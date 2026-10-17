@@ -508,6 +508,8 @@
 (autoload 'mevedel-view-historical-segment-p "mevedel-view-segments")
 
 ;; `mevedel-view-stream'
+(declare-function mevedel-view--render-request-progress
+                  "mevedel-view-stream" ())
 (declare-function mevedel-view--stop-request-progress
                   "mevedel-view-stream" ())
 (declare-function mevedel-view-stream-begin-turn
@@ -603,10 +605,27 @@ Nil and unknown modes are treated as `ask'."
     (or (car tail)
         (car mevedel-view--permission-mode-cycle))))
 
+(defun mevedel-view--composer-mode-badge (&optional mode)
+  "Return the composer's mode badge for the permanent rail.
+MODE defaults to the effective permission mode.  Editing and Plan retain
+their distinct labels; directive scope keeps Plan paused."
+  (pcase-let* ((`(,label ,face)
+                (mevedel-view--permission-mode-display
+                 (or mode (mevedel-view--effective-permission-mode)))))
+    (cond
+     (mevedel-view--pending-input-edit
+      (propertize
+       (format "[Editing %s]"
+               (plist-get mevedel-view--pending-input-edit :label))
+       'font-lock-face 'mevedel-view-input-prompt))
+     ((and (not mevedel-view--composer-scope) (mevedel-view--plan-mode-p))
+      (propertize (format "[Plan · %s]" label)
+                  'font-lock-face 'mevedel-view-plan-mode))
+     (t (propertize (format "[%s]" label) 'font-lock-face face)))))
+
 (defun mevedel-view--input-prompt-string (&optional mode)
   "Return the read-only input prompt string for permission MODE.
-The prompt starts with a blank separator line so status and interaction
-rows remain visually distinct from the editable composer."
+The ordinary prompt sits directly below the permanent composer rail."
   (let ((mode (or mode (mevedel-view--effective-permission-mode))))
     (if mevedel-view--composer-scope
         (let* ((record (plist-get mevedel-view--composer-scope :record))
@@ -656,42 +675,8 @@ rows remain visually distinct from the editable composer."
            (propertize "\n" 'font-lock-face 'shadow)
            (propertize "◆ > "
                        'font-lock-face 'mevedel-view-directive-scope)))
-      (if mevedel-view--pending-input-edit
-          (propertize
-           (format "\n[Editing %s]\n%s"
-                   (plist-get mevedel-view--pending-input-edit :label)
-                   mevedel-view--input-prompt)
-           'font-lock-face 'mevedel-view-input-prompt)
-	(if (mevedel-view--plan-mode-p)
-            (pcase-let* ((`(,label ,_) (mevedel-view--permission-mode-display mode))
-			 (text (format "\n[Plan · %s]\n%s"
-                                       label mevedel-view--input-prompt)))
-              (add-text-properties
-               0 (length text)
-               '(font-lock-face mevedel-view-input-prompt)
-               text)
-              (add-text-properties
-               2 (+ 9 (length label))
-               '(font-lock-face mevedel-view-plan-mode)
-               text)
-              text)
-	  ;; Every mode, Ask included, shows its badge, so the draft keeps
-	  ;; its line when the mode changes.
-	  (pcase-let* ((`(,label ,face)
-			  (mevedel-view--permission-mode-display mode))
-			 (text (format "\n[%s]\n%s"
-                                       label mevedel-view--input-prompt))
-			 (label-start 2)
-			 (label-end (+ label-start (length label))))
-              (add-text-properties
-               0 (length text)
-               '(font-lock-face mevedel-view-input-prompt)
-               text)
-              (add-text-properties
-               label-start label-end
-               `(font-lock-face ,face)
-               text)
-              text))))))
+      (propertize mevedel-view--input-prompt
+                  'font-lock-face 'mevedel-view-input-prompt))))
 
 
 ;;
@@ -1095,6 +1080,77 @@ into a neighbor."
            (setq pos next)))
        found))))
 
+(defun mevedel-view--composer-screen-row (window)
+  "Return the composer's screen row in WINDOW, or nil when it is not shown.
+Rows are counted with `vertical-motion' from WINDOW's start, bounded by
+its body height, so the count matches redisplay; `count-screen-lines'
+disagreed by one line depending on how the start was reached."
+  (when (and (markerp mevedel-view--input-marker)
+             (eq (marker-buffer mevedel-view--input-marker) (current-buffer)))
+    (let ((input-start (mevedel-view--input-start))
+          (start (window-start window)))
+      (when (<= start input-start)
+        (save-excursion
+          (goto-char start)
+          (let ((row 0)
+                (limit (window-body-height window))
+                found)
+            ;; Stop on the screen line containing INPUT-START, which sits
+            ;; after the prompt, usually mid-line, and possibly on the last
+            ;; line, where `vertical-motion' cannot advance.
+            (while (and (not found) (< row limit))
+              (if (or (/= 1 (vertical-motion 1 window))
+                      (> (point) input-start))
+                  (setq found t)
+                (setq row (1+ row))))
+            (and found row)))))))
+
+(defun mevedel-view--composer-anchors ()
+  "Return (WINDOW . ROW) for each window showing the current composer.
+Windows scrolled away from the composer are omitted: they keep their
+own start, so reading history is never disturbed."
+  (let (anchors)
+    (dolist (window (get-buffer-window-list (current-buffer) nil t))
+      (when-let* ((row (mevedel-view--composer-screen-row window)))
+        (push (cons window row) anchors)))
+    anchors))
+
+(defun mevedel-view--restore-composer-anchors (anchors)
+  "Put the composer back on its screen row in each window of ANCHORS.
+Text added or removed above the composer then scrolls the transcript
+instead of moving the composer, as in a bottom-anchored terminal.
+Like a terminal that is not yet full, a window whose current start still
+shows everything through the end of the draft keeps that start when text
+grows above: free space below the composer is used before scrolling."
+  (when (and anchors (markerp mevedel-view--input-marker)
+             (eq (marker-buffer mevedel-view--input-marker) (current-buffer)))
+    (let ((input-start (mevedel-view--input-start)))
+      (pcase-dolist (`(,window . ,row) anchors)
+        (when (and (window-live-p window)
+                   (eq (window-buffer window) (current-buffer)))
+          (let ((anchored (save-excursion
+                            (goto-char input-start)
+                            (vertical-motion (- row) window)
+                            (point)))
+                (current (window-start window)))
+            (unless (and (< current anchored)
+                         (mevedel-view--window-shows-end-p window current))
+              (set-window-start window anchored t))))))))
+
+(defun mevedel-view--window-shows-end-p (window start)
+  "Return non-nil when WINDOW starting at START shows `point-max'."
+  (save-excursion
+    (goto-char start)
+    (let ((limit (window-body-height window))
+          (rows 0))
+      (while (and (< (point) (point-max)) (< rows limit)
+                  (= 1 (vertical-motion 1 window)))
+        (setq rows (1+ rows)))
+      (and (< rows limit)
+           (or (= (point) (point-max))
+               ;; The last line has no newline: `vertical-motion' stops on it.
+               (= (line-end-position) (point-max)))))))
+
 (defun mevedel-view--call-preserving-window-state (thunk)
   "Call THUNK while preserving each displayed window's browsing state.
 Preserves those values for every window displaying the current buffer.
@@ -1133,6 +1189,7 @@ above the composer does not strand it in rendered transcript text."
                 mevedel-view--pww-current-mark)
                (- mevedel-view--pww-current-mark
                   (mevedel-view--input-start))))
+         (mevedel-view--pww-composer-anchors (mevedel-view--composer-anchors))
          (mevedel-view--pww-saved
           (mapcar (lambda (w)
                     (with-current-buffer mevedel-view--pww-current-buffer
@@ -1145,7 +1202,11 @@ above the composer does not strand it in rendered transcript text."
                                    (- wp (mevedel-view--input-start)))
                               (= wp (point-max))
                               (mevedel-view--position-render-anchor wp)
-                              (mevedel-view--position-render-anchor ws)))))
+                              (mevedel-view--position-render-anchor ws)
+                              ;; A tall draft can start the window inside the
+                              ;; composer; text above must not shift that view.
+                              (and (mevedel-view--position-in-input-region-p ws)
+                                   (- ws (mevedel-view--input-start)))))))
                   (get-buffer-window-list (current-buffer) nil t))))
     (cl-flet ((resolve-position (position input-offset anchor)
                 (cond
@@ -1163,7 +1224,7 @@ above the composer does not strand it in rendered transcript text."
           (goto-char (min (point-max) restored-current-point)))
 	(dolist (entry mevedel-view--pww-saved)
           (pcase-let ((`(,w ,wp ,ws ,input-offset ,at-bottom
-                            ,wp-anchor ,ws-anchor)
+                            ,wp-anchor ,ws-anchor ,ws-input-offset)
                        entry))
             (when (and (window-live-p w)
                        (eq (window-buffer w) mevedel-view--pww-current-buffer))
@@ -1174,7 +1235,9 @@ above the composer does not strand it in rendered transcript text."
 		(when (eq w mevedel-view--pww-selected-window)
                   (goto-char (window-point w))))
               (let ((restored-start
-                     (or (mevedel-view--render-anchor-position ws-anchor)
+                     (or (and ws-input-offset
+                              (+ (mevedel-view--input-start) ws-input-offset))
+                         (mevedel-view--render-anchor-position ws-anchor)
                          ws)))
 		(when (and restored-start (<= restored-start (point-max)))
                   (set-window-start w restored-start t)))
@@ -1183,6 +1246,7 @@ above the composer does not strand it in rendered transcript text."
                   (select-window w)
                   (goto-char (point-max))
                   (recenter -1))))))
+        (mevedel-view--restore-composer-anchors mevedel-view--pww-composer-anchors)
 	(when mevedel-view--pww-current-mark
 	  (set-marker
 	   (mark-marker)
@@ -1592,7 +1656,8 @@ follows `mevedel-view--input-marker'."
              (move-overlay
               mevedel-view--composer-keymap-overlay
               (mevedel-view--input-start) (point-max))
-             (mevedel-view--update-composer-indent))))))))
+             (mevedel-view--update-composer-indent))
+           (mevedel-view--render-request-progress)))))))
 
 (defun mevedel-view-cycle-permission-mode ()
   "Cycle the current session's permission mode from the view buffer."

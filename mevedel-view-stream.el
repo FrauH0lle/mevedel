@@ -99,6 +99,16 @@
                   "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--call-with-render-boundaries-advancing
                   "mevedel-view-composer" (thunk))
+(declare-function mevedel-view--composer-mode-badge
+                  "mevedel-view-composer" (&optional mode))
+(autoload 'mevedel-view--composer-mode-badge "mevedel-view-composer")
+(defvar mevedel-view--input-marker)
+
+;; `mevedel-view-interaction'
+(declare-function mevedel-view--interaction-count-label
+                  "mevedel-view-interaction" (&optional actionable))
+(declare-function mevedel-view-jump-to-interaction "mevedel-view-interaction" ())
+(autoload 'mevedel-view--interaction-count-label "mevedel-view-interaction")
 
 ;; `mevedel-view-audit'
 (declare-function mevedel-view--hook-audit-records-from-text
@@ -436,23 +446,32 @@ the view has already inserted the in-flight markers."
   (and (mevedel-view--request-progress-visible-p)
        (mevedel-view-zone-start 'progress)))
 
-(defun mevedel-view--request-progress-fragments (status &optional display-status)
-  "Return the fragment list for request-progress STATUS."
+(defun mevedel-view--request-progress-fragments (body)
+  "Return the permanent rail fragment containing BODY."
   (list (list :namespace 'progress
               :id 'request
               :priority 0
-              :body (mevedel-view--format-spinner-block status display-status)
+              :body body
               :keymap mevedel-view--display-map
               :navigatable nil)))
 
 (defun mevedel-view--render-request-progress ()
-  "Render the current request-progress row from buffer-local state."
-  (when mevedel-view--spinner-status
+  "Render the permanent composer rail, changing text only on semantic updates."
+  (when (and (not mevedel-view--agent-transcript-p)
+             (markerp mevedel-view--input-marker)
+             (marker-position mevedel-view--input-marker))
     (let* ((display-status
-            (mevedel-view--spinner-display-status
-             mevedel-view--spinner-status))
-           (render-state (list display-status
-                               (mevedel-view--request-progress-prefix))))
+            (and mevedel-view--spinner-status
+                 (mevedel-view--spinner-display-status
+                  mevedel-view--spinner-status)))
+           (badge (mevedel-view--composer-mode-badge))
+           (attention (mevedel-view--interaction-count-label t))
+           (windows (get-buffer-window-list (current-buffer) nil t))
+           (width (max 1 (1- (if windows
+                                 (apply #'min (mapcar #'window-body-width windows))
+                               (window-body-width)))))
+           (prefix (mevedel-view--request-progress-prefix))
+           (render-state (list display-status badge attention width prefix)))
       (unless (and (equal render-state
                           mevedel-view--spinner-rendered-state)
                    (mevedel-view-zone-region 'progress))
@@ -460,20 +479,13 @@ the view has already inserted the in-flight markers."
           (mevedel-view-zone-reconcile
            'progress anchor anchor
            (mevedel-view--request-progress-fragments
-            mevedel-view--spinner-status display-status))
+            (concat prefix
+                    (mevedel-view--format-composer-rail
+                     badge attention width mevedel-view--spinner-status
+                     display-status))))
           (setq mevedel-view--spinner-rendered-state
                 render-state)
           (mevedel-view--capture-request-animation-target))))))
-
-(defun mevedel-view--clear-request-progress ()
-  "Remove the fragment-managed request-progress row."
-  (mevedel-view-zone-clear 'progress)
-  (mevedel-view--release-animation-targets
-   mevedel-view--spinner-label-target mevedel-view--spinner-metadata-target)
-  (setq mevedel-view--spinner-rendered-state nil
-        mevedel-view--spinner-label-target nil
-        mevedel-view--spinner-metadata-target nil
-        mevedel-view--spinner-sample-frame nil))
 
 (defun mevedel-view--forget-request-progress-region ()
   "Forget the request-progress region after a larger redraw deleted it."
@@ -490,13 +502,14 @@ the view has already inserted the in-flight markers."
 DATA-BUF is the authoritative data buffer for elapsed-time lookup.
 STATUS is the base label to show; nil preserves the current label or
 falls back to \"Working...\"."
-  (when (mevedel-view--request-progress-active-p data-buf)
-    (let ((mevedel--data-buffer (or data-buf
-                                    (and (boundp 'mevedel--data-buffer)
-                                         mevedel--data-buffer)))
-          (label (or status mevedel-view--spinner-status "Working...")))
-      (setq mevedel-view--spinner-status label)
-      (mevedel-view--render-request-progress)
+  (let ((mevedel--data-buffer (or data-buf
+                                (and (boundp 'mevedel--data-buffer)
+                                     mevedel--data-buffer))))
+    (when (mevedel-view--request-progress-active-p data-buf)
+      (setq mevedel-view--spinner-status
+            (or status mevedel-view--spinner-status "Working...")))
+    (mevedel-view--render-request-progress)
+    (when (mevedel-view--request-progress-active-p data-buf)
       (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view--spinner-dynamic-label-p (text)
@@ -531,35 +544,49 @@ Background work is counted by the panel right above, not here."
          (elapsed (mevedel-view--spinner-elapsed-label)))
     (string-join (delq nil (list base elapsed)) " · ")))
 
-(defun mevedel-view--format-spinner-line (status &optional face display-status)
+(defun mevedel-view--format-spinner-line (status &optional face display-status width)
   "Return propertized spinner line for STATUS.
-FACE defaults to `mevedel-view-spinner'."
+FACE defaults to `mevedel-view-spinner'.  When WIDTH is non-nil, drop
+elapsed metadata before truncating the activity to fit that many columns."
   (let* ((face (or face 'mevedel-view-spinner))
          (display-status (or display-status
                              (mevedel-view--spinner-display-status status)))
          (base (if (string-prefix-p "Waiting for input" display-status)
                    "Waiting for input"
                  (mevedel-view--spinner-base-status status)))
-         (label (propertize base
+         (metadata (substring display-status (length base)))
+         (base (replace-regexp-in-string "[\n\r\t]+" " " base))
+         (frame (mevedel-view--animation-buffer-frame))
+         (seconds (mevedel-view--animation-display-seconds))
+         (sample (mevedel-view-animation-frame
+                  mevedel-view-spinner-style base seconds face frame)))
+    (when width
+      (when (> (+ (string-width sample) (string-width metadata)) width)
+        (setq metadata ""))
+      (when (> (string-width sample) width)
+        (setq base (truncate-string-to-width
+                    base (max 0 (- width (- (string-width sample)
+                                           (string-width base))))
+                    nil nil "…")
+              sample (mevedel-view-animation-frame
+                      mevedel-view-spinner-style base seconds face frame))))
+    (let ((label (propertize base
                             'font-lock-face face
                             'mevedel-view-spinner-frame t
-                            'display (mevedel-view-animation-frame
-                                      mevedel-view-spinner-style base
-                                      (mevedel-view--animation-display-seconds) face
-                                      (mevedel-view--animation-buffer-frame))
+                            'display sample
                             'read-only t
                             'keymap mevedel-view--display-map
                             'front-sticky '(read-only keymap)
                             'rear-nonsticky '(read-only keymap))))
     (concat label
-            (propertize (concat (substring display-status (length base)) "\n")
+            (propertize (concat metadata "\n")
                         'font-lock-face face
                         'mevedel-view-spinner-status
                         (mevedel-view--spinner-base-status status)
                         'read-only t
                         'keymap mevedel-view--display-map
                         'front-sticky '(read-only keymap)
-                        'rear-nonsticky '(read-only keymap)))))
+                        'rear-nonsticky '(read-only keymap))))))
 
 (defun mevedel-view--request-progress-prefix ()
   "Return separator text before the request progress row."
@@ -582,15 +609,48 @@ FACE defaults to `mevedel-view-spinner'."
                   'front-sticky '(read-only keymap)
                   'rear-nonsticky '(read-only keymap)))))
 
-(defun mevedel-view--format-spinner-block (status &optional display-status)
-  "Return request-progress spinner text for STATUS at point."
-  (concat (mevedel-view--request-progress-prefix)
-          (mevedel-view--format-spinner-line status nil display-status)))
+(defun mevedel-view--format-composer-rail (badge attention width status display-status)
+  "Format a one-line rail within WIDTH columns.
+BADGE and actionable ATTENTION take priority over STATUS and DISPLAY-STATUS.
+Only activity is animated; the controls remain ordinary interactive text."
+  (let* ((badge (truncate-string-to-width
+                 (replace-regexp-in-string "[\n\r\t]+" " " badge)
+                 (max 1 (- width (if attention (min 12 (/ width 2)) 0)))
+                 nil nil "…"))
+         (room (- width (string-width badge)))
+         (notice
+          (when (and attention (> room 4))
+            (let* ((available (- room 3))
+                   (hint " · C-c C-j")
+                   (text (concat "⚠ " attention hint)))
+              (when (> (string-width text) available)
+                (setq text
+                      (if (>= available (+ 3 (string-width hint)))
+                          (concat "⚠ "
+                                  (truncate-string-to-width
+                                   attention (- available 2 (string-width hint))
+                                   nil nil "…")
+                                  hint)
+                        (truncate-string-to-width "⚠ C-c C-j" available
+                                                  nil nil "…"))))
+              (propertize text
+                          'font-lock-face 'warning
+                          'mouse-face 'highlight
+                          'help-echo (concat attention "; C-c C-j to visit")
+                          'mevedel-view-zone-activate
+                          #'mevedel-view-jump-to-interaction)))))
+    (when notice
+      (setq badge (concat badge " · " notice)
+            room (- width (string-width badge))))
+    (if (and status (>= room 13))
+        (concat badge " · "
+                (mevedel-view--format-spinner-line
+                 status nil display-status (- room 3)))
+      (concat badge "\n"))))
 
 (defun mevedel-view--spinner-active-p ()
   "Return non-nil when this view buffer has visible spinner work."
   (or mevedel-view--pending-tool-calls
-      (mevedel-view--request-progress-visible-p)
       (mevedel-view--request-progress-active-p)))
 
 (defun mevedel-view--release-animation-targets (&rest targets)
@@ -1439,14 +1499,13 @@ Return non-nil when the status was restored."
     t))
 
 (defun mevedel-view--stop-spinner ()
-  "Remove request progress if present."
+  "Return the permanent rail to idle and release request animation."
   (mevedel-view--call-preserving-input-point
    (lambda ()
      (mevedel-view--debug-log
       'spinner-stop-delete
       :spinner (mevedel-view--debug-spinner-state)
       :state (mevedel-view--debug-state mevedel--data-buffer))
-     (mevedel-view--clear-request-progress)
      (when-let* ((session
                   (and (buffer-live-p mevedel--data-buffer)
                        (buffer-local-value 'mevedel--session
@@ -1472,7 +1531,8 @@ Return non-nil when the status was restored."
                      (buffer-local-value 'mevedel--current-request
                                          mevedel--data-buffer))
           (setq mevedel-view--spinner-start-time nil))
-        (mevedel-view--stop-spinner-timer)))))
+        (mevedel-view--stop-spinner-timer))
+     (mevedel-view--render-request-progress))))
 
 (defun mevedel-view--stop-request-progress ()
   "Stop and suppress the current request progress row."

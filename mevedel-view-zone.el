@@ -27,7 +27,10 @@
 (defvar mevedel-view--status-marker)
 
 ;; `mevedel-view-composer'
+(declare-function mevedel-view--composer-anchors "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
+(declare-function mevedel-view--restore-composer-anchors
+                  "mevedel-view-composer" (anchors))
 (declare-function mevedel-view--sanitize-undo "mevedel-view-composer" ())
 (defvar mevedel-view--input-marker)
 
@@ -546,6 +549,7 @@ priorities."
     (list
      :input (and input-start
                  (buffer-substring-no-properties input-start (point-max)))
+     :composer-anchors (and input-start (mevedel-view--composer-anchors))
      :point (copy-marker (point) t)
      :mark (and (mark t) (copy-marker (mark t) t))
      :mark-active mark-active
@@ -591,6 +595,7 @@ priorities."
             (set-window-start window window-start t))
           (when (eq window (plist-get state :selected-window))
             (goto-char (window-point window)))))))
+  (mevedel-view--restore-composer-anchors (plist-get state :composer-anchors))
   (when-let* ((mark (plist-get state :mark)))
     (set-marker (mark-marker) (min (point-max) mark)))
   (setq mark-active (plist-get state :mark-active)

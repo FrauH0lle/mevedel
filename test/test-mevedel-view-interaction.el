@@ -40,7 +40,7 @@
   ,test
   (test)
 
-  :doc "RET settles a new prompt and restores a multiline composer after redraw"
+  :doc "arrival preserves draft keys; explicit visit restores a multiline composer"
   (mevedel-view-test--with-buffers
     (switch-to-buffer view-buf)
     (with-current-buffer view-buf
@@ -51,6 +51,9 @@
          "Confirm" "Do the thing" "Proceed?" nil
          (lambda (value) (setq outcome value))))
       (with-current-buffer view-buf
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should-not (eq (key-binding (kbd "RET")) #'mevedel--approve-request))
+        (mevedel-view-jump-to-interaction)
         (should (get-text-property (point) 'mevedel-prompt-focus))
         (should (eq (key-binding (kbd "RET")) #'mevedel--approve-request))
         (mevedel-view--interaction-rebuild)
@@ -71,6 +74,8 @@
         (mevedel-permission--prompt-async-with-content
          "Allow operation?\n" nil (lambda (value) (setq outcome value))))
       (with-current-buffer view-buf
+        (should (= (point) (+ (mevedel-view--input-start) 3)))
+        (mevedel-view-jump-to-interaction)
         (should (get-text-property (point) 'mevedel-prompt-focus))
         (call-interactively (key-binding (kbd "RET")))
         (should (eq outcome 'allow-once))
@@ -87,6 +92,8 @@
          (lambda (value) (setq answer value))
          [(:question "Run tests?" :options ["Yes" "No"])]))
       (with-current-buffer view-buf
+        (should (= (point) (+ (mevedel-view--input-start) 3)))
+        (mevedel-view-jump-to-interaction)
         (should (get-text-property (point) 'mevedel-prompt-focus))
         (call-interactively (key-binding (kbd "RET")))
         (should-not answer)
@@ -118,6 +125,9 @@
     (with-current-buffer data-buf
       (mevedel--prompt-user-with-overlay
        "First" "One" "Proceed?" nil #'ignore))
+    (with-current-buffer view-buf
+      (should (= (point) (mevedel-view--input-start)))
+      (mevedel-view-jump-to-interaction))
     (let ((first (with-current-buffer view-buf
                    (car mevedel--prompt-overlays))))
       (with-current-buffer data-buf
@@ -130,6 +140,92 @@
         (should (= (point) (mevedel-view--input-start)))
         (should-not mevedel-view--interaction-focus-return)
         (mevedel--prompt-dismiss-all)))))
+
+(mevedel-deftest mevedel-view-jump-to-interaction ()
+  ,test
+  (test)
+
+  :doc "cycling preserves the original draft offset and leaves other windows alone"
+  (mevedel-view-test--with-buffers
+    (switch-to-buffer view-buf)
+    (mevedel-view-test--insert-composer-draft "draft\nnext" 3)
+    (let ((other (split-window)))
+      (set-window-buffer other view-buf)
+      (set-window-point other (+ (mevedel-view--input-start) 1))
+      (with-current-buffer data-buf
+        (mevedel--prompt-user-with-overlay "First" "One" "Proceed?" nil #'ignore)
+        (mevedel--prompt-user-with-overlay "Second" "Two" "Proceed?" nil #'ignore))
+      (should (= (point) (+ (mevedel-view--input-start) 3)))
+      (should (= (window-point other) (+ (mevedel-view--input-start) 1)))
+      (mevedel-view-jump-to-interaction)
+      (let ((first (get-text-property (point) 'mevedel-view-interaction-id)))
+        (mevedel-view-jump-to-interaction)
+        (should-not (equal first (get-text-property
+                                 (point) 'mevedel-view-interaction-id)))
+        (mevedel-view-jump-to-interaction)
+        (should (equal first (get-text-property
+                             (point) 'mevedel-view-interaction-id))))
+      (call-interactively (key-binding (kbd "RET")))
+      (should (= (point) (+ (mevedel-view--input-start) 3)))
+      (should (= (window-point other) (+ (mevedel-view--input-start) 1)))
+      (mevedel--prompt-dismiss-all)))
+
+  :doc "two explicit visitors return independently to their own draft offsets"
+  (mevedel-view-test--with-buffers
+    (switch-to-buffer view-buf)
+    (mevedel-view-test--insert-composer-draft "draft\nnext" 3)
+    (let ((first (selected-window))
+          (other (split-window)))
+      (set-window-buffer other view-buf)
+      (set-window-point other (+ (mevedel-view--input-start) 1))
+      (with-current-buffer data-buf
+        (mevedel--prompt-user-with-overlay "First" "One" "Proceed?" nil #'ignore))
+      (mevedel-view-jump-to-interaction)
+      (with-selected-window other
+        (mevedel-view-jump-to-interaction))
+      (call-interactively (key-binding (kbd "RET")))
+      (should (= (window-point first) (+ (mevedel-view--input-start) 3)))
+      (should (= (window-point other) (+ (mevedel-view--input-start) 1)))
+      (should-not mevedel-view--interaction-focus-return)))
+
+  :doc "settlement does not pull back a window that left the visited card"
+  (mevedel-view-test--with-buffers
+    (switch-to-buffer view-buf)
+    (mevedel-view-test--insert-composer-draft "draft\nnext" 3)
+    (with-current-buffer data-buf
+      (mevedel--prompt-user-with-overlay "First" "One" "Proceed?" nil #'ignore))
+    (mevedel-view-jump-to-interaction)
+    (let ((prompt (car mevedel--prompt-overlays)))
+      (goto-char (+ (mevedel-view--input-start) 1))
+      (mevedel--prompt--settle prompt 'aborted)
+      (should (= (point) (+ (mevedel-view--input-start) 1)))
+      (should-not mevedel-view--interaction-focus-return)))
+
+  :doc "a hidden Plan approval is revealed and visited explicitly"
+  (mevedel-view-test--with-buffers
+    (switch-to-buffer view-buf)
+    (let* ((session (mevedel-session--create :name "test"))
+           (entry (list :session session :interaction-id 'plan :hidden t
+                        :renderer
+                        (lambda (_entry)
+                          (mevedel-view--interaction-register
+                           '(:kind plan :id plan :count 1 :body "approval\n"))))))
+      (setq-local mevedel--session session)
+      (with-current-buffer data-buf (setq-local mevedel--session session))
+      (setf (mevedel-session-pending-plan-approval session) entry)
+      (mevedel-view-test--insert-composer-draft "draft" 2)
+      (mevedel-view-jump-to-interaction)
+      (should-not (plist-get entry :hidden))
+      (should (eq 'plan (get-text-property (point) 'mevedel-view-interaction-id)))
+      (should (= 2 (nth 2 (assq (selected-window)
+                                mevedel-view--interaction-focus-return))))))
+
+  :doc "no pending card reports a user error without moving point"
+  (mevedel-view-test--with-buffers
+    (switch-to-buffer view-buf)
+    (goto-char (mevedel-view--input-start))
+    (should-error (mevedel-view-jump-to-interaction) :type 'user-error)
+    (should (= (point) (mevedel-view--input-start)))))
 
 (mevedel-deftest mevedel-view--permission-absence-render
   (:doc "the expired-queue notice informs without disturbing the composer")
@@ -1708,6 +1804,7 @@ TIMERS is a cons cell whose car holds captured `(FUNCTION . ARGS)' entries."
         (test-mevedel-view-interaction--run-deferred timers)
         (should-not dispatched)
         (with-current-buffer view-buf
+          (mevedel-view-jump-to-interaction)
           (should (get-text-property (point) 'mevedel-prompt-focus))
           (call-interactively (key-binding (kbd "RET"))))
         (should (eq 'allow-once outcome))

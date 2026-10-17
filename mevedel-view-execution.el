@@ -65,6 +65,7 @@
 ;; `mevedel-view-zone'
 (declare-function mevedel-view-zone-collapse-state
                   "mevedel-view-zone" (key &optional default))
+(declare-function mevedel-view-zone-fragment-bounds "mevedel-view-zone" (zone id))
 (declare-function mevedel-view-zone-set-collapse-state
                   "mevedel-view-zone" (key collapsed))
 
@@ -85,6 +86,26 @@ exclude each other.")
 
 (defvar-local mevedel-view-execution--show-all nil
   "Non-nil while the panel lists every row instead of the first few.")
+
+(defvar-local mevedel-view-execution--shown nil
+  "Rows of the last rendered panel, as (KEY KIND DATA) in display order.")
+
+(defvar-local mevedel-view-execution--held nil
+  "Finished rows kept as inert lines while the pointer is on the panel.
+Each entry is (KEY KIND DATA).  Removing a row under the mouse or point
+would shift the rows the user is aiming at, so finished rows stay in
+place until both leave the panel.")
+
+(defvar-local mevedel-view-execution--release-timer nil
+  "Timer that releases held rows once the pointer leaves the panel.")
+
+(defvar-local mevedel-view-execution--unit-starts nil
+  "Hash table of panel unit identity to its first-seen start time.
+An agent tree keeps its place after its top-level agent finishes, whose
+start would otherwise be lost.")
+
+(defconst mevedel-view-execution--release-interval 0.5
+  "Seconds between checks whether held rows can be released.")
 
 (defun mevedel-view-execution--same-p (left right)
   "Whether LEFT and RIGHT identify the same owner's execution."
@@ -155,9 +176,186 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
   "Reset the panel's view-local expansion, overflow and collapse state."
   (setq mevedel-view-execution--selected nil
         mevedel-view-execution--selected-agent nil
-        mevedel-view-execution--show-all nil)
+        mevedel-view-execution--show-all nil
+        mevedel-view-execution--shown nil
+        mevedel-view-execution--held nil
+        mevedel-view-execution--unit-starts nil)
+  (mevedel-view-execution--cancel-release)
   (mevedel-view-zone-set-collapse-state mevedel-view-execution--collapse-key nil)
   (mevedel-view--render-status))
+
+
+;;;; Stable order and held rows
+
+(defun mevedel-view-execution--key (kind data)
+  "Return the identity of a KIND row showing DATA."
+  (if (eq kind 'agent)
+      (list 'agent (plist-get data :path))
+    (list 'execution (plist-get data :owner) (plist-get data :execution-id))))
+
+(defun mevedel-view-execution--start-time (data)
+  "Return DATA's start as a float, or 0 when unknown."
+  (let ((start (plist-get data :started-at)))
+    (cond ((numberp start) (float start))
+          (start (float-time start))
+          (t 0.0))))
+
+(defun mevedel-view-execution--agent-root (path)
+  "Return the top-level agent path containing agent PATH."
+  (let ((parts (split-string path "/" t)))
+    (concat "/" (string-join (seq-take parts 2) "/"))))
+
+(defun mevedel-view-execution--ordered (entries &optional starts)
+  "Return ENTRIES, each (KEY KIND DATA), newest first.
+New work then appears at the panel edge farthest from the composer, so
+rows already shown keep their screen position: with the composer
+anchored, only text above a change moves.  An agent and its descendants
+form one unit, ordered by their top-level agent, in path order inside.
+STARTS, a hash table, remembers each unit's start across calls and is
+pruned to the units present."
+  (let (units groups)
+    (dolist (entry entries)
+      (let* ((kind (nth 1 entry))
+             (data (nth 2 entry))
+             (group (if (eq kind 'agent)
+                        (mevedel-view-execution--agent-root (plist-get data :path))
+                      (car entry)))
+             (unit (assoc group units)))
+        (if unit
+            (setcdr unit (append (cdr unit) (list entry)))
+          (push (list group entry) units))))
+    (setq groups (mapcar #'car units)
+          units
+          (mapcar
+           (lambda (unit)
+             (let* ((members (cdr unit))
+                    (head (cl-find (car unit) members
+                                   :key (lambda (entry) (plist-get (nth 2 entry) :path))
+                                   :test #'equal))
+                    (start (or (and starts (gethash (car unit) starts))
+                               (if head
+                                   (mevedel-view-execution--start-time (nth 2 head))
+                                 (apply #'min (mapcar (lambda (entry)
+                                                        (mevedel-view-execution--start-time
+                                                         (nth 2 entry)))
+                                                      members))))))
+               (when starts (puthash (car unit) start starts))
+               (cons start
+                     (sort members
+                           (lambda (left right)
+                             (and (eq (nth 1 left) 'agent) (eq (nth 1 right) 'agent)
+                                  (string-lessp (plist-get (nth 2 left) :path)
+                                                (plist-get (nth 2 right) :path))))))))
+           (nreverse units)))
+    (when starts
+      (let (stale)
+        (maphash (lambda (group _start)
+                   (unless (member group groups) (push group stale)))
+                 starts)
+        (dolist (group stale) (remhash group starts))))
+    (apply #'append
+           (mapcar #'cdr (sort units (lambda (left right) (> (car left) (car right))))))))
+
+(defun mevedel-view-execution--pointer-on-panel-p ()
+  "Return non-nil when point or the mouse is on the background-work panel.
+Point counts in every window showing this view."
+  (when-let* ((bounds (mevedel-view-zone-fragment-bounds 'status 'background)))
+    (let ((start (plist-get bounds :start))
+          (end (plist-get bounds :end)))
+      (or (cl-some (lambda (window)
+                     (and (<= start (window-point window)) (< (window-point window) end)))
+                   (get-buffer-window-list (current-buffer) nil t))
+          (pcase-let ((`(,frame ,x . ,y) (mouse-pixel-position)))
+            (when (and (frame-live-p frame) (integerp x) (integerp y))
+              (let* ((posn (posn-at-x-y x y frame))
+                     (window (posn-window posn))
+                     (pos (posn-point posn)))
+                (and (windowp window)
+                     (eq (window-buffer window) (current-buffer))
+                     (integerp pos) (<= start pos) (< pos end)))))))))
+
+(defun mevedel-view-execution--cancel-release ()
+  "Cancel the held-row release timer."
+  (when (timerp mevedel-view-execution--release-timer)
+    (cancel-timer mevedel-view-execution--release-timer))
+  (setq mevedel-view-execution--release-timer nil))
+
+(defun mevedel-view-execution--check-release (buffer &optional timer)
+  "Release BUFFER's held rows once the pointer has left its panel.
+TIMER is the calling timer, cancelled alone when BUFFER is gone."
+  (if (not (buffer-live-p buffer))
+      (when (timerp timer) (cancel-timer timer))
+    (with-current-buffer buffer
+      (cond
+       ((null mevedel-view-execution--held)
+        (mevedel-view-execution--cancel-release))
+       ((not (mevedel-view-execution--pointer-on-panel-p))
+        (setq mevedel-view-execution--held nil)
+        (mevedel-view-execution--cancel-release)
+        (mevedel-view--render-status))))))
+
+(defun mevedel-view-execution--update-held (entries hover)
+  "Return held rows after rendering live ENTRIES, scheduling their release.
+Rows shown last time and finished since are held while HOVER, the pointer
+or point being on the panel, holds; otherwise every held row is released
+at once."
+  (let ((live-keys (mapcar #'car entries)))
+    (if (not hover)
+        (setq mevedel-view-execution--held nil)
+      (dolist (shown mevedel-view-execution--shown)
+        (unless (or (member (car shown) live-keys)
+                    (assoc (car shown) mevedel-view-execution--held)
+                    ;; An expanded execution keeps its own terminal inspector.
+                    (and (eq (nth 1 shown) 'execution)
+                         (mevedel-view-execution--same-p
+                          (nth 2 shown) mevedel-view-execution--selected)))
+          (push (list (car shown) (nth 1 shown)
+                      (plist-put (copy-sequence (nth 2 shown)) :held-p t))
+                mevedel-view-execution--held)))
+      ;; A row that reappeared is live again.
+      (setq mevedel-view-execution--held
+            (cl-remove-if (lambda (held) (member (car held) live-keys))
+                          mevedel-view-execution--held)))
+    (if mevedel-view-execution--held
+        (unless (timerp mevedel-view-execution--release-timer)
+          (let ((buffer (current-buffer))
+                timer)
+            (setq timer (run-with-timer
+                         mevedel-view-execution--release-interval
+                         mevedel-view-execution--release-interval
+                         (lambda ()
+                           (mevedel-view-execution--check-release buffer timer)))
+                  mevedel-view-execution--release-timer timer)))
+      (mevedel-view-execution--cancel-release))
+    mevedel-view-execution--held))
+
+(defun mevedel-view-execution--held-line (kind data)
+  "Return the inert dimmed line of a finished KIND row showing DATA."
+  (let ((face 'mevedel-view-tool-metadata))
+    (concat
+     "  "
+     (make-string (* 2 (or (plist-get data :depth) 0)) ?\s)
+     (mevedel-view-execution--face
+      (concat "✓ "
+              (string-pad (if (eq kind 'agent) "Finished" "Completed") 9)
+              " "
+              (string-pad (cond ((eq kind 'agent) "agent")
+                                ((eq (plist-get data :kind) 'monitor) "monitor")
+                                (t "bash"))
+                          8)
+              " "
+              (truncate-string-to-width
+               (replace-regexp-in-string
+                "[\n\r\t]+" " "
+                (or (if (eq kind 'agent) (plist-get data :path)
+                      (or (plist-get data :description) (plist-get data :command)))
+                    ""))
+               60 nil nil "…")
+              (when-let* ((exit (and (eq (plist-get data :termination) 'exited)
+                                     (plist-get data :exit-code))))
+                (format " · exit %s" exit)))
+      face)
+     "\n")))
 
 (defun mevedel-view-execution--action (text function)
   "Return TEXT carrying the local action FUNCTION, including its margins.
@@ -536,31 +734,45 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
          (selected-live (cl-find-if
                          (lambda (item) (mevedel-view-execution--same-p
                                         item mevedel-view-execution--selected)) live))
-         ;; Needs attention first, then running work, then watchers.
-         (items (append
-                 (mapcar (lambda (row) (cons 'agent row))
-                         (cl-remove-if-not (lambda (row) (memq (plist-get row :status)
-                                                               '(blocked waiting)))
-                                           agents))
-                 (mapcar (lambda (row) (cons 'agent row))
-                         (cl-remove-if (lambda (row) (memq (plist-get row :status)
-                                                           '(blocked waiting)))
-                                       agents))
-                 (mapcar (lambda (item) (cons 'execution item))
-                         (cl-remove 'monitor live :key (lambda (item) (plist-get item :kind))))
-                 (mapcar (lambda (item) (cons 'execution item))
-                         (cl-remove-if-not (lambda (item) (eq (plist-get item :kind) 'monitor))
-                                           live))))
+         (entries (append
+                   (mapcar (lambda (row)
+                             (list (mevedel-view-execution--key 'agent row) 'agent row))
+                           agents)
+                   (mapcar (lambda (item)
+                             (list (mevedel-view-execution--key 'execution item)
+                                   'execution item))
+                           live)))
+         (hover (and mevedel-view-execution--shown
+                     (mevedel-view-execution--pointer-on-panel-p)))
+         (held (mevedel-view-execution--update-held entries hover))
+         (items (mapcar (lambda (entry) (cons (nth 1 entry) (nth 2 entry)))
+                        (mevedel-view-execution--ordered
+                         (append entries held)
+                         (or mevedel-view-execution--unit-starts
+                             (setq mevedel-view-execution--unit-starts
+                                   (make-hash-table :test #'equal))))))
          (selected-item (cl-find-if
                          (lambda (item)
-                           (if (eq (car item) 'agent)
-                               (equal (plist-get (cdr item) :path)
-                                      mevedel-view-execution--selected-agent)
-                             (eq (cdr item) selected-live)))
+                           (and (not (plist-get (cdr item) :held-p))
+                                (if (eq (car item) 'agent)
+                                    (equal (plist-get (cdr item) :path)
+                                           mevedel-view-execution--selected-agent)
+                                  (eq (cdr item) selected-live))))
                          items))
-         (rows (if mevedel-view-execution--show-all
-                   items
-                 (seq-take items mevedel-view-execution--row-limit)))
+         (shown-keys (mapcar #'car mevedel-view-execution--shown))
+         (rows (cond
+                (mevedel-view-execution--show-all items)
+                ;; Under the pointer, keep exactly the rows already shown:
+                ;; new work at capacity would otherwise evict the bottom row
+                ;; and shift every other row.  The rule still counts it.
+                (hover
+                 (cl-remove-if-not
+                  (lambda (item)
+                    (or (plist-get (cdr item) :held-p)
+                        (member (mevedel-view-execution--key (car item) (cdr item))
+                                shown-keys)))
+                  items))
+                (t (seq-take items mevedel-view-execution--row-limit))))
          (collapsed (mevedel-view-zone-collapse-state
                      mevedel-view-execution--collapse-key nil)))
     (unless (cl-find mevedel-view-execution--selected-agent agents
@@ -579,21 +791,32 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
                          (list selected-item))))
     (when (and mevedel-view-execution--selected (not selected-live))
       (setq rows (append rows (list (cons 'execution mevedel-view-execution--selected)))))
+    ;; Only rows actually shown can be under the pointer; hidden overflow
+    ;; and a collapsed panel hold nothing.
+    (setq mevedel-view-execution--shown
+          (unless collapsed
+            (mapcar (lambda (item)
+                      (list (mevedel-view-execution--key (car item) (cdr item))
+                            (car item) (cdr item)))
+                    (cl-remove-if (lambda (item) (plist-get (cdr item) :held-p)) rows))))
     (when rows
       (let ((body (mevedel-view-execution--header session agents live collapsed)))
         (unless collapsed
           (dolist (item rows)
             (let ((data (cdr item)))
-              (if (eq (car item) 'agent)
-                  (progn
-                    (setq body (concat body (mevedel-view-execution--agent-line session data)))
-                    (when (equal (plist-get data :path) mevedel-view-execution--selected-agent)
-                      (setq body (concat body (mevedel-view-execution--agent-details
-                                               session data)))))
+              (cond
+               ((plist-get data :held-p)
+                (setq body (concat body (mevedel-view-execution--held-line (car item) data))))
+               ((eq (car item) 'agent)
+                (setq body (concat body (mevedel-view-execution--agent-line session data)))
+                (when (equal (plist-get data :path) mevedel-view-execution--selected-agent)
+                  (setq body (concat body (mevedel-view-execution--agent-details
+                                           session data)))))
+               (t
                 (setq body (concat body (mevedel-view-execution--line data)))
                 (when (mevedel-view-execution--same-p data mevedel-view-execution--selected)
                   (setq body (concat body (mevedel-view-execution--details
-                                           session data selected-live)))))))
+                                           session data selected-live))))))))
           (setq body (concat body (mevedel-view-execution--controls session (length items)))))
         (list :namespace 'status :id 'background :priority 50 :body body
               :body-suffix "\n" :navigatable t :entry 'background
@@ -621,8 +844,31 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
   (when-let* ((view (mevedel-view-execution--view session data-buffer)))
     (with-current-buffer view (mevedel-view--render-status))))
 
+(defun mevedel-view-execution--hold-terminal-facts (event)
+  "Record terminal EVENT's outcome on its shown or held row.
+The terminal event can precede or follow the state change that removes
+the row, so both the last shown rows and the held rows take the facts."
+  (when-let* ((view (mevedel-view-execution--view
+                     (plist-get event :session) (plist-get event :data-buffer))))
+    (with-current-buffer view
+      (let* ((facts (plist-get event :facts))
+             (key (list 'execution (plist-get event :owner)
+                        (plist-get facts :execution-id)))
+             (rendered nil))
+        (dolist (entry (append mevedel-view-execution--shown
+                               mevedel-view-execution--held))
+          (when (equal (car entry) key)
+            (let ((data (nth 2 entry)))
+              (setq data (plist-put data :termination (plist-get facts :termination))
+                    data (plist-put data :exit-code (plist-get facts :exit-code)))
+              (setcar (nthcdr 2 entry) data)
+              (when (plist-get data :held-p) (setq rendered t)))))
+        (when rendered (mevedel-view--render-status))))))
+
 (defun mevedel-view-execution--event (event)
   "Refresh only the selected inspector from passive progress or terminal EVENT."
+  (when (eq (plist-get event :type) 'terminal)
+    (mevedel-view-execution--hold-terminal-facts event))
   (when (memq (plist-get event :type) '(progress terminal))
     (let ((session (plist-get event :session)))
       (when-let* ((view (mevedel-view-execution--view session (plist-get event :data-buffer))))

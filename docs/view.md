@@ -885,9 +885,8 @@ interaction chrome around that transcript.
 |   Permission prompts, plan approvals, Ask,                    |
 |   pending input, approvals, and preview controls.            |
 +--------------------------------------------------------------+
-| Request progress row                                         |
-|   Bottom live spinner such as `Working...` or `Compacting...` |
-|   while the foreground request is active.                    |
+| Permanent composer rail                                      |
+|   Mode badge, pending-action shortcut, and live turn activity.|
 +-------------------------- input marker ----------------------+
 | Input zone                                                   |
 |   Read-only input prompt, then editable composer body.        |
@@ -912,18 +911,23 @@ Terminology:
 - **Interaction zone**: user-action chrome between
   `mevedel-view--interaction-marker` and the request progress row; it is for
   pending input and controls that require user response.
-- **Request progress row**: the fragment-backed foreground spinner directly
-  above the input prompt. It is not part of the history, status, or
-  interaction zones. Its elapsed value measures active request work, excluding
+- **Composer rail**: the permanent, fragment-backed line directly above the
+  input prompt, with no intervening blank line. It shows the mode badge at
+  rest, pending-action counts with an actionable `C-c C-j` hint, and foreground
+  activity while a request runs. It does not start an animation timer while
+  idle. The rail fits the narrowest window showing the view: activity yields
+  space before the mode and pending-action hint. It is not part of the history,
+  status, or interaction zones; its internal zone name remains `progress`.
+  Its elapsed value measures active request work, excluding
   time spent awaiting an Ask answer, permission decision, Plan approval,
   ApplyPatch review decision, or direct request input. During those waits it
   reads `Waiting for input` and every indicator holds still. Queued
   Pending Inputs and an armed session fork do not pause active elapsed time.
 - **Input zone**: the read-only prompt prefix plus the editable composer.
   **Composer** refers only to the editable unsent input body.
-  The mode badge (`[edits]`, `[Plan · edits]`, `[Editing …]`) sits on its own
-  line above a `> ` prompt, so the badge and the draft start at fixed columns
-  in every mode, Ask included, so switching modes never moves the draft. Explicit and soft-wrapped continuation
+  The mode badge (`[edits]`, `[Plan · edits]`, `[Editing …]`) starts the rail
+  above a `> ` prompt. The badge and draft start at fixed columns in every
+  mode, Ask included, so switching modes never moves the draft. Explicit and soft-wrapped continuation
   lines are indented by the width of the prompt's last line (two columns, or
   four after a directive's `◆ > `), so the draft forms one aligned column.
   The indent is a display-only `line-prefix`/`wrap-prefix` on the composer
@@ -959,6 +963,9 @@ cleanup; they are not independent renderers. Register controls with
 `mevedel-view--interaction-register`; do not direct-insert ad hoc UI near the
 composer. Registering or rebuilding an interaction must not auto-focus the
 prompt or move point out of the composer.
+`C-c C-j` (or the rail's pending-action text) explicitly visits the first
+pending interaction. It remembers the invoking window's draft offset;
+settlement returns there only while point remains in that interaction.
 Use `:body-properties-owned` only when the producer supplies complete per-span
 `read-only` and stickiness properties, as ApplyPatch does for inline feedback.
 A descriptor whose UI holds live editable state supplies `:body` as a
@@ -983,6 +990,11 @@ hold, and ending the hold by submitting a message closes it and re-offers idle
 work like any other closed interaction.
 Interaction keybindings are active only when point is on the interaction text;
 composer input must never settle or cycle interaction prompts.
+`C-c C-j` explicitly visits pending questions and approvals, revealing a hidden
+Plan approval when necessary; repeating it cycles the cards. A visit from the
+composer remembers that window's draft offset. Settlement returns there only
+if the window is still inside the visited card. A reader who navigates away,
+and other windows showing the same view, are not pulled back.
 
 Portable sessions also render cooperative lease-transfer controls in this
 zone; `mevedel-view-control-transfer.el` supplies their descriptors while the
@@ -1418,7 +1430,14 @@ directive, historical, agent, and side scopes cannot create one.
 
 The status zone shows one **background work** panel for everything that runs
 beside the conversation: active agents, yielded Bash commands, and Monitors.
-Finished items leave the panel at once; their transcript notices take over.
+Finished items leave the panel; their transcript notices take over. While point
+(in any window showing the view) or the mouse is on the panel, the panel keeps
+exactly the rows it showed, so the row being aimed at cannot shift: a row that
+finishes stays in place as an inert, dimmed `✓ Completed` (or `✓ Finished` for
+an agent) line, and new work, including a new child agent, is only counted in
+the rule and `[Show all N]` until both leave. In-place updates still apply. A
+timer runs only while the panel is held, to notice that the pointer left; the
+layout then recomputes in one step.
 
 ```text
  ─── background work · 1 blocked · 2 agents · 1 command · 1 monitor [-] ──
@@ -1432,8 +1451,13 @@ Finished items leave the panel at once; their transcript notices take over.
 The rule counts blocked agents (in a warning face), agents, commands and
 monitors, and ends with the panel's `[-]`/`[+]` collapse toggle; a collapsed
 panel keeps only the rule. Rows share one grammar: state, kind, name, then
-metadata. Needs-attention rows come first, then running agents, commands, and
-watchers. Nested agents indent under their parent. A Bash row shows the
+metadata. Rows are in stable start order, newest at the top: new work appears at
+the edge farthest from the composer, and the composer is anchored on its screen
+row (see [Composer anchoring](#composer-anchoring)), so rows already shown do not
+move. State changes, including blocking, update a row in place; blocked agents
+are marked by the warning face and the rule's count, not by reordering. An agent
+and its descendants form one unit ordered by the top-level agent, children
+indented under their parent. A Bash row shows the
 model-written `description` when present, else the command; a row owned by an
 agent names that owner. The footer progress line shows only the root turn's
 own activity and elapsed time; it never repeats these counts.
@@ -1612,6 +1636,23 @@ necessary to leave room for the rule, including in narrow windows. If truncation
 would hide the background-work panel's `[+]`/`[-]` control, it replaces the
 rule's leading three dashes so the control remains clickable without changing
 the width.
+
+### Composer anchoring
+
+Chrome above the composer (status, interactions, progress) changes height while
+the user types. A window that shows the composer keeps the composer on its screen
+row across every zone mutation and re-render: growth above it scrolls the
+transcript up, and shrinkage reveals more transcript, as in a bottom-anchored
+terminal. While everything from the window start through the end of the draft
+still fits, the start is kept and free space below the composer is used first.
+A window scrolled away from the composer keeps its own start, so reading history
+is not disturbed. Rows are counted with `vertical-motion` from the window start
+(`count-screen-lines` disagreed by one line depending on how the start was
+reached). View buffers set `scroll-conservatively` to 101 and `scroll-margin` to
+0, so a draft growing past the window bottom scrolls one line instead of
+recentering. Measured in a terminal Emacs: with the previous top anchoring, the
+first status row added at the window bottom recentred the composer by thirteen
+rows and every later change moved it by one; anchored, it stays on its row.
 
 A fragment is keyed by managed region identity, namespace, and id. It may
 also carry priority, label/body text, keymap/help text, activation metadata,

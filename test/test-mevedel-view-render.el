@@ -3212,7 +3212,7 @@
       (with-current-buffer view-buf
         (setq mevedel-view--data-turn-start assistant-start)
         (setq mevedel-view--in-flight-turn-start
-              (copy-marker mevedel-view--input-marker nil))
+              (copy-marker (mevedel-view--history-insertion-marker) nil))
         (mevedel-view-render-live-update data-buf)
         (goto-char (point-min))
         (search-forward "Stable paragraph.")

@@ -170,14 +170,15 @@ render would see once gptel has written the batch."
   "Anchor an in-flight turn in VIEW-BUF at the end of DATA-BUF."
   (with-current-buffer view-buf
     (setq mevedel-view--in-flight-turn-start
-          (copy-marker mevedel-view--input-marker))
+          (copy-marker (mevedel-view--history-insertion-marker)))
     (setq mevedel-view--data-turn-start
           (with-current-buffer data-buf (copy-marker (point-max))))))
 
 (defun mevedel-view-stream-test--history (view-buf)
-  "Return VIEW-BUF's text above the composer."
+  "Return VIEW-BUF's transcript text, excluding managed chrome."
   (with-current-buffer view-buf
-    (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
+    (buffer-substring-no-properties
+     (point-min) (mevedel-view--history-insertion-marker))))
 
 (defun mevedel-view-stream-test--insert-repair-audited-tool (data-buf)
   "Insert one completed repair-audited tool call into DATA-BUF."
@@ -2555,7 +2556,7 @@ turn's later text, live and after reconstruction."
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
       (setq mevedel-view--in-flight-turn-start
-            (copy-marker mevedel-view--input-marker))
+            (copy-marker (mevedel-view--history-insertion-marker)))
       (setq mevedel-view--data-turn-start
             (with-current-buffer data-buf (copy-marker (point-max))))
       (setq mevedel-view--pending-tool-calls
@@ -2584,7 +2585,7 @@ turn's later text, live and after reconstruction."
     (mevedel-view-stream-test--insert-data data-buf "final answer\n" 'response)
     (with-current-buffer view-buf
       (setq mevedel-view--in-flight-turn-start
-            (copy-marker mevedel-view--input-marker))
+            (copy-marker (mevedel-view--history-insertion-marker)))
       (setq mevedel-view--data-turn-start
             (with-current-buffer data-buf (copy-marker (point-min))))
       (setq mevedel-view--pending-tool-calls
@@ -3189,11 +3190,13 @@ turn's later text, live and after reconstruction."
       (let ((zone-text (buffer-substring-no-properties
                         (point)
                         (mevedel-view--input-start))))
-        (should (string-match-p "Working[^\n]*\n\n\\[ask\\]\n> \\'" zone-text)))
+        (should (string-match-p "Working[^\n]*\n> \\'" zone-text)))
       (mevedel-view--stop-spinner)
-      (should-not (text-property-any
+      (should (text-property-any
                    (point-min) mevedel-view--input-marker
-                   'mevedel-view-zone-namespace 'progress))))
+                   'mevedel-view-zone-namespace 'progress))
+      (should-not mevedel-view--spinner-status)
+      (should-not mevedel-view--spinner-timer)))
 
   :doc "request spinner stays below queued interaction text"
   (mevedel-view-stream-test--with-buffers
@@ -3326,16 +3329,11 @@ turn's later text, live and after reconstruction."
       (delete-other-windows)
       (with-current-buffer view-buf
         (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
-          (insert (propertize "Earlier answer\n"
-                              'mevedel-view-type 'response
-                              'mevedel-view-source '(1 . 2)))
-          (set-marker-insertion-type mevedel-view--input-marker nil)
-          (set-marker mevedel-view--status-marker
-                      mevedel-view--input-marker)
-          (set-marker mevedel-view--interaction-marker
-                      mevedel-view--input-marker))
+          (goto-char (mevedel-view--history-insertion-marker))
+          (mevedel-view--with-render-boundaries-advancing
+            (insert (propertize "Earlier answer\n"
+                                'mevedel-view-type 'response
+                                'mevedel-view-source '(1 . 2)))))
         (goto-char (point-min))
         (search-forward "Earlier")
         (goto-char (match-beginning 0))
@@ -4059,7 +4057,8 @@ turn's later text, live and after reconstruction."
        '(:name "Agent"
          :args (:task_name "explore" :message "Inspect."))))
     (with-current-buffer view-buf
-      (should-not (mevedel-view--request-progress-visible-p))
+      (should (mevedel-view--request-progress-visible-p))
+      (should-not mevedel-view--spinner-status)
       (should-not (string-match-p "Calling Agent"
                                   (buffer-substring-no-properties
                                    (point-min) (point-max))))))
@@ -4187,7 +4186,8 @@ turn's later text, live and after reconstruction."
                                (buffer-substring-no-properties
                                 (point-min) (point-max)))))
       (with-current-buffer view-buf
-        (should-not (mevedel-view--request-progress-visible-p))
+        (should (mevedel-view--request-progress-visible-p))
+        (should-not mevedel-view--spinner-status)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "Done" text))
@@ -4892,7 +4892,7 @@ turn's later text, live and after reconstruction."
       (with-current-buffer view-buf
         (setq mevedel-view--data-turn-start data-turn-start)
         (setq mevedel-view--in-flight-turn-start
-              (copy-marker mevedel-view--input-marker nil))
+              (copy-marker (mevedel-view--history-insertion-marker) nil))
         (setq mevedel-view--pending-tool-calls
               (list (list 'read "Read" nil)))
         (mevedel-view-stream-test--draw-running-rows)
@@ -5854,7 +5854,7 @@ turn's later text, live and after reconstruction."
         (should (timerp mevedel-view--spinner-timer))
         (should (gethash view-buf mevedel-view-power--watchers))
         (let ((timer mevedel-view--spinner-timer))
-          (cl-letf (((symbol-function 'mevedel-view--render-request-progress)
+          (cl-letf (((symbol-function 'mevedel-view-zone-reconcile)
                      (lambda (&rest _) (cl-incf reconciles)))
                     ((symbol-function 'mevedel-view--schedule-tool-boundary-render)
                      (lambda (&rest _) (cl-incf reconciles)))
@@ -7224,6 +7224,98 @@ turn's later text, live and after reconstruction."
                        display (get-text-property start 'display)))
               (should (= phase (mevedel-view--tool-sample-seconds start)))
               (should-not mevedel-view--spinner-timer))))))))
+
+(mevedel-deftest mevedel-view-composer-rail
+  (:doc "The permanent rail preserves the draft and reserves no idle timer.")
+  ,test
+  (test)
+
+  :doc "idle, active and settled rails occupy the same line next to input"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view-stream-test--insert-composer-draft "> draft\nsecond" 4)
+      (let ((lines (count-lines (point-min) (mevedel-view--input-start))))
+        (should (string-match-p "\\[ask\\]\n> > draft"
+                                (buffer-string)))
+        (should-not (mevedel-view--spinner-active-p))
+        (should-not mevedel-view--spinner-timer)
+        (mevedel-view--start-spinner "Working...")
+        (should (= lines (count-lines (point-min) (mevedel-view--input-start))))
+        (should (string-match-p "\\[ask\\] · Working[^\n]*\n> > draft"
+                                (buffer-string)))
+        (mevedel-view--stop-spinner)
+        (should (= lines (count-lines (point-min) (mevedel-view--input-start))))
+        (should-not (mevedel-view--spinner-active-p))
+        (should-not mevedel-view--spinner-timer)
+        (should (equal "> draft\nsecond" (mevedel-view--input-text)))
+        (should (= (point) (+ 4 (mevedel-view--input-start))))
+        (let ((before (buffer-string))
+              (tick (buffer-modified-tick)))
+          (mevedel-view--render-request-progress)
+          (should (= tick (buffer-modified-tick)))
+          (should (equal-including-properties before (buffer-string)))))))
+
+  :doc "pending attention is real actionable text and does not take focus"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (mevedel-view-stream-test--insert-composer-draft "keep typing" 3)
+      (mevedel-view--interaction-register
+       '(:kind permission :id approval :count 1 :body "Approve" :activate ignore))
+      (should (= (point) (+ 3 (mevedel-view--input-start))))
+      (let ((notice (text-property-any
+                     (mevedel-view-zone-start 'progress)
+                     mevedel-view--input-marker
+                     'mevedel-view-zone-activate
+                     #'mevedel-view-jump-to-interaction)))
+        (should notice)
+        (should (string-match-p "⚠ 1 permission · C-c C-j" (buffer-string)))
+        (goto-char notice)
+        (mevedel-view-activate-at-point)
+        (should (eq 'approval (get-text-property (point) 'mevedel-view-zone-id))))
+      (mevedel-view--interaction-unregister 'approval)
+      (should-not (string-match-p "⚠" (buffer-string)))
+      (should (equal "keep typing" (mevedel-view--input-text)))))
+
+  :doc "two windows use the narrower width and expanding restores activity"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (mevedel-view-stream-test--insert-composer-draft "a draft\nsecond line" 4)
+      (mevedel-view--interaction-register
+       '(:kind permission :id approval :count 1 :body "Approve" :activate ignore))
+      (mevedel-view--start-spinner "Working...")
+      (let* ((wide (selected-window))
+             (narrow (split-window wide 24 'right)))
+        (set-window-buffer narrow view-buf)
+        (mevedel-view--resume-on-window-layout wide)
+        (let* ((region (mevedel-view-zone-region 'progress))
+               (rail (string-trim
+                      (buffer-substring-no-properties
+                       (overlay-start region) (overlay-end region)))))
+          (should (<= (string-width rail)
+                      (1- (min (window-body-width wide)
+                               (window-body-width narrow)))))
+          (should (string-match-p "⚠" rail))
+          (should-not (string-match-p "Working" rail)))
+        (delete-window narrow)
+        (mevedel-view--resume-on-window-layout wide)
+        (should (string-match-p "C-c C-j · Working" (buffer-string)))
+        (should (equal "a draft\nsecond line" (mevedel-view--input-text)))
+        (should (= (point) (+ 4 (mevedel-view--input-start))))))))
+
+(mevedel-deftest mevedel-view--format-composer-rail
+  (:doc "Narrow rails sacrifice activity before mode and pending attention.")
+  (let ((mevedel-view-spinner-style 'static))
+    (dolist (width '(1 3 5 10 16 24 40 80))
+      (let ((rail (mevedel-view--format-composer-rail
+                   "[full-auto]" "2 permissions" width
+                   "Reading a very long file name\nwith details"
+                   "Reading a very long file name\nwith details · 1m 20s")))
+        (should (= 1 (cl-count ?\n rail)))
+        (should (<= (string-width (string-trim-right rail)) width))))
+    (let ((rail (mevedel-view--format-composer-rail
+                 "[edits]" "2 permissions" 40 "Working..." "Working... · 2s")))
+      (should (string-prefix-p "[edits] · ⚠ 2 permissions · C-c C-j" rail))
+      (should-not (string-match-p "Working" rail)))))
 
 (mevedel-deftest mevedel-view--animation-frozen-p
   (:doc "Input pause and reduced motion independently freeze presentation.")

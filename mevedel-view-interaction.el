@@ -330,8 +330,9 @@ silently placing controls in a data buffer."
   "Return N followed by SINGULAR or PLURAL."
   (format "%d %s" n (if (= n 1) singular plural)))
 
-(defun mevedel-view--interaction-count-label ()
-  "Return the composite interaction-zone counter label, or nil."
+(defun mevedel-view--interaction-count-label (&optional actionable)
+  "Return the composite interaction-zone counter label, or nil.
+With ACTIONABLE, omit queued inputs and the trailing pending label."
   (let ((previews 0)
         (plans 0)
         (requests 0)
@@ -381,11 +382,11 @@ silently placing controls in a data buffer."
                  (when (> permissions 0)
                    (mevedel-view--interaction-plural
                     permissions "permission" "permissions"))
-                 (when (> pending-inputs 0)
+                 (when (and (not actionable) (> pending-inputs 0))
                    (mevedel-view--interaction-plural
                     pending-inputs "input" "inputs")))))
     (when parts
-      (concat (string-join parts " · ") " pending"))))
+      (concat (string-join parts " · ") (unless actionable " pending")))))
 
 (defun mevedel-view--interaction-kind-priority (kind)
   "Return the stable interaction overlay priority for KIND."
@@ -499,7 +500,7 @@ snapshot taken at registration."
                       (gethash id mevedel-view--interaction-overlays))))
     (unless (and (overlayp overlay) (overlay-buffer overlay))
       (let ((anchor (mevedel-view--interaction-anchor)))
-        (setq overlay (make-overlay anchor anchor (current-buffer) nil t))))
+        (setq overlay (make-overlay anchor anchor (current-buffer) nil nil))))
     (when (hash-table-p mevedel-view--interaction-overlays)
       (puthash id overlay mevedel-view--interaction-overlays))
     (mevedel-view--interaction-apply-overlay-properties overlay descriptor)
@@ -613,38 +614,73 @@ snapshot taken at registration."
          overlay descriptor)))))
 
 (defvar-local mevedel-view--interaction-focus-return nil
-  "Temporary prompt focus as (ID WINDOW COMPOSER-OFFSET).")
+  "Explicit interaction visits as (WINDOW ID COMPOSER-OFFSET) entries.
+Arrival never moves point.  Only a visit made from the composer is saved.")
 
-(defun mevedel-view--interaction-sync-focus (pairs)
-  "Focus new prompts in PAIRS and restore the composer when they close."
-  (when (and mevedel-view--interaction-focus-return
-             (not (assoc (car mevedel-view--interaction-focus-return) pairs)))
-    (pcase-let ((`(,_id ,window ,offset)
-                 mevedel-view--interaction-focus-return))
-      (setq mevedel-view--interaction-focus-return nil)
-      (when (and (window-live-p window)
-                 (eq (window-buffer window) (current-buffer)))
+(defun mevedel-view-jump-to-interaction ()
+  "Visit the first pending question or approval without changing other windows.
+Remember this window's draft position and return there on settlement only
+if the window is still visiting that interaction.  Reveal hidden Plan
+approvals as needed.  Repeating the command cycles the pending cards."
+  (interactive)
+  (when-let* ((session (mevedel-view--session))
+              (entry (mevedel-session-pending-plan-approval session))
+              ((plist-get entry :hidden)))
+    (plist-put entry :hidden nil)
+    (mevedel-plan-approval-render session))
+  (let* ((window (selected-window))
+         (current (get-text-property (point) 'mevedel-view-interaction-id))
+         (pairs (seq-filter
+                 (lambda (pair)
+                   (memq (plist-get (cdr pair) :kind)
+                         '(preview plan request ask permission)))
+                 (mevedel-view--interaction-descriptor-pairs)))
+         (pair (or (cadr (member (assoc current pairs) pairs)) (car pairs)))
+         (bounds (and pair (mevedel-view-zone-fragment-bounds
+                            'interaction (car pair)))))
+    (unless bounds (user-error "No pending question or approval"))
+    (let* ((saved (assq window mevedel-view--interaction-focus-return))
+           (input-start (mevedel-view--input-start))
+           (offset (if (>= (point) input-start)
+                       (- (point) input-start)
+                     (and saved (equal current (cadr saved)) (nth 2 saved))))
+           (position (or (text-property-any
+                          (plist-get bounds :start) (plist-get bounds :end)
+                          'mevedel-prompt-focus t)
+                         (plist-get bounds :start))))
+      (setq mevedel-view--interaction-focus-return
+            (assq-delete-all window mevedel-view--interaction-focus-return))
+      (when offset
+        (push (list window (car pair) offset)
+              mevedel-view--interaction-focus-return))
+      (goto-char position)
+      (set-window-point window position))))
+
+(defun mevedel-view--interaction-focused-visits ()
+  "Return saved visits whose windows still point inside their interaction.
+Inspect the old text before reconciliation; a settled callback overlay
+may already have been deleted."
+  (seq-filter
+   (lambda (visit)
+     (pcase-let ((`(,window ,id ,_) visit))
+       (and (window-live-p window)
+            (eq (window-buffer window) (current-buffer))
+            (equal id (get-text-property
+                       (window-point window) 'mevedel-view-interaction-id)))))
+   mevedel-view--interaction-focus-return))
+
+(defun mevedel-view--interaction-sync-focus (pairs visits)
+  "Restore settled explicit VISITS after rendering live PAIRS.
+Never move a window that left its visited card or focus a newly arriving one."
+  (setq mevedel-view--interaction-focus-return nil)
+  (dolist (visit visits)
+    (pcase-let ((`(,window ,id ,offset) visit))
+      (if (assoc id pairs)
+          (push visit mevedel-view--interaction-focus-return)
         (set-window-point
          window (min (point-max) (+ (mevedel-view--input-start) offset)))
         (when (eq window (selected-window))
-          (goto-char (window-point window))))))
-  (dolist (pair pairs)
-    (when-let* ((overlay (gethash (car pair)
-                                 mevedel-view--interaction-overlays))
-                ((not (overlay-get overlay 'mevedel-focus-considered))))
-      (overlay-put overlay 'mevedel-focus-considered t)
-      (let ((window (selected-window)))
-        (when-let* (((not mevedel-view--interaction-focus-return))
-                    ((eq (window-buffer window) (current-buffer)))
-                    (input-start (mevedel-view--input-start))
-                    ((>= (window-point window) input-start))
-                    (position (text-property-any
-                               (overlay-start overlay) (overlay-end overlay)
-                               'mevedel-prompt-focus t)))
-          (setq mevedel-view--interaction-focus-return
-                (list (car pair) window (- (window-point window) input-start)))
-          (goto-char position)
-          (set-window-point window position))))))
+          (goto-char (window-point window)))))))
 
 (defun mevedel-view--interaction-render ()
   "Render interaction-zone fragments and descriptor callback overlays.
@@ -660,7 +696,8 @@ descriptor registration and callback ownership remain immediate."
 (defun mevedel-view--interaction-render-now ()
   "Materialize interactions without reentering a projection writer."
   (unless mevedel-view--interaction-render-suppressed
-    (let* ((label (mevedel-view--interaction-count-label))
+    (let* ((visits (mevedel-view--interaction-focused-visits))
+           (label (mevedel-view--interaction-count-label))
            (pairs (mevedel-view--interaction-descriptor-pairs))
            (render-p (or label pairs
                          (mevedel-view-zone-region 'interaction))))
@@ -682,7 +719,8 @@ descriptor registration and callback ownership remain immediate."
           (dolist (pair pairs)
             (when-let* ((after (plist-get (cdr pair) :after-render)))
               (funcall after)))
-          (mevedel-view--interaction-sync-focus pairs))))))
+          (mevedel-view--interaction-sync-focus pairs visits)))
+      (mevedel-view--render-request-progress))))
 
 ;; Rebuilds, prompt settlement, and queue settlement all close interactions
 ;; here, so this is the one place that sees the last blocker go.  The offered
@@ -776,7 +814,7 @@ queued idle work free to proceed."
           (and (hash-table-p mevedel-view--interaction-overlays)
                (gethash id mevedel-view--interaction-overlays)))
          (overlay (or existing-overlay
-                      (make-overlay anchor anchor (current-buffer) nil t))))
+                      (make-overlay anchor anchor (current-buffer) nil nil))))
     (mevedel-view--debug-log
      'interaction-register-begin
      :interaction-id id

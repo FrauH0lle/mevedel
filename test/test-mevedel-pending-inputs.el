@@ -422,9 +422,12 @@
         (with-current-buffer view-buf
           (should (equal "queued\nmessage"
                          (mevedel-view--input-text)))
-          (should (string-match-p
-                   "Editing follow-up 1"
-                   (mevedel-view--input-prompt-string)))
+          (let ((rail (mevedel-view-zone-region 'progress)))
+            (should (overlayp rail))
+            (should (string-match-p
+                     "Editing follow-up 1"
+                     (buffer-substring-no-properties
+                      (overlay-start rail) (overlay-end rail)))))
           (should-error (mevedel-view-send) :type 'user-error)
           (should-error (mevedel-view-send-follow-up) :type 'user-error)
           (mevedel-test--with-captured-messages nil

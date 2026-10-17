@@ -214,6 +214,7 @@
                   "mevedel-view-interaction" ())
 (declare-function mevedel-view-interaction-initialize
                   "mevedel-view-interaction" ())
+(declare-function mevedel-view-jump-to-interaction "mevedel-view-interaction" ())
 
 ;; `mevedel-view-markdown'
 (declare-function mevedel-view--buffer-substring-filter
@@ -683,6 +684,7 @@ above `mevedel-view--input-marker'."
   :parent mevedel-surface-mode-map
   "C-g" #'mevedel-view-abort
   "C-c C-k" #'mevedel-view-abort
+  "C-c C-j" #'mevedel-view-jump-to-interaction
   "C-c C-o" #'mevedel-menu
   "C-c C-q" #'mevedel-pending-inputs-clear)
 
@@ -756,6 +758,11 @@ the editable composer body.
   ;; Copying a rendered table yields its canonical pipe Markdown.
   (setq-local filter-buffer-substring-function
               #'mevedel-view--buffer-substring-filter)
+  ;; Keep the composer where it is: when it reaches the window bottom,
+  ;; scroll one line instead of recentering (which jumped about half a
+  ;; window when a status row appeared or the draft grew by a line).
+  (setq-local scroll-conservatively 101
+              scroll-margin 0)
   ;; Reflow rendered tables and ratio-sized images when a window
   ;; showing this view changes size or first displays it.
   (mevedel-view--enable-markdown-realign)
@@ -859,6 +866,7 @@ existing `mevedel--view-buffer' binding untouched.  A
           (setq mevedel-view--interaction-marker (copy-marker start t))
           (setq mevedel-view--input-marker (copy-marker start nil)))))
     (mevedel-view-composer-initialize)
+    (mevedel-view--ensure-request-progress data-buf)
     ;; Kill-buffer lifecycle: view killed -> clear ref on data buffer
     (add-hook 'kill-buffer-hook #'mevedel-view--on-view-killed nil t)
     ;; A buffer repurposed in another mode must stop decorative wakeups too.
@@ -1635,6 +1643,8 @@ redisplay hooks reschedule it once someone can see the result."
   "Update animation scheduling after WINDOW scrolled or changed size.
 Both hooks run before redisplay, while `window-end' still describes the
 old range, so the decision waits for the completed redisplay."
+  (when (eq (window-buffer window) (current-buffer))
+    (mevedel-view--render-request-progress))
   (when (and (eq (window-buffer window) (current-buffer))
              (fboundp 'mevedel-view--recheck-spinner-after-redisplay)
              (mevedel-view--spinner-active-p))
@@ -1657,7 +1667,8 @@ still release animation and power observers when it becomes invisible."
   (if (eq (window-buffer window) (current-buffer))
       (mevedel-view--resume-render-if-attended (current-buffer))
     (when (fboundp 'mevedel-view--start-spinner-timer)
-      (mevedel-view--start-spinner-timer t))))
+      (mevedel-view--start-spinner-timer t)))
+  (mevedel-view--render-request-progress))
 
 (defun mevedel-view--schedule-render (kind data-buffer delay)
   "Coalesce a KIND render of DATA-BUFFER after DELAY seconds.

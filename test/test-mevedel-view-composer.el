@@ -48,6 +48,95 @@
 (require 'gptel-request)
 (require 'mcp)
 
+(defun mevedel-view-composer-test--status-rows (count)
+  "Reconcile COUNT status rows through the real zone preserver."
+  (mevedel-view-zone-reconcile
+   'status (mevedel-view--status-anchor) (mevedel-view--status-anchor)
+   (when (> count 0)
+     (list (list :namespace 'status :id 'anchor-test :priority 1
+                 :body (mapconcat (lambda (n) (format "  row %d\n" n))
+                                  (number-sequence 1 count) ""))))))
+
+(mevedel-deftest mevedel-view--restore-composer-anchors ()
+  ,test
+  (test)
+  :doc "a window showing the composer keeps its row while status grows and shrinks"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (forward-line 1)
+        (dotimes (n 200) (insert (format "transcript %d\n" n))))
+      (goto-char (point-max))
+      (insert "a draft")
+      ;; A full window: the composer's line is the last one shown.
+      (let ((row (1- (window-body-height))))
+        (set-window-start nil (save-excursion
+                                (goto-char (mevedel-view--input-start))
+                                (vertical-motion (- row))
+                                (point)))
+        (should (= row (mevedel-view--composer-screen-row (selected-window))))
+        (dolist (count '(3 6 1 0 4))
+          (mevedel-view-composer-test--status-rows count)
+          (ert-info ((format "after %d status rows" count))
+            (should (= row (mevedel-view--composer-screen-row (selected-window))))))
+        ;; The render preserver anchors the same way.
+        (mevedel-view--call-preserving-window-state
+         (lambda ()
+           (let ((inhibit-read-only t))
+             (goto-char (mevedel-view--status-anchor))
+             (insert "streamed line\nanother\n"))))
+        (should (= row (mevedel-view--composer-screen-row (selected-window))))
+        (should (equal "a draft" (mevedel-view--input-text))))))
+  :doc "a window scrolled away from the composer keeps its start"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (forward-line 1)
+        (dotimes (n 200) (insert (format "transcript %d\n" n))))
+      (goto-char (point-min))
+      (forward-line 20)
+      (let ((start (point)))
+        (set-window-start nil start)
+        (should-not (mevedel-view--composer-screen-row (selected-window)))
+        (mevedel-view-composer-test--status-rows 5)
+        (should (= start (window-start))))))
+  :doc "a window starting inside a tall draft keeps its draft text when text grows above"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (goto-char (point-max))
+      (insert (mapconcat (lambda (n) (format "draft line %d" n))
+                         (number-sequence 1 (* 3 (window-body-height))) "\n"))
+      (let* ((start (save-excursion (goto-char (mevedel-view--input-start))
+                                    (forward-line 10) (point)))
+             (offset (- start (mevedel-view--input-start))))
+        (set-window-start nil start)
+        (should-not (mevedel-view--composer-screen-row (selected-window)))
+        (mevedel-view--call-preserving-window-state
+         (lambda ()
+           (let ((inhibit-read-only t))
+             (goto-char (mevedel-view--status-anchor))
+             (insert "streamed line above the composer\n"))))
+        (should (= offset (- (window-start) (mevedel-view--input-start)))))))
+  :doc "while everything fits, the window start stays and the composer moves down"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (set-window-start nil (point-min))
+      (let ((row (mevedel-view--composer-screen-row (selected-window))))
+        (should row)
+        (mevedel-view-composer-test--status-rows 3)
+        (should (= (point-min) (window-start)))
+        (should (< row (mevedel-view--composer-screen-row (selected-window))))))))
+
 (defun mevedel-view-composer-test--owner (symbol)
   "Return the source feature basename that defines SYMBOL."
   (file-name-base (or (symbol-file symbol 'defun) "")))
@@ -381,35 +470,43 @@
 ;;; Composer editing
 
 (mevedel-deftest mevedel-view--input-prompt-string
-  (:doc "renders permission mode in the prompt prefix")
+  (:doc "separates the prompt from the rail's permission badge")
   ,test
   (test)
 
   :doc "ask mode shows its badge like every other mode"
-  (let ((prompt (mevedel-view--input-prompt-string 'ask)))
-    (should (string= "\n[ask]\n> " prompt))
+  (let ((prompt (mevedel-view--input-prompt-string 'ask))
+        (badge (mevedel-view--composer-mode-badge 'ask)))
+    (should (string= "> " prompt))
+    (should (string= "[ask]" badge))
     (should (eq 'mevedel-view-permission-mode-ask
-                (get-text-property 2 'font-lock-face prompt)))
+                (get-text-property 2 'font-lock-face badge)))
     ;; Same line count as other modes, so switching never moves the draft.
     (should (= (cl-count ?\n prompt)
                (cl-count ?\n (mevedel-view--input-prompt-string 'edits)))))
 
   :doc "edits mode renders its canonical name"
-  (let ((prompt (mevedel-view--input-prompt-string 'edits)))
-    (should (string= "\n[edits]\n> " prompt))
+  (let ((prompt (mevedel-view--input-prompt-string 'edits))
+        (badge (mevedel-view--composer-mode-badge 'edits)))
+    (should (string= "> " prompt))
+    (should (string= "[edits]" badge))
     (should (eq 'mevedel-view-permission-mode-edits
-                (get-text-property 2 'font-lock-face prompt))))
+                (get-text-property 2 'font-lock-face badge))))
 
   :doc "full-auto mode renders its canonical name"
-  (let ((prompt (mevedel-view--input-prompt-string 'full-auto)))
-    (should (string= "\n[full-auto]\n> " prompt))
+  (let ((prompt (mevedel-view--input-prompt-string 'full-auto))
+        (badge (mevedel-view--composer-mode-badge 'full-auto)))
+    (should (string= "> " prompt))
+    (should (string= "[full-auto]" badge))
     (should (eq 'mevedel-view-permission-mode-full-auto
-                (get-text-property 2 'font-lock-face prompt))))
+                (get-text-property 2 'font-lock-face badge))))
 
   :doc "Plan shows the retained permission mode"
   (let ((mevedel--session
          (mevedel-session--create :authority-mode 'pid-lock :name "main" :plan-mode t)))
-    (should (string= "\n[Plan · full-auto]\n> "
+    (should (string= "[Plan · full-auto]"
+                     (mevedel-view--composer-mode-badge 'full-auto)))
+    (should (string= "> "
                      (mevedel-view--input-prompt-string 'full-auto))))
 
   :doc "directive scope is loud and uses its distinct prompt prefix"
@@ -671,7 +768,7 @@
                           (default-toplevel-value 'mevedel-permission-mode)))
               (should (string= "\n[edits]\n> "
                                (buffer-substring-no-properties
-                                mevedel-view--input-marker
+                                (mevedel-view-zone-start 'progress)
                                 (mevedel-view--input-start))))
               (should (equal "> first\nsecond"
                              (mevedel-view--input-text))))
@@ -757,7 +854,7 @@
                     (mevedel-session-permission-mode session)))
         (should (string= "\n[Plan · full-auto]\n> "
                          (buffer-substring-no-properties
-                          mevedel-view--input-marker
+                          (mevedel-view-zone-start 'progress)
                           (mevedel-view--input-start))))
         (should (equal "> first\nsecond"
                        (mevedel-view--input-text)))
@@ -1730,7 +1827,7 @@
       (with-current-buffer view-buf
         (should (string= "\n[ask]\n> "
                          (buffer-substring-no-properties
-                          mevedel-view--input-marker
+                          (mevedel-view-zone-start 'progress)
                           (mevedel-view--input-start)))))))
 
   :doc "refresh preserves input text and updates the mode"
@@ -1742,7 +1839,7 @@
       (mevedel-view-refresh-input-prompt)
       (should (string= "\n[full-auto]\n> "
                        (buffer-substring-no-properties
-                        mevedel-view--input-marker
+                        (mevedel-view-zone-start 'progress)
                         (mevedel-view--input-start))))
       (should (string= "draft" (mevedel-view--input-text)))))
 
@@ -1755,7 +1852,7 @@
       (mevedel-view-refresh-input-prompt)
       (should (string= "\n[full-auto]\n> "
                        (buffer-substring-no-properties
-                        mevedel-view--input-marker
+                        (mevedel-view-zone-start 'progress)
                         (mevedel-view--input-start))))
       (should (string= "> quoted\nsecond line" (mevedel-view--input-text)))
       (should-not (get-text-property (mevedel-view--input-start)
@@ -1775,7 +1872,7 @@
         (should (string= draft (mevedel-view--input-text)))
         (should (string= "\n[full-auto]\n> "
                          (buffer-substring-no-properties
-                          mevedel-view--input-marker
+                          (mevedel-view-zone-start 'progress)
                           (mevedel-view--input-start))))))))
 
 (mevedel-deftest mevedel-view--call-preserving-input-text
@@ -2539,7 +2636,7 @@
            (commands
             (list (cons "goal" (lambda (args) (setq seen args))))))
       (with-current-buffer data-buf
-        (setq-local mevedel--current-request t
+        (setq-local mevedel--current-request (mevedel-request--create)
                     mevedel-slash-commands commands))
       (with-current-buffer view-buf
         (goto-char (mevedel-view--input-start))
@@ -2554,7 +2651,7 @@
              (commands
               (list (cons command (lambda (args) (setq seen args))))))
         (with-current-buffer data-buf
-          (setq-local mevedel--current-request t
+          (setq-local mevedel--current-request (mevedel-request--create)
                       mevedel-slash-commands commands))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))

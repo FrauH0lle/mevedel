@@ -85,30 +85,137 @@
       (should (plist-get fragment :collapsed))
       (should (string-match-p "\\` ─── background work · 1 command \\[\\+\\] ─+\n\\'"
                               (substring-no-properties (plist-get fragment :body))))))
-  :doc "agents share the panel, blocked first, before commands and monitors"
+  :doc "rows are newest first; a blocking agent keeps its place, children follow parents"
   (mevedel-view-execution-test--with-view
     (setq live (list (list :execution-id "m1" :owner "/root" :yielded t :state 'running
-                           :kind 'monitor :description "test ticker" :event-count 1)
+                           :kind 'monitor :description "test ticker" :event-count 1
+                           :started-at 20.0)
                      (list :execution-id "e1" :owner "/root/counter" :yielded t
-                           :state 'running :command "make test" :description "Run tests")))
+                           :state 'running :command "make test" :description "Run tests"
+                           :started-at 30.0)))
     (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                (lambda ()
                  (list (list :path "/root/counter" :status 'running :depth 0
-                             :model-metadata '(:model "opus" :effort "medium"))
+                             :model-metadata '(:model "opus" :effort "medium")
+                             :started-at (seconds-to-time 10))
+                       (list :path "/root/counter/sub" :status 'running :depth 1
+                             :started-at (seconds-to-time 50))
                        (list :path "/root/reviewer" :status 'blocked :depth 0
-                             :activity 'permission-blocked)))))
+                             :activity 'permission-blocked
+                             :started-at (seconds-to-time 5))))))
       (let ((text (substring-no-properties
                    (plist-get (mevedel-view-execution-fragment session) :body))))
         (should (string-prefix-p
-                 " ─── background work · 1 blocked · 2 agents · 1 command · 1 monitor [-] ─"
+                 " ─── background work · 1 blocked · 3 agents · 1 command · 1 monitor [-] ─"
                  text))
         (should (string-search
-                 (concat "  ▸ Blocked   agent    /root/reviewer · waiting for permission\n"
-                         "  ▸ Running   agent    /root/counter · opus:medium\n"
-                         "  ▸ Running   bash     Run tests · /root/counter\n"
+                 (concat "  ▸ Running   bash     Run tests · /root/counter\n"
                          "  ▸ Watching  monitor  test ticker · 1 event\n"
-                         "  [Manage]\n")
+                         "  ▸ Running   agent    /root/counter · opus:medium\n"
+                         "    ▸ Running   agent    /root/counter/sub\n"
+                         "  ▸ Blocked   agent    /root/reviewer · waiting for permission\n")
                  text)))))
+  :doc "a row finishing under point stays inert and dimmed until point leaves"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (setf (plist-get (car live) :started-at) 1.0
+            (plist-get (car live) :description) "Run tests")
+      (setq live (append live (list (list :execution-id "e2" :owner "/root" :yielded t
+                                          :state 'running :command "serve"
+                                          :started-at 2.0))))
+      (mevedel-view--render-status)
+      (mevedel-view-execution-test--at "  ▸ Running   bash     serve")
+      ;; e1 finishes with exit 0 while point is on the panel.
+      (mevedel-view-execution--event
+       (list :session session :data-buffer data-buf :owner "/root" :type 'terminal
+             :facts '(:execution-id "e1" :state completed :termination exited :exit-code 0)))
+      (setq live (list (cadr live)))
+      (mevedel-view--render-status)
+      (unwind-protect
+          (progn
+            (should (string-search "  ✓ Completed bash     Run tests · exit 0\n" (buffer-string)))
+            (mevedel-view-execution-test--at "  ✓ Completed")
+            (should-not (get-text-property (point) 'mevedel-view-zone-activate))
+            (should (timerp mevedel-view-execution--release-timer))
+            ;; Point still on the panel: the check keeps the row.
+            (mevedel-view-execution--check-release view-buf)
+            (should (string-search "✓ Completed" (buffer-string)))
+            ;; Point leaves for the composer: the row goes, the timer stops.
+            (goto-char (point-max))
+            (mevedel-view-execution--check-release view-buf)
+            (should-not (string-search "✓ Completed" (buffer-string)))
+            (should-not mevedel-view-execution--release-timer)
+            (should (string-search "▸ Running   bash     serve" (buffer-string))))
+        (mevedel-view-execution--cancel-release))))
+  :doc "a hidden overflow row that finishes is not held"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (setq live (cl-loop for n from 1 to 7
+                          collect (list :execution-id (format "e%d" n) :owner "/root"
+                                        :yielded t :state 'running
+                                        :command (format "cmd %d" n)
+                                        :started-at (float n))))
+      (mevedel-view--render-status)
+      ;; Newest first: e7..e3 shown, e2 and e1 hidden behind [Show all 7].
+      (mevedel-view-execution-test--at "  ▸ Running   bash     cmd 7")
+      (setq live (cl-remove "e1" live :key (lambda (item) (plist-get item :execution-id))
+                            :test #'equal))
+      (unwind-protect
+          (progn
+            (mevedel-view--render-status)
+            (ert-info ("a finished row that was hidden is not brought back as held")
+              (should-not mevedel-view-execution--held)
+              (should-not (string-search "✓ Completed" (buffer-string)))))
+        (mevedel-view-execution--cancel-release))))
+  :doc "at capacity under point, shown rows stay put and new work is only counted"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (setq live (cl-loop for n from 1 to 5
+                          collect (list :execution-id (format "e%d" n) :owner "/root"
+                                        :yielded t :state 'running
+                                        :command (format "cmd %d" n)
+                                        :started-at (float n))))
+      (mevedel-view--render-status)
+      (mevedel-view-execution-test--at "  ▸ Running   bash     cmd 1")
+      (let ((line-of (lambda (text)
+                       (save-excursion
+                         (goto-char (point-min))
+                         (search-forward text)
+                         (line-number-at-pos)))))
+        (let ((line (funcall line-of "cmd 3")))
+          (unwind-protect
+              (progn
+                ;; At capacity, e1 finishes under point, then e6 starts.
+                (setq live (cdr live))
+                (mevedel-view--render-status)
+                (setq live (append live (list (list :execution-id "e6" :owner "/root"
+                                                    :yielded t :state 'running
+                                                    :command "cmd 6" :started-at 6.0))))
+                (mevedel-view--render-status)
+                (ert-info ("the finished row stays and no shown row moves")
+                  (should (string-search "✓ Completed bash     cmd 1" (buffer-string)))
+                  (should-not (string-search "cmd 6" (buffer-string)))
+                  (should (= line (funcall line-of "cmd 3")))
+                  (should (string-search "[Show all 6]" (buffer-string))))
+                ;; Leaving releases the hold and shows the new work.
+                (goto-char (point-max))
+                (mevedel-view-execution--check-release view-buf)
+                (should (string-search "▸ Running   bash     cmd 6" (buffer-string)))
+                (should-not (string-search "✓ Completed" (buffer-string))))
+            (mevedel-view-execution--cancel-release))))))
+  :doc "a row finishing while point is elsewhere disappears at once"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (mevedel-view--render-status)
+      (goto-char (point-max))
+      (setq live nil)
+      (should-not (mevedel-view-execution-fragment session))
+      (should-not mevedel-view-execution--held)
+      (should-not mevedel-view-execution--release-timer)))
   :doc "changing sessions drops retained selection even with equal IDs"
   (mevedel-view-execution-test--with-view
     (setq mevedel-view-execution--selected (plist-put (copy-sequence (car live)) :session session))
@@ -234,16 +341,70 @@
 (mevedel-deftest mevedel-view-execution-reset ()
   ,test
   (test)
-  :doc "clears expansion, overflow and collapse"
+  :doc "clears expansion, overflow, collapse and held rows, stopping the release timer"
   (mevedel-view-execution-test--with-view
     (setq mevedel-view-execution--selected-agent "/root/a"
-          mevedel-view-execution--show-all t)
+          mevedel-view-execution--show-all t
+          mevedel-view-execution--held (list (list '(agent "/root/a") 'agent '(:path "/root/a")))
+          mevedel-view-execution--release-timer (run-with-timer 3600 nil #'ignore))
     (mevedel-view-zone-set-collapse-state mevedel-view-execution--collapse-key t)
     (mevedel-view-execution-reset)
     (should-not mevedel-view-execution--selected-agent)
     (should-not mevedel-view-execution--show-all)
+    (should-not mevedel-view-execution--held)
+    (should-not mevedel-view-execution--release-timer)
     (should-not (mevedel-view-zone-collapse-state mevedel-view-execution--collapse-key))
     (should (string-search "▸ Running" (buffer-string)))))
+
+(mevedel-deftest mevedel-view-execution--ordered ()
+  ,test
+  (test)
+  :doc "newest unit first; an agent tree is one unit ordered by its top-level agent"
+  (let ((entry (lambda (kind data) (list (mevedel-view-execution--key kind data) kind data))))
+    (should (equal '((agent "/root/new") (execution "/root" "e") (agent "/root/old")
+                     (agent "/root/old/kid"))
+                   (mapcar #'car
+                           (mevedel-view-execution--ordered
+                            (list (funcall entry 'agent '(:path "/root/old/kid" :started-at 90.0))
+                                  (funcall entry 'agent '(:path "/root/old" :started-at 1.0))
+                                  (funcall entry 'execution '(:owner "/root" :execution-id "e"
+                                                              :started-at 5.0))
+                                  (funcall entry 'agent '(:path "/root/new" :started-at 9.0))))))))
+  :doc "an agent tree keeps its place after its top-level agent finishes"
+  (let ((entry (lambda (kind data) (list (mevedel-view-execution--key kind data) kind data)))
+        (starts (make-hash-table :test #'equal)))
+    (mevedel-view-execution--ordered
+     (list (funcall entry 'agent '(:path "/root/old" :started-at 1.0))
+           (funcall entry 'agent '(:path "/root/old/kid" :started-at 90.0))
+           (funcall entry 'agent '(:path "/root/new" :started-at 9.0)))
+     starts)
+    (should (equal '((agent "/root/new") (agent "/root/old/kid"))
+                   (mapcar #'car
+                           (mevedel-view-execution--ordered
+                            (list (funcall entry 'agent '(:path "/root/old/kid" :started-at 90.0))
+                                  (funcall entry 'agent '(:path "/root/new" :started-at 9.0)))
+                            starts))))
+    ;; Units that are gone are forgotten.
+    (mevedel-view-execution--ordered
+     (list (funcall entry 'agent '(:path "/root/new" :started-at 9.0))) starts)
+    (should (equal '("/root/new") (hash-table-keys starts)))))
+
+(mevedel-deftest mevedel-view-execution--check-release ()
+  ,test
+  (test)
+  :doc "a dead view's timer cancels only itself, never another view's"
+  (let* ((dead (generate-new-buffer " *dead-view*"))
+         (own (run-with-timer 3600 3600 #'ignore))
+         (other (run-with-timer 3600 3600 #'mevedel-view-execution--check-release
+                                (current-buffer))))
+    (unwind-protect
+        (progn
+          (kill-buffer dead)
+          (mevedel-view-execution--check-release dead own)
+          (should-not (memq own timer-list))
+          (should (memq other timer-list)))
+      (cancel-timer own)
+      (cancel-timer other))))
 
 (mevedel-deftest mevedel-view-execution--state-face ()
   (dolist (case '(((:state running) . mevedel-view-agent-running)
