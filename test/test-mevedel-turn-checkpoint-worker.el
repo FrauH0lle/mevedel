@@ -10,6 +10,8 @@
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-journal-test-support"))
 (require 'mevedel-turn)
+(require 'mevedel-agent-control)
+(require 'mevedel-session-persistence)
 
 (mevedel-deftest mevedel--defer-turn-steps
   (:vars ((mevedel-transport--enabled-p t)))
@@ -102,6 +104,39 @@
        (should pinned)
        (should-not (plist-get (gptel-fsm-info fsm) :mevedel-checkpoint-error))
        (should-not (plist-get (gptel-fsm-info fsm) :mevedel-checkpoint-cancel))
-       (should (zerop (plist-get (gptel-fsm-info fsm) :mevedel-settlement-holds)))))))
+       (should (zerop (plist-get (gptel-fsm-info fsm) :mevedel-settlement-holds))))))
+
+  :doc "a debounced agent-state save during preparation still captures the turn silently"
+  (mevedel-test-journal-capture--with-portable-session
+   (lambda (session buffer)
+     (let ((mevedel-journal-enabled nil))
+       (mevedel-test-journal-capture--turn session buffer "Question" "Completed answer"))
+     (let* ((fsm (gptel-make-fsm :info (list :buffer buffer :mevedel-turn-saved t
+                                           :mevedel-request-id "checkpoint")))
+            (mevedel-session-persistence-agent-save-debounce .05)
+            (head nil) ended warnings)
+       (mevedel-test--with-captured-diagnostics warnings
+         (mevedel--defer-turn-steps
+          fsm (list #'mevedel--turn-checkpoint (lambda (_) (setq ended t))))
+         (let ((until (+ (float-time) 15)))
+           (while (and (not (plist-get (gptel-fsm-info fsm) :mevedel-checkpoint-state))
+                       (< (float-time) until))
+             (accept-process-output nil .005)))
+         (should (eq 'waiting (plist-get (gptel-fsm-info fsm) :mevedel-checkpoint-state)))
+         (setq head (plist-get (mevedel-session-publication session) :head))
+         ;; Mailbox consumption schedules this sidecar publication in a
+         ;; background-event turn; it lands while the child prepares.
+         (mevedel-agent-control--persist-session session)
+         (let ((until (+ (float-time) 15)))
+           (while (and (not ended) (< (float-time) until)) (accept-process-output nil .01))))
+       (should ended)
+       (should-not (equal head (plist-get (mevedel-session-publication session) :head)))
+       (should-not (plist-get (gptel-fsm-info fsm) :mevedel-checkpoint-error))
+       (should (equal "" warnings))
+       (should (mevedel-journal-pins-present-p (mevedel-session-save-path session)))
+       (should (equal '(1) (mapcar (lambda (capture)
+                                     (length (plist-get (plist-get capture :metadata) :turn-ids)))
+                                   (mevedel-journal-capture-list
+                                    (mevedel-session-workspace session)))))))))
 
 ;;; test-mevedel-turn-checkpoint-worker.el ends here

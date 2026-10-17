@@ -67,7 +67,10 @@ Linux workspaces, deferred root-turn checkpoint preparation, scheduled journal
 recovery, digest discovery/admission and retention execute in short-lived batch
 Emacs workers. Checkpoint preparation reads a frozen committed publication without
 source mutation authority; the editor checks its live request and unchanged head
-before publishing and pinning under its own lease. Admission remains held through
+before publishing and pinning under its own lease. A newer publication of the same
+session supersedes the prepared evidence: preparation restarts once against the new
+head, and a second supersession leaves the turns to the next checkpoint without a
+warning. Admission remains held through
 this continuation, with cancellation and a bounded preparation deadline. Explicit
 checkpointing and non-portable sessions remain synchronous. Scheduled memory publication recovery and local consolidation
 recovery, admission, scope preparation and accepted-result publication use the same
@@ -684,3 +687,23 @@ still inspects every record.
 
 The same replay now checks the 32 records in 29-31 ms: one listing and one
 batched marker program.
+
+### 2026-10-17: treat a newer session publication as supersession
+
+After a background-event turn the editor warned "Journal capture checkpoint
+failed: Checkpoint source changed during preparation" and captured nothing. The
+session telemetry showed the turn save, then a `session-save :kind
+agent-registry` publication 0.7 s later, inside the roughly 1.8-s preparation
+window. The debounced agent-state save (two seconds after mailbox consumption
+or an activity transition) had moved the head. A reproduction through
+`mevedel--turn-checkpoint` showed the head check as the only failing condition.
+Execution completion records publish the same way. The rejection was correct,
+because the prepared head and source revision were stale. The warning was not:
+the same live root and request still owned the source, and nothing had failed.
+The owner now restarts preparation once against the current head. A second
+supersession returns no capture without a warning, and the next checkpoint
+covers those turns because preparation always takes every uncovered completed
+turn. A replaced request, a dead or reassigned root, a changed save path, a
+pending publication, disabled journaling, a worker error and the deadline still
+report failure. The restart costs one more child preparation, only when this
+race occurs.

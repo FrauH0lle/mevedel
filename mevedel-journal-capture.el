@@ -564,57 +564,75 @@ are read, so a worker needs no source mutation authority."
 ;;;###autoload
 (defun mevedel-journal-capture-checkpoint-start (session buffer callback)
   "Prepare a local portable SESSION checkpoint outside the editor.
-BUFFER must remain SESSION's root and its committed head must remain current.
-CALLBACK receives the published capture, nil, or (:error MESSAGE).  Return a
-cancellation function; cancellation never publishes or calls CALLBACK."
+BUFFER must remain SESSION's root with the same request.  A newer publication
+of the same session supersedes the prepared result: preparation restarts once
+against the new head, and a second supersession yields nil without publishing,
+leaving the turns to the next checkpoint.  CALLBACK receives the published
+capture, nil, or (:error MESSAGE).  Return a cancellation function;
+cancellation never publishes or calls CALLBACK."
   (require 'mevedel-journal-worker)
   (unless (and (mevedel-journal-worker-supported-p (mevedel-session-workspace session))
                (mevedel-session-codec-portable-authority-p session)
                (buffer-live-p buffer)
                (eq buffer (mevedel-session-root-buffer session)))
     (error "Checkpoint preparation requires a local portable root session"))
-  (let* ((head (plist-get (mevedel-session-publication session) :head))
-         (directory (mevedel-session-save-path session))
-         (request (buffer-local-value 'mevedel--current-request buffer))
-         (payload (with-current-buffer buffer
-                    (list :session-id (mevedel-session-session-id session)
-                          :name (mevedel-session-name session) :save-path directory
-                          :publication (copy-tree (mevedel-session-publication session))
-                          :turn-count (mevedel-session-turn-count session)
-                          :current-segment (mevedel-session-current-segment session)
-                          :prompt-index (copy-tree (mevedel-session-prompt-index session))
-                          :client (mevedel-workspace-identity-client)
-                          :policy (mevedel-journal-capture--freeze-policy))))
-         process timer settled)
+  (let ((directory (mevedel-session-save-path session))
+        (request (buffer-local-value 'mevedel--current-request buffer))
+        head process timer settled restarted)
     (cl-labels
-     ((cancel ()
+     ((start ()
+        (setq head (plist-get (mevedel-session-publication session) :head)
+              process
+              (mevedel-journal-worker-start
+               (mevedel-session-workspace session) 'capture-prepare #'finish nil
+               (with-current-buffer buffer
+                 (list :session-id (mevedel-session-session-id session)
+                       :name (mevedel-session-name session) :save-path directory
+                       :publication (copy-tree (mevedel-session-publication session))
+                       :turn-count (mevedel-session-turn-count session)
+                       :current-segment (mevedel-session-current-segment session)
+                       :prompt-index (copy-tree (mevedel-session-prompt-index session))
+                       :client (mevedel-workspace-identity-client)
+                       :policy (mevedel-journal-capture--freeze-policy))))))
+      (cancel ()
         (setq settled t)
         (when timer (cancel-timer timer))
         (when (and process (process-live-p process)) (delete-process process)))
       (finish (result)
         (unless settled
-          (cancel)
-          (funcall
-           callback
-           (condition-case err
-               (progn
-                 (when (plist-get result :error) (error "%s" (plist-get result :error)))
-                 (unless (and mevedel-journal-enabled (buffer-live-p buffer)
-                              (eq buffer (mevedel-session-root-buffer session))
-                              (eq session (buffer-local-value 'mevedel--session buffer))
-                              (eq request (buffer-local-value 'mevedel--current-request buffer))
-                              (equal directory (mevedel-session-save-path session))
-                              (equal head (plist-get (mevedel-session-publication session) :head))
-                              (not (mevedel-session-pending-publication session))
-                              (not (mevedel-session-publication-active-p session))
-                              (null (mevedel-session-publication-queue session)))
-                   (error "Checkpoint source changed during preparation"))
-                 (mevedel-session-artifacts-assert-mutation-authority session buffer)
-                 (mevedel-session-durability-call-with-reserved-lease
-                  session (lambda () (mevedel-journal-capture--publish session (plist-get result :prepared)))))
-             (error (list :error (error-message-string err))))))))
-     (setq process (mevedel-journal-worker-start
-                    (mevedel-session-workspace session) 'capture-prepare #'finish nil payload))
+          (let* ((owned (and mevedel-journal-enabled (buffer-live-p buffer)
+                             (eq buffer (mevedel-session-root-buffer session))
+                             (eq session (buffer-local-value 'mevedel--session buffer))
+                             (eq request (buffer-local-value 'mevedel--current-request buffer))
+                             (equal directory (mevedel-session-save-path session))
+                             (not (mevedel-session-pending-publication session))))
+                 (superseded
+                  (and owned (not (plist-get result :error))
+                       (or (not (equal head (plist-get (mevedel-session-publication session) :head)))
+                           (mevedel-session-publication-active-p session)
+                           (mevedel-session-publication-queue session)))))
+            (if (and superseded (not restarted))
+                ;; A newer publication of the same session, such as a debounced
+                ;; agent-state save, is not a failure: prepare against it.
+                (condition-case err
+                    (progn (setq restarted t) (start))
+                  (error (finish (list :error (error-message-string err)))))
+              (cancel)
+              (funcall
+               callback
+               (condition-case err
+                   (cond
+                    ((plist-get result :error) (error "%s" (plist-get result :error)))
+                    (superseded nil)
+                    ((not owned) (error "Checkpoint source changed during preparation"))
+                    (t
+                     (mevedel-session-artifacts-assert-mutation-authority session buffer)
+                     (mevedel-session-durability-call-with-reserved-lease
+                      session (lambda ()
+                                (mevedel-journal-capture--publish
+                                 session (plist-get result :prepared))))))
+                 (error (list :error (error-message-string err))))))))))
+     (start)
      (unless settled
        (setq timer (run-at-time 120 nil (lambda () (finish '(:error "Checkpoint preparation timed out"))))))
      #'cancel)))

@@ -39,7 +39,7 @@
          (when timer (cancel-timer timer))
          (when cancel (funcall cancel))))))
 
-  :doc "a changed saved publication rejects the prepared checkpoint without a pin"
+  :doc "a newer publication restarts preparation against the current head"
   (mevedel-test-journal-capture--with-portable-session
    (lambda (session buffer)
      (let ((mevedel-journal-enabled nil))
@@ -55,7 +55,32 @@
                (while (and (not completed) (< (float-time) until))
                  (accept-process-output nil .01)))
              (should completed)
-             (should (plist-get result :error))
+             (should-not (plist-get result :error))
+             (should (equal "Changed title"
+                            (plist-get (plist-get result :metadata) :session-name)))
+             (should (equal (plist-get (mevedel-session-publication session) :head)
+                            (plist-get result :head)))
+             (should (mevedel-journal-pins-present-p (mevedel-session-save-path session))))
+         (when cancel (funcall cancel))))))
+
+  :doc "repeated supersession yields nil without an error, capture or pin"
+  (mevedel-test-journal-capture--with-portable-session
+   (lambda (session buffer)
+     (let ((mevedel-journal-enabled nil))
+       (mevedel-test-journal-capture--turn session buffer "Question" "Answer"))
+     (let (result completed cancel (saves 0))
+       (unwind-protect
+           (progn
+             (setq cancel (mevedel-journal-capture-checkpoint-start
+                           session buffer (lambda (value) (setq result value completed t))))
+             (let ((until (+ (float-time) 30)))
+               ;; Keep publishing so both preparation attempts are superseded.
+               (while (and (not completed) (< (float-time) until))
+                 (setf (mevedel-session-name session) (format "Title %d" (cl-incf saves)))
+                 (mevedel-session-artifacts-save session buffer t)
+                 (accept-process-output nil .05)))
+             (should completed)
+             (should-not result)
              (should-not (mevedel-journal-pins-present-p (mevedel-session-save-path session)))
              (should-not (mevedel-journal-capture-list (mevedel-session-workspace session))))
          (when cancel (funcall cancel))))))

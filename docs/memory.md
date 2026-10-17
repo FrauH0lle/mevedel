@@ -871,7 +871,12 @@ Emacs child prepares that checkpoint from the committed publication and frozen
 turn index, model policy and client identity. It receives no source mutation
 lease or provider object. The editor retains request admission while allowing
 input, then checks the same live root, request, saved head and source authority
-before publishing and pinning. Changed or cancelled sources cannot publish late
+before publishing and pinning. A newer publication of the same session, such as
+a debounced agent-state save or an execution completion record, supersedes the
+prepared evidence rather than failing it: preparation restarts once against the
+new head, and a second supersession silently leaves the turns to the next
+checkpoint. A replaced request or root, or a pending publication, still fails
+with a warning. Changed or cancelled sources cannot publish late
 results; preparation has a 120-second timeout. The child's request and reply
 files use an explicit lossless coding: detection read evidence holding a NUL
 byte, such as binary tool output, as raw bytes and broke every non-ASCII string.
