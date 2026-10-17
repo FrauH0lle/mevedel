@@ -2313,9 +2313,15 @@ I'll update the docs, run the focused checks, and ask before any risky action.
 
 -- 1 question · 1 permission · 2 pending inputs ---------------
 
-Ask
-  Which validation should run next?
-  [focused view tests] [compile] [full suite]
+  1  Which validation should run next?
+     ○ 1  Focused view tests
+     ○ 2  Compile
+     ○ 3  Full suite
+     ○ c  Custom input…
+
+  [ Submit ]  0 of 1 answered
+
+  n/p move  1-9 focus  RET choose  c custom  C-c C-c submit  q cancel
 
 Permission request from /root/verifier
 Allow Bash?
