@@ -179,7 +179,40 @@ A panel row is a line whose text sits on the source block face."
           (should (= 1 (hash-table-count (cdr cached)))))
         (should (equal rows (mevedel-tool-ask-ui--sample-lines
                              state "abcdefghijk" 8)))
-        (should (= 1 calls))))))
+        (should (= 1 calls)))))
+
+  :doc "blank lines in several samples never share or corrupt cached rows"
+  (let ((state (mevedel-tool-ask-ui--state-create)))
+    (should (equal '("alpha" "" "omega")
+                   (mevedel-tool-ask-ui--sample-lines state "alpha\n\nomega" 40)))
+    (should (equal '("gamma" "" "delta")
+                   (mevedel-tool-ask-ui--sample-lines state "gamma\n\ndelta" 40)))
+    (should (equal '("one" "" "" "two")
+                   (mevedel-tool-ask-ui--sample-lines state "one\n\n\ntwo" 40)))
+    (should (equal '("alpha" "" "omega")
+                   (mevedel-tool-ask-ui--sample-lines state "alpha\n\nomega" 40)))
+    (should (equal '("") (mevedel-tool-ask-ui--wrap-sample-line "" 40))))
+
+  :doc "a form whose samples contain blank lines opens and shows them"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     #'ignore
+     [(:question "First?" :options [(:label "A" :sample "alpha\n\nomega")
+                                    (:label "B" :sample "gamma\n\ndelta")])
+      (:question "Second?" :options [(:label "C" :sample "one\n\n\ntwo") "D"])])
+    (should (equal (test-mevedel-tool-ask-ui--panel-rows rendered-body)
+                   '("Sample · A" "alpha" "" "omega"
+                     "Sample · C" "one" "" "" "two")))))
+
+(mevedel-deftest mevedel-tool-ask-ui--wrap-sample-line-fresh ()
+  ,test
+  (test)
+  :doc "every call returns a fresh list, so callers may splice it"
+  (let ((first (mevedel-tool-ask-ui--wrap-sample-line "" 40))
+        (second (mevedel-tool-ask-ui--wrap-sample-line "" 40)))
+    (should-not (eq first second))
+    (should-not (eq (mevedel-tool-ask-ui--wrap-sample-line "short" 40)
+                    (mevedel-tool-ask-ui--wrap-sample-line "short" 40)))))
 
 (mevedel-deftest mevedel-tool-ask-ui--sample-panel ()
   ,test
@@ -464,7 +497,51 @@ A panel row is a line whose text sits on the source block face."
       (cl-letf (((symbol-function 'mevedel-view--interaction-register)
                  (lambda (&rest _) (cl-incf registrations))))
         (mevedel-tool-ask-ui--refresh state))
-      (should (= 0 registrations)))))
+      (should (= 0 registrations))))
+
+  :doc "point on a heading keeps its place when a re-wrapped panel above it grew"
+  (test-mevedel-tool-ask-ui--with-form
+    (let ((width 60))
+      (cl-letf (((symbol-function 'mevedel-tool-ask-ui--sample-width)
+                 (lambda (_state) width)))
+        (mevedel-tool-ask-ui-show
+         #'ignore
+         [(:question "First?"
+           :options [(:label "Wide" :sample "one two three four five six seven eight nine ten eleven")
+                     "Plain"])
+          (:question "Second heading?" :options ["A" "B"])])
+        (with-current-buffer view-buffer
+          (let ((state (car mevedel-tool-ask-ui--states)))
+            (search-forward "Second heading?")
+            (backward-char 3)
+            (setq width 20)
+            (mevedel-tool-ask-ui--refresh state)
+            (should (looking-at-p "ng\\?"))
+            (should (= 1 (get-text-property (point) 'mevedel-ask-question)))))))))
+
+
+(mevedel-deftest mevedel-tool-ask-ui--anchor-at-point ()
+  ,test
+  (test)
+  :doc "entries anchor at their glyph, headings and panels at their block, prose nowhere"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     #'ignore
+     [(:question "First?" :options [(:label "A" :sample "alpha")])])
+    (with-current-buffer view-buffer
+      (let* ((state (car mevedel-tool-ask-ui--states))
+             (glyph (mevedel-tool-ask-ui--anchor-start state '(0 . 0)))
+             (block (mevedel-tool-ask-ui--anchor-start state '(question . 0))))
+        (should (equal '((0 . 0) . 0) (mevedel-tool-ask-ui--anchor-at-point state)))
+        (should (< block glyph))
+        (search-forward "alpha")
+        (let ((anchor (mevedel-tool-ask-ui--anchor-at-point state)))
+          (should (equal '(question . 0) (car anchor)))
+          (should (= (point) (+ block (cdr anchor))))
+          (should (mevedel-tool-ask-ui--anchor-p (car anchor) (point))))
+        (should-not (mevedel-tool-ask-ui--anchor-p '(0 . 0) (point)))
+        (goto-char (overlay-end registered-overlay))
+        (should-not (mevedel-tool-ask-ui--anchor-at-point state))))))
 
 
 (mevedel-deftest mevedel-tool-ask-ui--retire ()

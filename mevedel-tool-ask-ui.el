@@ -404,44 +404,47 @@ Prefer whitespace boundaries, preserving all text and its properties.
 Long words break only between glyphs.  An oversized glyph gets its own
 row, even if it exceeds WIDTH, so wrapping always makes progress.
 Expand tabs so their width is independent of the panel's indentation.
-Column widths are conservative for composed glyphs such as emoji."
+Column widths are conservative for composed glyphs such as emoji.
+Always returns a fresh list."
   (when (string-match-p "\t" line)
     (setq line (with-temp-buffer
                  (insert line)
                  (untabify (point-min) (point-max))
                  (buffer-string))))
-  (let ((glyphs (mapcar
-                 (lambda (glyph) (cons glyph (string-width glyph)))
-                 ;; Automatic composition needs a displayed buffer, including
-                 ;; when a hidden view is rendered before it is first shown.
-                 (with-current-buffer
-                     (window-buffer (or (get-buffer-window (current-buffer) t)
-                                        (selected-window)))
-                   (string-glyph-split line))))
-        (prefix "") rows)
-    (while glyphs
-      (let ((columns (string-width prefix)) row word boundary rest)
-        ;; Accept at least one whole glyph, even when it cannot fit.
-        (while (and glyphs
-                    (or (null row) (<= (+ columns (cdar glyphs)) width)))
-          (let ((glyph (pop glyphs)))
-            (setq columns (+ columns (cdr glyph)))
-            (push (car glyph) row)
-            (if (string-match-p "\\`[ \t]+\\'" (car glyph))
-                (when word (setq boundary row rest glyphs))
-              (setq word t))))
-        (when glyphs
-          (if boundary
-              (setq row boundary glyphs rest)
-            ;; A space just beyond a full word belongs to that row, not
-            ;; after the continuation marker.  Keep all original text.
-            (when word
-              (while (and glyphs
-                          (string-match-p "\\`[ \t]+\\'" (caar glyphs)))
-                (push (car (pop glyphs)) row)))))
-        (push (concat prefix (apply #'concat (nreverse row))) rows)
-        (setq prefix (propertize "↪ " 'font-lock-face 'shadow))))
-    (or (nreverse rows) '(""))))
+  (if (<= (string-width line) width)
+      (list line)
+    (let ((glyphs (mapcar
+                   (lambda (glyph) (cons glyph (string-width glyph)))
+                   ;; Automatic composition needs a displayed buffer, including
+                   ;; when a hidden view is rendered before it is first shown.
+                   (with-current-buffer
+                       (window-buffer (or (get-buffer-window (current-buffer) t)
+                                          (selected-window)))
+                     (string-glyph-split line))))
+          (prefix "") rows)
+      (while glyphs
+        (let ((columns (string-width prefix)) row word boundary rest)
+          ;; Accept at least one whole glyph, even when it cannot fit.
+          (while (and glyphs
+                      (or (null row) (<= (+ columns (cdar glyphs)) width)))
+            (let ((glyph (pop glyphs)))
+              (setq columns (+ columns (cdr glyph)))
+              (push (car glyph) row)
+              (if (string-match-p "\\`[ \t]+\\'" (car glyph))
+                  (when word (setq boundary row rest glyphs))
+                (setq word t))))
+          (when glyphs
+            (if boundary
+                (setq row boundary glyphs rest)
+              ;; A space just beyond a full word belongs to that row, not
+              ;; after the continuation marker.  Keep all original text.
+              (when word
+                (while (and glyphs
+                            (string-match-p "\\`[ \t]+\\'" (caar glyphs)))
+                  (push (car (pop glyphs)) row)))))
+          (push (concat prefix (apply #'concat (nreverse row))) rows)
+          (setq prefix (propertize "↪ " 'font-lock-face 'shadow))))
+      (nreverse rows))))
 
 (defun mevedel-tool-ask-ui--sample-lines (state sample width)
   "Return SAMPLE fontified and wrapped to WIDTH, cached in STATE.
@@ -456,15 +459,17 @@ are kept, so resizing does not accumulate them."
       (setq rows (setf (mevedel-tool-ask-ui--state-sample-rows state)
                        (cons width (make-hash-table :test #'equal)))))
     (with-memoization (gethash sample (cdr rows))
-      (mapcan
-       (lambda (line)
-         (mevedel-tool-ask-ui--wrap-sample-line line width))
-       (copy-sequence
-        (with-memoization (gethash sample fontified)
-          (split-string
-           (mevedel-view--fontify-as (string-trim-right sample)
-                                     'markdown-mode)
-           "\n")))))))
+      ;; `append', not `mapcan': splicing in place would make cached rows
+      ;; share structure with whatever a line's wrapping returned.
+      (apply #'append
+             (mapcar
+              (lambda (line)
+                (mevedel-tool-ask-ui--wrap-sample-line line width))
+              (with-memoization (gethash sample fontified)
+                (split-string
+                 (mevedel-view--fontify-as (string-trim-right sample)
+                                           'markdown-mode)
+                 "\n")))))))
 
 (defun mevedel-tool-ask-ui--shown-sample (state index)
   "Return the option index whose sample question INDEX's panel shows.
@@ -900,37 +905,61 @@ Question jumps are only advertised when there is another question."
       (when announce
         (mevedel--prompt-announce overlay)))))
 
+(defun mevedel-tool-ask-ui--anchor-at-point (state)
+  "Return what point is on in STATE's form as (KEY . OFFSET), or nil.
+KEY is the entry identity at point, or (question . INDEX) on a
+question's heading or sample panel; OFFSET is point's distance from
+where KEY starts."
+  (let ((overlay (mevedel-tool-ask-ui--state-overlay state)))
+    (when-let* ((key (or (mevedel-tool-ask-ui--entry-at-point state)
+                         (and (overlayp overlay)
+                              (eq (overlay-buffer overlay) (current-buffer))
+                              (<= (overlay-start overlay) (point))
+                              (< (point) (overlay-end overlay))
+                              (when-let* ((index (get-text-property
+                                                  (point) 'mevedel-ask-question)))
+                                (cons 'question index)))))
+                (start (mevedel-tool-ask-ui--anchor-start state key)))
+      (cons key (- (point) start)))))
+
+(defun mevedel-tool-ask-ui--anchor-start (state key)
+  "Return where anchor KEY starts in STATE's form, or nil.
+An entry starts at its glyph, a question block at its first character."
+  (if (eq (car-safe key) 'question)
+      (let ((overlay (mevedel-tool-ask-ui--state-overlay state)))
+        (text-property-any (overlay-start overlay) (overlay-end overlay)
+                           'mevedel-ask-question (cdr key)))
+    (cdr (assoc key (mevedel-tool-ask-ui--entry-positions state)))))
+
+(defun mevedel-tool-ask-ui--anchor-p (key position)
+  "Return non-nil when buffer POSITION still belongs to anchor KEY."
+  (and (<= (point-min) position)
+       (< position (point-max))
+       (if (eq (car-safe key) 'question)
+           (eq (cdr key) (get-text-property position 'mevedel-ask-question))
+         (equal key (get-text-property position 'mevedel-ask-entry)))))
+
 (defun mevedel-tool-ask-ui--refresh (state &optional announce identity)
   "Render STATE, optionally ANNOUNCE it and move point to IDENTITY.
-Without IDENTITY, point stays on its entry at the same offset into it.
-The view restores point by its offset into the whole form, which lands
-elsewhere when text above point changed height, as a re-wrapped sample
-panel does after a resize."
+Without IDENTITY, point stays on its entry, or in its question's heading
+or panel, at the same offset into it.  The view restores point by its
+offset into the whole form, which lands elsewhere when text above point
+changed height, as a re-wrapped sample panel does after a resize."
   (unless (mevedel-tool-ask-ui--settled-p state)
     (with-current-buffer (mevedel-tool-ask-ui--state-chat-buffer state)
-      (let* ((anchor (and (not identity)
-                          (mevedel-tool-ask-ui--entry-at-point state)))
-             (offset (and anchor
-                          (- (point)
-                             (cdr (assoc anchor
-                                         (mevedel-tool-ask-ui--entry-positions
-                                          state)))))))
+      (let ((anchor (and (not identity)
+                         (mevedel-tool-ask-ui--anchor-at-point state))))
         (mevedel-tool-ask-ui--render state announce)
-        (cond
-         (identity (mevedel-tool-ask-ui--goto-entry state identity))
-         (anchor
-          (when-let* ((position (cdr (assoc anchor
-                                            (mevedel-tool-ask-ui--entry-positions
-                                             state)))))
-            (goto-char position)
-            ;; Keep the column inside the row when it still belongs to it.
-            (when (and (<= (point-min) (+ position offset))
-                       (< (+ position offset) (point-max))
-                       (equal anchor (get-text-property (+ position offset)
-                                                        'mevedel-ask-entry)))
-              (goto-char (+ position offset))))
-          (mevedel-tool-ask-ui--post-command))
-         (t (mevedel-tool-ask-ui--post-command)))))))
+        (if identity
+            (mevedel-tool-ask-ui--goto-entry state identity)
+          (pcase-let ((`(,key . ,offset) anchor))
+            (when-let* ((start (and key (mevedel-tool-ask-ui--anchor-start
+                                         state key))))
+              ;; Keep the offset while it still lies in the same place.
+              (goto-char (if (mevedel-tool-ask-ui--anchor-p key (+ start offset))
+                             (+ start offset)
+                           start))))
+          (mevedel-tool-ask-ui--post-command))))))
 
 (cl-defun mevedel-tool-ask-ui-show (callback questions)
   "Show QUESTIONS as one form and settle it through CALLBACK."
