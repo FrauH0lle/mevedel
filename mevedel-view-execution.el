@@ -294,7 +294,9 @@ Point counts in every window showing this view."
                      (and (<= start (window-point window)) (< (window-point window) end)))
                    (get-buffer-window-list (current-buffer) nil t))
           (pcase-let ((`(,frame ,x . ,y) (mouse-pixel-position)))
-            (when (and (frame-live-p frame) (integerp x) (integerp y))
+            ;; A pointer above or left of the frame reports negative
+            ;; coordinates, which `posn-at-x-y' rejects.
+            (when (and (frame-live-p frame) (natnump x) (natnump y))
               (let* ((posn (posn-at-x-y x y frame))
                      (window (posn-window posn))
                      (pos (posn-point posn)))

@@ -456,6 +456,24 @@
         (goto-char (mevedel-view--input-start))
         (should (eq (key-binding [down-mouse-1]) 'mouse-drag-region))))))
 
+(mevedel-deftest mevedel-view-execution--pointer-on-panel-p ()
+  ,test
+  (test)
+  :doc "a pointer above or left of the frame is off the panel instead of an error; point still counts"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (mevedel-view--render-status)
+      (goto-char (mevedel-view--input-start))
+      (dolist (coordinates '((0 . -27) (-4 . 3) (-1 . -1)))
+        (cl-letf (((symbol-function 'mouse-pixel-position)
+                   (lambda () (cons (selected-frame) coordinates))))
+          (should-not (mevedel-view-execution--pointer-on-panel-p))))
+      (mevedel-view-execution-test--at "  ▸ Running")
+      (cl-letf (((symbol-function 'mouse-pixel-position)
+                 (lambda () (cons (selected-frame) '(0 . -27)))))
+        (should (mevedel-view-execution--pointer-on-panel-p))))))
+
 (mevedel-deftest mevedel-view-execution--retain-selected ()
   ,test
   (test)
