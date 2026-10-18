@@ -9,6 +9,9 @@
 
 (eval-when-compile (require 'cl-lib))
 
+;; `gptel'
+(declare-function gptel-backend-name "ext:gptel" (backend))
+
 ;; `mevedel-compact-estimation'
 (declare-function mevedel-compact-estimation-clear-baseline
                   "mevedel-compact-estimation" ())
@@ -87,6 +90,8 @@
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-p "mevedel-structs" (object))
 (defvar mevedel--view-buffer)
 
 ;; `mevedel-telemetry'
@@ -144,11 +149,35 @@
   summary-ready
   tail-text
   target
+  target-policy
   telemetry-span
   tokens-before
   trigger
   workspace
   (attempt 0))
+
+(defun mevedel-compact-run--label (state)
+  "Return conversation and frozen model identities for compaction STATE."
+  (let* ((session (mevedel-compact-run--state-session state))
+         (buffer (mevedel-compact-run--state-chat-buffer state))
+         (models
+          (mapcar
+           (lambda (policy)
+             (if (not (listp policy)) "unknown"
+               (format "%s:%s"
+                       (or (and (plist-get policy :backend)
+                                (gptel-backend-name (plist-get policy :backend)))
+                           "unknown")
+                       (or (plist-get policy :model) "unknown"))))
+           (list (mevedel-compact-run--state-target-policy state)
+                 (mevedel-compact-run--state-policy state)))))
+    (format
+     "[%s %s; target %s; summary %s]"
+     (or (and (mevedel-session-p session) (mevedel-session-name session))
+         (and (buffer-live-p buffer) (buffer-name buffer))
+         "conversation")
+     (or (plist-get (mevedel-compact-run--state-target state) :origin) "/root")
+     (car models) (cadr models))))
 
 (defun mevedel-compact-run--finish (state err)
   "Settle compaction STATE once with ERR."
@@ -240,7 +269,8 @@ the persistent failure counter unchanged."
        session (mevedel-compact-run--state-chat-buffer state) 'compaction
        (mevedel-compact-run--state-journal-captures state)))
     (message
-     "mevedel: compaction complete (%dk -> %dk tokens, %d turns preserved)"
+     "mevedel: compaction complete %s (buffer %dk -> %dk tokens, %d turns preserved)"
+     (mevedel-compact-run--label state)
      (/ tokens-before 1000)
      (/ tokens-after 1000)
      (if aggressive 0 mevedel-compact-evidence-tail-turns))
@@ -412,7 +442,8 @@ rather than escaping, because the caller may be an asynchronous hook."
                         (hook-audits
                          (and context
                               (mevedel-compact-target-hook-audit-records decision))))
-                   (message "mevedel: compacting (%dk -> ...)"
+                   (message "mevedel: compacting %s (buffer %dk -> ...)"
+                            (mevedel-compact-run--label state)
                             (/ (mevedel-compact-run--state-tokens-before state)
                                1000))
                    (when (= (mevedel-compact-run--state-attempt state) 1)
@@ -532,6 +563,7 @@ task-relevance data for a handoff summary.  SOURCE-TRANSFORM filters the
                          tokens-before target-policy))))
            (state
             (mevedel-compact-run--state-create
+             :target-policy target-policy
              :aggressive aggressive
              :auto auto
              :callback callback

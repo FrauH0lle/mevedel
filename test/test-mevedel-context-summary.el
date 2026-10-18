@@ -7,6 +7,7 @@
 (require 'cl-lib)
 (require 'gptel-request)
 (require 'mevedel-context-summary)
+(require 'mevedel-claude-code-backend)
 (require 'mevedel-models)
 (require 'gptel-openai-oauth)
 (require 'mevedel-structs)
@@ -71,6 +72,36 @@
 - none
 ## Unfinished
 - none")
+
+(mevedel-deftest mevedel-context-summary-generate/claude-context-budget ()
+  (let* ((process-environment (copy-sequence process-environment))
+         (_ (setenv "CLAUDE_CODE_DISABLE_1M_CONTEXT" nil))
+         (_ (setenv "ANTHROPIC_DEFAULT_SONNET_MODEL" nil))
+         (gptel--known-backends nil)
+         (backend (mevedel-claude-code-register))
+         (policy (list :backend backend
+                       :model (mevedel-claude-code--model "sonnet")))
+         (mevedel-model-reserve-tokens 20000))
+    (dolist (size '(800000 4000000))
+      (let (result dispatched)
+        (cl-letf (((symbol-function 'mevedel-engine-request-text)
+                   (lambda (actual-backend input _system callback &rest _)
+                     (should (eq backend actual-backend))
+                     (should (> (length input) size))
+                     (setq dispatched t)
+                     (funcall callback test-mevedel-context-summary--continuation nil)
+                     #'ignore)))
+          (mevedel-context-summary-generate
+           (make-string size ?x) 'continuation
+           (lambda (value) (setq result value)) :policy policy))
+        (if (= size 800000)
+            (progn
+              ;; This single prompt exceeds both the former 128K fallback
+              ;; and a conservative 200K window, but fits the current 1M.
+              (should dispatched)
+              (should (eq 'success (plist-get result :outcome))))
+          (should-not dispatched)
+          (should (eq 'size (plist-get result :error-class))))))))
 
 (mevedel-deftest mevedel-context-summary--headings ()
   ,test
