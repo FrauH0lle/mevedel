@@ -141,6 +141,12 @@ use real temp files/directories rather than mocking. Eask gives ERT a temporary
 `HOME` and XDG roots; the shared helper rejects unsafe test invocations that
 could reach real user state.
 
+The Eask startup hook also redirects the native compilation cache into that
+temporary HOME before loading test files or their dependencies.  ERT's own
+cache redirection happens after test-file loading and is not sufficient:
+changing HOME alone leaves Emacs's startup native-cache path pointing at the
+real home.  Both caches are removed when their owning test process exits.
+
 ### Byte compilation
 ```bash
 npx @emacs-eask/cli compile
