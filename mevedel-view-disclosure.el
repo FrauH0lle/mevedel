@@ -35,10 +35,6 @@
 ;; `mevedel-view-composer'
 (defvar mevedel-view--input-marker)
 
-;; `mevedel-view-execution'
-(declare-function mevedel-view-execution-toggle-panel
-                  "mevedel-view-execution" ())
-
 ;; `mevedel-view-render'
 (declare-function mevedel-view-render-mutate
                   "mevedel-view-render" (key function &optional replacement cleanup))
@@ -564,7 +560,8 @@ this helper.  Source-backed transcript/tool disclosure remains owned by
       t)
      ((and (eq namespace 'status) (eq id 'background)
            (get-text-property (point) 'mevedel-view-zone-collapsible))
-      (mevedel-view-execution-toggle-panel)
+      (when-let* ((toggle (get-text-property (point) 'mevedel-view-zone-toggle)))
+        (funcall toggle))
       t))))
 
 (defun mevedel-view-disclosure--intent (source vtype collapsed function)

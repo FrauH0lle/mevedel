@@ -212,11 +212,11 @@
                   (should-not (string-search "cmd 6" (buffer-string)))
                   (should (= line (funcall line-of "cmd 3")))
                   (should (string-search "[Show all 6]" (buffer-string))))
-                ;; Leaving releases the hold and shows the new work.
+                ;; Leaving shows new work and starts the held row's grace.
                 (goto-char (point-max))
                 (mevedel-view-execution--check-release view-buf)
                 (should (string-search "▸ Running   bash     cmd 6" (buffer-string)))
-                (should-not (string-search "✓ Completed" (buffer-string))))
+                (should (string-search "✓ Completed" (buffer-string))))
             (mevedel-view-execution--cancel-release))))))
   :doc "a row finishing while point is elsewhere lingers for the grace period"
   (mevedel-view-execution-test--with-view
@@ -285,6 +285,35 @@
         (goto-char (point-max))
         (funcall command event)
         (should mevedel-view-execution--selected))))
+  :doc "TAB toggles only its row, including preview controls, and preserves the draft"
+  (mevedel-view-execution-test--with-view
+    (setq live (append live (list (list :execution-id "e2" :owner "/root"
+                                      :yielded t :state 'running :kind 'monitor
+                                      :description "Watch errors"))))
+    (mevedel-view--render-status)
+    (goto-char (point-max))
+    (insert "> draft\nsecond line")
+    (cl-letf (((symbol-function 'mevedel-execution-stop-user)
+               (lambda (&rest _) (ert-fail "TAB stopped an execution"))))
+      (dolist (text '("same command" "Watch errors"))
+        (mevedel-view-execution-test--at text)
+        (call-interactively (key-binding (kbd "TAB")))
+        (should mevedel-view-execution--selected)
+        (should-not (mevedel-view-zone-collapse-state
+                     mevedel-view-execution--collapse-key))
+        (should (string-search "Preview (not full output)" (buffer-string)))
+        (mevedel-view-execution-test--at "[Stop]")
+        (call-interactively (key-binding (kbd "TAB")))
+        (should-not mevedel-view-execution--selected)
+        (should (string-search "same command" (buffer-string)))
+        (should (string-search "Watch errors" (buffer-string)))))
+    (dolist (offset '(0 -2))
+      (mevedel-view-execution-test--at "[Manage]")
+      (forward-char offset)
+      (call-interactively (key-binding (kbd "TAB")))
+      (should-not (mevedel-view-zone-collapse-state
+                   mevedel-view-execution--collapse-key)))
+    (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
   :doc "blank suffix and header margins are inert, Manage is explicit"
   (mevedel-view-execution-test--with-view
     (mevedel-view--render-status)
@@ -348,6 +377,221 @@
         (should (equal " [-] background w… ─\n" (substring-no-properties header)))
         (should (get-text-property 1 'mevedel-view-zone-activate header))))))
 
+(mevedel-deftest mevedel-view-execution--mouse-press ()
+  ,test
+  (test)
+  :doc "first focus click only selects; selected-window clicks toggle the row or header"
+  (dolist (same-buffer '(nil t))
+    (dolist (target '(row header))
+      (mevedel-view-execution-test--with-view
+        (save-window-excursion
+          (switch-to-buffer view-buf)
+          (let* ((view-window (selected-window))
+                 (other-window (split-window-right))
+                 (mouse-drag-copy-region nil)
+                 commands
+                 (pre-command-hook
+                  (cons (lambda () (push this-command commands)) pre-command-hook)))
+            (set-window-buffer other-window (if same-buffer view-buf data-buf))
+            (mevedel-view--render-status)
+            (mevedel-view-execution-test--at (if (eq target 'row) "  ▸ Running" "[-]"))
+            (let* ((position (point))
+                   ;; Command lookup uses text-pos (slot 5), not just point.
+                   (location (list view-window position '(10 . 10) 0 nil position))
+                   (click (vector (list 'down-mouse-1 location)
+                                  (list 'mouse-1 location))))
+              (select-window other-window)
+              (execute-kbd-macro click)
+              (should (eq (selected-window) view-window))
+              (should (= (point) position))
+              (should-not mevedel-view-execution--selected)
+              (should-not (mevedel-view-zone-collapse-state
+                           mevedel-view-execution--collapse-key))
+              (execute-kbd-macro click)
+              (ert-info ((format "same-buffer=%S target=%S commands=%S"
+                                 same-buffer target (reverse commands)))
+                (if (eq target 'row)
+                    (should mevedel-view-execution--selected)
+                  (should (mevedel-view-zone-collapse-state
+                           mevedel-view-execution--collapse-key))))))))))
+  :doc "a focus click on Stop cannot stop work; the subsequent selected-window click can"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (let ((view-window (selected-window))
+            (other-window (split-window-right))
+            (mouse-drag-copy-region nil)
+            stopped)
+        (set-window-buffer other-window data-buf)
+        (mevedel-view--render-status)
+        (mevedel-view-execution-test--activate "  ▸ Running")
+        (mevedel-view-execution-test--at "[Stop]")
+        (let* ((position (point))
+               (location (list view-window position '(10 . 10) 0 nil position))
+               (click (vector (list 'down-mouse-1 location) (list 'mouse-1 location))))
+          (cl-letf (((symbol-function 'mevedel-execution-stop-user)
+                     (lambda (owner id) (push (list owner id) stopped))))
+            (select-window other-window)
+            (execute-kbd-macro click)
+            (should-not stopped)
+            (execute-kbd-macro click)
+            (should (equal (list (list session "e1")) stopped)))))))
+  :doc "selected-window dragging selects text without toggling and leaves composer bindings alone"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (let ((mouse-drag-copy-region nil)
+            (mouse-drag-and-drop-region nil))
+        (mevedel-view--render-status)
+        (mevedel-view-execution-test--at "  ▸ Running")
+        (let* ((start (point))
+               (end (+ start 12))
+               (from (list (selected-window) start '(10 . 10) 0 nil start))
+               (to (list (selected-window) end '(100 . 10) 0 nil end)))
+          (execute-kbd-macro (vector (list 'down-mouse-1 from)
+                                     (list 'drag-mouse-1 from to)))
+          (should-not mevedel-view-execution--selected)
+          (should (= start (region-beginning)))
+          (should (= end (region-end))))
+        (goto-char (mevedel-view--input-start))
+        (should (eq (key-binding [down-mouse-1]) 'mouse-drag-region))))))
+
+(mevedel-deftest mevedel-view-execution--retain-selected ()
+  ,test
+  (test)
+  :doc "completed inspectors start a fresh grace period on collapse, blocked until pointers leave"
+  (dolist (hover-at-collapse '(nil t))
+    (mevedel-view-execution-test--with-view
+      (let* ((clock 1000.0)
+             (hover hover-at-collapse)
+             (float-time-orig (symbol-function 'float-time)))
+        (cl-letf (((symbol-function 'float-time)
+                   (lambda (&optional time) (if time (funcall float-time-orig time) clock)))
+                  ((symbol-function 'mevedel-view-execution--pointer-on-panel-p)
+                   (lambda () hover)))
+          (unwind-protect
+              (progn
+                (mevedel-view--render-status)
+                (goto-char (point-max))
+                (insert "> draft\nsecond line")
+                (mevedel-view-execution-test--activate "  ▸ Running")
+                (setq live nil)
+                (mevedel-view-execution--event
+                 (list :session session :data-buffer data-buf :owner "/root" :type 'terminal
+                       :facts '(:execution-id "e1" :state completed :termination exited :exit-code 0)
+                       :whole-output "retained output"))
+                (setq clock 1200.0)
+                (mevedel-view-execution--check-release view-buf)
+                (should (string-search "retained output" (buffer-string)))
+                (should-not mevedel-view-execution--release-timer)
+                (mevedel-view-execution-test--at "  ▾ Completed")
+                (call-interactively (key-binding (kbd "TAB")))
+                (should-not mevedel-view-execution--selected)
+                (should (string-search "✓ Completed bash" (buffer-string)))
+                (should (timerp mevedel-view-execution--release-timer))
+                (let ((held (nth 2 (car mevedel-view-execution--held))))
+                  (should (= 1210.0 (plist-get held :release-at)))
+                  (should-not (plist-get held :whole-output))
+                  (should-not (plist-get held :output-tail)))
+                (when hover-at-collapse
+                  (setq clock 2000.0)
+                  (mevedel-view-execution--check-release view-buf)
+                  (should (string-search "✓ Completed bash" (buffer-string)))
+                  (setq hover nil)
+                  (mevedel-view-execution--check-release view-buf)
+                  (should (= 2010.0 (plist-get (nth 2 (car mevedel-view-execution--held))
+                                              :release-at))))
+                (setq clock (if hover-at-collapse 2009.0 1209.0))
+                (mevedel-view-execution--check-release view-buf)
+                (should (string-search "✓ Completed bash" (buffer-string)))
+                (setq clock (+ clock 1.5))
+                (mevedel-view-execution--check-release view-buf)
+                (should-not (string-search "✓ Completed bash" (buffer-string)))
+                (should-not mevedel-view-execution--release-timer)
+                (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+            (mevedel-view-execution--cancel-release))))))
+  :doc "a completed inspector beyond five newer rows stays visible until its grace expires"
+  (mevedel-view-execution-test--with-view
+    (let* ((clock 1000.0)
+           (hover t)
+           (float-time-orig (symbol-function 'float-time)))
+      (cl-letf (((symbol-function 'float-time)
+                 (lambda (&optional time) (if time (funcall float-time-orig time) clock)))
+                ((symbol-function 'mevedel-view-execution--pointer-on-panel-p)
+                 (lambda () hover)))
+        (unwind-protect
+            (progn
+              (setq mevedel-view-execution--selected
+                    (list :session session :execution-id "old" :owner "/root"
+                          :state 'completed :terminal-p t :termination 'exited :exit-code 0
+                          :description "Old inspector" :started-at 1.0 :whole-output "old output")
+                    live (cl-loop for n from 2 to 6
+                                  collect (list :execution-id (format "e%d" n)
+                                                :owner "/root" :yielded t :state 'running
+                                                :started-at (float n) :description (format "New %d" n))))
+              (mevedel-view--render-status)
+              (mevedel-view-execution-test--at "  ▾ Completed")
+              (call-interactively (key-binding (kbd "TAB")))
+              (should (string-search "✓ Completed bash     Old inspector" (buffer-string)))
+              (setq clock 1001.0 hover nil)
+              (mevedel-view-execution--check-release view-buf)
+              (should (string-search "✓ Completed bash     Old inspector" (buffer-string)))
+              (setq clock 1010.0)
+              (mevedel-view-execution--check-release view-buf)
+              (should (string-search "✓ Completed bash     Old inspector" (buffer-string)))
+              (setq clock 1011.5)
+              (mevedel-view-execution--check-release view-buf)
+              (should-not (string-search "Old inspector" (buffer-string)))
+              (should (= 5 (mevedel-view-test--count-substring "▸ Running" (buffer-string)))))
+          (mevedel-view-execution--cancel-release)))))
+  :doc "pinning an older live inspector does not evict a held completed row"
+  (mevedel-view-execution-test--with-view
+    (let* ((clock 1000.0)
+           (hover t)
+           (float-time-orig (symbol-function 'float-time)))
+      (cl-letf (((symbol-function 'float-time)
+                 (lambda (&optional time) (if time (funcall float-time-orig time) clock)))
+                ((symbol-function 'mevedel-view-execution--pointer-on-panel-p)
+                 (lambda () hover)))
+        (unwind-protect
+            (progn
+              (setq mevedel-view-execution--selected
+                    (list :session session :execution-id "old" :owner "/root"
+                          :state 'completed :terminal-p t :description "Old inspector"
+                          :started-at 1.0)
+                    live (cl-loop for n from 2 to 8
+                                  collect (list :execution-id (format "e%d" n)
+                                                :owner "/root" :yielded t :state 'running
+                                                :started-at (float n) :description (format "New %d" n))))
+              (mevedel-view--render-status)
+              (mevedel-view-execution-test--activate "  ▾ Completed")
+              (mevedel-view-execution-test--activate "[Show all 8]")
+              (mevedel-view-execution-test--activate "New 2")
+              (mevedel-view-execution-test--activate "[Show fewer]")
+              (setq clock 1001.0 hover nil)
+              (mevedel-view-execution--check-release view-buf)
+              (should (string-search "✓ Completed bash     Old inspector" (buffer-string)))
+              (should (string-search "▾ Running   bash     New 2" (buffer-string)))
+              (should (= 4 (mevedel-view-test--count-substring "▸ Running" (buffer-string)))))
+          (mevedel-view-execution--cancel-release)))))
+  :doc "selecting another execution or agent also retains a completed inspector summary"
+  (dolist (kind '(execution agent))
+    (mevedel-view-execution-test--with-view
+      (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                 (lambda () '((:path "/root/new" :status running :depth 0)))))
+        (unwind-protect
+            (progn
+              (setq mevedel-view-execution--selected
+                    (list :session session :execution-id "old" :owner "/root"
+                          :state 'completed :terminal-p t :description "Old inspector"
+                          :whole-output "discarded output"))
+              (mevedel-view--render-status)
+              (mevedel-view-execution-test--activate
+               (if (eq kind 'agent) "  ▸ Running   agent" "  ▸ Running   bash"))
+              (should (string-search "✓ Completed bash     Old inspector" (buffer-string)))
+              (should-not (plist-get (nth 2 (car mevedel-view-execution--held)) :whole-output)))
+          (mevedel-view-execution--cancel-release))))))
+
 (mevedel-deftest mevedel-view-execution-toggle-panel ()
   ,test
   (test)
@@ -361,7 +605,20 @@
     (should (string-search "background work · 1 command [+]" (buffer-string)))
     (mevedel-view-execution-test--activate "[+]")
     (should (string-search "▸ Running" (buffer-string)))
-    (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))
+    (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+  :doc "TAB on the header, not the work rows, toggles the complete panel"
+  (mevedel-view-execution-test--with-view
+    (mevedel-view--render-status)
+    (dolist (collapsed '(t nil))
+      (mevedel-view-execution-test--at " ─── background work")
+      (call-interactively (key-binding (kbd "TAB")))
+      (should (eq collapsed (mevedel-view-zone-collapse-state
+                             mevedel-view-execution--collapse-key)))
+      (should (eq (not collapsed)
+                  (and (string-search "  ▸ Running" (buffer-string)) t))))
+    (should (string-search "  ▸ Running" (buffer-string)))
+    (should-not (mevedel-view-zone-collapse-state
+                 mevedel-view-execution--collapse-key))))
 
 (mevedel-deftest mevedel-view-execution-reset ()
   ,test
@@ -516,6 +773,22 @@
         (should (equal "/root/counter" interrupted))
         (mevedel-view-execution-test--activate "  ▾ Running   agent")
         (should-not mevedel-view-execution--selected-agent))))
+  :doc "TAB on agent rows or details toggles the agent without invoking Interrupt"
+  (mevedel-view-execution-test--with-view
+    (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+               (lambda () '((:path "/root/counter" :status running :depth 0))))
+              ((symbol-function 'mevedel-agent-control-interrupt-user)
+               (lambda (&rest _) (ert-fail "TAB interrupted an agent"))))
+      (mevedel-view--render-status)
+      (mevedel-view-execution-test--at "  ▸ Running   agent")
+      (call-interactively (key-binding (kbd "TAB")))
+      (should (equal "/root/counter" mevedel-view-execution--selected-agent))
+      (mevedel-view-execution-test--at "[Interrupt]")
+      (call-interactively (key-binding (kbd "TAB")))
+      (should-not mevedel-view-execution--selected-agent)
+      (should (string-search "  ▸ Running   bash" (buffer-string)))
+      (should-not (mevedel-view-zone-collapse-state
+                   mevedel-view-execution--collapse-key))))
   :doc "a finished agent drops its expansion and its stale controls refuse"
   (mevedel-view-execution-test--with-view
     (let ((agents (list (list :path "/root/counter" :status 'running :depth 0))))
@@ -608,7 +881,9 @@
       (mevedel-view-execution--event (plist-put (copy-tree event) :type 'progress))
       (should (string-search "final retained output" (buffer-string)))
       (mevedel-view-execution-test--activate "  ▾ Completed")
-      (should-not (mevedel-view-execution-fragment session))))
+      (should (string-search "✓ Completed bash" (buffer-string)))
+      (should-not mevedel-view-execution--selected)
+      (should-not (string-search "final retained output" (buffer-string)))))
   :doc "nested agent owner routes passive completion to parent without scanning"
   (mevedel-view-execution-test--with-view
     (let ((child (generate-new-buffer " *execution-child*")))

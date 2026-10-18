@@ -139,9 +139,27 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
            mevedel-view-execution--selected)
       (user-error "Execution is no longer available")))
 
+(defun mevedel-view-execution--retain-selected ()
+  "Give the completed selected inspector a fresh held-row grace period.
+Retain only its summary, not the inspector's output payloads."
+  (when-let* ((selected mevedel-view-execution--selected)
+              ((or (plist-get selected :terminal-p)
+                   (memq (plist-get selected :state) '(completed lost failed)))))
+    (let ((data (copy-sequence selected))
+          (key (mevedel-view-execution--key 'execution selected)))
+      (cl-remf data :whole-output)
+      (cl-remf data :output-tail)
+      (setq data (plist-put data :held-p t)
+            data (plist-put data :release-at
+                            (+ (float-time) mevedel-view-execution-grace-seconds))
+            mevedel-view-execution--held
+            (cons (list key 'execution data)
+                  (cl-remove key mevedel-view-execution--held :key #'car :test #'equal))))))
+
 (defun mevedel-view-execution--toggle (session snapshot)
   "Toggle local inspection of SNAPSHOT belonging to SESSION."
   (let ((current (mevedel-view-execution--current session snapshot)))
+    (mevedel-view-execution--retain-selected)
     (setq mevedel-view-execution--selected
           (unless (and (eq session (plist-get mevedel-view-execution--selected :session))
                        (mevedel-view-execution--same-p mevedel-view-execution--selected current))
@@ -154,6 +172,7 @@ With LIVE-ONLY, a retained terminal selection is not sufficient."
   (setq mevedel-view-execution--selected-agent
         (unless (equal path mevedel-view-execution--selected-agent) path))
   (when mevedel-view-execution--selected-agent
+    (mevedel-view-execution--retain-selected)
     (setq mevedel-view-execution--selected nil))
   (mevedel-view--render-status))
 
@@ -381,13 +400,28 @@ being on the panel, holds they never leave; leaving restarts the period."
       face)
      "\n")))
 
+(defun mevedel-view-execution--mouse-press (event)
+  "Select the window at EVENT without activating background work.
+A press in the already selected window keeps normal drag selection and
+click activation.  A focus-changing press consumes only its click release."
+  (interactive "e")
+  (if (eq (posn-window (event-start event)) (selected-window))
+      (mouse-drag-region event)
+    (mouse-set-point event)
+    (set-transient-map (define-keymap "<mouse-1>" #'ignore))))
+
+(defvar-keymap mevedel-view-execution--action-map
+  :doc "Background-work mouse press handling before shared activation."
+  "<down-mouse-1>" #'mevedel-view-execution--mouse-press)
+
 (defun mevedel-view-execution--action (text function)
   "Return TEXT carrying the local action FUNCTION, including its margins.
 A trailing newline stays activatable but gets no `mouse-face': Emacs
 highlights a contiguous run of one `mouse-face' as a single region, so
 highlighting row ends would join adjacent rows into one hover."
   (let ((text (propertize text
-                          'keymap (mevedel-view--display-fragment-keymap)
+                          'keymap (mevedel-view--display-fragment-keymap
+                                   mevedel-view-execution--action-map)
                           'mouse-face 'highlight
                           'mevedel-view-zone-activate function)))
     (when (string-suffix-p "\n" text)
@@ -721,11 +755,13 @@ panel's collapse toggle, `[-]' or `[+]' when COLLAPSED."
                              font-lock-face mevedel-view-tool-warning)
                            header))
     (let ((start (string-search toggle header)))
-      (concat (substring header 0 start)
-              (mevedel-view-execution--button
-               toggle (mevedel-view-execution--callback 'collapse session)
-               (if collapsed "RET: show background work" "RET: hide background work"))
-              (substring header (+ start (length toggle)))))))
+      (propertize
+       (concat (substring header 0 start)
+               (mevedel-view-execution--button
+                toggle (mevedel-view-execution--callback 'collapse session)
+                (if collapsed "RET: show background work" "RET: hide background work"))
+               (substring header (+ start (length toggle))))
+       'mevedel-view-zone-toggle (mevedel-view-execution--callback 'collapse session)))))
 
 (defun mevedel-view-execution--controls (session total)
   "Return the panel's last row for SESSION with TOTAL items.
@@ -796,7 +832,12 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
                         (member (mevedel-view-execution--key (car item) (cdr item))
                                 shown-keys)))
                   items))
-                (t (seq-take items mevedel-view-execution--row-limit))))
+                (t
+                 (let ((limited (seq-take items mevedel-view-execution--row-limit)))
+                   (cl-remove-if-not
+                    (lambda (item)
+                      (or (memq item limited) (plist-get (cdr item) :held-p)))
+                    items)))))
          (collapsed (mevedel-view-zone-collapse-state
                      mevedel-view-execution--collapse-key nil)))
     (unless (cl-find mevedel-view-execution--selected-agent agents
@@ -811,8 +852,14 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
       (setq mevedel-view-execution--selected
             (plist-put mevedel-view-execution--selected :unavailable-p t)))
     (when (and selected-item (not (memq selected-item rows)))
-      (setq rows (append (seq-take rows (1- mevedel-view-execution--row-limit))
-                         (list selected-item))))
+      (let ((limited (seq-take
+                      (cl-remove-if (lambda (item) (plist-get (cdr item) :held-p)) rows)
+                      (1- mevedel-view-execution--row-limit))))
+        (setq rows (cl-remove-if-not
+                    (lambda (item)
+                      (or (memq item limited) (eq item selected-item)
+                          (plist-get (cdr item) :held-p)))
+                    items))))
     (when (and mevedel-view-execution--selected (not selected-live))
       (setq rows (append rows (list (cons 'execution mevedel-view-execution--selected)))))
     ;; Only live rows actually shown can finish under the pointer; hidden
@@ -831,22 +878,29 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
       (let ((body (mevedel-view-execution--header session agents live collapsed)))
         (unless collapsed
           (dolist (item rows)
-            (let ((data (cdr item)))
-              (cond
-               ((plist-get data :held-p)
-                (setq body (concat body (mevedel-view-execution--held-line (car item) data))))
-               ((eq (car item) 'agent)
-                (setq body (concat body (mevedel-view-execution--agent-line session data)))
-                (when (equal (plist-get data :path) mevedel-view-execution--selected-agent)
-                  (setq body (concat body (mevedel-view-execution--agent-details
-                                           session data)))))
-               (t
-                (setq body (concat body (mevedel-view-execution--line data)))
-                (when (mevedel-view-execution--same-p data mevedel-view-execution--selected)
-                  (setq body (concat body (mevedel-view-execution--details
-                                           session data selected-live))))))))
+            (let* ((data (cdr item))
+                   (row
+                    (cond
+                     ((plist-get data :held-p)
+                      (mevedel-view-execution--held-line (car item) data))
+                     ((eq (car item) 'agent)
+                      (concat (mevedel-view-execution--agent-line session data)
+                              (when (equal (plist-get data :path)
+                                           mevedel-view-execution--selected-agent)
+                                (mevedel-view-execution--agent-details session data))))
+                     (t
+                      (concat (mevedel-view-execution--line data)
+                              (when (mevedel-view-execution--same-p
+                                     data mevedel-view-execution--selected)
+                                (mevedel-view-execution--details session data selected-live)))))))
+              (setq body
+                    (concat body
+                            (propertize row 'mevedel-view-zone-toggle
+                                        (get-text-property
+                                         0 'mevedel-view-zone-activate row))))))
           (setq body (concat body (mevedel-view-execution--controls session (length items)))))
         (list :namespace 'status :id 'background :priority 50 :body body
+              :keymap (mevedel-view--display-fragment-keymap)
               :body-suffix "\n" :navigatable t :entry 'background
               :collapsible t :collapse-key mevedel-view-execution--collapse-key
               :collapsed collapsed)))))

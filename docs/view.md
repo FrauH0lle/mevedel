@@ -1456,8 +1456,10 @@ it showed, so the row being aimed at cannot shift: new work, including a new
 child agent, is only counted in the rule and `[Show all N]` until both leave.
 In-place updates still apply. A timer runs only while finished lines are held,
 to notice the pointer leaving and grace periods ending; the layout then
-recomputes in one step. Collapsing a retained finished inspector removes it at
-once.
+recomputes in one step. Collapsing a retained finished inspector leaves its
+dimmed completed row with a fresh ten-second grace period. Time spent expanded
+does not count; while either cursor or mouse remains in the panel, removal
+stays blocked and leaving restarts the full period.
 
 ```text
  ─── background work · 1 blocked · 2 agents · 1 command · 1 monitor [-] ──
@@ -1482,12 +1484,20 @@ model-written `description` when present, else the command; a row owned by an
 agent names that owner. The footer progress line shows only the root turn's
 own activity and elapsed time; it never repeats these counts.
 
-Click or RET anywhere on a row, including its indentation or line end, expands
-it in place; activating it again collapses it. Only one row is expanded at a
-time. An expanded agent row shows its provider, model and effort with
-**Open transcript**, **Show in conversation** (the Agent call that started
-it), and **Interrupt**, which interrupts the agent's current turn and keeps it
-retained. An expanded command or Monitor row shows a bounded output preview.
+Click, `RET`, or `TAB` anywhere on a row, including its indentation or line end,
+expands it in place; activating it again collapses it. `TAB` in an expanded
+item's details also toggles that item, never one of its action buttons. Only
+`TAB` on the header or the header's explicit `[-]`/`[+]` control toggles the
+whole panel. `TAB` on the footer or blank panel space does nothing.
+A first primary click on a background-work row or control in an unselected Emacs
+window only selects that window and places point. Clicking again in the
+selected window activates it; no timed double-click is required. Dragging in
+the selected window retains normal text selection.
+Only one row is expanded at a time. An expanded agent row shows its provider,
+model and effort with **Open transcript**, **Show in conversation** (the Agent
+call that started it), and **Interrupt**, which interrupts the agent's current
+turn and keeps it retained. An expanded command or Monitor row shows a bounded
+output preview.
 The preview is not another transcript or process owner: it projects execution
 snapshots and passive progress/terminal events without consuming model output.
 It shows at most three output lines, each limited to 100 columns. It labels its
@@ -1502,7 +1512,8 @@ transcript when necessary. Settled agent views finish their scheduled projection
 before locating the row, so an idle agent is as navigable as a running one.
 The captured tool ID includes nested ToolCall children.
 
-The panel lists up to five rows plus the expanded row when needed. Its last
+The panel lists up to five rows plus the expanded row when needed; retained
+finished rows also stay visible throughout their grace period. Its last
 row holds the explicit controls: `[Show all N]` (then `[Show fewer]`) when rows
 overflow, which expands the panel in place, and `[Manage]`, which opens the
 background-work cockpit. Blank space does nothing. Monitor expiry is a fixed
