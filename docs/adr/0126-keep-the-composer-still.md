@@ -11,16 +11,21 @@ zone mutation and re-render, so that growth scrolls the transcript instead, as i
 a bottom-anchored terminal. While everything from the window start to the end of
 the draft still fits, the start is kept and free space below is used first; a
 window scrolled away from the composer, or starting inside a tall draft, keeps
-its own reading position. Both zone mutations and full re-renders capture the
-number of characters from each window start to the buffer end. After restoring
-logical positions and composer anchors, a smaller tail permits clamping a start
-past the last page backward to that page. This fills empty space left below the
-draft when an interaction disappears, even if the composer was previously
-offscreen or near the top and the start was in surviving transcript. Unchanged
-or growing tails retain deliberate blank space; earlier history views do not
-move toward the bottom, and a window already starting at `point-min` stays
-there. View buffers set `scroll-conservatively` to 101 and `scroll-margin` to 0
-so a draft growing past the bottom scrolls one line.
+its own reading position. Full re-renders capture the number of characters from
+each window start to the buffer end. Windows with a visible composer anchor do
+not receive the last-page fallback: that anchor also records deliberate blank
+space. For other windows, after restoring logical positions, a smaller tail
+permits clamping a start past the last page backward to that page. This fills
+empty space left when an offscreen interaction disappears. Unchanged or growing
+tails retain deliberate blank space; earlier history views do not move toward
+the bottom, and a window already starting at `point-min` stays there.
+
+Deleting draft text captures the buffer end's display row before the deletion
+and repairs only newly created blank space. Prompt, history and saved-draft
+replacement are single mutations: their temporary empty draft is not a viewport
+state to restore. Ordinary insertion does not capture display geometry. View
+buffers set `scroll-conservatively` to 101 and `scroll-margin` to 0 so a draft
+growing past the bottom scrolls one line.
 
 The line next to the composer never appears or disappears: one permanent rail
 carries the mode badge, an actionable pending count with `C-c C-j`, and the
@@ -79,6 +84,20 @@ focus is explicit.
   The writer queue now rechecks the separator when it drains; an unchanged
   separator costs 0.38 µs (compiled).
 
+- **Preserve intentional blank space, repair draft shrink (2026-10-18).** A
+  recentered transcript with a visible composer jumped 24 rows in a 41-row
+  terminal window when a streaming status summary became shorter in characters
+  but not in display rows. The character-count gate alone cannot distinguish
+  this from removed content. A captured composer row already carries the needed
+  viewport intent, so full re-renders now exempt those windows from the fallback
+  rather than adding an end-of-buffer geometry scan to every render. Separately,
+  deleting five draft lines left five new blank rows; clearing a tall draft could
+  leave almost the entire window empty. Deletion now captures and restores the
+  old end row, bounded by one window. Replacing a draft runs this repair once,
+  after insertion, so navigating to a shorter history entry does not scroll for
+  the temporary empty draft. These paths preserve pre-existing blank space
+  instead of consuming it.
+
 - **Last-page clamp after shrink (2026-10).** Preserving a screen row alone
   preserved empty space too: submitting a question from a scrolled viewport
   left the composer at row 5 in a 41-row window. When the composer had been
@@ -91,7 +110,7 @@ focus is explicit.
   those regressions but missed another real case: a split window starting in
   surviving transcript just above the Ask card, with the composer offscreen,
   retained only lines 79--90 in a 39-row window after submission. The current
-  net-tail shrink gate covers both cases without coupling viewport policy to
+  net-tail shrink gate covered both cases without coupling viewport policy to
   fragment identity. Zone reconciliation and full re-renders capture tail
   lengths before mutation and clamp after logical and composer restoration.
   A truncation regression established that clamping before logical restoration

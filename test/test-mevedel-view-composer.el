@@ -212,6 +212,71 @@
   :doc "outer restoration fills a transcript-start window after card removal"
   'transcript-render)
 
+(mevedel-deftest mevedel-view--draft-window-state ()
+  (let ((operation ,operation)
+        (blank ,blank))
+    (mevedel-view-test--with-buffers
+      (save-window-excursion
+        (switch-to-buffer view-buf)
+        (delete-other-windows)
+        (let ((inhibit-read-only t))
+          (goto-char (point-min))
+          (forward-line 1)
+          (dotimes (n 200) (insert (format "history %d\n" n))))
+        (goto-char (point-max))
+        (insert (mapconcat #'number-to-string
+                           (number-sequence 1 (if (eq operation 'tall) 60 10))
+                           "\n"))
+        (let ((end-row (- (window-body-height) 1 blank)))
+          (set-window-start nil (save-excursion
+                                  (goto-char (point-max))
+                                  (vertical-motion (- end-row))
+                                  (point)) t)
+          (pcase operation
+            ((or 'clear 'tall) (mevedel-view--clear-input))
+            ('delete (delete-region (mevedel-view--input-start) (point-max)))
+            ('history (mevedel-view-history--replace-input "one\ntwo"))
+            ('snapshot
+             (mevedel-view--restore-composer-snapshot
+              '(:text "one\ntwo" :point-offset 0)
+              (mevedel-session--create :session-id "draft-viewport") t)))
+          (should (= end-row
+                     (save-excursion
+                       (goto-char (window-start))
+                       (vertical-motion (window-body-height)))))
+          (should-not mevedel-view--draft-window-state)))))
+  (operation blank)
+  :doc "clearing a full multiline draft fills only the new space" 'clear 0
+  :doc "clearing a draft taller than the window fills the page" 'tall 0
+  :doc "direct deletion repairs a full viewport" 'delete 0
+  :doc "deleting retains deliberately blank rows" 'delete 5
+  :doc "history replacement repairs its net shrink, not temporary deletion" 'history 0
+  :doc "history replacement retains deliberately blank rows" 'history 5
+  :doc "snapshot replacement repairs its net shrink" 'snapshot 0)
+
+(mevedel-deftest mevedel-view--call-preserving-composer-view
+  (:doc "character-only shrink retains a visible composer's deliberate row")
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (forward-line 1)
+        (dotimes (n 200) (insert (format "history %d\n" n))))
+      (goto-char (point-max))
+      (insert "draft")
+      (set-window-start nil (save-excursion
+                              (goto-char (mevedel-view--input-start))
+                              (vertical-motion -5)
+                              (point)) t)
+      (mevedel-view--call-preserving-composer-view
+       (lambda ()
+         (let ((inhibit-read-only t))
+           (goto-char (window-start))
+           (delete-char 3))))
+      (should (= 5 (mevedel-view--composer-screen-row (selected-window)))))))
+
 (defun mevedel-view-composer-test--owner (symbol)
   "Return the source feature basename that defines SYMBOL."
   (file-name-base (or (symbol-file symbol 'defun) "")))
