@@ -771,8 +771,9 @@ source block titled with the option it shows. The panel shows the
 sample-bearing option point visited last. Samples are wrapped to the window's
 width into rows, continuation rows marked `↪`, and the panel's height is the
 question's longest sample in rows, capped by `mevedel-ask-sample-height`, so
-comparing options never moves the rest of the form. After a resize, rows
-re-wrap on the form's next repaint. With point in an open question, `C-v`/`M-v`
+comparing options never moves the rest of the form. When the narrowest window
+showing the view changes width, the form lays itself out again at once. With
+point in an open question, `C-v`/`M-v`
 page an overflowing sample; otherwise they scroll the window. See
 [ADR 0113](adr/0113-show-ask-samples-inline.md).
 

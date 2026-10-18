@@ -1487,7 +1487,9 @@ button lines keep their buttons and may wrap below about fifty columns. When
 that width changes, the zone runs `mevedel-view-zone-width-change-functions`
 once with the view current. The status zone re-renders from it, so a split
 window does not keep stale wrapped rules until an unrelated redraw changes
-their height.
+their height. The interaction zone rebuilds from it too, re-fitting its
+separator and queue-backed cards, and pending Ask forms lay themselves out
+again for the new width.
 
 ```text
  ─── background work · 1 blocked · 2 agents · 1 command · 1 monitor [-] ──

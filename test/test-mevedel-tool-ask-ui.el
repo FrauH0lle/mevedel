@@ -593,6 +593,46 @@ A panel row is a line whose text sits on the source block face."
           (should (= (1- (window-body-width))
                      (mevedel-tool-ask-ui--wrap-width state))))))))
 
+(mevedel-deftest mevedel-tool-ask-ui--width-changed ()
+  ,test
+  (test)
+  :doc "a narrower window lays the form out again before the next keystroke"
+  (test-mevedel-tool-ask-ui--with-form
+    (with-current-buffer view-buffer
+      (mevedel-view-test--insert-composer-draft "> draft\nnext" 3))
+    (test-mevedel-tool-ask-ui--show
+     #'ignore
+     [(:question "Where should the long-form guidance for this project live?"
+       :options [(:label "AGENTS.md" :description "Shared with every contributor and agent, loaded into every session automatically.")
+                 (:label "docs/development.md" :description "Already owns the test commands and the compile checks.")])
+      (:question "Ship?" :options ["Yes" "No"])])
+    (with-current-buffer view-buffer
+      (goto-char (+ (mevedel-view--input-start) 3)))
+    (let* ((state (car (buffer-local-value 'mevedel-tool-ask-ui--states view-buffer)))
+           (wide (car (mevedel-tool-ask-ui--state-height state))))
+      (split-window-right 30)
+      (with-current-buffer view-buffer
+        (mevedel-view-zone--on-window-change nil))
+      (let ((narrow (mevedel-tool-ask-ui--wrap-width state))
+            ;; Batch `vertical-motion' ignores `wrap-prefix', so rows are
+            ;; counted the way the form counts them, at the new width.
+            (rows (lambda ()
+                    (mevedel-tool-ask-ui--text-rows
+                     rendered-body (mevedel-tool-ask-ui--wrap-width state))))
+            heights)
+        (should (< narrow wide))
+        (should (eql narrow (car (mevedel-tool-ask-ui--state-height state))))
+        (with-current-buffer view-buffer
+          (should (equal "> draft\nnext" (mevedel-view--input-text)))
+          (should (= (point) (+ (mevedel-view--input-start) 3))))
+        (push (funcall rows) heights)
+        (with-current-buffer view-buffer
+          (mevedel-view-jump-to-interaction)
+          (dolist (key '("TAB" "<backtab>"))
+            (call-interactively (lookup-key rendered-keymap (kbd key)))
+            (push (funcall rows) heights)))
+        (should (= 1 (length (delete-dups heights))))))))
+
 
 (mevedel-deftest mevedel-tool-ask-ui--closed-heading ()
   ,test

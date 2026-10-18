@@ -127,6 +127,7 @@
 		  (namespace start end fragments))
 (declare-function mevedel-view-zone-region "mevedel-view-zone"
 		  (namespace))
+(defvar mevedel-view-zone-width-change-functions)
 (autoload 'mevedel-view-zone-fragment-bounds "mevedel-view-zone")
 (autoload 'mevedel-view-zone-reconcile "mevedel-view-zone")
 (autoload 'mevedel-view-zone-region "mevedel-view-zone")
@@ -805,6 +806,16 @@ queued idle work free to proceed."
           (mevedel-view--interaction-sync-active-work-pause)))
       (when closed
         (mevedel-view--interaction-offer-idle-work)))))
+
+(defun mevedel-view--interaction-width-changed ()
+  "Lay out the current view's interaction zone again for its new width.
+The separator rule and width-fitted cards are sized when rendered."
+  (when (and (derived-mode-p 'mevedel-view-mode)
+             (mevedel-view-zone-region 'interaction))
+    (mevedel-view--interaction-rebuild)))
+
+(add-hook 'mevedel-view-zone-width-change-functions
+          #'mevedel-view--interaction-width-changed)
 
 (defun mevedel-view--interaction-register (descriptor)
   "Register DESCRIPTOR in the interaction zone and return its overlay."

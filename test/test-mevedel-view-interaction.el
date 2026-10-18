@@ -652,6 +652,31 @@
   "Return the buffer start of interaction card ID."
   (plist-get (mevedel-view-zone-fragment-bounds 'interaction id) :start))
 
+(mevedel-deftest mevedel-view--interaction-width-changed ()
+  ,test
+  (test)
+  :doc "a narrower window re-fits the separator rule to one row"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (mevedel-view-test--insert-composer-draft "> draft\nnext" 3)
+      ;; A direct card; queue-backed ones return from their session on rebuild.
+      (test-mevedel-view-interaction--card 'card 'ask 1)
+      (cl-flet ((separator-rows ()
+                  (let ((start (plist-get (mevedel-view-zone-fragment-bounds
+                                           'interaction :separator)
+                                          :start)))
+                    (save-excursion
+                      (goto-char start)
+                      (count-screen-lines start (line-end-position))))))
+        (should (= 1 (separator-rows)))
+        (split-window-right 30)
+        (mevedel-view-zone--on-window-change nil)
+        (should (= 1 (separator-rows))))
+      (should (equal "> draft\nnext" (mevedel-view--input-text)))
+      (should (= (point) (+ (mevedel-view--input-start) 3))))))
+
 (mevedel-deftest mevedel-view--interaction-rank ()
   ,test
   (test)

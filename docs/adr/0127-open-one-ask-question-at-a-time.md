@@ -46,9 +46,12 @@ whole form and the transcript above it.
 
 - A closed question and its answer are flattened and cut to one line, the
   answer keeping at least half of it; the full text is in the help echo and
-  appears when the question opens. The cut is computed at repaint, so after a
-  resize it may be too long or too short until the next repaint. Below about 25
-  columns each part keeps a 10-column minimum and the line wraps.
+  appears when the question opens. The cut fits the narrowest window showing
+  the view, and the form lays itself out again when that width changes. It
+  used to wait for the next repaint, so the first keystroke after a resize
+  changed the form's height: after a split from 150 to 70 terminal columns,
+  the form went from 32 to 31 rows on the next `n`. Below about 25 columns
+  each part keeps a 10-column minimum and the line wraps.
 - Digits and `c` act only in the open question.
 - A short open question leaves blank space above Submit, up to the height of
   the tallest open question.

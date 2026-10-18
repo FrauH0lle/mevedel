@@ -9,7 +9,8 @@ its question's option list. The panel uses the rendered source block face, so a
 sample reads like a code block elsewhere in the transcript, and its title names
 the option it belongs to.
 
-Samples are wrapped into rows at the view window's width, continuation rows
+Samples are wrapped into rows at the width of the narrowest window showing the
+view, continuation rows
 marked `↪`. The panel's height is fixed per question: the longest of that
 question's samples in rows, capped by `mevedel-ask-sample-height`. Moving between
 options therefore never moves anything below the panel. The panel shows the
@@ -45,9 +46,9 @@ line count, moving the next question by as much on an 80-column window.
   rows: only the open question shows its panel
   ([ADR 0127](0127-open-one-ask-question-at-a-time.md)).
 - Samples are fontified as Markdown once per form and cached.
-- Wrapping depends on the window width when the form repaints. After a resize,
-  rows soft-wrap until the next repaint re-wraps them; no resize hook keeps
-  them current.
+- Wrapping depends on the view's width. When it changes, the form re-wraps
+  its samples and lays itself out again at once, through the zone's
+  width-change hook, instead of soft-wrapping until the next repaint.
 - Samples are not shown side by side with the options, as some terminal UIs do.
   An Emacs buffer has no column layout that wraps both sides independently.
 
