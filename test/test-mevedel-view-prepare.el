@@ -94,6 +94,44 @@ BODY can release it by setting RELEASED and inspect WORKER."
     (should (equal "typing" (buffer-substring-no-properties (mark) (point))))
     (should-not (string-search "preparing result" (buffer-string)))))
 
+(mevedel-deftest mevedel-view-prepare/groups
+  (:doc "a result being prepared keeps its tool run folded into one row")
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-prepare--min-size 400)
+          (mevedel-view-tool-group-collapse-threshold 3))
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (dotimes (i 4)
+        (mevedel-view-test--insert-data
+         data-buf
+         (format "(:name \"Read\" :args (:file_path \"/tmp/f%d.el\"))\n\n%s\n"
+                 i (if (= i 3) (make-string 600 ?y) "short"))
+         `(tool . ,(format "call_%d" i))))
+      (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+        (clrhash mevedel-view--tool-rendering-cache)
+        (let ((expected (buffer-substring-no-properties (point-min) (point-max)))
+              threads)
+          (unwind-protect
+              (mevedel-prepare-test--paused
+                (should mevedel-view-prepare--jobs)
+                ;; The pending row is a member: the run keeps its one row.
+                (should (equal expected (buffer-substring-no-properties
+                                         (point-min) (point-max))))
+                (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+                (setq released t)
+                (mevedel-prepare-test--wait
+                 (lambda () (and (not mevedel-view-prepare--jobs)
+                                 (not mevedel-view-render--batch))))
+                (should (equal expected (buffer-substring-no-properties
+                                         (point-min) (point-max)))))
+            (setq threads (delq nil (mapcar #'mevedel-view-prepare--job-thread
+                                            mevedel-view-prepare--jobs)))
+            (mevedel-view-prepare-cancel)
+            (mevedel-prepare-test--wait
+             (lambda () (not (cl-some #'thread-live-p threads))))))))))
+
 (mevedel-deftest mevedel-view-prepare/context ()
   ,test
   (test)

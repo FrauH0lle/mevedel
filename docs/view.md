@@ -160,6 +160,11 @@ normally, and terminal settlement renders the final state.
 Live updates preserve the main view's source-backed disclosure state. An
 incremental update or full-rerender fallback must not collapse response,
 reasoning, tool, or audit sections that the reader expanded.
+When a tool run grows past the grouping threshold beneath a reader, its member
+rows remain visible and the group stays expanded after the reader leaves. This
+also applies before any result arrives: running rows retain point by call key,
+then by transcript tool id on settlement, and remembered group expansion carries
+over to the settled group.
 Grouped tool and reasoning rows use their own transcript source identity,
 so expansion and the reader's cursor survive a row moving out of a group
 when a late audit requires individual presentation.
@@ -327,11 +332,11 @@ tick before publication; changing the source cancels and restarts the job.
 Markdown fontification sees each whole response but yields between line-aligned
 regions. Tool entries are prepared in small groups; the job owns and releases
 their private buffers and caches. Once ready, the refresh
-renders the turns needed to restore point, selection, and window anchors and
-all chat prompt turns immediately (so moving onto pending responses still has
-an accurate prompt and click target), then replace other visible turns and
-offscreen turn placeholders one per timer
-callback, in that priority order. Each callback
+renders every turn a displaying window shows, the turns needed to restore
+point, selection, and window anchors, and all chat prompt turns immediately (so
+moving onto pending responses still has an accurate prompt and click target).
+Offscreen turn placeholders are then replaced one per timer callback; a reader
+never sees a placeholder replaced in front of them. Each callback
 captures the current draft and reader state, so typing between callbacks is
 preserved. Source text or property changes retire the old plan. Callbacks pause
 while the view is unattended or its transport is busy, and view teardown cancels
@@ -750,7 +755,10 @@ names, and the row shows that body under a header naming the dependencies.
 Runs of more than `mevedel-view-tool-group-collapse-threshold` (default 3)
 plain tool rows fold into one grouped activity row such as
 `Searched 5 patterns, read 1 file, ran 5 commands, thought 8 times`; tools
-without a verb mapping — MCP tools included — appear as `NAME ×N`. The
+without a verb mapping — MCP tools included — appear as `NAME ×N`. A summary
+too long for the narrowest window showing the view ends in `…`, leaving room for
+its running and failed counts, so the folded row stays one screen line as they
+come and go. The
 expanded group reuses the compound-tool nested-row machinery: each tool call
 and substantive reasoning occurrence is a `tool-child` row in chronological
 order with its own collapse state, and collapsing the group takes its rows
@@ -767,8 +775,10 @@ renders nothing and splits nothing. The original yielded Bash row retains
 its linked completion breadcrumb. Breadcrumbs can fold into activity groups as counted completions,
 such as `3 commands completed, 1 failed`, and show linked rows when expanded.
 A newly formed group stays open when one
-of its rows is already open, so grouping
-does not hide text the reader is inspecting. An explicit group fold wins over
+of its rows is already open, or when point or a window's point is on one of its
+rows, settled or running, as the run folds; the group then remembers itself as
+open, so it does not fold later when the reader moves on. Grouping therefore
+does not hide or move text the reader is inspecting. An explicit group fold wins over
 its children's states. Rows that demand individual presentation — agent
 handles, compound tools, rows carrying hook audits, rows their renderer wants expanded or
 compact, and coalesced rows — never fold into a group; they split the run
@@ -790,7 +800,8 @@ settle. A call the pipeline reports finished keeps its place until its
 result reaches the transcript (for a gptel batch, after the whole batch):
 its row shows `✓`, or `×` for a failure, and it leaves the running count,
 so one early finisher never reshapes the run. A folded running group cannot
-show those rows, so its header adds `· N failed`; once no call is left
+show those rows, so its header adds `· N failed: TOOL` naming the failed tools;
+once no call is left
 running, a failure takes the group's marker as `×`. The ID-less post-tool hook
 that precedes the result retires such a finished call first and never a
 bound sibling still running. A response that opens with tool
@@ -818,8 +829,11 @@ calls that reached it, and one formed only by running calls returns to plain
 rows. If that redraw fails, the running decorations are still removed and a
 running group's settled marker is restored in place.
 
-Failed calls split that run around their standalone rows and use
-a red `×` in the `error` face. Warning rows stay groupable; a group containing
+Failed calls stay in their run, so a call failing never reshapes it. A folded
+group containing one takes the red `×` marker in the `error` face and ends its
+summary with `· N failed: Grep`, the same text its running form showed: each
+failed tool is named once, and a long list of names ends in `…` so the row stays
+one line. The failed row inside the group carries its own `×`. Warning rows stay groupable; a group containing
 a warning carries `!`, and the warning stays visible on its nested row.
 Failed tool rows, including nested calls inside compound tools, start collapsed.
 Only the marker uses warning or error highlighting; the tool name, argument,
@@ -1903,8 +1917,12 @@ from its first tool even when retained-tail projection changes the enclosing
 source of a neighboring blank line. Content hashes and temporary in-flight
 tokens are excluded so growth and settlement do not change reader identity. A
 raw position saved across a delete-and-re-render lands in different content
-whenever lengths shift. Anchors that cannot be resolved after the redraw fall back to the
-clamped raw position.
+whenever lengths shift. A transcript anchor whose section no longer exists, such
+as a tool row folded into its group's row, resolves to the start of the
+narrowest rendered run whose source contains it. Other anchors that cannot be
+resolved fall back to the clamped raw position, but a position that was in the
+transcript never resolves into the editable composer: it goes to the last
+transcript character instead, so the next keystroke cannot edit the draft.
 Restoring an existing mark updates its marker directly, preserving activation
 state without running mark-activation hooks. A redraw must not schedule editor
 mode transitions for the next user command.
@@ -2136,7 +2154,10 @@ with another 250 ms between them. The callback also realigns ratio-sized images.
 
 The callback enters normal projection mutation ownership before locating work,
 so queued work discovers current positions and the changed window's width when
-it actually runs. Updates stay off the undo list and preserve the modified flag,
+it actually runs. A formatted table or resized image usually changes height:
+the callback keeps each visible composer on its screen row, so the change
+scrolls the transcript above it, and gives a window left past a shortened end
+its last page back. Updates stay off the undo list and preserve the modified flag,
 data buffer, composer draft, point, mark, other markers, overlays, and displayed
 window anchors. Table replacement uses cell identity and unwrapped character
 offsets instead of whole-table text diffing. This distinguishes repeated words
@@ -2219,7 +2240,10 @@ enclosing block. These reduce first-arrival allocation without deferring decodin
 or changing metadata validation and ownership checks.
 Scheduled projections show a non-toggleable `Tool: preparing result...` row for
 uncached collapsed tool spans of at least 256 Ki characters. The row indicates
-pending presentation, not a successful tool outcome. One parser thread per view
+pending presentation, not a successful tool outcome. Inside an activity run it
+stays a member of the run's group, shown running, so publication does not
+unfold or refold the group; an open group never parses the deferred span on the
+main thread. One parser thread per view
 processes admitted spans sequentially, waiting between the canonical parser's
 stages. Checkpoints block on a condition variable released by the main-thread
 preparation callback; worker waits never dispatch editor timers or process
@@ -2295,7 +2319,11 @@ and reapply collapse state, including temporary in-flight anchors that later
 settle, so expanded tool/response sections do not collapse again during
 live refreshes. Rebuilding the same transcript retains remembered states for
 children hidden inside folded groups; an explicit transcript-source change
-clears them. Source anchors prevent unmatched states from applying to rewritten
+clears them. Only chosen states are remembered: a toggle, a state already
+remembered, or a captured state that differs from its section type's default
+(responses and turns open, other sections folded). A section shown in its
+default state is not remembered, so a group that once folded by default does
+not later fold over a row the reader opened. Source anchors prevent unmatched states from applying to rewritten
 content at the same position.
 `mevedel-view-render-settle` computes those keys with their durable
 post-settle anchors (`mevedel-view-disclosure--settling-p`): it runs before

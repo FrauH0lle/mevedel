@@ -664,5 +664,46 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (should (equal "● S2  readable    Chat 1 · Planning  Prompt"
                    (mevedel-view-segments--candidate segment 2 t)))))
 
+(mevedel-deftest mevedel-view-render-capture-segment-state ()
+  ,test
+  (test)
+  :doc "a revisit returns point and window start to the same content"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (dotimes (i 4)
+        (mevedel-view-test--insert-data data-buf (format "Prompt %d\n" i) nil)
+        (mevedel-view-test--insert-data
+         data-buf (format "Response %d with target text.\n" i) 'response))
+      (with-current-buffer view-buf
+        (set-window-buffer (selected-window) view-buf)
+        (mevedel-view--full-rerender)
+        (goto-char (point-min))
+        (search-forward "Response 2 with")
+        (set-window-start (selected-window) (line-beginning-position) t)
+        (search-forward "target")
+        (let ((state (mevedel-view-render-capture-segment-state)))
+          ;; The next projection is longer above the reader, as a formatted
+          ;; table and its raw source differ.
+          (mevedel-view--full-rerender)
+          (let ((inhibit-read-only t))
+            (goto-char (point-min))
+            (insert "A longer projection of earlier history.\n"))
+          (goto-char (point-min))
+          (mevedel-view-render--restore-segment-state state 'backward)
+          (should (looking-back "Response 2 with target" (line-beginning-position)))
+          (should (save-excursion
+                    (goto-char (window-start))
+                    (looking-at "Response 2 with")))))))
+  :doc "positions without an anchor fall back to their offsets"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (let ((state (mevedel-view-render-capture-segment-state)))
+        (should-not (plist-get state :point-anchor))
+        (goto-char (mevedel-view--input-start))
+        (mevedel-view-render--restore-segment-state state 'backward)
+        (should (= (point) (point-min)))))))
+
 (provide 'test-mevedel-view-segments)
 ;;; test-mevedel-view-segments.el ends here

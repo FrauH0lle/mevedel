@@ -212,6 +212,71 @@
   :doc "outer restoration fills a transcript-start window after card removal"
   'transcript-render)
 
+(mevedel-deftest mevedel-view--draft-window-state ()
+  (let ((operation ,operation)
+        (blank ,blank))
+    (mevedel-view-test--with-buffers
+      (save-window-excursion
+        (switch-to-buffer view-buf)
+        (delete-other-windows)
+        (let ((inhibit-read-only t))
+          (goto-char (point-min))
+          (forward-line 1)
+          (dotimes (n 200) (insert (format "history %d\n" n))))
+        (goto-char (point-max))
+        (insert (mapconcat #'number-to-string
+                           (number-sequence 1 (if (eq operation 'tall) 60 10))
+                           "\n"))
+        (let ((end-row (- (window-body-height) 1 blank)))
+          (set-window-start nil (save-excursion
+                                  (goto-char (point-max))
+                                  (vertical-motion (- end-row))
+                                  (point)) t)
+          (pcase operation
+            ((or 'clear 'tall) (mevedel-view--clear-input))
+            ('delete (delete-region (mevedel-view--input-start) (point-max)))
+            ('history (mevedel-view-history--replace-input "one\ntwo"))
+            ('snapshot
+             (mevedel-view--restore-composer-snapshot
+              '(:text "one\ntwo" :point-offset 0)
+              (mevedel-session--create :session-id "draft-viewport") t)))
+          (should (= end-row
+                     (save-excursion
+                       (goto-char (window-start))
+                       (vertical-motion (window-body-height)))))
+          (should-not mevedel-view--draft-window-state)))))
+  (operation blank)
+  :doc "clearing a full multiline draft fills only the new space" 'clear 0
+  :doc "clearing a draft taller than the window fills the page" 'tall 0
+  :doc "direct deletion repairs a full viewport" 'delete 0
+  :doc "deleting retains deliberately blank rows" 'delete 5
+  :doc "history replacement repairs its net shrink, not temporary deletion" 'history 0
+  :doc "history replacement retains deliberately blank rows" 'history 5
+  :doc "snapshot replacement repairs its net shrink" 'snapshot 0)
+
+(mevedel-deftest mevedel-view--call-preserving-composer-view
+  (:doc "character-only shrink retains a visible composer's deliberate row")
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (forward-line 1)
+        (dotimes (n 200) (insert (format "history %d\n" n))))
+      (goto-char (point-max))
+      (insert "draft")
+      (set-window-start nil (save-excursion
+                              (goto-char (mevedel-view--input-start))
+                              (vertical-motion -5)
+                              (point)) t)
+      (mevedel-view--call-preserving-composer-view
+       (lambda ()
+         (let ((inhibit-read-only t))
+           (goto-char (window-start))
+           (delete-char 3))))
+      (should (= 5 (mevedel-view--composer-screen-row (selected-window)))))))
+
 (defun mevedel-view-composer-test--owner (symbol)
   "Return the source feature basename that defines SYMBOL."
   (file-name-base (or (symbol-file symbol 'defun) "")))
@@ -2160,7 +2225,35 @@
             (should (= (window-point other) (+ (mevedel-view--input-start) 4)))
             (should (= (mark) (+ (mevedel-view--input-start) 8)))
             (should mark-active)
-            (should (equal draft (mevedel-view--input-text)))))))))
+            (should (equal draft (mevedel-view--input-text))))))))
+
+  :doc "a vanished transcript position never lands in the composer"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf "A long response that is replaced by something much shorter.\n"
+     'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4)
+      (save-window-excursion
+        (set-window-buffer (selected-window) view-buf)
+        (goto-char (point-min))
+        (search-forward "something much shorter")
+        (set-window-point (selected-window) (point))
+        (let ((end (marker-position mevedel-view--status-marker)))
+          (mevedel-view--call-preserving-window-state
+           (lambda ()
+             (let ((inhibit-read-only t))
+               (goto-char (point-min))
+               (search-forward "A long response")
+               (delete-region (match-beginning 0) end)
+               (goto-char (match-beginning 0))
+               (insert "Short.\n")))))
+        (should-not (mevedel-view--position-in-input-region-p (point)))
+        (should-not (mevedel-view--position-in-input-region-p
+                     (window-point (selected-window))))
+        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))))))
 
 (mevedel-deftest mevedel-view--render-anchor-identity ()
   ,test
@@ -2261,6 +2354,41 @@
     (should-not (mevedel-view--position-render-anchor (point-min)))
     (should-not (mevedel-view--position-render-anchor (point-max)))))
 
+(mevedel-deftest mevedel-view--render-anchor-container ()
+  ,test
+  (test)
+  :doc "returns the narrowest run whose source contains the position"
+  (with-temp-buffer
+    (insert (propertize "turn\n" 'mevedel-view-source '(10 . 100)))
+    (let ((inner (point)))
+      (insert (propertize "group\n" 'mevedel-view-source '(20 . 60)))
+      (insert "plain\n")
+      (should (= inner (mevedel-view--render-anchor-container 30 (point-max))))
+      (should (= (point-min) (mevedel-view--render-anchor-container 70 (point-max))))
+      (should-not (mevedel-view--render-anchor-container 200 (point-max)))))
+  :doc "ignores runs at or after the limit"
+  (with-temp-buffer
+    (insert "plain\n")
+    (let ((limit (point)))
+      (insert (propertize "group\n" 'mevedel-view-source '(20 . 60)))
+      (should-not (mevedel-view--render-anchor-container 30 limit)))))
+
+(mevedel-deftest mevedel-view--transcript-position-backstop ()
+  ,test
+  (test)
+  :doc "moves a position out of the composer onto the last transcript character"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Response.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((inside (1+ (mevedel-view--input-start)))
+            (outside (point-min)))
+        (should (= outside (mevedel-view--transcript-position-backstop outside)))
+        (let ((moved (mevedel-view--transcript-position-backstop inside)))
+          (should-not (mevedel-view--position-in-input-region-p moved))
+          (should (< moved (marker-position mevedel-view--status-marker))))))))
+
 (mevedel-deftest mevedel-view--render-anchor-position ()
   ,test
   (test)
@@ -2314,6 +2442,16 @@
                  '(fragment status tasks 0)))
     (should-not (mevedel-view--render-anchor-position nil)))
 
+  :doc "a section folded into an enclosing one resolves to that run"
+  (with-temp-buffer
+    (insert (propertize "Assistant\n" 'mevedel-view-source '(10 . 100)))
+    (let ((group (point)))
+      (insert (propertize "  ✓ Read 4 files\n" 'mevedel-view-source '(20 . 60)
+                          'mevedel-view-type 'tool-group))
+      (insert (propertize "Prose.\n" 'mevedel-view-source '(60 . 100)))
+      (should (= group (mevedel-view--render-anchor-position
+                        '(source (30 tool-summary nil) 0 5))))))
+
   :doc "section identities survive separator changes and compound child reordering"
   (with-temp-buffer
     (let ((source '(40 . 90))
@@ -2344,7 +2482,9 @@
         (should (= (+ child-start 1)
                    (mevedel-view--render-anchor-position child-anchor)))
         (delete-region child-start (point-max))
-        (should-not (mevedel-view--render-anchor-position child-anchor))))))
+        ;; A vanished child goes to its enclosing group row, not a sibling.
+        (should (= (point-min)
+                   (mevedel-view--render-anchor-position child-anchor)))))))
 
 (mevedel-deftest mevedel-view--input-text ()
   ,test

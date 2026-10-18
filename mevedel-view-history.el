@@ -52,6 +52,8 @@
 (defvar mevedel--session)
 
 ;; `mevedel-view-composer'
+(declare-function mevedel-view--call-preserving-draft-window-state
+                  "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view-abort "mevedel-view-composer" ())
@@ -121,11 +123,13 @@
 
 (defun mevedel-view-history--replace-input (text)
   "Replace the current view input with TEXT."
-  (let ((inhibit-read-only t))
-    (mevedel-view--clear-input)
-    (goto-char (mevedel-view--input-start))
-    (insert text)
-    (goto-char (point-max))))
+  (mevedel-view--call-preserving-draft-window-state
+   (lambda ()
+     (let ((inhibit-read-only t))
+       (mevedel-view--clear-input)
+       (goto-char (mevedel-view--input-start))
+       (insert text)
+       (goto-char (point-max))))))
 
 (defun mevedel-view-history-add (input)
   "Add INPUT to the current view buffer's input history.

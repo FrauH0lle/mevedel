@@ -609,6 +609,18 @@ elapsed metadata before truncating the activity to fit that many columns."
                   'front-sticky '(read-only keymap)
                   'rear-nonsticky '(read-only keymap)))))
 
+(defun mevedel-view--repair-request-progress-separator ()
+  "Redraw the rail when the text above it now needs another separator.
+The separator depends on how the text before the rail ends, which any
+transcript writer can change without redrawing the rail.  A stale one
+leaves an extra blank line, or none, until some later rail update
+removes it and moves the transcript a row again."
+  (when (and mevedel-view--spinner-rendered-state
+             (mevedel-view-zone-region 'progress)
+             (not (equal (nth 4 mevedel-view--spinner-rendered-state)
+                         (mevedel-view--request-progress-prefix))))
+    (mevedel-view--render-request-progress)))
+
 (defun mevedel-view--format-composer-rail (badge attention width status display-status)
   "Format a one-line rail within WIDTH columns.
 BADGE and actionable ATTENTION take priority over STATUS and DISPLAY-STATUS.

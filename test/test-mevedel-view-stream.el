@@ -2749,6 +2749,215 @@ turn's later text, live and after reconstruction."
       (should (= 1 (mevedel-view-stream-test--count-substring
                     "● Read: a" (mevedel-view-stream-test--history view-buf))))))
 
+  :doc "a run folding under the reader stays open and keeps the reader's row"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3)
+          (calls '((:name "Read" :args (:file_path "a"))
+                   (:name "Read" :args (:file_path "b"))
+                   (:name "Read" :args (:file_path "c"))))
+          (fourth '((:name "Read" :args (:file_path "d")))))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (dolist (call calls)
+        (mevedel-view-stream-test--batch data-buf (list call))
+        (mevedel-view-stream-test--batch data-buf (list call) t))
+      (save-window-excursion
+        (set-window-buffer (selected-window) view-buf)
+        (with-current-buffer view-buf
+          (mevedel-view-stream-test--insert-composer-draft "> quoted\nsecond line" 4)
+          (goto-char (point-min))
+          (search-forward "Read: c")
+          (set-window-point (selected-window) (point)))
+        (mevedel-view-stream-test--batch data-buf fourth)
+        (with-current-buffer view-buf
+          (let ((text (mevedel-view-stream-test--history view-buf)))
+            (should (string-match-p "Read 4 files · 1 running" text))
+            (should (string-match-p "Read: c" text)))
+          (should-not (mevedel-view--position-in-input-region-p (point)))
+          (should (string-match-p
+                   "Read: c"
+                   (buffer-substring-no-properties
+                    (line-beginning-position) (line-end-position))))
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+          ;; Leaving the group does not fold it under the next reader.
+          (goto-char (+ (mevedel-view--input-start) 4))
+          (set-window-point (selected-window) (point)))
+        (mevedel-view-stream-test--batch data-buf fourth t)
+        (let ((text (mevedel-view-stream-test--history view-buf)))
+          (should (string-match-p "✓ Read 4 files" text))
+          (should (string-match-p "Read: c" text))))))
+
+  :doc "a running-only group keeps its visited member and remembers expansion"
+  (dolist (leave-before-settlement '(nil t))
+    (mevedel-view-stream-test--with-buffers
+      (let ((mevedel-view-tool-boundary-render-delay 0)
+            (mevedel-view-tool-group-collapse-threshold 3)
+            (calls '((:name "Read" :args (:file_path "a"))
+                     (:name "Read" :args (:file_path "b"))
+                     (:name "Read" :args (:file_path "c"))
+                     (:name "Read" :args (:file_path "d")))))
+        (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+        (when leave-before-settlement
+          (mevedel-view-stream-test--insert-data data-buf "Let me check.\n" 'response))
+        (dolist (call (butlast calls))
+          (mevedel-view-stream-test--batch data-buf (list call))
+          (mevedel-view-stream-handle-pipeline-event
+           (append (list :type 'started :data-buffer data-buf
+                         :tool-use-id (plist-get (plist-get call :args) :file_path))
+                   call)))
+        (save-window-excursion
+          (set-window-buffer (selected-window) view-buf)
+          (with-current-buffer view-buf
+            (mevedel-view-stream-test--insert-composer-draft "> quoted\nsecond line" 4)
+            (goto-char (point-min))
+            (search-forward "Read: c")
+            (set-window-point (selected-window) (point)))
+          (mevedel-view-stream-test--batch data-buf (last calls))
+          (with-current-buffer view-buf
+            (should (string-match-p "Read 4 files · 4 running"
+                                    (mevedel-view-stream-test--history view-buf)))
+            (should (string-suffix-p
+                     "Read: c" (buffer-substring-no-properties
+                                (line-beginning-position) (point))))
+            (should (equal "c" (get-text-property
+                                (point) 'mevedel-view-pending-tool-use-id)))
+            (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+            (when leave-before-settlement
+              (goto-char (+ (mevedel-view--input-start) 4))
+              (set-window-point (selected-window) (point))))
+          ;; A second render after leaving must not hide the running rows.
+          (mevedel-view-render-live-update data-buf)
+          (should (string-match-p "Read: c"
+                                  (mevedel-view-stream-test--history view-buf)))
+          ;; Results use the pipeline id in their gptel property, as gptel does.
+          ;; Debouncing removes every pending entry before the next redraw.
+          (let ((mevedel-view-tool-boundary-render-delay 60))
+            (dolist (call calls)
+              (let ((id (plist-get (plist-get call :args) :file_path)))
+                (when leave-before-settlement
+                  (mevedel-view-stream-test--insert-data
+                   data-buf (concat (when (equal id "a") "\n\n")
+                                    "#+begin_tool Read\n") nil))
+                (mevedel-view-stream-test--insert-data
+                 data-buf (format "%S\n\nresult\n" call) (cons 'tool id))
+                (when leave-before-settlement
+                  (mevedel-view-stream-test--insert-data data-buf "#+end_tool\n" nil))
+                (with-current-buffer data-buf
+                  (mevedel-view-stream-post-tool
+                   (if (equal id "d") call
+                     (append (list :tool-use-id id) call)))))))
+          (mevedel-view--flush-scheduled-render view-buf t)
+          (with-current-buffer view-buf
+            (should (string-match-p "✓ Read 4 files"
+                                    (mevedel-view-stream-test--history view-buf)))
+            (should (string-match-p "Read: c"
+                                    (mevedel-view-stream-test--history view-buf)))
+            (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+            (if leave-before-settlement
+                (should (= (point) (+ (mevedel-view--input-start) 4)))
+              (should (string-match-p
+                       "Read: c" (buffer-substring-no-properties
+                                  (line-beginning-position) (line-end-position)))))
+            (goto-char (+ (mevedel-view--input-start) 4))
+            (set-window-point (selected-window) (point)))
+          (mevedel-view-render-live-update data-buf)
+          (with-current-buffer view-buf
+            (should (string-match-p "Read: c"
+                                    (mevedel-view-stream-test--history view-buf)))
+            (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+            (should (= (point) (+ (mevedel-view--input-start) 4))))))))
+
+  :doc "a running-only reader expansion belongs to its turn, not its data position"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3)
+          (calls '((:name "Read" :args (:file_path "a"))
+                   (:name "Read" :args (:file_path "b"))
+                   (:name "Read" :args (:file_path "c"))
+                   (:name "Read" :args (:file_path "d")))))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (mevedel-view-stream-test--batch data-buf (butlast calls))
+      (save-window-excursion
+        (set-window-buffer (selected-window) view-buf)
+        (with-current-buffer view-buf
+          (mevedel-view-stream-test--insert-composer-draft "> quoted\nsecond line" 4)
+          (goto-char (point-min))
+          (search-forward "Read: c")
+          (set-window-point (selected-window) (point)))
+        (mevedel-view-stream-test--batch data-buf (last calls))
+        (with-current-buffer view-buf
+          (should (string-suffix-p
+                   "Read: c" (buffer-substring-no-properties
+                              (line-beginning-position) (point))))
+          (mevedel-view-stream-stop)
+          (goto-char (+ (mevedel-view--input-start) 4))
+          (set-window-point (selected-window) (point)))
+        ;; No result arrived: the next turn reuses precisely the same data end.
+        (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+        (mevedel-view-stream-test--batch data-buf calls)
+        (with-current-buffer view-buf
+          (let ((text (mevedel-view-stream-test--history view-buf)))
+            (should (string-match-p "Read 4 files · 4 running" text))
+            (should-not (string-match-p "Read: c" text)))
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ (mevedel-view--input-start) 4)))))))
+
+  :doc "a transient default fold is not remembered over a row opened later"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3)
+          (calls '((:name "Read" :args (:file_path "a"))
+                   (:name "Read" :args (:file_path "b"))
+                   (:name "Read" :args (:file_path "c")))))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      ;; Results land before their post-tool hooks run, so for a moment the
+      ;; run counts past the threshold and folds by default.
+      (mevedel-view-stream-test--batch data-buf calls)
+      (mevedel-view-stream-test--batch data-buf calls t)
+      (with-current-buffer view-buf
+        (should (string-match-p "✓ Read: c"
+                                (mevedel-view-stream-test--history view-buf)))
+        (goto-char (point-min))
+        (search-forward "Read: c")
+        (mevedel-view-toggle-section)
+        (should (string-match-p "result" (mevedel-view-stream-test--history view-buf)))
+        (mevedel-view-stream-test--insert-composer-draft "> quoted\nsecond line" 4))
+      (mevedel-view-stream-test--batch
+       data-buf '((:name "Read" :args (:file_path "d"))))
+      (let ((text (mevedel-view-stream-test--history view-buf)))
+        (should (string-match-p "Read 4 files · 1 running" text))
+        (should (string-match-p "Read: c" text))
+        (should (string-match-p "result" text)))
+      (with-current-buffer view-buf
+        (should (equal "> quoted\nsecond line" (mevedel-view--input-text))))))
+
+  :doc "a running group keeps its single row when one of its calls fails"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3)
+          (calls '((:name "Read" :args (:file_path "a"))
+                   (:name "Read" :args (:file_path "b"))
+                   (:name "Read" :args (:file_path "c"))
+                   (:name "Grep" :args (:pattern "x")))))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (with-current-buffer view-buf
+        (mevedel-view-stream-test--insert-composer-draft "> quoted\nsecond line" 4))
+      (mevedel-view-stream-test--batch data-buf calls)
+      (dolist (call (butlast calls))
+        (mevedel-view-stream-test--batch data-buf (list call) t))
+      (with-current-buffer data-buf
+        (mevedel-view-stream-test--insert-data
+         data-buf "(:name \"Grep\" :args (:pattern \"x\"))\n\nError: tool failed\n"
+         (cons 'tool "grep-x"))
+        (mevedel-view-stream-post-tool (car (last calls))))
+      (let ((text (mevedel-view-stream-test--history view-buf)))
+        (should (string-match-p
+                 "× Read 3 files, searched 1 pattern · 1 failed: Grep$" text))
+        (should-not (string-match-p "Read: a\\|Grep: x" text)))
+      (with-current-buffer view-buf
+        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+
   :doc "calls after assistant text start their own run"
   (mevedel-view-stream-test--with-buffers
     (let ((mevedel-view-tool-boundary-render-delay 0)
@@ -2999,13 +3208,13 @@ turn's later text, live and after reconstruction."
         (cl-loop for call in calls for i from 1
                  do (event 'started call (format "id-%d" i)))
         (event 'settled (car calls) "id-1" :status 'error)
-        (should (string-match-p "● Read 4 files · 3 running · 1 failed\n"
+        (should (string-match-p "● Read 4 files · 3 running · 1 failed: Read\n"
                                 (mevedel-view-stream-test--history view-buf)))
         (cl-loop for call in (cdr calls) for i from 2
                  do (event 'settled call (format "id-%d" i)))
         ;; Nothing left running: the failure takes the marker.
         (let ((text (mevedel-view-stream-test--history view-buf)))
-          (should (string-match-p "× Read 4 files · 1 failed\n" text))
+          (should (string-match-p "× Read 4 files · 1 failed: Read\n" text))
           (should-not (string-match-p "running\\|●" text)))
         ;; A stop restores the group's own header.
         (with-current-buffer view-buf (mevedel-view-stream-stop))
