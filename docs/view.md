@@ -921,6 +921,12 @@ Terminology:
   idle. The rail fits the narrowest window showing the view: activity yields
   space before the mode and pending-action hint. It is not part of the history,
   status, or interaction zones; its internal zone name remains `progress`.
+  A window resize refits the rail from `window-size-change-functions`, which
+  run before windows redisplay. Scrolling never rewrites it:
+  `window-scroll-functions` run inside a window's redisplay, which then
+  restores point to its earlier buffer position, so text changed above the
+  composer there would move the cursor within or out of the draft. A label
+  that went stale while offscreen waits for the next once-a-second refresh.
   Its elapsed value measures active request work, excluding
   time spent awaiting an Ask answer, permission decision, Plan approval,
   ApplyPatch review decision, or direct request input. During those waits it

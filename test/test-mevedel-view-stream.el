@@ -5862,15 +5862,19 @@ turn's later text, live and after reconstruction."
                      (lambda (&rest _) (cl-incf reconciles)))
                     ((symbol-function 'mevedel-view-render-live-update)
                      (lambda (&rest _) (cl-incf reconciles))))
-            (mevedel-view--resume-on-window-layout (selected-window) (point-min))
+            (mevedel-view--resume-on-window-scroll (selected-window) (point-min))
             (mevedel-view--resume-render-if-attended view-buf)
             (should (= 0 reconciles)))
           (fundamental-mode)
           (should-not (mevedel--timer-pending-p timer))
           (should-not (gethash view-buf mevedel-view-power--watchers)))))))
 
-(mevedel-deftest mevedel-view--resume-on-window-layout
-  (:doc "Scrolling or resizing defers the decision until the new range is drawn.")
+(mevedel-deftest mevedel-view--resume-on-window-scroll
+  (:doc "Scrolling defers the decision until the new range is drawn.")
+  ,test
+  (test)
+
+  :doc "the animation decision waits for the completed redisplay"
   (mevedel-view-stream-test--with-buffers
     (mevedel-view-stream-test--with-visible-view
       (let ((mevedel-view-spinner-style 'ascii)
@@ -5882,13 +5886,71 @@ turn's later text, live and after reconstruction."
                 ;; Inside the hook the old range would read as hidden.
                 (cl-letf (((symbol-function 'mevedel-view--animation-visible-p)
                            #'ignore))
-                  (mevedel-view--resume-on-window-layout (selected-window)
+                  (mevedel-view--resume-on-window-scroll (selected-window)
                                                          (point-min)))
                 (should (mevedel--ui-timer-pending-p timer))
                 (should (mevedel--ui-timer-pending-p
                          mevedel-view--spinner-probe-timer))
-                (should (memq #'mevedel-view--resume-on-window-layout
-                              window-size-change-functions))))
+                (should (memq #'mevedel-view--resume-on-window-scroll
+                              window-scroll-functions))))
+          (mevedel-view--stop-spinner)))))
+
+  :doc "a stale rail is not rewritten inside redisplay, keeping the draft cursor"
+  ;; Redisplay restores point numerically after `window-scroll-functions'.
+  ;; The elapsed label gaining a digit there moved the cursor one character
+  ;; back, so text typed after RET at the window bottom joined the previous
+  ;; line.  Run the view's own hook as redisplay does.
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'static))
+        (unwind-protect
+            (progn
+              (mevedel-view-stream-test--insert-composer-draft "> draft\nsecond" 9)
+              (mevedel-view--start-spinner "Working...")
+              (setq mevedel-view--spinner-start-time
+                    (time-subtract nil 9.5))
+              (mevedel-view--render-request-progress)
+              (should (string-match-p "· 9s\n" (buffer-string)))
+              ;; The once-a-second tick has not run yet when 10 s pass.
+              (setq mevedel-view--spinner-start-time
+                    (time-subtract nil 10.5))
+              (let ((tick (buffer-modified-tick))
+                    (before (buffer-string)))
+                (run-hook-with-args 'window-scroll-functions
+                                    (selected-window) (window-start))
+                (should (= tick (buffer-modified-tick)))
+                (should (equal before (buffer-string))))
+              (should (equal "> draft\nsecond" (mevedel-view--input-text)))
+              (should (= (point) (+ 9 (mevedel-view--input-start)))))
+          (mevedel-view--stop-spinner))))))
+
+(mevedel-deftest mevedel-view--resume-on-window-resize
+  (:doc "Resizing refits the rail and rearms animation from the size hook.")
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--with-visible-view
+      (let ((mevedel-view-spinner-style 'ascii)
+            (mevedel-view-spinner-power-policy 'full))
+        (unwind-protect
+            (progn
+              (mevedel-view-stream-test--insert-composer-draft "a draft" 2)
+              (mevedel-view--start-spinner "Working...")
+              (should (memq #'mevedel-view--resume-on-window-resize
+                            window-size-change-functions))
+              (should-not (memq #'mevedel-view--resume-on-window-resize
+                                window-scroll-functions))
+              (let ((narrow (split-window (selected-window) 12 'right)))
+                (set-window-buffer narrow view-buf)
+                (run-hook-with-args 'window-size-change-functions
+                                    (selected-window))
+                (should-not (string-match-p "Working" (buffer-string)))
+                (delete-window narrow))
+              (run-hook-with-args 'window-size-change-functions
+                                  (selected-window))
+              (should (string-match-p "Working" (buffer-string)))
+              (should (mevedel--ui-timer-pending-p
+                       mevedel-view--spinner-probe-timer))
+              (should (equal "a draft" (mevedel-view--input-text)))
+              (should (= (point) (+ 2 (mevedel-view--input-start)))))
           (mevedel-view--stop-spinner))))))
 
 (mevedel-deftest mevedel-view-animation-window-departure
@@ -7288,7 +7350,7 @@ turn's later text, live and after reconstruction."
       (let* ((wide (selected-window))
              (narrow (split-window wide 24 'right)))
         (set-window-buffer narrow view-buf)
-        (mevedel-view--resume-on-window-layout wide)
+        (mevedel-view--resume-on-window-resize wide)
         (let* ((region (mevedel-view-zone-region 'progress))
                (rail (string-trim
                       (buffer-substring-no-properties
@@ -7299,7 +7361,7 @@ turn's later text, live and after reconstruction."
           (should (string-match-p "⚠" rail))
           (should-not (string-match-p "Working" rail)))
         (delete-window narrow)
-        (mevedel-view--resume-on-window-layout wide)
+        (mevedel-view--resume-on-window-resize wide)
         (should (string-match-p "C-c C-j · Working" (buffer-string)))
         (should (equal "a draft\nsecond line" (mevedel-view--input-text)))
         (should (= (point) (+ 4 (mevedel-view--input-start))))))))

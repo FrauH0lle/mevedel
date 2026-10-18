@@ -772,11 +772,11 @@ the editable composer body.
   (add-hook 'window-buffer-change-functions
             #'mevedel-view--resume-on-window-change nil t)
   (add-hook 'window-scroll-functions
-            #'mevedel-view--resume-on-window-layout nil t)
+            #'mevedel-view--resume-on-window-scroll nil t)
   ;; Resizing (`delete-other-windows', a taller frame) can bring a span
-  ;; into view without scrolling.
+  ;; into view without scrolling, and changes the rail's width.
   (add-hook 'window-size-change-functions
-            #'mevedel-view--resume-on-window-layout nil t))
+            #'mevedel-view--resume-on-window-resize nil t))
 
 
 ;;
@@ -1639,16 +1639,27 @@ redisplay hooks reschedule it once someone can see the result."
           (mevedel-view-render-resume-batch))
         (mevedel-view-prepare-resume)))))
 
-(defun mevedel-view--resume-on-window-layout (window &optional _start)
-  "Update animation scheduling after WINDOW scrolled or changed size.
-Both hooks run before redisplay, while `window-end' still describes the
-old range, so the decision waits for the completed redisplay."
-  (when (eq (window-buffer window) (current-buffer))
-    (mevedel-view--render-request-progress))
+(defun mevedel-view--resume-on-window-scroll (window &optional _start)
+  "Update animation scheduling after WINDOW scrolled.
+The hook runs before redisplay, while `window-end' still describes the
+old range, so the decision waits for the completed redisplay.
+
+Never change buffer text here: `window-scroll-functions' run inside the
+window's redisplay, which afterwards restores point to its earlier
+numeric position.  Text inserted or deleted above the composer would
+then move the cursor within the draft, or out of it."
   (when (and (eq (window-buffer window) (current-buffer))
              (fboundp 'mevedel-view--recheck-spinner-after-redisplay)
              (mevedel-view--spinner-active-p))
     (mevedel-view--recheck-spinner-after-redisplay)))
+
+(defun mevedel-view--resume-on-window-resize (window)
+  "Refit the rail and update animation scheduling after WINDOW resized.
+Size changes run before windows are redisplayed, so the rail's text can
+change here with the usual composer point preservation."
+  (when (eq (window-buffer window) (current-buffer))
+    (mevedel-view--render-request-progress))
+  (mevedel-view--resume-on-window-scroll window))
 
 (defun mevedel-view--resume-attended-views (&rest _)
   "Resume the pending render of every view that became attended.

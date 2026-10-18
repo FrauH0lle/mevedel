@@ -67,6 +67,18 @@ focus is explicit.
 
 ## Decision history
 
+- **Rail refresh outside redisplay (2026-10).** The rail was refitted from one
+  handler on both `window-size-change-functions` and `window-scroll-functions`.
+  The scroll hook runs inside the window's redisplay, which restores point to its
+  earlier buffer position afterwards, so a rail text change there shifted the
+  draft cursor. A GUI reproduction crossed the elapsed label from `9s` to `10s`
+  before the once-a-second tick and typed RET then `x` at the window bottom.
+  The redisplay scroll rendered `10s`, point fell back one character, and `x`
+  joined the previous line. Only the size hook now refits the rail; it runs
+  before windows redisplay. Scrolling still reschedules animation. A compiled
+  probe put the scroll hook at 0.21 µs per call, down from 5.8 µs for the
+  unchanged-rail check alone.
+
 - **Last-page clamp after shrink (2026-10).** Preserving a screen row alone
   preserved empty space too: submitting a question from a scrolled viewport
   left the composer at row 5 in a 41-row window. When the composer had been
