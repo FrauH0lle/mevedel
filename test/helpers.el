@@ -677,6 +677,25 @@ only report a failure the test never asked for."
       (when (fboundp 'mevedel-plan-approval-abort)
         (mevedel-plan-approval-abort)))))
 
+(defun mevedel-view-test--position-screen-y (position window &optional _fully)
+  "Model visible POSITION's Y in WINDOW using terminal unit-height rows.
+Batch Emacs has an initial frame with no native visibility queries.  This
+model supports policy tests, not pixel geometry assertions; interactive
+tests use the real measurement function, including images and clipping."
+  (when (<= (window-start window) position)
+    (save-excursion
+      (goto-char (window-start window))
+      (let ((row 0) (limit (window-body-height window)) found)
+        (while (and (not found) (< row limit))
+          (if (or (/= 1 (vertical-motion 1 window)) (> (point) position))
+              (setq found t)
+            (setq row (1+ row))))
+        (and found row)))))
+
+(defun mevedel-view-test--composer-screen-y (window)
+  "Return the composer's Y in WINDOW through the geometry seam."
+  (mevedel-view--position-screen-y (mevedel-view--input-start) window))
+
 (defmacro mevedel-view-test--with-buffers (&rest body)
   "Execute BODY with data and view buffers bound and initialized."
   (declare (indent 0) (debug t))
@@ -697,7 +716,12 @@ only report a failure the test never asked for."
              (setq-local mevedel-view--abort-function
                          #'mevedel-view-test--abort-interactions))
            (mevedel-view--setup view-buf data-buf)
-           (cl-letf (((symbol-function 'mevedel-recovery-save) #'ignore)) ,@body))
+           (cl-letf (((symbol-function 'mevedel-recovery-save) #'ignore)
+                     ((symbol-function 'mevedel-view--position-screen-y)
+                      (if noninteractive
+                          #'mevedel-view-test--position-screen-y
+                        (symbol-function 'mevedel-view--position-screen-y))))
+             ,@body))
        (when (buffer-live-p view-buf) (kill-buffer view-buf))
        (when (buffer-live-p data-buf) (kill-buffer data-buf))
        (when (file-directory-p mevedel-user-dir)

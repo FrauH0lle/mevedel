@@ -77,18 +77,18 @@
                                 (goto-char (mevedel-view--input-start))
                                 (vertical-motion (- row))
                                 (point)))
-        (should (= row (mevedel-view--composer-screen-row (selected-window))))
+        (should (= row (mevedel-view-test--composer-screen-y (selected-window))))
         (dolist (count '(3 6 1 0 4))
           (mevedel-view-composer-test--status-rows count)
           (ert-info ((format "after %d status rows" count))
-            (should (= row (mevedel-view--composer-screen-row (selected-window))))))
+            (should (= row (mevedel-view-test--composer-screen-y (selected-window))))))
         ;; The render preserver anchors the same way.
         (mevedel-view--call-preserving-window-state
          (lambda ()
            (let ((inhibit-read-only t))
              (goto-char (mevedel-view--status-anchor))
              (insert "streamed line\nanother\n"))))
-        (should (= row (mevedel-view--composer-screen-row (selected-window))))
+        (should (= row (mevedel-view-test--composer-screen-y (selected-window))))
         (should (equal "a draft" (mevedel-view--input-text))))))
   :doc "a window scrolled away from the composer keeps its start"
   (mevedel-view-test--with-buffers
@@ -103,7 +103,7 @@
       (forward-line 20)
       (let ((start (point)))
         (set-window-start nil start)
-        (should-not (mevedel-view--composer-screen-row (selected-window)))
+        (should-not (mevedel-view-test--composer-screen-y (selected-window)))
         (mevedel-view-composer-test--status-rows 5)
         (should (= start (window-start))))))
   :doc "a window starting inside a tall draft keeps its draft text when text grows above"
@@ -118,7 +118,7 @@
                                     (forward-line 10) (point)))
              (offset (- start (mevedel-view--input-start))))
         (set-window-start nil start)
-        (should-not (mevedel-view--composer-screen-row (selected-window)))
+        (should-not (mevedel-view-test--composer-screen-y (selected-window)))
         (mevedel-view--call-preserving-window-state
          (lambda ()
            (let ((inhibit-read-only t))
@@ -131,11 +131,11 @@
       (switch-to-buffer view-buf)
       (delete-other-windows)
       (set-window-start nil (point-min))
-      (let ((row (mevedel-view--composer-screen-row (selected-window))))
+      (let ((row (mevedel-view-test--composer-screen-y (selected-window))))
         (should row)
         (mevedel-view-composer-test--status-rows 3)
         (should (= (point-min) (window-start)))
-        (should (< row (mevedel-view--composer-screen-row (selected-window))))))))
+        (should (< row (mevedel-view-test--composer-screen-y (selected-window))))))))
 
 (mevedel-deftest mevedel-view--clamp-window-starts ()
   (let ((scenario ,scenario))
@@ -169,9 +169,9 @@
                    (vertical-motion (if (eq scenario 'full) (- 2 height) -5))
                    (point)))) t)
           (if (memq scenario '(hidden transcript transcript-render))
-              (should-not (mevedel-view--composer-screen-row (selected-window)))
+              (should-not (mevedel-view-test--composer-screen-y (selected-window)))
             (should (= (if (eq scenario 'full) (- height 2) 5)
-                       (mevedel-view--composer-screen-row (selected-window)))))
+                       (mevedel-view-test--composer-screen-y (selected-window)))))
           (let ((saved-start (window-start)))
             (should (= (alist-get (selected-window)
                                   (mevedel-view--window-tail-lengths))
@@ -284,7 +284,21 @@
          (let ((inhibit-read-only t))
            (goto-char (window-start))
            (delete-char 3))))
-      (should (= 5 (mevedel-view--composer-screen-row (selected-window)))))))
+      (should (= 5 (mevedel-view-test--composer-screen-y (selected-window)))))))
+
+(mevedel-deftest mevedel-view--capture-draft-window-state
+  (:doc "Insertion-only input never measures window or EOF geometry.")
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (cl-letf (((symbol-function 'mevedel-view--position-screen-y)
+                 (lambda (&rest _) (ert-fail "Insertion queried visibility")))
+                ((symbol-function 'window-text-pixel-size)
+                 (lambda (&rest _) (ert-fail "Insertion measured pixels")))
+                ((symbol-function 'mevedel-view--window-tail-lengths)
+                 (lambda (&rest _) (ert-fail "Insertion enumerated windows"))))
+        (goto-char (point-max))
+        (insert "ordinary typing")
+        (should-not mevedel-view--draft-window-state)))))
 
 (defun mevedel-view-composer-test--owner (symbol)
   "Return the source feature basename that defines SYMBOL."

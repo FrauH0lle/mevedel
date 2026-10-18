@@ -231,6 +231,9 @@
         (set-mark (+ (mevedel-view--input-start) 2))
         (setq mark-active t)
         (set-window-start (selected-window) (point-min))
+        ;; Native viewport measurement fontifies like redisplay.  Snapshot
+        ;; displayed draft properties, not an unfinished fontification state.
+        (jit-lock-fontify-now (mevedel-view--input-start) (point-max))
         (let ((draft (buffer-substring (mevedel-view--input-start) (point-max)))
               (start (window-start)))
           (mevedel-session-enqueue-pending-input

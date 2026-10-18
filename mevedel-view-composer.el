@@ -1075,43 +1075,55 @@ into a neighbor."
            (setq pos next)))
        found))))
 
-(defun mevedel-view--composer-screen-row (window)
-  "Return the composer's screen row in WINDOW, or nil when it is not shown.
-Rows are counted with `vertical-motion' from WINDOW's start, bounded by
-its body height, so the count matches redisplay; `count-screen-lines'
-disagreed by one line depending on how the start was reached."
-  (when (and (markerp mevedel-view--input-marker)
-             (eq (marker-buffer mevedel-view--input-marker) (current-buffer)))
-    (let ((input-start (mevedel-view--input-start))
-          (start (window-start window)))
-      (when (<= start input-start)
-        (save-excursion
-          (goto-char start)
-          (let ((row 0)
-                (limit (window-body-height window))
-                found)
-            ;; Stop on the screen line containing INPUT-START, which sits
-            ;; after the prompt, usually mid-line, and possibly on the last
-            ;; line, where `vertical-motion' cannot advance.
-            (while (and (not found) (< row limit))
-              (if (or (/= 1 (vertical-motion 1 window))
-                      (> (point) input-start))
-                  (setq found t)
-                (setq row (1+ row))))
-            (and found row)))))))
+(defun mevedel-view--position-screen-y (position window &optional fully)
+  "Return POSITION's body-relative pixel Y in WINDOW, or nil if hidden.
+When FULLY is non-nil, reject partially visible lines too.
+The native visibility query traverses the current window, even before
+redisplay after a mutation; unlike `window-end', it is not a cached extent."
+  (when-let* ((visible (pos-visible-in-window-p position window t))
+              ((or (not fully) (null (cddr visible)))))
+    (- (cadr visible)
+       (window-header-line-height window)
+       (window-tab-line-height window))))
+
+(defun mevedel-view--viewport-at-y (window position y)
+  "Return (START . VSCROLL) placing POSITION at body pixel Y in WINDOW.
+Native backward traversal handles wrapping and variable-height lines.
+On terminals the same API uses character cells as pixels."
+  (if (<= y 0)
+      (cons (save-excursion
+              (goto-char position)
+              (vertical-motion 0 window)
+              (point))
+            (- y))
+    (let ((size (window-text-pixel-size
+                 window (cons position (- y)) position nil nil nil t)))
+      (cons (nth 2 size) (max 0 (- (nth 1 size) y))))))
+
+(defun mevedel-view--set-viewport (window viewport)
+  "Set WINDOW to VIEWPORT's (START . VSCROLL), avoiding redundant setters."
+  (unless (= (window-start window) (car viewport))
+    (set-window-start window (car viewport) t))
+  ;; Setting the start can reset vertical scrolling, so check it afterwards.
+  (unless (= (window-vscroll window t) (cdr viewport))
+    (set-window-vscroll window (cdr viewport) t)))
 
 (defun mevedel-view--composer-anchors ()
-  "Return (WINDOW . ROW) for each window showing the current composer.
+  "Return (WINDOW . Y) for each window showing the current composer.
+Y is a pixel coordinate relative to the window body.
 Windows scrolled away from the composer are omitted: they keep their
 own start, so reading history is never disturbed."
   (let (anchors)
-    (dolist (window (get-buffer-window-list (current-buffer) nil t))
-      (when-let* ((row (mevedel-view--composer-screen-row window)))
-        (push (cons window row) anchors)))
+    (when (and (markerp mevedel-view--input-marker)
+               (eq (marker-buffer mevedel-view--input-marker) (current-buffer)))
+      (dolist (window (get-buffer-window-list (current-buffer) nil t))
+        (when-let* ((y (mevedel-view--position-screen-y
+                       (mevedel-view--input-start) window)))
+          (push (cons window y) anchors))))
     anchors))
 
 (defun mevedel-view--restore-composer-anchors (anchors)
-  "Put the composer back on its screen row in each window of ANCHORS.
+  "Put the composer back at its pixel Y in each window of ANCHORS.
 Text added or removed above the composer then scrolls the transcript
 instead of moving the composer, as in a bottom-anchored terminal.
 Like a terminal that is not yet full, a window whose current start still
@@ -1120,31 +1132,20 @@ grows above: free space below the composer is used before scrolling."
   (when (and anchors (markerp mevedel-view--input-marker)
              (eq (marker-buffer mevedel-view--input-marker) (current-buffer)))
     (let ((input-start (mevedel-view--input-start)))
-      (pcase-dolist (`(,window . ,row) anchors)
+      (pcase-dolist (`(,window . ,y) anchors)
         (when (and (window-live-p window)
                    (eq (window-buffer window) (current-buffer)))
-          (let ((anchored (save-excursion
-                            (goto-char input-start)
-                            (vertical-motion (- row) window)
-                            (point)))
+          (let ((anchored (mevedel-view--viewport-at-y window input-start y))
                 (current (window-start window)))
-            (unless (and (< current anchored)
-                         (mevedel-view--window-shows-end-p window current))
-              (set-window-start window anchored t))))))))
+            (unless (and (or (< current (car anchored))
+                             (and (= current (car anchored))
+                                  (< (window-vscroll window t) (cdr anchored))))
+                         (mevedel-view--window-shows-end-p window))
+              (mevedel-view--set-viewport window anchored))))))))
 
-(defun mevedel-view--window-shows-end-p (window start)
-  "Return non-nil when WINDOW starting at START shows `point-max'."
-  (save-excursion
-    (goto-char start)
-    (let ((limit (window-body-height window))
-          (rows 0))
-      (while (and (< (point) (point-max)) (< rows limit)
-                  (= 1 (vertical-motion 1 window)))
-        (setq rows (1+ rows)))
-      (and (< rows limit)
-           (or (= (point) (point-max))
-               ;; The last line has no newline: `vertical-motion' stops on it.
-               (= (line-end-position) (point-max)))))))
+(defun mevedel-view--window-shows-end-p (window)
+  "Return non-nil when WINDOW currently shows all of the final screen line."
+  (mevedel-view--position-screen-y (point-max) window t))
 
 (defun mevedel-view--window-tail-lengths ()
   "Return (WINDOW . LENGTH) entries for displayed windows.
@@ -1153,37 +1154,40 @@ LENGTH counts characters from the window start to `point-max'."
             (cons window (- (point-max) (window-start window))))
           (get-buffer-window-list (current-buffer) nil t)))
 
-(defun mevedel-view--clamp-window-starts (tails &optional end-rows)
+(defun mevedel-view--clamp-window-starts (tails &optional end-positions)
   "Fill the last page when text below a restored start shrank.
 TAILS contains (WINDOW . LENGTH) entries captured before mutation by
 `mevedel-view--window-tail-lengths'.  Compare against restored starts,
 after semantic and composer anchoring.  Unchanged or growing tails keep
 their reading position, including deliberate space below the buffer.
-Compute the last page in display rows, including wrapped lines; cached
-`window-end' can be stale after mutations and `set-window-start'.
-END-ROWS optionally holds (WINDOW . ROW) entries for draft edits: retain
-the old end row instead of consuming deliberate blank space below it."
+Compute the last page in pixels, including wrapped and variable-height lines.
+END-POSITIONS optionally holds (WINDOW . Y) entries for draft edits: retain
+the old end Y instead of consuming deliberate blank space below it."
   (pcase-dolist (`(,window . ,length) tails)
     (when (and (window-live-p window)
                (eq (window-buffer window) (current-buffer))
-               (> (window-start window) (point-min))
+               (or (> (window-start window) (point-min))
+                   (> (window-vscroll window t) 0))
                (< (- (point-max) (window-start window)) length))
-      (let ((last-page
-             (save-excursion
-               (goto-char (point-max))
-               (vertical-motion
-                (- (or (alist-get window end-rows)
-                       (1- (window-body-height window 'remap)))) window)
-               (point))))
-        (when (> (window-start window) last-page)
-          (set-window-start window last-page t))))))
+      (let* ((end (point-max))
+             (y (or (alist-get window end-positions)
+                    (max 0 (- (window-body-height window t)
+                              ;; Native forward measurement includes vscroll.
+                              (window-vscroll window t)
+                              (cdr (window-text-pixel-size window end end))))))
+             (last-page (mevedel-view--viewport-at-y window end y))
+             (current (window-start window)))
+        (when (or (> current (car last-page))
+                  (and (= current (car last-page))
+                       (> (window-vscroll window t) (cdr last-page))))
+          (mevedel-view--set-viewport window last-page))))))
 
 (defvar-local mevedel-view--draft-window-state nil
   "Viewport state before a composer deletion, or `preserving' during a render.")
 
 (defun mevedel-view--capture-draft-window-state (beg end)
   "Capture the displayed tail before deleting composer text from BEG to END.
-Insertion-only edits do no display work.  Remember the buffer end's row,
+Insertion-only edits do no display work.  Remember the buffer end's pixel Y,
 bounded by one window, so deleting text fills only newly created space."
   (unless (eq mevedel-view--draft-window-state 'preserving)
     (setq mevedel-view--draft-window-state nil)
@@ -1191,17 +1195,12 @@ bounded by one window, so deleting text fills only newly created space."
                (markerp mevedel-view--input-marker)
                (marker-buffer mevedel-view--input-marker)
                (>= beg (marker-position mevedel-view--input-marker)))
-      (let ((tails (mevedel-view--window-tail-lengths)) rows)
+      (let ((tails (mevedel-view--window-tail-lengths)) positions)
         (dolist (tail tails)
-          (let* ((window (car tail))
-                 (height (window-body-height window 'remap)))
-            (when (> (window-start window) (point-min))
-              (push (cons window
-                          (save-excursion
-                            (goto-char (window-start window))
-                            (min (1- height) (vertical-motion height window))))
-                    rows))))
-        (setq mevedel-view--draft-window-state (cons tails rows))))))
+          (let ((window (car tail)))
+            (when-let* ((y (mevedel-view--position-screen-y (point-max) window)))
+              (push (cons window y) positions))))
+        (setq mevedel-view--draft-window-state (cons tails positions))))))
 
 (defun mevedel-view--restore-draft-window-state (&rest _)
   "Repair space created by a composer deletion without moving history readers."
@@ -1220,7 +1219,7 @@ bounded by one window, so deleting text fills only newly created space."
     (mevedel-view--restore-draft-window-state)))
 
 (defun mevedel-view--call-preserving-composer-view (thunk)
-  "Call THUNK preserving composer rows without restoring semantic positions.
+  "Call THUNK preserving composer Y without restoring semantic positions.
 THUNK owns point and logical window-start restoration.  Visible composer
 anchors retain intentional blank space; only other windows use the
 last-page fallback when their displayed tail shrinks."

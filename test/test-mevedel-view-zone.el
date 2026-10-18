@@ -308,7 +308,7 @@
                               (goto-char (point-min)) (forward-line 10) (point))))
           (set-window-start reader reader-start t)
           (set-window-point reader reader-start)
-          (let ((writer-row (mevedel-view--composer-screen-row writer)))
+          (let ((writer-row (mevedel-view-test--composer-screen-y writer)))
             (dolist (fragments (list (list card lower) (list upper card lower)
                                     (list upper card) (list card)))
               (funcall render fragments)
@@ -317,7 +317,7 @@
                            (goto-char (window-point visitor))
                            (vertical-motion -5 visitor)
                            (point))))
-              (should (= writer-row (mevedel-view--composer-screen-row writer)))
+              (should (= writer-row (mevedel-view-test--composer-screen-y writer)))
               (should (= (+ 4 (mevedel-view--input-start))
                          (window-point writer)))
               (should (= reader-start (window-start reader)))
@@ -330,7 +330,7 @@
                        (save-excursion
                          (goto-char (window-point visitor))
                          (vertical-motion -5 visitor) (point))))
-            (should (= writer-row (mevedel-view--composer-screen-row writer)))
+            (should (= writer-row (mevedel-view-test--composer-screen-y writer)))
             (should (= reader-start (window-start reader))))))))
 
   :doc "composer anchoring preserves deliberate blank rows when a card shrinks"
@@ -351,7 +351,7 @@
                           (goto-char (mevedel-view--input-start))
                           (vertical-motion -6) (point)) t)
       (mevedel-view-zone-clear 'interaction)
-      (should (= 6 (mevedel-view--composer-screen-row (selected-window))))
+      (should (= 6 (mevedel-view-test--composer-screen-y (selected-window))))
       (should (= (+ 4 (mevedel-view--input-start)) (point)))
       (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))
 
@@ -375,9 +375,9 @@
                             (goto-char (mevedel-view--input-start))
                             (vertical-motion -10) (point)) t)
         (should (mevedel-view-zone-bounds-at (window-start)))
-        (should (= 10 (mevedel-view--composer-screen-row (selected-window))))
+        (should (= 10 (mevedel-view-test--composer-screen-y (selected-window))))
         (funcall render 90)
-        (should (= 10 (mevedel-view--composer-screen-row (selected-window))))
+        (should (= 10 (mevedel-view-test--composer-screen-y (selected-window))))
         (should (= (+ 4 (mevedel-view--input-start)) (point)))
         (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
 
@@ -402,7 +402,7 @@
                               'interaction 'tall) :start))
         (unless start-in-card (forward-line -5))
         (set-window-start nil (point) t)
-        (should-not (mevedel-view--composer-screen-row (selected-window)))
+        (should-not (mevedel-view-test--composer-screen-y (selected-window)))
         (should (eq (not (null (mevedel-view-zone-bounds-at (window-start))))
                     start-in-card))
         (mevedel-view-zone-clear 'interaction)
