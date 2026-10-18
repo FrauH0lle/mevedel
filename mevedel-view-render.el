@@ -2135,8 +2135,11 @@ Execution outcome remains independent of lifecycle and disclosure state."
 
 (defun mevedel-view--rendering-header-line (rendering)
   "Return the propertized collapsed header line for RENDERING."
-  (let* ((header (or (plist-get rendering :header) "Tool"))
-         (vtype (or (plist-get rendering :vtype) 'tool-summary))
+  (let* ((vtype (or (plist-get rendering :vtype) 'tool-summary))
+         (header (if (eq vtype 'tool-group)
+                     (mevedel-view--fit-group-header
+                      (or (plist-get rendering :header) "Tool") rendering)
+                   (or (plist-get rendering :header) "Tool")))
          (status (plist-get rendering :agent-status))
          (tool-status (mevedel-view--rendering-status rendering))
          (agent-p (eq vtype 'agent-handle))
@@ -6746,6 +6749,28 @@ and follow the settled children."
                                        child (plist-get child :source)))))
                           (not (cdr state))))
                       settled))))))))
+
+(defun mevedel-view--fit-group-header (header rendering)
+  "Return HEADER shortened so RENDERING's folded group row is one screen line.
+The summary grows with every kind of tool a run uses, and its running and
+failed counts come and go; a summary that wrapped would add or drop a row
+as they did.  Room is kept for those counts, measured against the
+narrowest window showing the view."
+  (let* ((windows (get-buffer-window-list (current-buffer) nil t))
+         (width (if windows
+                    (apply #'min (mapcar #'window-body-width windows))
+                  (window-body-width)))
+         (count (plist-get rendering :pending-count))
+         (failed (+ (or (plist-get rendering :pending-failed) 0)
+                    (or (plist-get rendering :failed-count) 0)))
+         (suffix (concat (and count (format " · %d running" count))
+                         (and (> failed 0) (format " · %d failed" failed))))
+         ;; The marker column, a line prefix for nested rows, and the
+         ;; last column, which would wrap the line in a terminal.
+         (available (max 10 (- width 4 2 1 (string-width suffix)))))
+    (if (> (string-width header) available)
+        (truncate-string-to-width header available nil nil "…")
+      header)))
 
 (defun mevedel-view--group-failed-count (entries)
   "Return how many settled activity ENTRIES failed, or nil for none."

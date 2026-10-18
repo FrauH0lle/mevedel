@@ -8334,6 +8334,33 @@
                    (list :header "Bash: ls" :status 'success
                          :sandbox-summary summary))))))
 
+(mevedel-deftest mevedel-view--fit-group-header ()
+  ,test
+  (test)
+  :doc "keeps a folded group row to one line with room for its counts"
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 50)))
+      (let* ((header (concat "Read 5 files, searched 3 patterns, ran 2 commands, "
+                             "fetched 1 page, thought 4 times"))
+             (running (list :header header :vtype 'tool-group :pending-count 2))
+             (settled (list :header header :vtype 'tool-group :failed-count 1)))
+        (dolist (rendering (list running settled))
+          (let ((fitted (mevedel-view--fit-group-header header rendering))
+                (line (substring-no-properties
+                       (mevedel-view--rendering-header-line rendering))))
+            (should (string-suffix-p "…" fitted))
+            (should (< (string-width line) 50))))
+        (should (string-match-p "· 2 running"
+                                (mevedel-view--rendering-header-line running)))
+        (should (string-match-p "· 1 failed"
+                                (mevedel-view--rendering-header-line settled))))))
+  :doc "leaves a header that fits unchanged"
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 80)))
+      (should (equal "Read 4 files"
+                     (mevedel-view--fit-group-header
+                      "Read 4 files" '(:vtype tool-group :pending-count 1)))))))
+
 (mevedel-deftest mevedel-view--group-failed-count ()
   ,test
   (test)

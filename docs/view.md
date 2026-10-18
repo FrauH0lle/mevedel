@@ -735,7 +735,10 @@ names, and the row shows that body under a header naming the dependencies.
 Runs of more than `mevedel-view-tool-group-collapse-threshold` (default 3)
 plain tool rows fold into one grouped activity row such as
 `Searched 5 patterns, read 1 file, ran 5 commands, thought 8 times`; tools
-without a verb mapping — MCP tools included — appear as `NAME ×N`. The
+without a verb mapping — MCP tools included — appear as `NAME ×N`. A summary
+too long for the narrowest window showing the view ends in `…`, leaving room for
+its running and failed counts, so the folded row stays one screen line as they
+come and go. The
 expanded group reuses the compound-tool nested-row machinery: each tool call
 and substantive reasoning occurrence is a `tool-child` row in chronological
 order with its own collapse state, and collapsing the group takes its rows
