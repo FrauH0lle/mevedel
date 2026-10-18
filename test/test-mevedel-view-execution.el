@@ -21,13 +21,18 @@
           "mevedel-execution-test-helpers"))
 
 (defmacro mevedel-view-execution-test--with-view (&rest body)
-  "Run BODY in a real view with SESSION and mutable public LIVE snapshots."
+  "Run BODY in a real view with SESSION and mutable public LIVE snapshots.
+Input event variables are rebound because `execute-kbd-macro' leaves its
+mouse events in them, which later interactive calls would read."
   (declare (indent 0) (debug t))
   `(mevedel-view-test--with-buffers
      (let ((session (mevedel-session--create :name "execution-ui" :root-buffer data-buf))
            (live (list (list :execution-id "e1" :owner "/root" :tool-use-id "tool1"
                              :yielded t :state 'running :command "same command"
-                             :output-tail "" :output-bytes 0))))
+                             :output-tail "" :output-bytes 0)))
+           (last-command-event last-command-event)
+           (last-input-event last-input-event)
+           (last-nonmenu-event last-nonmenu-event))
        (with-current-buffer data-buf (setq-local mevedel--session session))
        (with-current-buffer view-buf
          (cl-letf (((symbol-function 'mevedel-execution-count-user)
