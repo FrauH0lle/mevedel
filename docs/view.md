@@ -1714,7 +1714,9 @@ and action line, and its controls. Before this, a cursor on one execution's
 row landed on another execution's `[Stop]` when 35 characters of output
 arrived in an inspector above it. `mevedel-view-zone-position-anchor` and
 `mevedel-view-zone-anchor-position` expose the same identity to other redraw
-paths.
+paths. Full transcript redraws use that pair too, including screen-row offsets
+for managed-zone window starts, rather than replacing semantic identities with
+raw fragment offsets.
 
 `mevedel-interaction-prompt.el` owns the common lifecycle for those opaque
 handles: exactly-once settlement, request-local cancellation, buffer-kill

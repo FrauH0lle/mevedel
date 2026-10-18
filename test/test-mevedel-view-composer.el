@@ -2252,7 +2252,8 @@
     (mevedel-view-zone-reconcile
      'status (point-min) (point-min)
      '((:namespace status :id tasks :body "abcdef")))
-    (should (equal '(fragment status tasks 3)
+    (should (equal (list 'fragment
+                        (mevedel-view-zone-position-anchor (+ (point-min) 3)))
                    (mevedel-view--position-render-anchor
                     (+ (point-min) 3)))))
 
@@ -2293,15 +2294,36 @@
     (mevedel-view-zone-reconcile
      'status (point-min) (point-min)
      '((:namespace status :id tasks :body "abcdef")))
-    (should (= (+ (point-min) 3)
-               (mevedel-view--render-anchor-position
-                '(fragment status tasks 3))))
+    (let ((anchor (mevedel-view--position-render-anchor (+ (point-min) 3))))
+      (should (= (+ (point-min) 3)
+                 (mevedel-view--render-anchor-position anchor)))
+      (mevedel-view-zone-reconcile
+       'status (point-min) (point-min)
+       '((:namespace status :id tasks :body "ab")))
+      (should (= (+ (point-min) 2)
+                 (mevedel-view--render-anchor-position anchor)))))
+
+  :doc "full render restoration keeps a tagged row when text before it grows"
+  (with-temp-buffer
+    (setq-local mevedel-view--status-marker (copy-marker (point-min) t))
+    (setq-local mevedel-view--interaction-marker (copy-marker (point-min) t))
+    (setq-local mevedel-view--input-marker (copy-marker (point-min) nil))
     (mevedel-view-zone-reconcile
      'status (point-min) (point-min)
-     '((:namespace status :id tasks :body "ab")))
-    (should (= (+ (point-min) 2)
-               (mevedel-view--render-anchor-position
-                '(fragment status tasks 5)))))
+     (list (list :namespace 'status :id 'tasks
+                 :body (concat "short\n" (propertize "target row\n"
+                                                     'mevedel-view-zone-anchor 'target)))))
+    (goto-char (point-min))
+    (search-forward "target")
+    (mevedel-view--call-preserving-window-state
+     (lambda ()
+       (mevedel-view-zone-reconcile
+        'status (point-min) (point-min)
+        (list (list :namespace 'status :id 'tasks
+                    :body (concat "much longer first row\nsecond row\n"
+                                  (propertize "target row\n"
+                                              'mevedel-view-zone-anchor 'target)))))))
+    (should (looking-back "target" (line-beginning-position))))
 
   :doc "resolves a source anchor to the run containing the data position"
   (with-temp-buffer
@@ -2332,7 +2354,7 @@
     (insert "plain text\n")
     (should-not (mevedel-view--render-anchor-position '(source (40 nil nil) 0 4)))
     (should-not (mevedel-view--render-anchor-position
-                 '(fragment status tasks 0)))
+                 '(fragment (status :id tasks :offset 0))))
     (should-not (mevedel-view--render-anchor-position nil)))
 
   :doc "section identities survive separator changes and compound child reordering"

@@ -166,7 +166,10 @@
                 (mevedel-view-zone-reconcile
                  'interaction (point-min) (point-min)
                  (list (list :namespace 'interaction :id 'form
-                             :body (concat first "row two\nrow three\nrow four\n")))))))
+                             :body (concat first "row two\nrow three\nrow four\n"
+                                           (mapconcat (lambda (_) "history row\n")
+                                                      (number-sequence 1 (* 2 (window-body-height)))
+                                                      ""))))))))
         (funcall render "one\n")
         (goto-char (point-max))
         (let ((bounds (mevedel-view-zone-fragment-bounds 'interaction 'form)))
@@ -175,6 +178,7 @@
                                   (forward-line 2)
                                   (point))))
         ;; The first line now wraps onto a second screen row.
+        (should-not (mevedel-view--composer-screen-row (selected-window)))
         (funcall render (concat (make-string (+ width 10) ?x) "\n"))
         (should (= 2 (count-screen-lines
                       (plist-get (mevedel-view-zone-fragment-bounds 'interaction 'form) :start)

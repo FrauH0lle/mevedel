@@ -520,10 +520,10 @@
 (defvar mevedel-view--in-flight-turn-start)
 
 ;; `mevedel-view-zone'
-(declare-function mevedel-view-zone-bounds-at "mevedel-view-zone"
-                  (&optional position))
-(declare-function mevedel-view-zone-fragment-bounds "mevedel-view-zone"
-                  (zone id))
+(declare-function mevedel-view-zone-anchor-position "mevedel-view-zone"
+                  (anchor))
+(declare-function mevedel-view-zone-position-anchor "mevedel-view-zone"
+                  (position &optional window))
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-fork-preflight
@@ -1015,26 +1015,24 @@ section grows or settles."
        (next-single-property-change pos 'mevedel-view-type nil limit)
        (next-single-property-change pos 'mevedel-view-source-key nil limit)))
 
-(defun mevedel-view--position-render-anchor (pos)
+(defun mevedel-view--position-render-anchor (pos &optional window)
   "Return a semantic anchor for POS that survives a re-render, or nil.
 
 Redraws delete and re-insert view text, so a raw buffer position saved
 across one lands in different content whenever lengths shift above or
-around it.  A managed fragment (zone namespace, fragment id, offset
-into the fragment) or the transcript source map (section identity
+around it.  A managed fragment's semantic anchor or the transcript source
+map (section identity
 plus offset into its rendered run) identifies the same content after
 the redraw.  Composer positions are handled by input offsets and
-return nil here."
+return nil here.  With WINDOW, POS is its start; managed zone offsets
+then count screen rows rather than characters."
   (when (and (integer-or-marker-p pos)
              (>= pos (point-min))
              (< pos (point-max))
              (not (mevedel-view--position-in-input-region-p pos)))
     (or
-     (when-let* ((bounds (mevedel-view-zone-bounds-at pos)))
-       (list 'fragment
-             (plist-get bounds :namespace)
-             (plist-get bounds :id)
-             (- pos (plist-get bounds :start))))
+     (when-let* ((anchor (mevedel-view-zone-position-anchor pos window)))
+       (list 'fragment anchor))
      (when-let* ((identity (mevedel-view--render-anchor-identity pos)))
        (let ((nth 0)
              (scan (point-min))
@@ -1058,11 +1056,8 @@ is clamped into the re-rendered fragment or source run, so a position
 whose content shrank stays inside the same content instead of drifting
 into a neighbor."
   (pcase anchor
-    (`(fragment ,namespace ,id ,offset)
-     (when-let* ((bounds (mevedel-view-zone-fragment-bounds namespace id)))
-       (min (max (plist-get bounds :start)
-                 (1- (plist-get bounds :end)))
-            (+ (plist-get bounds :start) offset))))
+    (`(fragment ,anchor)
+     (mevedel-view-zone-anchor-position anchor))
     (`(source ,identity ,nth ,offset)
      (let ((limit (if (and (markerp mevedel-view--input-marker)
                            (marker-buffer mevedel-view--input-marker))
@@ -1289,7 +1284,7 @@ above the composer does not strand it in rendered transcript text."
                                       (- wp (mevedel-view--input-start)))
 				 (= wp (point-max))
 				 (mevedel-view--position-render-anchor wp)
-				 (mevedel-view--position-render-anchor ws)
+				 (mevedel-view--position-render-anchor ws w)
 				 ;; A tall draft can start the window inside the
 				 ;; composer; text above must not shift that view.
 				 (and (mevedel-view--position-in-input-region-p ws)
