@@ -2218,15 +2218,35 @@ Execution outcome remains independent of lifecycle and disclosure state."
           (cond
            ((or count pending-failed)
             (mevedel-view--running-header
-             line count (plist-get rendering :pending-virtual) failed))
+             line count (plist-get rendering :pending-virtual) failed
+             (plist-get rendering :failed-names)))
            ;; A settled group keeps the count its running form showed, so
            ;; settling neither unfolds nor reshapes it.
            (settled-failed
             (concat line
                     (propertize " · " 'font-lock-face 'mevedel-view-tool-metadata)
-                    (propertize (format "%d failed" settled-failed)
+                    (propertize (mevedel-view--failed-label
+                                 settled-failed
+                                 (plist-get rendering :failed-names))
                                 'font-lock-face 'error)))
            (t line)))))))
+
+(defconst mevedel-view--failed-names-width 30
+  "Most columns a folded group spends naming its failed tools.")
+
+(defun mevedel-view--failed-label (count names)
+  "Return `N failed' for COUNT failures, naming the failed tools in NAMES.
+NAMES are shown once each, in order, and end in `…' past
+`mevedel-view--failed-names-width' columns, so the folded row can still
+say which call failed without growing past one line."
+  (let ((label (format "%d failed" count))
+        (names (delete-dups (copy-sequence (delq nil names)))))
+    (if (not names)
+        label
+      (concat label ": "
+              (truncate-string-to-width
+               (string-join names ", ") mevedel-view--failed-names-width
+               nil nil "…")))))
 
 (defun mevedel-view--sandbox-summary-line (summary)
   "Return the durable disclosure line for material sandbox SUMMARY.
@@ -3850,11 +3870,11 @@ once its call settles."
                               (selected-frame))))
     text))
 
-(defun mevedel-view--running-header (line count &optional virtual failed)
+(defun mevedel-view--running-header (line count &optional virtual failed names)
   "Return group header LINE marked running with COUNT calls in flight.
 The settled marker gives way to the running one, and `· N running'
-follows the summary; FAILED finished-but-unwritten calls add `· N failed',
-since a folded running group cannot show their rows.  With no call left
+follows the summary; FAILED failed calls add `· N failed' naming the tools
+in NAMES, since a folded group cannot show their rows.  With no call left
 running, a failure takes the `×' marker.  Unless VIRTUAL, the replaced
 marker is kept on the new one so a stopped turn can restore it in place."
   (let ((marker (if count
@@ -3875,7 +3895,7 @@ marker is kept on the new one so a stopped turn can restore it in place."
                                      'font-lock-face 'mevedel-view-tool-metadata)
                          'pending-run)))
               (when failed
-                (concat sep (propertize (format "%d failed" failed)
+                (concat sep (propertize (mevedel-view--failed-label failed names)
                                         'font-lock-face 'error))))
       'mevedel-view-pending-tool-live t))))
 
@@ -3906,6 +3926,14 @@ then, shown finished instead of running."
                         '(error failed denied blocked)))
                 entries)))
     (and (> count 0) count)))
+
+(defun mevedel-view--pending-failed-names (entries)
+  "Return the tool names of in-flight ENTRIES that finished failed."
+  (delq nil (mapcar (lambda (entry)
+                      (and (memq (mevedel-view--pending-entry-settled-p entry)
+                                 '(error failed denied blocked))
+                           (or (nth 1 entry) "Tool")))
+                    entries)))
 
 (defun mevedel-view--insert-pending-tool-row (entry)
   "Insert the row for in-flight tool ENTRY.
@@ -3954,6 +3982,7 @@ will once settled; otherwise each call gets its own running row."
                 :vtype 'tool-group
                 :pending-count (mevedel-view--pending-running-count entries)
                 :pending-failed (mevedel-view--pending-failed-count entries)
+                :failed-names (mevedel-view--pending-failed-names entries)
                 :pending-virtual t))
          '(mevedel-view-type tool-pending
            mevedel-view-pending-tool-live t))
@@ -6732,6 +6761,8 @@ and follow the settled children."
             :pending-count (mevedel-view--pending-running-count pending)
             :pending-failed (mevedel-view--pending-failed-count pending)
             :failed-count (mevedel-view--group-failed-count entries)
+            :failed-names (append (mevedel-view--group-failed-names entries)
+                                  (mevedel-view--pending-failed-names pending))
             :status (let ((statuses
                            (mapcar (lambda (entry)
                                      (mevedel-view--rendering-status
@@ -6768,7 +6799,10 @@ narrowest window showing the view."
          (failed (+ (or (plist-get rendering :pending-failed) 0)
                     (or (plist-get rendering :failed-count) 0)))
          (suffix (concat (and count (format " · %d running" count))
-                         (and (> failed 0) (format " · %d failed" failed))))
+                         (and (> failed 0)
+                              (concat " · " (mevedel-view--failed-label
+                                            failed
+                                            (plist-get rendering :failed-names))))))
          ;; The marker column, a line prefix for nested rows, and the
          ;; last column, which would wrap the line in a terminal.
          (available (max 10 (- width 4 2 1 (string-width suffix)))))
@@ -6786,6 +6820,16 @@ narrowest window showing the view."
                            'error)))
                 entries)))
     (and (> count 0) count)))
+
+(defun mevedel-view--group-failed-names (entries)
+  "Return the tool names of settled activity ENTRIES that failed.
+Use the name each rendering carries for grouping, never reparsing a call."
+  (delq nil (mapcar (lambda (entry)
+                      (let ((rendering (plist-get entry :rendering)))
+                        (and (eq (plist-get entry :kind) 'tool)
+                             (eq (mevedel-view--rendering-status rendering) 'error)
+                             (or (plist-get rendering :group-tool) "Tool"))))
+                    entries)))
 
 (defun mevedel-view-render--reader-members ()
   "Return the tool rows under this view's point and its window points."

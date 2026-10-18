@@ -8354,12 +8354,60 @@
                                 (mevedel-view--rendering-header-line running)))
         (should (string-match-p "· 1 failed"
                                 (mevedel-view--rendering-header-line settled))))))
+  :doc "a folded row naming its failures still fits one line"
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 60)))
+      (let* ((rendering (list :header (concat "Read 5 files, searched 3 patterns, "
+                                              "ran 2 commands, fetched 1 page")
+                              :vtype 'tool-group :status 'error :failed-count 2
+                              :failed-names '("Grep" "WebFetch")))
+             (line (substring-no-properties
+                    (mevedel-view--rendering-header-line rendering))))
+        (should (string-suffix-p "· 2 failed: Grep, WebFetch" line))
+        (should (string-match-p "…" line))
+        (should (< (string-width line) 60)))))
   :doc "leaves a header that fits unchanged"
   (with-temp-buffer
     (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 80)))
       (should (equal "Read 4 files"
                      (mevedel-view--fit-group-header
                       "Read 4 files" '(:vtype tool-group :pending-count 1)))))))
+
+(mevedel-deftest mevedel-view--failed-label ()
+  ,test
+  (test)
+  :doc "names each failed tool once, in order"
+  (should (equal "3 failed: Grep, Bash"
+                 (mevedel-view--failed-label 3 '("Grep" "Bash" "Grep"))))
+  :doc "a count without names stays bare"
+  (should (equal "1 failed" (mevedel-view--failed-label 1 nil)))
+  :doc "a long list of names ends in an ellipsis within its budget"
+  (let ((label (mevedel-view--failed-label
+                5 '("mcp__server__first_long_tool" "mcp__server__second_long_tool"))))
+    (should (string-suffix-p "…" label))
+    (should (<= (string-width label)
+                (+ (string-width "5 failed: ") mevedel-view--failed-names-width)))))
+
+(mevedel-deftest mevedel-view--group-failed-names ()
+  ,test
+  (test)
+  :doc "names failed tool entries from their grouping name"
+  (should (equal '("Bash" "Tool")
+                 (mevedel-view--group-failed-names
+                  '((:kind tool :rendering (:status error :group-tool "Bash"))
+                    (:kind tool :rendering (:status success :group-tool "Read"))
+                    (:kind tool :rendering (:status failed))
+                    (:kind completion :rendering (:status error)))))))
+
+(mevedel-deftest mevedel-view--pending-failed-names ()
+  ,test
+  (test)
+  :doc "names in-flight calls that finished failed"
+  (should (equal '("Grep")
+                 (mevedel-view--pending-failed-names
+                  '((k1 "Read" "a" (:settled t))
+                    (k2 "Grep" "x" (:settled error))
+                    (k3 "Bash" "ls" nil))))))
 
 (mevedel-deftest mevedel-view--group-failed-count ()
   ,test
@@ -8582,7 +8630,7 @@
           (should (= 1 (cl-count-if
                         (lambda (line)
                           (string-match-p
-                           "× Read 8 files, ran 1 command · 1 failed" line))
+                           "× Read 8 files, ran 1 command · 1 failed: Bash$" line))
                         (split-string text "\n"))))
           (should-not (string-match-p "Bash:" text))
           (should-not (string-match-p "Error: command failed" text)))

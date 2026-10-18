@@ -780,7 +780,8 @@ settle. A call the pipeline reports finished keeps its place until its
 result reaches the transcript (for a gptel batch, after the whole batch):
 its row shows `✓`, or `×` for a failure, and it leaves the running count,
 so one early finisher never reshapes the run. A folded running group cannot
-show those rows, so its header adds `· N failed`; once no call is left
+show those rows, so its header adds `· N failed: TOOL` naming the failed tools;
+once no call is left
 running, a failure takes the group's marker as `×`. The ID-less post-tool hook
 that precedes the result retires such a finished call first and never a
 bound sibling still running. A response that opens with tool
@@ -810,8 +811,9 @@ running group's settled marker is restored in place.
 
 Failed calls stay in their run, so a call failing never reshapes it. A folded
 group containing one takes the red `×` marker in the `error` face and ends its
-summary with `· N failed`, the same count its running form showed; the failed
-row inside the group carries its own `×`. Warning rows stay groupable; a group containing
+summary with `· N failed: Grep`, the same text its running form showed: each
+failed tool is named once, and a long list of names ends in `…` so the row stays
+one line. The failed row inside the group carries its own `×`. Warning rows stay groupable; a group containing
 a warning carries `!`, and the warning stays visible on its nested row.
 Failed tool rows, including nested calls inside compound tools, start collapsed.
 Only the marker uses warning or error highlighting; the tool name, argument,

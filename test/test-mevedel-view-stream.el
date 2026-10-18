@@ -2837,7 +2837,7 @@ turn's later text, live and after reconstruction."
         (mevedel-view-stream-post-tool (car (last calls))))
       (let ((text (mevedel-view-stream-test--history view-buf)))
         (should (string-match-p
-                 "× Read 3 files, searched 1 pattern · 1 failed" text))
+                 "× Read 3 files, searched 1 pattern · 1 failed: Grep$" text))
         (should-not (string-match-p "Read: a\\|Grep: x" text)))
       (with-current-buffer view-buf
         (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
@@ -3093,13 +3093,13 @@ turn's later text, live and after reconstruction."
         (cl-loop for call in calls for i from 1
                  do (event 'started call (format "id-%d" i)))
         (event 'settled (car calls) "id-1" :status 'error)
-        (should (string-match-p "● Read 4 files · 3 running · 1 failed\n"
+        (should (string-match-p "● Read 4 files · 3 running · 1 failed: Read\n"
                                 (mevedel-view-stream-test--history view-buf)))
         (cl-loop for call in (cdr calls) for i from 2
                  do (event 'settled call (format "id-%d" i)))
         ;; Nothing left running: the failure takes the marker.
         (let ((text (mevedel-view-stream-test--history view-buf)))
-          (should (string-match-p "× Read 4 files · 1 failed\n" text))
+          (should (string-match-p "× Read 4 files · 1 failed: Read\n" text))
           (should-not (string-match-p "running\\|●" text)))
         ;; A stop restores the group's own header.
         (with-current-buffer view-buf (mevedel-view-stream-stop))

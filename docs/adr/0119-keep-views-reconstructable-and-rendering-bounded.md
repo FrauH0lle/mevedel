@@ -67,7 +67,7 @@ programs and invalid/failed envelopes retain the outer presentation.
 Nested compound rows retain their own metadata and
 depth, so disclosure replacement removes descendants without consuming siblings.
 Failed tool calls stay in their activity group, which takes a red `×` and
-counts them as `· N failed`; their own rows start
+counts and names them as `· N failed: Grep`; their own rows start
 collapsed with a red `×`. Warning rows remain groupable and mark their group
 with `!`. Only markers receive severity highlighting, and an accompanying
 sandbox warning cannot downgrade an error. Full rerender is the correctness
@@ -383,10 +383,12 @@ result was an error, moving the transcript three rows while the reader watched.
 A large result being prepared off the main thread split its run the same way
 and refolded it when published. Failed calls now stay in the group, which
 shows the failure where the reader looks: the folded row takes `×` and ends
-with `· N failed`, as the running row already did for an early failure, and the
-failed child keeps its collapsed `×` row. It does not name the failed call in
-the folded row; opening the group shows it. A preparing result is a running
-member of its group.
+with `· N failed: Grep`, the text the running row already showed for an early
+failure, and the failed child keeps its collapsed `×` row. Naming the failed
+tools answers September's objection that a folded row hid which call failed;
+the names are deduplicated and end in `…` past 30 columns, and the summary
+before them shortens first, so the row stays one line. A preparing result is a
+running member of its group.
 
 ### October 2026: refresh only the newest turn after a settled save
 
