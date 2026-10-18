@@ -33,12 +33,13 @@ visiting that prompt.
 
 Interaction cards stack in arrival order, the newest farthest from the
 composer; only the pending-input card, which the composer itself queues, stays
-pinned next to it. A card arriving while another is pending therefore moves
-only the transcript above it, never a card the user may be reading or
-answering. `C-c C-j` starts at the card nearest the composer, the one that has
-waited longest, and repeated presses cycle outward. In a window not yet full,
-where free space is used first, an arrival pushes the cards below it down like
-any other growth above the composer.
+pinned next to it. No other producer, patch review included, carries a type
+priority; arrival alone orders them. A card arriving while another is pending
+therefore moves only the transcript above it, never a card the user may be
+reading or answering. `C-c C-j` starts at the card nearest the composer, the
+one that has waited longest, and repeated presses cycle outward. In a window
+not yet full, where free space is used first, an arrival pushes the cards
+below it down like any other growth above the composer.
 
 Closing an agent inspection's side window rewraps the parent's text without
 any zone change. A parent window gets the composer's screen row from before
