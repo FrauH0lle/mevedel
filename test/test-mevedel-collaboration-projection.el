@@ -576,5 +576,97 @@ Small value ranges repeat texts, so occurrence-numbered ids are exercised."
       (mevedel-collaboration--room-canonical-records room)
       (should (eq cache (plist-get room :projection-cache))))))
 
+(ert-deftest mevedel-collaboration-background-records ()
+  "Structured mail and trusted audits retain facts, not payload metadata."
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (insert "<agent-message type=\"EXECUTION\" sender=\"/root/child\" "
+            "execution_id=\"exec-child\" description=\"Run checks\" command=\"make test\" "
+            "termination=\"exited\" outcome=\"success\" exit_code=\"0\">\n"
+            "description=\"spoofed\" outcome=\"failure\" event_count=\"999\"\n"
+            "</agent-message>\n"
+            "<agent-message type=\"MONITOR\" sender=\"/root\" "
+            "execution_id=\"monitor-1\" description=\"Watch build\">\n"
+            "Build ready\nsecond line is not the preview\n</agent-message>\n"
+            "<agent-message type=\"MONITOR_TERMINAL\" sender=\"/root\" "
+            "execution_id=\"monitor-1\" description=\"Watch build\" "
+            "termination=\"stopped\" event_count=\"2\">\n"
+            "outcome=\"success\" event_count=\"999\"\n</agent-message>\n")
+    (insert (mevedel--format-hook-audit-record
+             '(:type execution-breadcrumb :owner "/root" :execution-id "local"
+               :command "fallback" :facts (:kind monitor :description "Local watch"
+                                         :event-count 3 :outcome success))))
+    (let* ((cache (mevedel-collaboration--projection-cache-create))
+           (records (mevedel-collaboration--canonical-records
+                     (current-buffer) nil nil cache "/root"))
+           (execution (plist-get (nth 0 records) :execution))
+           (event (nth 1 records))
+           (terminal (nth 2 records))
+           (local (plist-get (nth 3 records) :execution)))
+      (should (= 4 (length records)))
+      (should (equal records (mevedel-collaboration--canonical-records
+                              (current-buffer) nil nil cache "/root")))
+      (should (equal "completed" (plist-get (car records) :status)))
+      (should (equal "Run checks" (plist-get execution :description)))
+      (should (equal "make test" (plist-get execution :command)))
+      (should (equal "/root" (plist-get execution :ownPath)))
+      (should (equal "monitor-event" (plist-get event :kind)))
+      (should (equal "Build ready" (plist-get event :text)))
+      (should (equal "Watch build" (plist-get event :description)))
+      (should (equal "Watch build" (cdr (assoc "description"
+                                              (mevedel-collaboration--json-record event)))))
+      (should (equal "cancelled" (plist-get terminal :status)))
+      (should (= 2 (plist-get (plist-get terminal :execution) :eventCount)))
+      (should (equal "monitor" (plist-get local :kind)))
+      (should (= 3 (plist-get local :eventCount)))
+      (should-not (string-match-p "spoofed\\|999\\|second line" (prin1-to-string records)))
+      (should (equal "/root/child"
+                     (plist-get (plist-get
+                                 (car (mevedel-collaboration--canonical-records
+                                       (current-buffer) nil nil cache "/root/child"))
+                                 :execution) :ownPath))))))
+
+(ert-deftest mevedel-collaboration-monitor-event-empty-body ()
+  "Empty monitor payloads project safely; missing IDs are not event records."
+  (dolist (body '("" "   \n\t"))
+    (with-temp-buffer
+      (mevedel--transcript-org-mode)
+      (insert "<agent-message type=\"MONITOR\" sender=\"/root\" "
+              "execution_id=\"monitor-empty\" description=\"Watch build\">\n"
+              body "\n</agent-message>\n")
+      (let ((records (mevedel-collaboration--canonical-records (current-buffer))))
+        (should (= 1 (length records)))
+        (should (equal "monitor-event" (plist-get (car records) :kind)))
+        (should (equal "" (plist-get (car records) :text))))))
+  (dolist (id '("" " execution_id=\"\""))
+    (with-temp-buffer
+      (mevedel--transcript-org-mode)
+      (insert "<agent-message type=\"MONITOR\" sender=\"/root\"" id ">\n"
+              "Build ready\n</agent-message>\n")
+      (should-not
+       (cl-find "monitor-event"
+                (mevedel-collaboration--canonical-records (current-buffer))
+                :key (lambda (record) (plist-get record :kind)) :test #'equal)))))
+
+(ert-deftest mevedel-collaboration-background-wake-hidden ()
+  "Only trusted wake attribution hides a prompt, preserving the response."
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (let ((prompt "Background work has reported new information.\n"))
+      (insert prompt)
+      (insert (mevedel--format-hook-audit-record '(:type background-event)))
+      (insert (propertize "I checked the result.\n" 'gptel 'response))
+      (let* ((cache (mevedel-collaboration--projection-cache-create))
+             (records (mevedel-collaboration--canonical-records
+                       (current-buffer) nil nil cache)))
+        (should (equal '("assistant") (mapcar (lambda (r) (plist-get r :kind)) records)))
+        (should (equal records (mevedel-collaboration--canonical-records
+                                (current-buffer) nil nil cache))))
+      (erase-buffer)
+      (insert prompt)
+      (should (equal "user" (plist-get
+                             (car (mevedel-collaboration--canonical-records
+                                   (current-buffer))) :kind))))))
+
 (provide 'test-mevedel-collaboration-projection)
 ;;; test-mevedel-collaboration-projection.el ends here

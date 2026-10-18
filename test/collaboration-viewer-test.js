@@ -581,7 +581,84 @@ async function testItemDiscussionAsk() {
   assert.equal(asked[0].expected, undefined);
 }
 
+function testCompletionRendering() {
+  const window = {};
+  const document = {createElement: tag => new Element(tag)};
+  vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), {window, document});
+  const render = (record, onExecutionOpen) => window.mevedelTranscriptRenderer.renderRecord(
+    record, null, null, null, onExecutionOpen);
+  const execution = {owner: '/root', ownPath: '/root', id: 'exec-1', kind: 'bash',
+    command: 'make check', description: 'Run checks', eventCount: null, exitCode: 0};
+  const record = {id: 'completion', kind: 'execution', status: 'completed', execution};
+  const cases = [
+    ['completed', 0, 'completed (exit code 0)'],
+    ['completed', 1, 'completed (exit code 1)'],
+    ['failed', 2, 'failed (exit code 2)'],
+    ['failed', null, 'failed'],
+    ['cancelled', 9, 'stopped'],
+    ['timed-out', 124, 'timed out'],
+    ['warning', null, 'ended'],
+  ];
+  for (const [status, exitCode, ending] of cases) {
+    const turn = render({...record, status, execution: {...execution, exitCode}});
+    assert.equal(textOf(findByClass(turn, 'execution-breadcrumb')),
+                 `● Background command "Run checks" ${ending}  [Show result]`);
+    assert.equal(!!findByClass(turn, 'failed'), status === 'failed');
+    assert.equal(turn.disclosures.size, 0);
+    assert.equal(findByClass(turn, 'execution-result-link').disabled, true);
+  }
+  // Both root and child transcripts suppress their own owner, not other owners.
+  for (const [owner, ownPath, suffix] of [
+    ['/root', '/root', ''], ['/root/child', '/root/child', ''],
+    ['/root/child', '/root', ' · /root/child'],
+    ['/root', '/root/child', ' · /root'],
+  ]) {
+    const turn = render({...record, execution: {...execution, owner, ownPath, description: ''}});
+    assert.equal(textOf(findByClass(turn, 'execution-breadcrumb')),
+                 `● Background command "make check" completed (exit code 0)${suffix}  [Show result]`);
+  }
+  // All lifecycle words apply to monitors, but exit codes never do.
+  for (const [status, , ending] of cases) {
+    for (const eventCount of [0, 1, 2, null]) {
+      const turn = render({...record, status, execution: {
+        ...execution, kind: 'monitor', description: 'Watch checks', eventCount, exitCode: 7,
+      }});
+      const events = eventCount === null ? '' : ` · ${eventCount} event${eventCount === 1 ? '' : 's'}`;
+      assert.equal(textOf(findByClass(turn, 'execution-breadcrumb')),
+                   `● Monitor "Watch checks" ${ending.split(' (')[0]}${events}  [Show result]`);
+      assert.equal(!!findByClass(turn, 'failed'), status === 'failed');
+    }
+  }
+  const hostile = '<img src=x onerror="alert(1)">';
+  const facts = {...execution, description: `${hostile}\nRun\tchecks`,
+    owner: '/root/<script>bad()</script>'};
+  let opened;
+  const escaped = render({...record, execution: facts}, value => { opened = value; });
+  const row = findByClass(escaped, 'execution-breadcrumb');
+  assert.equal(textOf(row),
+               `● Background command "${hostile} Run checks" completed (exit code 0) · ${facts.owner}  [Show result]`);
+  assert.equal(row.children[0].children[1],
+               `Background command "${hostile} Run checks" completed (exit code 0) · ${facts.owner}  `);
+  const link = findByClass(escaped, 'execution-result-link');
+  assert.equal(link.tagName, 'button');
+  assert.equal(link.type, 'button');
+  assert.equal(link.disabled, false);
+  link.dispatch('click');
+  assert.equal(opened, facts);
+
+  const event = render({id: 'event-1', kind: 'monitor-event', text: hostile,
+    description: 'Watch <checks>'});
+  const eventRow = findByClass(event, 'execution-breadcrumb');
+  assert.equal(eventRow.textContent, `● Monitor event: ${hostile} · Watch <checks>`);
+  assert.equal(eventRow.children.length, 0);
+  assert.equal(findByClass(event, 'execution-result-link'), null);
+  assert.equal(event.disclosures.size, 0);
+  assert.equal(textOf(findByClass(render({id: 'event-2', kind: 'monitor-event',
+    text: 'Ready'}), 'execution-breadcrumb')), '● Monitor event: Ready · monitor');
+}
+
 async function main() {
+  testCompletionRendering();
   await runNotificationTests();
   await testItemConversations();
   await testEditingAvailability();
@@ -2200,10 +2277,12 @@ async function main() {
   // Forwarded completion stays one compact line; result bytes travel only
   // after an explicit read-only fetch, including the missing-evidence case.
   const execution = {id: 'forwarded-1', kind: 'execution', status: 'failed',
-    execution: {id: 'exec-1', owner: '/root/child', command: 'exit 2', exitCode: 2}};
+    execution: {id: 'exec-1', owner: '/root/child', ownPath: '/root', kind: 'bash',
+      command: 'exit 2', description: 'Run failing command', eventCount: null, exitCode: 2}};
   await deliverTo(sockets[1], {t: 'record', record: execution});
   const breadcrumb = findByRecordId(nodes.transcript, execution.id);
-  assert.ok(textOf(breadcrumb).includes('Failed: exit 2 · exit 2 · /root/child'));
+  assert.equal(textOf(findByClass(breadcrumb, 'execution-breadcrumb')),
+               '● Background command "Run failing command" failed (exit code 2) · /root/child  [Show result]');
   assert.ok(!textOf(breadcrumb).includes('CHILD OUTPUT'));
   assert.equal(breadcrumb.disclosures.size, 0);
   const beforeResult = sockets[1].sent.length;

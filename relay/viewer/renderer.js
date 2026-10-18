@@ -579,18 +579,34 @@
     if (record.kind === 'execution') {
       const facts = record.execution || {};
       const row = el('div', 'execution-breadcrumb');
-      const label = record.status === 'cancelled' ? 'Stopped'
-        : record.status === 'failed' ? 'Failed'
-        : record.status === 'completed' ? 'Finished' : 'Unknown';
-      const code = record.status === 'failed' && Number.isInteger(facts.exitCode)
-        ? ` · exit ${facts.exitCode}` : '';
-      row.append(el('span', '', `↳ ${label}: ${facts.command || 'Bash'}${code} · ${facts.owner || 'agent'}  `));
-      const link = el('button', 'execution-result-link', 'Show result');
+      const monitor = facts.kind === 'monitor';
+      const verb = record.status === 'cancelled' ? 'stopped'
+        : record.status === 'timed-out' ? 'timed out'
+        : record.status === 'warning' ? 'ended'
+        : record.status === 'failed' ? 'failed' : 'completed';
+      const flat = value => String(value).replace(/[\n\r\t]+/g, ' ');
+      const subject = flat(facts.description || facts.command || (monitor ? 'monitor' : 'Bash'));
+      const detail = monitor
+        ? (Number.isInteger(facts.eventCount)
+          ? ` · ${facts.eventCount} event${facts.eventCount === 1 ? '' : 's'}` : '')
+        : (Number.isInteger(facts.exitCode)
+           && !['cancelled', 'timed-out'].includes(record.status)
+          ? ` (exit code ${facts.exitCode})` : '');
+      const owner = facts.owner && facts.owner !== facts.ownPath ? ` · ${flat(facts.owner)}` : '';
+      const label = el('span');
+      label.append(el('span', `execution-status${record.status === 'failed' ? ' failed' : ''}`, '● '));
+      label.append(`${monitor ? 'Monitor' : 'Background command'} "${subject}" ${verb}${detail}${owner}  `);
+      row.append(label);
+      const link = el('button', 'execution-result-link', '[Show result]');
       link.type = 'button';
       link.disabled = typeof onExecutionOpen !== 'function';
       if (!link.disabled) link.addEventListener('click', () => onExecutionOpen(facts));
       row.append(link);
       return row;
+    }
+    if (record.kind === 'monitor-event') {
+      return el('div', 'execution-breadcrumb',
+                `● Monitor event: ${record.text || ''} · ${record.description || 'monitor'}`);
     }
     if (record.kind === 'user') {
       const shared = record.shared;

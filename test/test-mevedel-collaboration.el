@@ -168,7 +168,7 @@
                    (lambda ()
                      (list (list :start last-user-start :end (point-max)
                                  :directive-id "thread"))))
-                  ((symbol-function 'mevedel-transcript-audit-guest-prompts)
+                  ((symbol-function 'mevedel-transcript-audit-turn-attributions)
                    (lambda () (list (cons last-user-start (list :name "phone"))))))
           (let* ((records (mevedel-collaboration--canonical-records
                            (current-buffer)))
@@ -205,7 +205,7 @@
                    (lambda ()
                      (list (list :start board-start :end (point-max)
                                  :shared (list :itemId "board" :questionId "q")))))
-                  ((symbol-function 'mevedel-transcript-audit-guest-prompts)
+                  ((symbol-function 'mevedel-transcript-audit-turn-attributions)
                    (lambda () nil)))
           (let ((records (mevedel-collaboration--canonical-records (current-buffer))))
             (should (equal '(nil nil "board" "board")

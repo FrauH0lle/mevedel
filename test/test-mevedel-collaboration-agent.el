@@ -217,7 +217,7 @@
                   ((symbol-function 'mevedel-collaboration--room-for-buffer)
                    (lambda (buffer) (and (eq buffer data) room)))
                   ((symbol-function 'mevedel-collaboration--canonical-records)
-                   (lambda (_buffer) nil))
+                   (lambda (_buffer &optional _completion-buffer _completions _cache _path) nil))
                   ((symbol-function 'mevedel-agent-persistence-ensure-conversation)
                    (lambda (seen-session record root _readonly)
                      (should (eq session seen-session))
@@ -305,8 +305,9 @@
                   ((symbol-function 'float-time)
                    (lambda (&optional _) now))
                   ((symbol-function 'mevedel-collaboration--canonical-records)
-                   (lambda (seen)
+                   (lambda (seen &optional _completion-buffer _completions _cache path)
                      (should (eq buffer seen))
+                     (should (equal "/root/worker-1" path))
                      canonical)))
           ;; A path outside the registry earns a targeted refusal.
           (mevedel-collaboration--handle-fetch-agent

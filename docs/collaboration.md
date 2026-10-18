@@ -950,13 +950,24 @@ without a duplicate current-segment output card. This also applies to Bash
 children of ToolCall. If an intervening archive is unreadable and the command
 is no longer running, its original row keeps the available output but warns
 that completion evidence is unavailable instead of guessing an outcome.
-Yielded root and child Bash executions produce one compact, output-free
-completion breadcrumb in their owning guest transcripts. The native view renders
-each forwarded `EXECUTION` mailbox as a separate expandable notice, without
-deduplicating the original command's breadcrumb. The guest projection instead
-provides an output-free result link for forwarded mail, deduplicated by owner and
-execution ID in each receiving transcript. Identity and terminal facts come from
-the structured mailbox opener, never metadata-looking text in its output body.
+Yielded root and child executions produce one compact, output-free completion
+line, matching the native view: `● Background command "Run checks" completed
+(exit code 0)  Show result`. The description takes precedence over the command.
+Failures, stops, and timeouts say `failed`, `stopped`, and `timed out`; only a
+failed bullet uses the error color. Missing outcome evidence says `ended`, not
+`completed`. Monitor completions say `● Monitor "Watch build" stopped · 2 events`
+instead of showing an exit code. The owner suffix appears only for another
+agent's execution, not the transcript's own path.
+
+Local completion audits and forwarded `EXECUTION` / `MONITOR_TERMINAL` mail
+share this result link, deduplicated by owner and execution ID in each receiving
+transcript. Identity, description, kind, event count, and terminal facts come
+from trusted audits or the structured mailbox opener, never metadata-looking
+text in its output body. A `MONITOR` mailbox produces a separate, unlinked
+`● Monitor event: <first line> · <description>` notice; only its preview comes
+from the payload. Background-event turn attribution hides the harness's fixed
+wake prompt, while retaining the assistant's response and event notices. An
+ordinary user prompt with the same words remains visible.
 **Show result** makes a separate read-only request for retained output; it does
 not duplicate the body in the parent transcript or alter the model-visible
 mailbox. The host validates owner and ID against either the receiving root or

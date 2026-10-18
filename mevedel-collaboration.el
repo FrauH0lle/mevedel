@@ -99,7 +99,7 @@
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
                   "mevedel-collaboration-projection"
-                  (data-buffer &optional completion-buffer completions cache))
+                  (data-buffer &optional completion-buffer completions cache own-path))
 (declare-function mevedel-collaboration--json-record
                   "mevedel-collaboration-projection" (record))
 (declare-function mevedel-collaboration--pending-tool-match

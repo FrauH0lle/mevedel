@@ -28,7 +28,11 @@ Credentials never enter relay payloads; notification wakeups remain generic.
   peerId before forwarding to the host.
 - Yielded root/child completions and forwarded child completions are projected
   as output-free `execution` records with `status` and
-  `execution: {owner, id, command, exitCode}`. The viewer's **Show result**
+  `execution: {owner, ownPath, id, command, description, kind, eventCount, exitCode}`.
+  `ownPath` is the transcript owner, `kind` is `bash` or `monitor`, and absent
+  optional facts are null. Monitor event mail projects as `monitor-event` records
+  with `text` (the first payload line) and `description` from its structured opener.
+  Background-event attributed prompts are omitted. The viewer's **Show result**
   button sends a sealed
   `{"t":"execution-result-get","reqId":N,"owner":"/root/child",
   "executionId":"exec-1"}` frame. The host answers that peer with

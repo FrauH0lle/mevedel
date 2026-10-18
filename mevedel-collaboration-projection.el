@@ -67,18 +67,13 @@
                   "mevedel-transcript-audit" (text))
 (declare-function mevedel-transcript-audit-buffer-spans
                   "mevedel-transcript-audit" (&optional type start end))
-(declare-function mevedel-transcript-audit-guest-prompts
+(declare-function mevedel-transcript-audit-turn-attributions
                   "mevedel-transcript-audit" ())
 (declare-function mevedel-transcript-buffer-directive-ranges
                   "mevedel-transcript-audit" (&optional allow-open))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
-
-;; `mevedel-view-audit'
-(declare-function mevedel-view-audit-mailbox-breadcrumb
-                  "mevedel-view-audit" (text sender open-tag))
-(autoload 'mevedel-view-audit-mailbox-breadcrumb "mevedel-view-audit")
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--generic-tool-rendering
@@ -97,6 +92,7 @@
                   "mevedel-view-render" (text))
 
 (require 'mevedel-collaboration-artifact-projection)
+(require 'xml)
 (require 'mevedel-shared-conversation)
 (require 'mevedel-tool-registry)
 (require 'mevedel-transcript)
@@ -236,7 +232,7 @@ an artifact only by its record id, never by a filesystem path."
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
                        :truncated :guest :directive :item :detail :diff
                        :artifact :store :size :missing :presentation :shared
-                       :execution))
+                       :execution :description))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -775,21 +771,25 @@ failing the whole projection."
   (ignore-errors (mevedel-transcript-buffer-directive-ranges t)))
 
 (defun mevedel-collaboration--attribute-guest-prompts (user-starts)
-  "Attach guest names to user records per attribution positions.
+  "Attach guest names and return background user records to omit.
 USER-STARTS is an ordered list of (SEGMENT-START . RECORD).  Each guest
 attribution record names the last user turn starting at or before it.
 Starts are the stable anchor: segment repair can grow a user turn's end
 over the audit blocks that follow it, or reclassify trailing text, but
 the turn always begins before its own attribution block."
-  (dolist (attribution (mevedel-transcript-audit-guest-prompts))
-    (let (owner)
-      (dolist (entry user-starts)
-        (when (<= (car entry) (car attribution))
-          (setq owner (cdr entry))))
-      (when owner
-        (plist-put owner :guest (plist-get (cdr attribution) :name))
-        (when-let* ((shared (plist-get (cdr attribution) :shared)))
-          (plist-put owner :shared shared))))))
+  (let (background)
+    (dolist (attribution (mevedel-transcript-audit-turn-attributions))
+      (let (owner)
+        (dolist (entry user-starts)
+          (when (<= (car entry) (car attribution))
+            (setq owner (cdr entry))))
+        (when owner
+          (if (eq (plist-get (cdr attribution) :type) 'background-event)
+              (push owner background)
+            (plist-put owner :guest (plist-get (cdr attribution) :name))
+            (when-let* ((shared (plist-get (cdr attribution) :shared)))
+              (plist-put owner :shared shared))))))
+    background))
 
 (defun mevedel-collaboration--execution-ids-in-buffer (buffer ids)
   "Add trusted execution identities in BUFFER to hash table IDS."
@@ -941,8 +941,9 @@ row does not imply success.  This table lives only for one history fetch."
                       (kill-buffer buffer))))))))))
     completions))
 
-(defun mevedel-collaboration--forwarded-execution (segment)
-  "Return the native completion for EXECUTION mailbox SEGMENT, or nil.
+(defun mevedel-collaboration--forwarded-execution (segment &optional events)
+  "Return structured background evidence for mailbox SEGMENT, or nil.
+With EVENTS, include nonterminal monitor event previews.
 The structural mailbox parser supplies its bounds; malformed or ordinary
 mailboxes are not guest completion records."
   (save-excursion
@@ -955,14 +956,52 @@ mailboxes are not guest completion records."
                   (open (buffer-substring-no-properties
                          (plist-get block :open-start)
                          (plist-get block :open-end)))
-                  ((string-match-p "\\_<type=\"EXECUTION\"" open)))
-        (mevedel-view-audit-mailbox-breadcrumb
-         (buffer-substring-no-properties
-          (plist-get block :body-start) (plist-get block :body-end))
-         (plist-get block :id) open)))))
+                  (attributes
+                   (condition-case nil
+                       (with-temp-buffer
+                         (insert open "</agent-message>")
+                         (cadr (car (xml-parse-region (point-min) (point-max)))))
+                     (error nil)))
+                  (type (alist-get 'type attributes))
+                  (id (alist-get 'execution_id attributes))
+                  ((not (string-empty-p id))))
+        (let ((description (alist-get 'description attributes)))
+          (cond
+           ((and events (equal type "MONITOR"))
+            (list :type 'monitor-event :execution-id id
+                  :description (or description "monitor")
+                  :text (car (split-string
+                              (string-trim
+                               (buffer-substring-no-properties
+                                (plist-get block :body-start)
+                                (plist-get block :body-end))) "\n"))))
+           ((member type '("EXECUTION" "MONITOR_TERMINAL"))
+            (let ((code (alist-get 'exit_code attributes))
+                  (count (alist-get 'event_count attributes))
+                  (termination (alist-get 'termination attributes))
+                  (outcome (alist-get 'outcome attributes)))
+              (list :type 'execution-breadcrumb :execution-id id
+                    :owner (plist-get block :id)
+                    :command (alist-get 'command attributes)
+                    :facts (list :description description
+                                 :kind (if (equal type "MONITOR_TERMINAL")
+                                           'monitor 'bash)
+                                 :event-count (and count (string-to-number count))
+                                 :termination (and termination (intern termination))
+                                 :outcome (and outcome (intern outcome))
+                                 :output-path (alist-get 'output_path attributes)
+                                 :output-bytes (when-let* ((n (alist-get 'output_bytes attributes)))
+                                                 (string-to-number n))
+                                 :omitted-output-bytes
+                                 (when-let* ((n (alist-get 'omitted_output_bytes attributes)))
+                                   (string-to-number n))
+                                 :execution-output
+                                 (buffer-substring-no-properties
+                                  (plist-get block :body-start) (plist-get block :body-end))
+                                 :exit-code (and code (string-to-number code))))))))))))
 
-(defun mevedel-collaboration--forwarded-execution-record (completion)
-  "Project trusted COMPLETION as an output-free linked guest breadcrumb."
+(defun mevedel-collaboration--forwarded-execution-record (completion &optional own-path)
+  "Project trusted COMPLETION as a linked breadcrumb in transcript OWN-PATH."
   (let* ((owner (plist-get completion :owner))
          (id (plist-get completion :execution-id))
          (facts (plist-get completion :facts))
@@ -970,6 +1009,7 @@ mailboxes are not guest completion records."
          (termination (plist-get facts :termination))
          (status (cond ((memq termination '(stopped interrupted
                                           cancelled owner-stopped)) "cancelled")
+                       ((memq termination '(timeout timed-out expired)) "timed-out")
                        ((memq outcome '(success no-match different false))
                         "completed")
                        ((null outcome) "warning")
@@ -981,12 +1021,16 @@ mailboxes are not guest completion records."
      (concat "forwarded-execution-"
              (substring (secure-hash 'sha256 (concat owner "\0" id)) 0 24))
      "execution" :revision 0 :identity-fixed t :status status
-     :execution (list :owner owner :id id :command command
+     :execution (list :owner owner :ownPath (or own-path "/root")
+                      :id id :command command
+                      :description (plist-get facts :description)
+                      :kind (if (eq (plist-get facts :kind) 'monitor) "monitor" "bash")
+                      :eventCount (plist-get facts :event-count)
                       :exitCode (unless (memq termination '(signaled interrupted))
                                   (plist-get facts :exit-code))))))
 
 (defun mevedel-collaboration--canonical-records
-    (data-buffer &optional completion-buffer completions cache)
+    (data-buffer &optional completion-buffer completions cache own-path)
   "Return allowlisted records reconstructed from DATA-BUFFER.
 Records inside a directive turn carry that directive's id, and records
 inside a shared-item turn that item's id, so a viewer can filter the
@@ -997,7 +1041,8 @@ segments.  CACHE, a `mevedel-collaboration--projection-cache' for a live
 transcript, retains each segment's records between calls; a segment is
 reprojected only when its source, the shared context, or a live lookup it
 made has changed.  The result is the same as without CACHE, and its records
-are fresh copies the caller may modify."
+are fresh copies the caller may modify.  OWN-PATH identifies the transcript
+owner; omitted means the root transcript."
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
       (when (and cache (not (equal (mevedel-collaboration--projection-context)
@@ -1038,7 +1083,7 @@ are fresh copies the caller may modify."
                            (id (plist-get completion :execution-id))
                            ((stringp owner)) ((stringp id))
                            (record (mevedel-collaboration--forwarded-execution-record
-                                    completion))
+                                    completion own-path))
                            (key (plist-get record :id))
                            ((not (gethash key forwarded-executions)))
                            (_ (progn
@@ -1186,10 +1231,24 @@ are fresh copies the caller may modify."
                                  segment nil
                                  (lambda ()
                                    (cons (mevedel-collaboration--forwarded-execution
-                                          segment)
+                                          segment t)
                                          (cons start end)))
                                  #'ignore #'ignore))))
-                (add-execution completion scope)))
+                (if (eq (plist-get completion :type) 'monitor-event)
+                    (let* ((text (plist-get completion :text))
+                           (key (list "monitor-event" completion))
+                           (occurrence (gethash key occurrences 0)))
+                      (puthash key (1+ occurrence) occurrences)
+                      (push (mevedel-collaboration--scoped
+                             (mevedel-collaboration--record
+                              (mevedel-collaboration--stable-record-id
+                               "monitor-event" (prin1-to-string completion) occurrence)
+                              "monitor-event" :revision 0
+                              :text (mevedel-collaboration--truncate-bytes text 2000)
+                              :description (plist-get completion :description))
+                             scope)
+                            records))
+                  (add-execution completion scope))))
              ((eq (car segment) 'tool)
               (let ((render-end (gethash end following-render-data)))
                 (dolist (record
@@ -1217,7 +1276,9 @@ are fresh copies the caller may modify."
           (add-execution (plist-get span :record)
                          (mevedel-collaboration--scope-at
                           ranges items (plist-get span :start))))
-        (mevedel-collaboration--attribute-guest-prompts (nreverse user-starts))
+        (let ((background
+               (mevedel-collaboration--attribute-guest-prompts (nreverse user-starts))))
+          (setq records (cl-delete-if (lambda (record) (memq record background)) records)))
         (when cache
           ;; Projection does not edit the transcript; if anything did, the
           ;; retained sources describe no single state, so start over.

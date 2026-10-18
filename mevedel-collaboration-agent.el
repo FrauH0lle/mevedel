@@ -51,9 +51,10 @@
 
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
-                  "mevedel-collaboration-projection" (data-buffer))
+                  "mevedel-collaboration-projection"
+                  (data-buffer &optional completion-buffer completions cache own-path))
 (declare-function mevedel-collaboration--forwarded-execution
-                  "mevedel-collaboration-projection" (segment))
+                  "mevedel-collaboration-projection" (segment &optional events))
 (declare-function mevedel-collaboration--truncate-bytes
                   "mevedel-collaboration-projection" (string limit))
 
@@ -240,7 +241,7 @@ A failure is remembered, so later guest polls are refused, not retried."
                                   (concat path "\0"
                                           (plist-get record :id))))))
                            record))
-                       (mevedel-collaboration--canonical-records buffer)))
+                       (mevedel-collaboration--canonical-records buffer nil nil nil path)))
                      (chunks (mevedel-collaboration--snapshot-chunks
                               records
                               (mevedel-collaboration--agent-frame-overhead
