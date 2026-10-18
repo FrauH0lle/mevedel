@@ -2107,7 +2107,35 @@
             (should (= (window-point other) (+ (mevedel-view--input-start) 4)))
             (should (= (mark) (+ (mevedel-view--input-start) 8)))
             (should mark-active)
-            (should (equal draft (mevedel-view--input-text)))))))))
+            (should (equal draft (mevedel-view--input-text))))))))
+
+  :doc "a vanished transcript position never lands in the composer"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf "A long response that is replaced by something much shorter.\n"
+     'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4)
+      (save-window-excursion
+        (set-window-buffer (selected-window) view-buf)
+        (goto-char (point-min))
+        (search-forward "something much shorter")
+        (set-window-point (selected-window) (point))
+        (let ((end (marker-position mevedel-view--status-marker)))
+          (mevedel-view--call-preserving-window-state
+           (lambda ()
+             (let ((inhibit-read-only t))
+               (goto-char (point-min))
+               (search-forward "A long response")
+               (delete-region (match-beginning 0) end)
+               (goto-char (match-beginning 0))
+               (insert "Short.\n")))))
+        (should-not (mevedel-view--position-in-input-region-p (point)))
+        (should-not (mevedel-view--position-in-input-region-p
+                     (window-point (selected-window))))
+        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))))))
 
 (mevedel-deftest mevedel-view--render-anchor-identity ()
   ,test
@@ -2208,6 +2236,41 @@
     (should-not (mevedel-view--position-render-anchor (point-min)))
     (should-not (mevedel-view--position-render-anchor (point-max)))))
 
+(mevedel-deftest mevedel-view--render-anchor-container ()
+  ,test
+  (test)
+  :doc "returns the narrowest run whose source contains the position"
+  (with-temp-buffer
+    (insert (propertize "turn\n" 'mevedel-view-source '(10 . 100)))
+    (let ((inner (point)))
+      (insert (propertize "group\n" 'mevedel-view-source '(20 . 60)))
+      (insert "plain\n")
+      (should (= inner (mevedel-view--render-anchor-container 30 (point-max))))
+      (should (= (point-min) (mevedel-view--render-anchor-container 70 (point-max))))
+      (should-not (mevedel-view--render-anchor-container 200 (point-max)))))
+  :doc "ignores runs at or after the limit"
+  (with-temp-buffer
+    (insert "plain\n")
+    (let ((limit (point)))
+      (insert (propertize "group\n" 'mevedel-view-source '(20 . 60)))
+      (should-not (mevedel-view--render-anchor-container 30 limit)))))
+
+(mevedel-deftest mevedel-view--transcript-position-backstop ()
+  ,test
+  (test)
+  :doc "moves a position out of the composer onto the last transcript character"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Response.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((inside (1+ (mevedel-view--input-start)))
+            (outside (point-min)))
+        (should (= outside (mevedel-view--transcript-position-backstop outside)))
+        (let ((moved (mevedel-view--transcript-position-backstop inside)))
+          (should-not (mevedel-view--position-in-input-region-p moved))
+          (should (< moved (marker-position mevedel-view--status-marker))))))))
+
 (mevedel-deftest mevedel-view--render-anchor-position ()
   ,test
   (test)
@@ -2261,6 +2324,16 @@
                  '(fragment status tasks 0)))
     (should-not (mevedel-view--render-anchor-position nil)))
 
+  :doc "a section folded into an enclosing one resolves to that run"
+  (with-temp-buffer
+    (insert (propertize "Assistant\n" 'mevedel-view-source '(10 . 100)))
+    (let ((group (point)))
+      (insert (propertize "  ✓ Read 4 files\n" 'mevedel-view-source '(20 . 60)
+                          'mevedel-view-type 'tool-group))
+      (insert (propertize "Prose.\n" 'mevedel-view-source '(60 . 100)))
+      (should (= group (mevedel-view--render-anchor-position
+                        '(source (30 tool-summary nil) 0 5))))))
+
   :doc "section identities survive separator changes and compound child reordering"
   (with-temp-buffer
     (let ((source '(40 . 90))
@@ -2291,7 +2364,9 @@
         (should (= (+ child-start 1)
                    (mevedel-view--render-anchor-position child-anchor)))
         (delete-region child-start (point-max))
-        (should-not (mevedel-view--render-anchor-position child-anchor))))))
+        ;; A vanished child goes to its enclosing group row, not a sibling.
+        (should (= (point-min)
+                   (mevedel-view--render-anchor-position child-anchor)))))))
 
 (mevedel-deftest mevedel-view--input-text ()
   ,test

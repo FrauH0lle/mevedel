@@ -724,6 +724,10 @@ turns rendered as usual.")
 (defvar-local mevedel-view--live-source-change-hook nil
   "Change hook that invalidates this view's retained live prefix.")
 
+(defvar mevedel-view-render--reader-members nil
+  "Tool rows under a reader when the current projection writer started.
+Each element is a row's data source start, or an in-flight call's key.")
+
 (defvar-local mevedel-view-render--batch nil
   "Pending full-history projection, owned by this view.")
 
@@ -3912,7 +3916,8 @@ finished before its result landed takes the settled marker and is still."
       (insert "  " hint))
     (insert "\n")
     (add-text-properties start (point)
-                         '(mevedel-view-type tool-pending
+                         `(mevedel-view-type tool-pending
+                           mevedel-view-pending-key ,key
                            mevedel-view-pending-tool-live t))
     (mevedel-view--apply-rendering-indent start (point))))
 
@@ -4434,7 +4439,11 @@ operations call their owned implementations rather than entering here again."
                              (mevedel-view-render-cancel-batch)
                              (unless (eq work-key 'full)
                                (mevedel-view-render--full-now)))
-                           (funcall thunk))
+                           ;; Rows a reader is on when the writer deletes
+                           ;; them must not fold out from under them.
+                           (let ((mevedel-view-render--reader-members
+                                  (mevedel-view-render--reader-members)))
+                             (funcall thunk)))
                        ((error quit) (unless failure (setq failure err)) nil))
                    (when release
                      (condition-case err
@@ -6688,7 +6697,8 @@ and follow the settled children."
               (cl-incf index))))
          (children (append settled (mevedel-view--pending-children pending))))
     (when children
-      (let ((completions (mevedel-view--group-completions children)))
+      (let ((completions (mevedel-view--group-completions children))
+            (reader-p (mevedel-view-render--reader-on-member-p settled pending)))
       (list :header (mevedel-view--tool-group-header children completions)
             :execution-completions completions
             :vtype 'tool-group
@@ -6703,17 +6713,49 @@ and follow the settled children."
                                 'warning))
                           entries)
                          'warning)
-            ;; A new group must not hide a row the reader already opened.
-            ;; An explicit fold of the group itself still takes precedence.
+            :reader-open reader-p
+            ;; A new group must not hide a row the reader already opened or
+            ;; is on.  An explicit fold of the group itself still takes
+            ;; precedence.
             :initially-collapsed-p
-            (not (cl-some
-                  (lambda (child)
-                    (when-let* ((state
-                                 (mevedel-view-disclosure-state-for-key
-                                  (mevedel-view--child-call-state-key
-                                   child (plist-get child :source)))))
-                      (not (cdr state))))
-                  settled)))))))
+            (not (or reader-p
+                     (cl-some
+                      (lambda (child)
+                        (when-let* ((state
+                                     (mevedel-view-disclosure-state-for-key
+                                      (mevedel-view--child-call-state-key
+                                       child (plist-get child :source)))))
+                          (not (cdr state))))
+                      settled))))))))
+
+(defun mevedel-view-render--reader-members ()
+  "Return the tool rows under this view's point and its window points."
+  (let (members)
+    (dolist (pos (cons (point)
+                       (mapcar #'window-point
+                               (get-buffer-window-list nil nil t))))
+      (when (and (< pos (point-max))
+                 (memq (get-text-property pos 'mevedel-view-type)
+                       '(tool-summary tool-pending)))
+        (if-let* ((key (get-text-property pos 'mevedel-view-pending-key)))
+            (push key members)
+          (when-let* ((start (mevedel-view-disclosure-source-start
+                              (get-text-property pos 'mevedel-view-source))))
+            (push start members)))))
+    members))
+
+(defun mevedel-view-render--reader-on-member-p (children pending)
+  "Return non-nil when a reader is on one of CHILDREN or PENDING calls.
+CHILDREN are settled group children; PENDING are in-flight entries."
+  (and mevedel-view-render--reader-members
+       (or (cl-some (lambda (child)
+                      (member (mevedel-view-disclosure-source-start
+                               (plist-get child :source))
+                              mevedel-view-render--reader-members))
+                    children)
+           (cl-some (lambda (entry)
+                      (member (car entry) mevedel-view-render--reader-members))
+                    pending))))
 
 (defun mevedel-view--tool-group-rendering-from-source
     (data-buf start end)
@@ -6776,6 +6818,11 @@ Return non-nil when the group row was inserted."
       (unless (plist-get
                (mevedel-view-disclosure-apply-rendering-state rendering source)
                :initially-collapsed-p)
+        ;; A group that formed open under the reader stays open after the
+        ;; reader moves on: folding later would move what they just read.
+        (when (and (plist-get rendering :reader-open)
+                   (not (mevedel-view-disclosure-state-entry source 'tool-group)))
+          (mevedel-view-disclosure-record-state source 'tool-group nil))
         (setq rendering (mevedel-view--tool-group-rendering
                          entries data-buf nil pending)))
       (mevedel-view--insert-rendered-tool rendering source)

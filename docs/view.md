@@ -752,8 +752,10 @@ renders nothing and splits nothing. The original yielded Bash row retains
 its linked completion breadcrumb. Breadcrumbs can fold into activity groups as counted completions,
 such as `3 commands completed, 1 failed`, and show linked rows when expanded.
 A newly formed group stays open when one
-of its rows is already open, so grouping
-does not hide text the reader is inspecting. An explicit group fold wins over
+of its rows is already open, or when point or a window's point is on one of its
+rows, settled or running, as the run folds; the group then remembers itself as
+open, so it does not fold later when the reader moves on. Grouping therefore
+does not hide or move text the reader is inspecting. An explicit group fold wins over
 its children's states. Rows that demand individual presentation — agent
 handles, compound tools, rows carrying hook audits, rows their renderer wants expanded or
 compact, and coalesced rows — never fold into a group; they split the run
@@ -1819,8 +1821,12 @@ from its first tool even when retained-tail projection changes the enclosing
 source of a neighboring blank line. Content hashes and temporary in-flight
 tokens are excluded so growth and settlement do not change reader identity. A
 raw position saved across a delete-and-re-render lands in different content
-whenever lengths shift. Anchors that cannot be resolved after the redraw fall back to the
-clamped raw position.
+whenever lengths shift. A transcript anchor whose section no longer exists, such
+as a tool row folded into its group's row, resolves to the start of the
+narrowest rendered run whose source contains it. Other anchors that cannot be
+resolved fall back to the clamped raw position, but a position that was in the
+transcript never resolves into the editable composer: it goes to the last
+transcript character instead, so the next keystroke cannot edit the draft.
 Restoring an existing mark updates its marker directly, preserving activation
 state without running mark-activation hooks. A redraw must not schedule editor
 mode transitions for the next user command.

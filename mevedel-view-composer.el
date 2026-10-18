@@ -1078,7 +1078,48 @@ into a neighbor."
                  (setq found (min (max pos (1- next)) (+ pos offset)))
                (setq count (1+ count))))
            (setq pos next)))
-       found))))
+       (or found
+           (mevedel-view--render-anchor-container (car identity) limit))))))
+
+(defun mevedel-view--render-anchor-container (source-start limit)
+  "Return the start of the narrowest rendered run containing SOURCE-START.
+A redraw can fold a section into an enclosing one, such as a tool row into
+its group's single row; the reader then belongs on what now shows it.
+Search rendered runs before LIMIT."
+  (let ((pos (point-min))
+        best best-size)
+    (while (< pos limit)
+      (let ((source (get-text-property pos 'mevedel-view-source))
+            (next (or (next-single-property-change
+                       pos 'mevedel-view-source nil limit)
+                      limit)))
+        (when-let* (((consp source))
+                    (start (mevedel-view-disclosure-source-start source))
+                    (end (and (integer-or-marker-p (cdr source))
+                              (if (markerp (cdr source))
+                                  (marker-position (cdr source))
+                                (cdr source))))
+                    ((<= start source-start))
+                    ((< source-start end))
+                    ((or (null best-size) (< (- end start) best-size))))
+          (setq best pos
+                best-size (- end start)))
+        (setq pos next)))
+    best))
+
+(defun mevedel-view--transcript-position-backstop (position)
+  "Return POSITION, or the transcript's last character if it is in the composer.
+For a position that was in the transcript before a redraw: when its
+content vanished, a fallback must not put the reader into the draft,
+where the next keystroke would edit it."
+  (if (not (mevedel-view--position-in-input-region-p position))
+      position
+    (max (point-min)
+         (1- (if (and (markerp mevedel-view--status-marker)
+                      (marker-position mevedel-view--status-marker)
+                      (< mevedel-view--status-marker (mevedel-view--input-start)))
+                 (marker-position mevedel-view--status-marker)
+               (mevedel-view--input-start))))))
 
 (defun mevedel-view--composer-screen-row (window)
   "Return the composer's screen row in WINDOW, or nil when it is not shown.
@@ -1238,13 +1279,14 @@ above the composer does not strand it in rendered transcript text."
                                    (- ws (mevedel-view--input-start)))))))
                   (get-buffer-window-list (current-buffer) nil t))))
     (cl-flet ((resolve-position (position input-offset anchor)
-                (cond
-                 ((and input-offset
-                       (markerp mevedel-view--input-marker)
-                       (marker-buffer mevedel-view--input-marker))
-                  (+ (mevedel-view--input-start) (max 0 input-offset)))
-                 ((mevedel-view--render-anchor-position anchor))
-                 (t position))))
+                (if (and input-offset
+                         (markerp mevedel-view--input-marker)
+                         (marker-buffer mevedel-view--input-marker))
+                    (+ (mevedel-view--input-start) (max 0 input-offset))
+                  (mevedel-view--transcript-position-backstop
+                   (min (point-max)
+                        (or (mevedel-view--render-anchor-position anchor)
+                            position))))))
       (unwind-protect (funcall thunk)
 	(let ((restored-current-point
                (resolve-position mevedel-view--pww-current-point
