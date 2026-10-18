@@ -757,10 +757,12 @@ open question, from its heading too.
 and opens a closed question on its current answer. `c` edits a custom answer
 in the minibuffer, retaining the previous answer as the initial text. Choosing
 an answer opens the next unanswered question, then moves to the final Submit
-row. The form keeps one height while pending, the tallest any open question
-needs, with blank lines above Submit making up the difference; rows are counted
-as the narrowest-capacity window showing the form wraps them, each window
-reserving its own continuation column when it has no right fringe. `RET` on Submit
+row. In the narrowest-capacity window, the form keeps one height while pending,
+the tallest any open question needs, with blank lines above Submit making up
+the difference. Rows are counted using each window's own continuation-column
+policy, reserving that column when it has no right fringe. A wider window can
+still show different heights across questions because its text wraps less;
+the shared blank-line budget is not a per-window layout. `RET` on Submit
 or `C-c C-c` submits the whole questionnaire; unanswered questions report no
 preference explicitly. `q`/`C-g` cancel only the questionnaire, while `C-c C-k`
 also aborts

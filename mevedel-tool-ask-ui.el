@@ -421,9 +421,9 @@ Fitting the narrowest keeps every row one screen row in all of them."
   "Return the text columns a wrapped row of STATE's form holds.
 Each window showing the view holds its body width, less the last column
 when it has no right fringe, as on a terminal, to carry the continuation
-glyph; a row filling such a window wraps.  The form fits the smallest
-of these, so it keeps one height in every window.  Without a window,
-assume the selected one has no fringe."
+glyph; a row filling such a window wraps.  Measure wrapped text against
+the smallest of these capacities.  Without a window, assume the selected
+one has no fringe."
   (let ((windows (get-buffer-window-list
                   (mevedel-tool-ask-ui--state-chat-buffer state) nil t)))
     (if windows
