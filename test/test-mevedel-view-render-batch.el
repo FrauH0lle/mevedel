@@ -703,5 +703,38 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
         (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
       (should-not (string-search "Loading conversation turn" (buffer-string))))))
 
+(mevedel-deftest mevedel-view--repair-request-progress-separator ()
+  ,test
+  (test)
+  :doc "the rail separator follows the transcript end once placeholders fill"
+  (mevedel-batch-test--with-history
+    (save-window-excursion
+      (set-window-buffer (selected-window) view-buf)
+      (let ((expected (buffer-substring-no-properties (point-min) (point-max))))
+        (goto-char (point-min))
+        (search-forward "Response 0 with target text")
+        (set-window-start nil (line-beginning-position) t)
+        (goto-char (mevedel-view--input-start))
+        (forward-char 4)
+        ;; The newest reply is offscreen, so publication ends in a placeholder.
+        (mevedel-batch-test--start-projection-showing view-buf "Response 0")
+        (should (string-search "Loading conversation turn"
+                               (buffer-substring-no-properties
+                                (- (mevedel-view--input-start) 80)
+                                (mevedel-view--input-start))))
+        (cl-loop repeat 30 while mevedel-view-render--batch do
+          (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+        (should (equal expected
+                       (buffer-substring-no-properties (point-min) (point-max))))
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+  :doc "a rail whose separator is current is not redrawn"
+  (mevedel-batch-test--with-history
+    (let (redrawn)
+      (cl-letf (((symbol-function 'mevedel-view--render-request-progress)
+                 (lambda () (setq redrawn t))))
+        (mevedel-view--repair-request-progress-separator))
+      (should-not redrawn))))
+
 (provide 'test-mevedel-view-render-batch)
 ;;; test-mevedel-view-render-batch.el ends here

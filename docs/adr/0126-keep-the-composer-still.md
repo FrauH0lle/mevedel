@@ -24,7 +24,10 @@ so a draft growing past the bottom scrolls one line.
 
 The line next to the composer never appears or disappears: one permanent rail
 carries the mode badge, an actionable pending count with `C-c C-j`, and the
-turn's activity, replacing the separate progress row and the badge line.
+turn's activity, replacing the separate progress row and the badge line. The
+blank separator above the rail depends on how the text before it ends, so it is
+checked again whenever a transcript writer finishes and redrawn only when it no
+longer fits.
 
 Arriving permission prompts and questions do not move point. They render, the
 rail shows them as pending, and `C-c C-j` visits the next one from the invoking
@@ -66,6 +69,15 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Rail separator after transcript writes (2026-10).** The separator was
+  chosen only when the rail itself redrew. A batched history refresh published
+  placeholders ending in a single newline, so the rail took an extra blank
+  line; replacing the last placeholder did not redraw the rail, and the next
+  unrelated rail update removed the line again. A 43-row window measured
+  266, then 267, then 266 buffer lines, moving the transcript a row each time.
+  The writer queue now rechecks the separator when it drains; an unchanged
+  separator costs 0.38 µs (compiled).
 
 - **Last-page clamp after shrink (2026-10).** Preserving a screen row alone
   preserved empty space too: submitting a question from a scrolled viewport

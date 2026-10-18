@@ -386,6 +386,8 @@
                   "mevedel-view-stream" (&optional data-buf status))
 (declare-function mevedel-view--forget-request-progress-region
                   "mevedel-view-stream" ())
+(declare-function mevedel-view--repair-request-progress-separator
+                  "mevedel-view-stream" ())
 (declare-function mevedel-view--retire-pending-tool-rows
                   "mevedel-view-stream" ())
 (declare-function mevedel-view--schedule-tool-boundary-render
@@ -4446,7 +4448,13 @@ operations call their owned implementations rather than entering here again."
                   ;; or replacement behind it.  Report the first error only
                   ;; after every still-current intention has been drained.
                   (while mevedel-view-render--pending
-                    (run (pop mevedel-view-render--pending))))
+                    (run (pop mevedel-view-render--pending)))
+                  ;; Writers change how the transcript ends without
+                  ;; redrawing the rail below it.
+                  (unless failure
+                    (condition-case err
+                        (mevedel-view--repair-request-progress-separator)
+                      (error (setq failure err)))))
                 (if failure (signal (car failure) (cdr failure)) result))
             (setq mevedel-view-render--owner nil
                   mevedel-view-render--pending nil)))))))
