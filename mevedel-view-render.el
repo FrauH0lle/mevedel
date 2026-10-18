@@ -281,8 +281,12 @@
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start
                   "mevedel-view-composer" ())
+(declare-function mevedel-view--position-render-anchor
+                  "mevedel-view-composer" (pos))
 (declare-function mevedel-view--prompt-start-position
                   "mevedel-view-composer" ())
+(declare-function mevedel-view--render-anchor-position
+                  "mevedel-view-composer" (anchor))
 (declare-function mevedel-view-enter-directive-scope
                   "mevedel-view-composer"
                   (directive action &optional attempt-index workspace))
@@ -7787,17 +7791,23 @@ returns to just before it."
     (nreverse starts)))
 
 (defun mevedel-view-render-capture-segment-state ()
-  "Capture point, window, and disclosure state for the displayed segment."
+  "Capture point, window, and disclosure state for the displayed segment.
+Point and the window start are kept as semantic render anchors as well:
+the segment is projected again on return, and deferred formatting such as
+table layout makes that projection differ in length from this one."
   (let* ((input-start (mevedel-view--input-marker-position))
          (turn-starts (mevedel-view--rendered-turn-starts))
          (window (get-buffer-window (current-buffer) t)))
     (list
      :point (point)
+     :point-anchor (mevedel-view--position-render-anchor (point))
      :input-offset
      (and input-start
           (>= (point) input-start)
           (- (point) (mevedel-view--input-start)))
      :window-start (and window (window-start window))
+     :window-start-anchor
+     (and window (mevedel-view--position-render-anchor (window-start window)))
      :collapsed-turns
      (cl-loop
       for pos in turn-starts
@@ -7835,7 +7845,9 @@ returns to just before it."
    ((plist-get state :point)
     (goto-char
      (max (point-min)
-          (min (plist-get state :point)
+          (min (or (mevedel-view--render-anchor-position
+                    (plist-get state :point-anchor))
+                   (plist-get state :point))
                (mevedel-view--input-marker-position)))))
    ((eq direction 'backward)
     (let ((pos (point-min))
@@ -7854,7 +7866,9 @@ returns to just before it."
     (goto-char (point-min))
     (mevedel-view-next-turn)))
   (when-let* ((window (get-buffer-window (current-buffer) t))
-              (start (plist-get state :window-start)))
+              (start (or (mevedel-view--render-anchor-position
+                          (plist-get state :window-start-anchor))
+                         (plist-get state :window-start))))
     (set-window-start window (min start (point-max)) t)))
 
 (defun mevedel-view-render-project-segment (data-buffer state direction)

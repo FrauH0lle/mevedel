@@ -1835,7 +1835,9 @@ history begins after it.
 Each archived projection renders exactly one segment and is read-only. It does
 not merge earlier segments, modify the authoritative data buffer, or become a
 resumable session state. The view remembers cursor, window, and fold state
-ephemerally while moving among segments. The live composer draft remains
+ephemerally while moving among segments; the cursor and window start return to
+the same rendered content by semantic render anchor, since a segment projected
+again need not match its earlier length. The live composer draft remains
 hidden and unchanged, and `[Latest]` returns to the live segment. Fresh resume
 always starts at latest.
 
