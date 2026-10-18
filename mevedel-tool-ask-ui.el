@@ -163,10 +163,11 @@ and is deliberately not reused here."
 SAMPLE-SHOWN and SAMPLE-OFFSETS are alists from question index to the
 option its sample panel shows and to the panel's first visible row.
 SAMPLE-CACHE maps sample strings to their fontified lines; SAMPLE-ROWS
-is (WIDTH . TABLE), mapping samples to their rows at WIDTH."
+is (WIDTH . TABLE), mapping samples to their rows at WIDTH.  HEIGHT is
+(WIDTH . ROWS), the form's reserved height in screen rows at WIDTH."
   callback source-buffer origin questions count answers chat-buffer
   interaction-id overlay open
-  sample-shown sample-offsets sample-cache sample-rows)
+  sample-shown sample-offsets sample-cache sample-rows height)
 
 (defvar-local mevedel-tool-ask-ui--states nil
   "Live Ask forms in this buffer.")
@@ -870,24 +871,83 @@ Question jumps are only advertised when there is another question."
     ;; Narrow windows wrap the hints; keep them under the first one.
     (propertize text 'wrap-prefix "  ")))
 
+(defun mevedel-tool-ask-ui--text-rows (text width)
+  "Return how many screen rows TEXT takes in a window WIDTH columns wide.
+Follows `word-wrap': a line breaks after whitespace before a word that
+would cross the edge, a word wider than a row breaks inside, and every
+continuation row starts with the line's `wrap-prefix'."
+  (let ((rows 0)
+        (start 0))
+    (dolist (line (split-string text "\n"))
+      (let* ((prefix (or (get-text-property start 'wrap-prefix text) ""))
+             (indent (min (string-width prefix) (1- width)))
+             (column 0)
+             (row-start 0))
+        (setq rows (1+ rows))
+        (let ((position 0))
+          ;; Each match is one run of whitespace and the word after it, so
+          ;; it is never empty before the end of LINE.
+          (while (and (< position (length line))
+                      (string-match "\\([ \t]*\\)\\([^ \t]*\\)" line position))
+            (let* ((spaces (string-width (match-string 1 line)))
+                   (word (string-width (match-string 2 line)))
+                   (end (match-end 0)))
+              (setq column (+ column spaces))
+              (when (and (> word 0) (> (+ column word) width)
+                         (> column row-start))
+                ;; The word starts a new row, breaking inside it when it is
+                ;; wider than a continuation row.
+                (setq rows (1+ rows)
+                      column indent
+                      row-start indent))
+              (while (> (+ column word) width)
+                (setq word (- word (- width column))
+                      rows (1+ rows)
+                      column indent
+                      row-start indent))
+              (setq column (+ column word)
+                    position end))))
+        (setq start (+ start (length line) 1))))
+    rows))
+
+(defun mevedel-tool-ask-ui--reserved-rows (state)
+  "Return the screen rows STATE's questions reserve at the current width.
+That is the tallest its questions get with any one of them open or
+none, so opening and answering never change the form's height.  Cached
+per width."
+  (let ((width (mevedel-tool-ask-ui--form-width state))
+        (cached (mevedel-tool-ask-ui--state-height state)))
+    (if (eql (car cached) width)
+        (cdr cached)
+      (let* ((open (mevedel-tool-ask-ui--state-open state))
+             (rows
+              (unwind-protect
+                  (cl-loop
+                   for candidate in
+                   (cons nil (number-sequence
+                              0 (1- (mevedel-tool-ask-ui--state-count state))))
+                   maximize
+                   (progn
+                     (setf (mevedel-tool-ask-ui--state-open state) candidate)
+                     (mevedel-tool-ask-ui--text-rows
+                      (mevedel-tool-ask-ui--form-questions state) width)))
+                (setf (mevedel-tool-ask-ui--state-open state) open))))
+        (setf (mevedel-tool-ask-ui--state-height state) (cons width rows))
+        rows))))
+
 (defun mevedel-tool-ask-ui--form-body (state)
-  "Return the rendered questionnaire body for STATE."
-  (let* ((body
+  "Return the rendered questionnaire body for STATE.
+Blank lines between the questions and Submit fill the form to its
+reserved height, so the questions keep their place at the top and
+Submit and the hints keep theirs at the bottom."
+  (let* ((questions (mevedel-tool-ask-ui--form-questions state))
+         (gap (- (mevedel-tool-ask-ui--reserved-rows state)
+                 (mevedel-tool-ask-ui--text-rows
+                  questions (mevedel-tool-ask-ui--form-width state))))
+         (body
           (concat
-           "\n"
-           ;; Closed questions stack as a list; a blank line sets off the
-           ;; open one.
-           (mapconcat
-            (lambda (index)
-              (concat
-               (when (and (> index 0)
-                          (or (mevedel-tool-ask-ui--question-open-p state index)
-                              (mevedel-tool-ask-ui--question-open-p
-                               state (1- index))))
-                 "\n")
-               (mevedel-tool-ask-ui--question-block state index)))
-            (number-sequence 0 (1- (mevedel-tool-ask-ui--state-count state)))
-            "")
+           questions
+           (make-string (max 0 gap) ?\n)
            "\n"
            (propertize
             (concat
@@ -906,6 +966,22 @@ Question jumps are only advertised when there is another question."
         (setq first (1+ first)))
       (put-text-property first (1+ first) 'mevedel-prompt-focus t body))
     body))
+
+(defun mevedel-tool-ask-ui--form-questions (state)
+  "Return STATE's questions, each closed one a line and the open one in full."
+  (concat
+   "\n"
+   ;; Closed questions stack as a list; a blank line sets off the open one.
+   (mapconcat
+    (lambda (index)
+      (concat
+       (when (and (> index 0)
+                  (or (mevedel-tool-ask-ui--question-open-p state index)
+                      (mevedel-tool-ask-ui--question-open-p state (1- index))))
+         "\n")
+       (mevedel-tool-ask-ui--question-block state index)))
+    (number-sequence 0 (1- (mevedel-tool-ask-ui--state-count state)))
+    "")))
 
 (defun mevedel-tool-ask-ui--render (state announce)
   "Paint STATE and announce it remotely when ANNOUNCE is non-nil."

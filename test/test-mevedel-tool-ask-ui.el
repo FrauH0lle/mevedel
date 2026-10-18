@@ -68,9 +68,10 @@ A panel row is a line whose text sits on the source block face."
     (goto-char (point-min))
     (let (rows)
       (while (not (eobp))
-        (let ((face (get-text-property (+ (point) 5) 'font-lock-face)))
-          (when (and (< (+ (point) 5) (line-end-position))
-                     (memq 'mevedel-view-source-block (ensure-list face)))
+        (when (< (+ (point) 5) (line-end-position))
+          (when (memq 'mevedel-view-source-block
+                      (ensure-list (get-text-property (+ (point) 5)
+                                                      'font-lock-face)))
             (push (string-trim (buffer-substring-no-properties
                                 (point) (line-end-position)))
                   rows)))
@@ -501,6 +502,49 @@ A panel row is a line whose text sits on the source block face."
         (call-interactively (lookup-key rendered-keymap (kbd "RET")))
         (mevedel-tool-ask-ui--open-question state 1)
         (should (equal '(1 . 1) (get-text-property (point) 'mevedel-ask-entry)))))))
+
+
+(mevedel-deftest mevedel-tool-ask-ui--text-rows ()
+  ,test
+  (test)
+  :doc "counts word-wrapped screen rows, wrap prefixes and over-long words included"
+  (dolist (case `(("" 10 1)
+                  ("abc" 10 1)
+                  ("aaaa bbbb" 9 1)
+                  ("aaaa bbbb c" 9 2)
+                  ("a\nb\n" 10 3)
+                  (,(propertize "aaaa bbbb cccc" 'wrap-prefix "  ") 9 2)
+                  (,(make-string 25 ?x) 10 3)
+                  (,(propertize (concat "aa " (make-string 20 ?x))
+                                'wrap-prefix "    ")
+                   10 5)))
+    (pcase-let ((`(,text ,width ,rows) case))
+      (should (equal (list text rows)
+                     (list text (mevedel-tool-ask-ui--text-rows text width)))))))
+
+
+(mevedel-deftest mevedel-tool-ask-ui--form-body ()
+  ,test
+  (test)
+  :doc "the form keeps one height whichever question is open, and none"
+  (test-mevedel-tool-ask-ui--with-form
+    (cl-letf (((symbol-function 'mevedel-tool-ask-ui--form-width) (lambda (_) 60)))
+      (test-mevedel-tool-ask-ui--show
+       #'ignore
+       [(:question "First, with a long sample?"
+         :options [(:label "A" :sample "1\n2\n3\n4\n5\n6\n7\n8")
+                   (:label "B" :description "A description long enough to wrap onto a second row here.")])
+        (:question "Second?" :options ["C" "D"])])
+      (let ((rows (lambda () (mevedel-tool-ask-ui--text-rows rendered-body 60)))
+            heights)
+        (push (funcall rows) heights)
+        (dolist (key '("TAB" "<backtab>" "RET" "RET"))
+          (call-interactively (lookup-key rendered-keymap (kbd key)))
+          (push (funcall rows) heights))
+        ;; Every layout, the last with nothing open, has the same height.
+        (should (with-current-buffer view-buffer
+                  (eq 'submit (get-text-property (point) 'mevedel-ask-entry))))
+        (should (= 1 (length (delete-dups heights))))))))
 
 
 (mevedel-deftest mevedel-tool-ask-ui--closed-heading ()

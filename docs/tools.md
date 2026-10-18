@@ -757,9 +757,11 @@ open question, from its heading too.
 and opens a closed question on its current answer. `c` edits a custom answer
 in the minibuffer, retaining the previous answer as the initial text. Choosing
 an answer opens the next unanswered question, then moves to the final Submit
-row. `RET` there or `C-c C-c`
-submits the whole questionnaire; unanswered questions explicitly report no
-preference. `q`/`C-g` cancel only the questionnaire, while `C-c C-k` also aborts
+row. The form keeps one height while pending, the tallest any open question
+needs, with blank lines above Submit making up the difference. `RET` on Submit
+or `C-c C-c` submits the whole questionnaire; unanswered questions report no
+preference explicitly. `q`/`C-g` cancel only the questionnaire, while `C-c C-k`
+also aborts
 the run. The form keeps one progress count beside Submit and one keyboard hint
 line, with hanging indentation for wrapped questions and descriptions.
 
