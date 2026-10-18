@@ -54,8 +54,10 @@
                   "mevedel-view-zone" (key &optional default))
 (declare-function mevedel-view-zone-set-collapse-state
                   "mevedel-view-zone" (key collapsed))
+(declare-function mevedel-view-zone-width "mevedel-view-zone" ())
 (autoload 'mevedel-view-zone-collapse-state "mevedel-view-zone")
 (autoload 'mevedel-view-zone-set-collapse-state "mevedel-view-zone")
+(autoload 'mevedel-view-zone-width "mevedel-view-zone")
 
 
 ;;
@@ -733,9 +735,15 @@ EXPANDED widens the budget to make room for the completed section.  It
 always exceeds the collapsed budget, because the expanded row list is
 the collapsed one plus a `done' suffix and a truncation reserves a line
 for its summary -- an equal budget would make expanding drop an open row
-and reveal no completed row at all."
-  (when-let* ((window (get-buffer-window (current-buffer) t)))
-    (let* ((height (window-body-height window))
+and reveal no completed row at all.
+The budget follows the height of the shortest frame showing the buffer,
+not of its window.  A popup split or a growing echo area resizes the
+window but not the frame; a window-height budget re-flowed the panel at
+the next unrelated status redraw after each."
+  (when-let* ((windows (get-buffer-window-list (current-buffer) nil t)))
+    (let* ((height (apply #'min (mapcar (lambda (window)
+                                          (frame-height (window-frame window)))
+                                        windows)))
            (collapsed
             (min mevedel-tool-task--status-max-body-lines
                  (max mevedel-tool-task--status-min-body-lines
@@ -849,10 +857,21 @@ states each count once.  SHOW-COMPLETED selects the toggle wording."
 
 (defun mevedel-tool-task-display-string (session show-completed)
   "Return task display for SESSION.
-SHOW-COMPLETED controls whether completed task detail is included."
-  (let* ((body (mevedel-tool-task--format-groups
-                session show-completed
-                (mevedel-tool-task--status-line-budget show-completed)))
+SHOW-COMPLETED controls whether completed task detail is included.
+Every line fits one screen row of the narrowest window showing the view,
+so the line budget is a row budget and a long note or title cannot
+change the panel's height as it changes length."
+  (let* ((limit (max 1 (1- (mevedel-view-zone-width))))
+         (body (mapconcat
+                (lambda (line)
+                  (if (<= (string-width line) limit)
+                      line
+                    (truncate-string-to-width line limit nil nil "…")))
+                (split-string (mevedel-tool-task--format-groups
+                               session show-completed
+                               (mevedel-tool-task--status-line-budget show-completed))
+                              "\n")
+                "\n"))
          (separator (mevedel-view--zone-separator
                      (mevedel-tool-task--task-label
                       session show-completed))))

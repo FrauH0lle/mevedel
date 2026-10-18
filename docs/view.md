@@ -1759,7 +1759,11 @@ Current fragment namespaces:
   point. Expanded task and agent panels start their rows immediately below
   the separator, without an intervening blank line. Long task titles are
   truncated in the compact rows; the truncation marker is not a disclosure
-  control.
+  control. Every task row and status note is cut to one screen row of the
+  narrowest window showing the view, so the panel's line cap is a row cap.
+  The cap follows the height of the shortest frame showing the view, not of
+  its window: a popup split once changed it from 6 to 4 lines (15 to 10
+  expanded), and the panel re-flowed at the next unrelated status redraw.
 - `interaction`: pending-input summaries and user controls plus a
   non-navigatable `:separator` fragment. Ask, permission, plan, preview, and
   pending-input
