@@ -217,7 +217,11 @@ checks that the session can fork (no pending input, request, live execution,
 active agent turn or active Goal), then prompts for its branch name in Emacs.
 While Worktree is selected, the card names whatever would refuse that check,
 in the same words as the refusal, so a queued follow-up is resolved in the
-Pending Inputs cockpit first instead of being discovered on `RET`. Browser
+Pending Inputs cockpit first instead of being discovered on `RET`. The notice
+that uncommitted changes stay behind comes from a git status check of about
+40 ms; it runs when the card first shows and after each selection change, and
+other redraws, such as queue events and the control-transfer poll, reuse it.
+The blocker check is in memory and stays current on every redraw. Browser
 acceptance is available only for Here, using the host-selected settings;
 settings changes and Worktree acceptance remain in Emacs.
 

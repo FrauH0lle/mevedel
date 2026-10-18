@@ -413,22 +413,33 @@ opening an editable draft."
     (mevedel-worktree-validate-branch-name branch directory)
     branch))
 
+(defun mevedel-plan-mode--worktree-dirty-p (entry)
+  "Return non-nil when ENTRY's source checkout has uncommitted changes.
+The check runs several git processes, about 40 ms, so its result is kept
+on ENTRY for every redraw until the selection changes; foreign rebuilds
+such as queue events and the control-transfer poll redraw the card too.
+Acceptance runs its own check and never relies on this one."
+  (car (or (plist-get entry :worktree-dirty)
+           (let ((dirty (list (with-current-buffer (plist-get entry :chat-buffer)
+                                (and (plist-get (mevedel-worktree-collect-status)
+                                                :dirty-p)
+                                     t)))))
+             (plist-put entry :worktree-dirty dirty)
+             dirty))))
+
 (defun mevedel-plan-mode--worktree-warning (entry)
   "Return ENTRY's Worktree notice when Worktree is selected, or nil.
 It names what would refuse acceptance now, from the same check acceptance
 runs, and warns that uncommitted source changes stay behind."
   (when (eq (plist-get (plist-get entry :selection) :location) 'worktree)
-    (let* ((chat-buffer (plist-get entry :chat-buffer))
-           (blocked
+    (let* ((blocked
             (when-let* ((session (plist-get entry :session)))
               (condition-case err
                   (progn (mevedel-plan-handoff-assert-worktree-ready
-                          session chat-buffer)
+                          session (plist-get entry :chat-buffer))
                          nil)
                 (error (error-message-string err)))))
-           (dirty
-            (with-current-buffer chat-buffer
-              (plist-get (mevedel-worktree-collect-status) :dirty-p))))
+           (dirty (mevedel-plan-mode--worktree-dirty-p entry)))
       (when (or blocked dirty)
         (string-join
          (delq nil
@@ -441,9 +452,11 @@ runs, and warns that uncommitted source changes stay behind."
   "Plan approval entry edited by the current instructions buffer.")
 
 (defun mevedel-plan-mode--selection-changed (entry)
-  "Persist ENTRY's changed selection and redraw its approval."
+  "Persist ENTRY's changed selection and redraw its approval.
+An explicit change also refreshes the cached source checkout state."
   (let ((selection (plist-get entry :selection))
         (session (plist-get entry :session)))
+    (plist-put entry :worktree-dirty nil)
     (if-let* ((callback (plist-get entry :selection-changed)))
         (funcall callback selection)
       (mevedel-plan--metadata-put session :selection selection))

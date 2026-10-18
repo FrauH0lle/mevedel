@@ -1678,6 +1678,32 @@
       (plist-put (plist-get entry :selection) :location 'here)
       (should-not (mevedel-plan-mode--worktree-warning entry)))))
 
+(mevedel-deftest mevedel-plan-mode--worktree-dirty-p
+  (:doc "redraws reuse the checked source state until the selection changes")
+  (let* ((session (mevedel-session--create
+                   :authority-mode 'pid-lock :name "test"
+                   :working-directory default-directory))
+         (entry (list :selection (list :location 'worktree)
+                      :chat-buffer (current-buffer)
+                      :session session))
+         (checks 0)
+         (dirty t))
+    (cl-letf (((symbol-function 'mevedel-worktree-collect-status)
+               (lambda (&rest _) (cl-incf checks) (list :dirty-p dirty)))
+              ((symbol-function 'mevedel-plan-approval-render) #'ignore))
+      (dotimes (_ 3)
+        (should (string-match-p "uncommitted changes"
+                                (mevedel-plan-mode--worktree-warning entry))))
+      (should (= 1 checks))
+      ;; The checkout became clean; an explicit selection change rechecks.
+      (setq dirty nil)
+      (should (mevedel-plan-mode--worktree-warning entry))
+      (mevedel-plan-mode--selection-changed entry)
+      (should-not (mevedel-plan-mode--worktree-warning entry))
+      (should (= 2 checks))
+      (should-not (mevedel-plan-mode--worktree-warning entry))
+      (should (= 2 checks)))))
+
 (mevedel-deftest mevedel-plan-mode--accept
   (:doc "archives, exits Plan, shows preparation, and dispatches once")
   ,test
