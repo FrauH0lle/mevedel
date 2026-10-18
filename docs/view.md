@@ -979,8 +979,14 @@ cleanup; they are not independent renderers. Register controls with
 `mevedel-view--interaction-register`; do not direct-insert ad hoc UI near the
 composer. Registering or rebuilding an interaction must not auto-focus the
 prompt or move point out of the composer.
-`C-c C-j` (or the rail's pending-action text) explicitly visits the first
-pending interaction. It remembers the invoking window's draft offset;
+Cards stack in arrival order, the newest farthest from the composer, so an
+arriving card moves only the transcript above it (ADR 0126). The pending-input
+card stays pinned next to the composer. A descriptor re-registered under the
+same id, as rebuilds do, keeps its place; one that closed and returns arrives
+anew.
+`C-c C-j` (or the rail's pending-action text) explicitly visits the pending
+interaction nearest the composer, the one waiting longest, and repeated
+presses cycle outward. It remembers the invoking window's draft offset;
 settlement returns there only while point remains in that interaction.
 Use `:body-properties-owned` only when the producer supplies complete per-span
 `read-only` and stickiness properties, as ApplyPatch does for inline feedback.

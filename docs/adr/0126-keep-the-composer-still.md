@@ -31,6 +31,15 @@ rail shows them as pending, and `C-c C-j` visits the next one from the invoking
 window, which returns to its draft position on settlement only if it is still
 visiting that prompt.
 
+Interaction cards stack in arrival order, the newest farthest from the
+composer; only the pending-input card, which the composer itself queues, stays
+pinned next to it. A card arriving while another is pending therefore moves
+only the transcript above it, never a card the user may be reading or
+answering. `C-c C-j` starts at the card nearest the composer, the one that has
+waited longest, and repeated presses cycle outward. In a window not yet full,
+where free space is used first, an arrival pushes the cards below it down like
+any other growth above the composer.
+
 Background-work rows are in stable start order, newest farthest from the
 composer; state changes, including blocking, update rows in place. While point
 or the mouse is on the panel, it keeps exactly the rows it showed: finished rows
@@ -88,6 +97,21 @@ focus is explicit.
   Fitting every line to the narrowest window and fixing the preview and agent
   expansion heights keeps all four constant (12, 7, 10 and 4 rows). The extra
   layout work costs about 21 µs per panel render.
+
+- **Arrival order for interaction cards (2026-10).** Cards were ordered by
+  kind: patch preview, Plan, Ask and requests, permissions, pending input,
+  then notices. With the composer anchored, every card ranked below an
+  existing one was inserted between it and the composer and pushed it up.
+  Measured in a graphical 42-row view, a 10-line permission card arriving
+  while the user was in an Ask moved the form and the cursor up 9 rows; a
+  sub-agent permission, a control-transfer request, or the permission
+  expiry notice can arrive this way at any moment. No kind needed a fixed
+  place: each card is answered on its own, and only pending input belongs
+  to the composer. Arrival order applies the principle the background panel
+  already follows, new rows at the far edge, at no rendering cost.
+  `C-c C-j` used to start at the top card; it now starts at the one nearest
+  the composer, which in arrival order has waited longest and needs the
+  least scrolling from the draft.
 
 - **Last-page clamp after shrink (2026-10).** Preserving a screen row alone
   preserved empty space too: submitting a question from a scrolled viewport

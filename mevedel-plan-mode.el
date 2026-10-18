@@ -760,7 +760,6 @@ runs, and warns that uncommitted source changes stay behind."
                          :id (plist-get entry :interaction-id)
                          :count 1
                          :body body
-                         :priority 200
                          :keymap keymap
                          :entry entry
                          :activate #'deliver)))

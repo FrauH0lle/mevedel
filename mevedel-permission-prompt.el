@@ -642,7 +642,6 @@ workspace approval would store."
                             include-always
                             suppress-allow-session once-only
                             toggle)
-                     :priority 100
                      :keymap map
                      :help-echo (if once-only
                                     "One-time permission prompt"

@@ -999,7 +999,6 @@ Submit and the hints keep theirs at the bottom."
         (mevedel--prompt-attribution-line
          (mevedel-tool-ask-ui--state-origin state))
         (mevedel-tool-ask-ui--form-body state))
-       :priority 150
        :keymap (mevedel-tool-ask-ui--keymap state)
        :help-echo "Ask prompt")))
     (let ((overlay (mevedel-tool-ask-ui--state-overlay state))
