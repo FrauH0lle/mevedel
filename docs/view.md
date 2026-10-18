@@ -101,7 +101,10 @@ A parent window that showed its composer gets back the composer's screen row
 from before the inspection opened: the side window narrowed it, and closing
 the side window widens it again, so its text rewraps into fewer rows. Without
 this, the composer of a 25-row window with wrapped paragraphs rose from the
-last row to row 18 above blank space.
+last row to row 18 above blank space. The row is restored only to windows that
+still show the composer with point in it just before the inspector closes
+(reflow from the close does not qualify a window); a parent window the user
+scrolled or moved into earlier history meanwhile keeps its start and point.
 
 If the observed agent settles while its transcript view is open, the view
 renders the final content immediately and updates its header in place. It
@@ -1491,14 +1494,24 @@ column for a fringeless window's continuation glyph). A row's name gives way
 first, down to twenty columns, then its metadata is cut. The panel sits above
 the anchored composer, so a wrapped row changed the panel's height whenever
 its text changed length. At 100 columns, a long agent row occupied two rows
-and shrank the panel by one when it became a one-row finished line. Only
-button lines keep their buttons and may wrap below about fifty columns. When
-that width changes, the zone runs `mevedel-view-zone-width-change-functions`
+and shrank the panel by one when it became a one-row finished line. Expanded
+controls pack whole buttons into explicit rows, shortening a label only when
+it cannot fit alone; all actions stay reachable. This may take an extra row
+in a narrow window rather than wrapping a button label. Completion reserves
+the same control-row budget: the execution's Stop slot becomes inert space,
+and a held agent's controls become a finished notice padded to the live row
+count. Model detail lines fit identically in live and held states. When that
+width changes, the zone runs `mevedel-view-zone-width-change-functions`
 once with the view current. The status zone re-renders from it, so a split
 window does not keep stale wrapped rules until an unrelated redraw changes
 their height. The interaction zone rebuilds from it too, re-fitting its
 separator and queue-backed cards, and pending Ask forms lay themselves out
-again for the new width.
+again for the new width. An Ask form wraps to the smallest text capacity of
+the windows showing the view: each window contributes its body width, less the
+continuation column when that window has no right fringe (a terminal, or
+`overflow-newline-into-fringe` off), so a wider fringed window never grants a
+narrower fringeless one its last column. With no window the selected window's
+width, fringeless, applies.
 
 ```text
  ─── background work · 1 blocked · 2 agents · 1 command · 1 monitor [-] ──

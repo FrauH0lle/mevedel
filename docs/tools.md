@@ -759,7 +759,8 @@ in the minibuffer, retaining the previous answer as the initial text. Choosing
 an answer opens the next unanswered question, then moves to the final Submit
 row. The form keeps one height while pending, the tallest any open question
 needs, with blank lines above Submit making up the difference; rows are counted
-as the window wraps them, on terminals one column short of its width. `RET` on Submit
+as the narrowest-capacity window showing the form wraps them, each window
+reserving its own continuation column when it has no right fringe. `RET` on Submit
 or `C-c C-c` submits the whole questionnaire; unanswered questions report no
 preference explicitly. `q`/`C-g` cancel only the questionnaire, while `C-c C-k`
 also aborts

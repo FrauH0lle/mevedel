@@ -143,6 +143,9 @@
 (declare-function mevedel-view--call-preserving-input-text "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--call-preserving-window-state "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--composer-anchors "mevedel-view-composer" ())
+(declare-function mevedel-view--composer-screen-row
+                  "mevedel-view-composer" (window))
+(declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--restore-composer-anchors
                   "mevedel-view-composer" (anchors))
 (declare-function mevedel-view--transcript-gptel-send-blocked
@@ -606,14 +609,36 @@ growing header, and hover details are built only when shown."
                    (eq mevedel--data-buffer data-buffer)))
         (push buf views)))))
 
+(defun mevedel-view--agent-transcript-following-anchors
+    (anchors parent view-buffer)
+  "Return the ANCHORS of PARENT windows that should regain their composer row.
+Call this before closing the inspection, while window layout still shows
+what the user last saw.  A window showing PARENT qualifies only when it
+shows the composer with point in it; one the user moved into history
+does not.  A window showing VIEW-BUFFER, the same-window inspection, always
+qualifies: it returns to PARENT when closed."
+  (when (buffer-live-p parent)
+    (with-current-buffer parent
+      (seq-filter
+       (lambda (anchor)
+         (let ((window (car anchor)))
+           (and (window-live-p window)
+                (or (eq (window-buffer window) view-buffer)
+                    (and (eq (window-buffer window) parent)
+                         (mevedel-view--composer-screen-row window)
+                         (>= (window-point window)
+                             (mevedel-view--input-start)))))))
+       anchors))))
+
 (defun mevedel-view--kill-agent-transcript-view
     (view-buffer &optional kill-retained)
   "Kill transcript inspection VIEW-BUFFER and disposable data.
 Also kill retained conversation data when KILL-RETAINED is non-nil.
 Closing the inspection's window widens or restores the parent view's
-windows, and their text rewraps.  Their composers return to the screen
-rows they had before the inspection opened instead of rising above
-empty space."
+windows, and their text rewraps.  Parent windows that, before closing,
+still show the composer with point in it return it to the screen row it
+had before the inspection opened instead of rising above empty space.  A
+window the user moved into history meanwhile keeps its start."
   (when (mevedel-view--agent-transcript-view-p view-buffer)
     (let ((windows (get-buffer-window-list view-buffer nil t))
           data-buffer live-p transcript-info parent anchors)
@@ -624,6 +649,8 @@ empty space."
               anchors mevedel-view--agent-transcript-parent-anchors
               live-p (plist-get mevedel-view--agent-transcript-info
                                 :live-buffer)))
+      (setq anchors (mevedel-view--agent-transcript-following-anchors
+                     anchors parent view-buffer))
       (dolist (win windows)
         (ignore-errors
           (quit-window nil win)))

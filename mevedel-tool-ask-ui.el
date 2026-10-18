@@ -419,17 +419,24 @@ Fitting the narrowest keeps every row one screen row in all of them."
 
 (defun mevedel-tool-ask-ui--wrap-width (state)
   "Return the text columns a wrapped row of STATE's form holds.
-Without a right fringe, as on a terminal, the last column carries the
-continuation glyph, so a row that fills the window width wraps."
-  (let ((window (get-buffer-window
-                 (mevedel-tool-ask-ui--state-chat-buffer state) t))
-        (width (mevedel-tool-ask-ui--form-width state)))
-    (if (and window
-             (display-graphic-p (window-frame window))
-             overflow-newline-into-fringe
-             (> (or (nth 1 (window-fringes window)) 0) 0))
-        width
-      (1- width))))
+Each window showing the view holds its body width, less the last column
+when it has no right fringe, as on a terminal, to carry the continuation
+glyph; a row filling such a window wraps.  The form fits the smallest
+of these, so it keeps one height in every window.  Without a window,
+assume the selected one has no fringe."
+  (let ((windows (get-buffer-window-list
+                  (mevedel-tool-ask-ui--state-chat-buffer state) nil t)))
+    (if windows
+        (let ((capacity most-positive-fixnum))
+          (dolist (window windows capacity)
+            (setq capacity
+                  (min capacity
+                       (if (and (display-graphic-p (window-frame window))
+                                overflow-newline-into-fringe
+                                (> (or (nth 1 (window-fringes window)) 0) 0))
+                           (window-body-width window)
+                         (1- (window-body-width window)))))))
+      (1- (mevedel-tool-ask-ui--form-width state)))))
 
 (defun mevedel-tool-ask-ui--wrap-sample-line (line width)
   "Split fontified LINE into rows at WIDTH, marking continuation rows.

@@ -1968,7 +1968,11 @@ adopt prompt.  Returns the messages the session produced."
     (let ((proposal '(:id patch :operations nil)))
       (plist-put proposal :view-buffer view-buf)
       (with-current-buffer view-buf
-        (should (overlayp (mevedel-patch-review--render proposal)))))))
+        (should (overlayp (mevedel-patch-review--render proposal)))
+        ;; Cards stack by arrival; a producer carries no type priority.
+        (let ((descriptor (gethash 'patch mevedel-view--interaction-descriptors)))
+          (should descriptor)
+          (should-not (plist-member descriptor :priority)))))))
 
 (mevedel-deftest mevedel-patch-review--sync-drafts
   (:doc "Captures live feedback drafts from field markers") ,test (test)

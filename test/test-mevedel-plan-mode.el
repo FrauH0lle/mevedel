@@ -804,6 +804,61 @@
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
 
+  :doc "a narrow host split cuts only the local card; the remote payload keeps every setting and notice whole"
+  (let* ((session (mevedel-session--create
+                   :authority-mode 'pid-lock
+                   :name "test" :working-directory default-directory))
+         (data-buffer (generate-new-buffer " *plan-remote-data*"))
+         (view-buffer (generate-new-buffer " *plan-remote-view*"))
+         (model "ReviewProvider-With-A-Long-Name:review-model-20251001")
+         (skills '("alpha-long-skill-name" "beta-long-skill-name"
+                   "gamma-long-skill-name"))
+         (selection (list :location 'here :context 'current
+                          :execution 'direct :mode 'ask
+                          :model-provider model
+                          :skills (mapcar (lambda (name) (list :name name))
+                                          skills)))
+         (entry (mevedel-plan-mode--approval-entry
+                 "# Plan" data-buffer session selection))
+         (notice "A long worktree notice that cannot fit one narrow screen row")
+         (context (mevedel-plan-mode--context-description 'current))
+         (execution (mevedel-plan-mode--execution-description 'direct))
+         (fontifier (symbol-function 'mevedel-view--fontify-as))
+         (fontifications 0)
+         descriptor overlay)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                   (lambda (_buffer) view-buffer))
+                  ((symbol-function 'mevedel-view-zone-width) (lambda () 30))
+                  ((symbol-function 'mevedel-view--fontify-as)
+                   (lambda (&rest args)
+                     (cl-incf fontifications)
+                     (apply fontifier args)))
+                  ((symbol-function 'mevedel-plan-mode--worktree-warning)
+                   (lambda (_entry) notice))
+                  ((symbol-function 'mevedel-view--interaction-register)
+                   (lambda (value)
+                     (setq descriptor value)
+                     (setq overlay (make-overlay (point-min) (point-min)))))
+                  ((symbol-function 'mevedel--prompt-announce) #'ignore))
+          (mevedel-plan-mode--render-approval entry)
+          (should (= fontifications 1))
+          ;; Local: every line fits one narrow row.
+          (dolist (line (split-string (plist-get descriptor :body) "\n"))
+            (unless (or (string-prefix-p "#" line)
+                        (string-search " implement " line))
+              (should (<= (string-width line) 29))))
+          (should-not (string-search model (plist-get descriptor :body)))
+          ;; Remote: complete semantic text, independent of the split.
+          (let ((remote (plist-get (overlay-get overlay 'mevedel--remote)
+                                   :body)))
+            (dolist (text (list model (string-join skills ", ") notice
+                                context execution))
+              (should (string-search text remote)))
+            (should-not (string-search "…" remote))))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
   :doc "cycling a setting preserves a multiline leading-> composer draft"
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create

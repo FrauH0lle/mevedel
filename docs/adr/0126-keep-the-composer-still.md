@@ -33,16 +33,20 @@ visiting that prompt.
 
 Interaction cards stack in arrival order, the newest farthest from the
 composer; only the pending-input card, which the composer itself queues, stays
-pinned next to it. A card arriving while another is pending therefore moves
-only the transcript above it, never a card the user may be reading or
-answering. `C-c C-j` starts at the card nearest the composer, the one that has
-waited longest, and repeated presses cycle outward. In a window not yet full,
-where free space is used first, an arrival pushes the cards below it down like
-any other growth above the composer.
+pinned next to it. No other producer, patch review included, carries a type
+priority; arrival alone orders them. A card arriving while another is pending
+therefore moves only the transcript above it, never a card the user may be
+reading or answering. `C-c C-j` starts at the card nearest the composer, the
+one that has waited longest, and repeated presses cycle outward. In a window
+not yet full, where free space is used first, an arrival pushes the cards
+below it down like any other growth above the composer.
 
 Closing an agent inspection's side window rewraps the parent's text without
-any zone change. A parent window that showed its composer when the inspection
-opened gets that screen row back on return.
+any zone change. A parent window gets the composer's screen row from before
+the inspection opened back only if, just before the close, it still shows the
+composer with point in it. A window the user moved into history is left alone,
+and a same-window inspection always returns to the parent at that row. Reflow
+caused by the close itself does not make a window eligible.
 
 Background-work rows are in stable start order, newest farthest from the
 composer; state changes, including blocking, update rows in place. While point
@@ -55,8 +59,12 @@ aiming at the panel.
 Panel heights depend only on which rows exist, not on their text. Every row,
 finished line, preview line and rule fits one screen row of the narrowest
 window showing the view, and re-renders when that width changes. An open
-execution preview is always three lines. A finished expanded agent keeps
-details of the same height while its row is held.
+execution preview is always three lines. Expanded controls pack whole buttons
+into explicit fitted rows, using short labels only when a button cannot fit
+alone. The live layout sets the completion budget: an execution reserves its
+Stop slot as inert space, and a held finished agent replaces its actions with
+a padded finished notice. Model details are fitted in both states. Thus a
+finished expansion keeps its displayed height, not just its logical line count.
 
 ## Rationale and consequences
 
@@ -85,6 +93,17 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Narrow expanded controls (2026-10).** A 47-column display wrapped live
+  execution controls onto two rows but finished controls onto one; expanded
+  agents had the same gap, and their model metadata was unbounded. Holding
+  row identities alone did not protect mouse targets. Explicit control-row
+  layout now keeps every action and reserves the live height on completion;
+  truncation applies to metadata, never to the set of actions. Packing whole
+  buttons can use an extra row in a narrow window instead of allowing a
+  button's label to wrap. A compiled hot status-render fixture with expanded
+  agent and execution controls remained around 0.40 ms before and after the
+  change, at both normal and narrow widths; differences were within run noise.
 
 - **One-row panel lines and constant-height expansions (2026-10).** Holding
   the row set did not hold the height. Measured in a 100-column graphical

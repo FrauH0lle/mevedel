@@ -627,7 +627,6 @@ same reason."
            :after-render
            (lambda ()
              (mevedel-patch-review--refresh-feedback-markers proposal))
-           :priority 300
            :read-only (eq (plist-get proposal :state) 'submitting)
            :body-properties-owned t))))
 

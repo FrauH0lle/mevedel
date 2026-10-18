@@ -274,13 +274,10 @@
           (let ((panel-lines
                  (lambda ()
                    (let ((bounds (mevedel-view-zone-fragment-bounds 'status 'background)))
-                     ;; Button lines keep their buttons and may wrap below
-                     ;; about fifty columns.
-                     (cl-remove-if (lambda (line) (string-search "[" line))
-                                   (split-string (buffer-substring-no-properties
+                     (split-string (buffer-substring-no-properties
                                                   (plist-get bounds :start)
                                                   (plist-get bounds :end))
-                                                 "\n"))))))
+                                   "\n")))))
             (mevedel-view--render-status)
             (let ((before (length (funcall panel-lines))))
               (should (< (mevedel-view-zone-width) 40))
@@ -885,6 +882,61 @@
                     (mevedel-view-execution--agent-line
                      session '(:path "/root/a" :status waiting :depth 0)))))))
 
+(mevedel-deftest mevedel-view-execution--details ()
+  ,test
+  (test)
+  :doc "a narrow execution finishing under the mouse keeps its displayed control-row budget"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer view-buf)
+      (split-window-right 47)
+      (visual-line-mode 1)
+      (cl-letf (((symbol-function 'mevedel-view-execution--pointer-on-panel-p) (lambda () t)))
+        (unwind-protect
+            (progn
+              (mevedel-view--render-status)
+              (goto-char (point-max))
+              (insert "> draft\nsecond line")
+              (mevedel-view-execution-test--activate "  ▸ Running   bash")
+              (let* ((bounds (mevedel-view-zone-fragment-bounds 'status 'background))
+                     (before (count-screen-lines (plist-get bounds :start)
+                                                 (plist-get bounds :end) nil (selected-window))))
+                (setq live nil)
+                (mevedel-view--render-status)
+                (setq bounds (mevedel-view-zone-fragment-bounds 'status 'background))
+                (should (= before (count-screen-lines (plist-get bounds :start)
+                                                      (plist-get bounds :end) nil (selected-window)))))
+              (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+          (mevedel-view-execution--cancel-release))))))
+
+(mevedel-deftest mevedel-view-execution--control-lines ()
+  ,test
+  (test)
+  :doc "actions fit narrow rows without losing callbacks; finished rows keep the live budget"
+  (dolist (width '(10 20 30 47 80))
+    (let* ((mevedel-view-execution--layout-width width)
+           (callback (lambda () t))
+           (controls (list (list "[Open transcript]" "[View]" callback "Open transcript")
+                           (list "[Show in conversation]" "[Call]" callback "Show call")
+                           (list "[Interrupt]" "[Stop]" callback "Interrupt")))
+           (live (mevedel-view-execution--control-lines controls))
+           (finished (mevedel-view-execution--control-lines controls t)))
+      (should (= (cl-count ?\n live) (cl-count ?\n finished)))
+      (dolist (line (split-string live "\n" t))
+        (should (< (string-width line) width)))
+      (should (= 3 (cl-count-if
+                    (lambda (char) (eq char ?\[)) (string-to-list live))))
+      (let ((pos 0) (actions 0))
+        (while (< pos (length live))
+          (when (get-text-property pos 'mevedel-view-zone-activate live)
+            (cl-incf actions))
+          (setq pos (next-single-property-change
+                     pos 'mevedel-view-zone-activate live (length live))))
+        (should (= 3 actions)))
+      (should-not (text-property-not-all 0 (length finished)
+                                         'mevedel-view-zone-activate nil finished)))))
+
 (mevedel-deftest mevedel-view-execution--agent-details ()
   ,test
   (test)
@@ -934,6 +986,41 @@
       (should (string-search "  ▸ Running   bash" (buffer-string)))
       (should-not (mevedel-view-zone-collapse-state
                    mevedel-view-execution--collapse-key))))
+  :doc "narrow hovered expansions keep displayed rows on agent and execution completion"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer view-buf)
+      (split-window-right 47)
+      (visual-line-mode 1)
+      (let ((agents (list (list :path "/root/counter" :status 'running :depth 0
+                                :tool-use-id "agent-call"
+                                :model-metadata
+                                '(:backend "Anthropic" :model "anthropic/claude-sonnet-4.5-20250929"
+                                  :effort "high"))))
+            (rows (lambda ()
+                    (let ((bounds (mevedel-view-zone-fragment-bounds 'status 'background)))
+                      (count-screen-lines (plist-get bounds :start)
+                                          (plist-get bounds :end) nil (selected-window))))))
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect) (lambda () agents))
+                  ((symbol-function 'mevedel-view-execution--pointer-on-panel-p) (lambda () t)))
+          (unwind-protect
+              (progn
+                (mevedel-view--render-status)
+                (goto-char (point-max))
+                (insert "> draft\nsecond line")
+                (mevedel-view-execution-test--activate "  ▸ Running   agent")
+                (let ((before (funcall rows)))
+                  (setq agents nil)
+                  (mevedel-view--render-status)
+                  (should (= before (funcall rows))))
+                (mevedel-view-execution-test--activate "  ▸ Running   bash")
+                (let ((before (funcall rows)))
+                  (setq live nil)
+                  (mevedel-view--render-status)
+                  (should (= before (funcall rows))))
+                (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+            (mevedel-view-execution--cancel-release))))))
   :doc "a finished agent keeps an inert expansion of the same height while held, and its stale controls refuse"
   (mevedel-view-execution-test--with-view
     (let* ((agents (list (list :path "/root/counter" :status 'running :depth 0

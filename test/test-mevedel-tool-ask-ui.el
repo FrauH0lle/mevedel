@@ -528,7 +528,8 @@ A panel row is a line whose text sits on the source block face."
   (test)
   :doc "the form keeps one height whichever question is open, and none"
   (test-mevedel-tool-ask-ui--with-form
-    (cl-letf (((symbol-function 'mevedel-tool-ask-ui--form-width) (lambda (_) 60)))
+    (cl-letf (((symbol-function 'mevedel-tool-ask-ui--form-width) (lambda (_) 60))
+              ((symbol-function 'mevedel-tool-ask-ui--wrap-width) (lambda (_) 59)))
       (test-mevedel-tool-ask-ui--show
        #'ignore
        [(:question "First, with a long sample?"
@@ -591,7 +592,47 @@ A panel row is a line whose text sits on the source block face."
         (should (= (window-body-width) (mevedel-tool-ask-ui--wrap-width state)))
         (let ((overflow-newline-into-fringe nil))
           (should (= (1- (window-body-width))
-                     (mevedel-tool-ask-ui--wrap-width state))))))))
+                     (mevedel-tool-ask-ui--wrap-width state)))))))
+
+  :doc "every displaying window's own fringe policy sets the minimum capacity"
+  (test-mevedel-tool-ask-ui--with-form
+    (let* ((state (mevedel-tool-ask-ui--state-create :chat-buffer view-buffer))
+           (wide (selected-window))
+           (narrow (split-window-right -30)))
+      (set-window-buffer narrow view-buffer)
+      (let ((narrow-width (window-body-width narrow))
+            (wide-width (window-body-width wide)))
+        (should (< narrow-width wide-width))
+        ;; Fringes are injected per window; a graphical frame is simulated.
+        (cl-flet ((capacity (fringed)
+                    (cl-letf (((symbol-function 'display-graphic-p)
+                               (lambda (&rest _) t))
+                              ((symbol-function 'window-fringes)
+                               (lambda (&optional window)
+                                 (if (memq (or window (selected-window)) fringed)
+                                     '(8 8 nil nil)
+                                   '(0 0 nil nil)))))
+                      (mevedel-tool-ask-ui--wrap-width state))))
+          ;; The wide, fringed selected window must not grant the narrow,
+          ;; fringeless one its last column.
+          (should (= (1- narrow-width) (capacity (list wide))))
+          ;; The reverse: the narrow fringed window holds all its columns.
+          (should (= narrow-width (capacity (list narrow))))
+          (should (= narrow-width (capacity (list wide narrow))))
+          (should (= (1- narrow-width) (capacity nil)))
+          ;; A wide window without a fringe is the limit when it is closer.
+          (delete-window narrow)
+          (should (= (window-body-width wide) (capacity (list wide))))))))
+
+  :doc "a view without a window falls back to the selected window, fringeless"
+  (test-mevedel-tool-ask-ui--with-form
+    (let ((state (mevedel-tool-ask-ui--state-create :chat-buffer view-buffer)))
+      (set-window-buffer (selected-window) (get-buffer-create " *ask-other*"))
+      (unwind-protect
+          (with-current-buffer view-buffer
+            (should (= (1- (window-body-width))
+                       (mevedel-tool-ask-ui--wrap-width state))))
+        (kill-buffer " *ask-other*")))))
 
 (mevedel-deftest mevedel-tool-ask-ui--width-changed ()
   ,test
