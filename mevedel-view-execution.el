@@ -869,6 +869,12 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
          (selected-live (cl-find-if
                          (lambda (item) (mevedel-view-execution--same-p
                                         item mevedel-view-execution--selected)) live))
+         ;; State notification precedes terminal publication.  Keep the
+         ;; selection through that gap, but do not offer live controls on
+         ;; stale facts.
+         (retained (when (and mevedel-view-execution--selected (not selected-live))
+                     (setq mevedel-view-execution--selected
+                           (plist-put mevedel-view-execution--selected :unavailable-p t))))
          (entries (append
                    (mapcar (lambda (row)
                              (list (mevedel-view-execution--key 'agent row) 'agent row))
@@ -882,7 +888,11 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
          (held (mevedel-view-execution--update-held entries hover))
          (items (mapcar (lambda (entry) (cons (nth 1 entry) (nth 2 entry)))
                         (mevedel-view-execution--ordered
-                         (append entries held)
+                         ;; A retained finished inspector keeps its place.
+                         (append entries held
+                                 (when retained
+                                   (list (list (mevedel-view-execution--key 'execution retained)
+                                               'execution retained))))
                          (or mevedel-view-execution--unit-starts
                              (setq mevedel-view-execution--unit-starts
                                    (make-hash-table :test #'equal))))))
@@ -923,11 +933,6 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
     (when selected-live
       (setq mevedel-view-execution--selected
             (plist-put (copy-sequence selected-live) :session session)))
-    (when (and mevedel-view-execution--selected (not selected-live))
-      ;; State notification precedes terminal publication.  Keep the selection
-      ;; through that gap, but do not offer live controls on stale facts.
-      (setq mevedel-view-execution--selected
-            (plist-put mevedel-view-execution--selected :unavailable-p t)))
     (when (and selected-item (not (memq selected-item rows)))
       (let ((limited (seq-take
                       (cl-remove-if (lambda (item) (plist-get (cdr item) :held-p)) rows)
@@ -937,8 +942,10 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
                       (or (memq item limited) (eq item selected-item)
                           (plist-get (cdr item) :held-p)))
                     items))))
-    (when (and mevedel-view-execution--selected (not selected-live))
-      (setq rows (append rows (list (cons 'execution mevedel-view-execution--selected)))))
+    (when retained
+      (setq rows (cl-remove-if-not
+                  (lambda (item) (or (memq item rows) (eq (cdr item) retained)))
+                  items)))
     ;; Only live rows actually shown can finish under the pointer; hidden
     ;; overflow, a collapsed panel and a retained finished inspector hold
     ;; nothing.

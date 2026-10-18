@@ -1524,9 +1524,9 @@ output-limit warning joins the header instead of adding a line. Previously the
 preview grew from one to three lines, wrapping at 100 columns, as output
 arrived, and the selected row moved up four rows during one command. The
 preview labels its output bounds and distinguishes no output yet from
-unavailable output. An expanded execution stays visible after completion until
-collapsed or replaced, so settlement does not close something the user is
-reading.
+unavailable output. An expanded execution stays visible, in its place among
+the rows, after completion until collapsed or replaced, so settlement does not
+close or move something the user is reading.
 
 The expanded execution has explicit **Full output**, **Show in conversation**,
 and live-only **Stop** actions. Full output opens a read-only inspection buffer;

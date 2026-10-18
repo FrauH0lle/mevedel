@@ -313,6 +313,34 @@
         (mevedel-view-zone--on-window-change (selected-window))
         (should (= (- (mevedel-view-zone-width) 4) (funcall rule-width)))
         (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+  :doc "a finished inspected execution keeps its place among the rows"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (setq live (list (list :execution-id "e1" :owner "/root" :yielded t :state 'running
+                             :command "make test-oldest" :started-at 1.0)
+                       (list :execution-id "e2" :owner "/root" :yielded t :state 'running
+                             :command "npm run build" :started-at 2.0)
+                       (list :execution-id "e3" :owner "/root" :yielded t :state 'running
+                             :command "cargo check-newest" :started-at 3.0 :output-tail "ok")))
+      (setq mevedel-view-execution--selected
+            (plist-put (copy-sequence (nth 2 live)) :session session))
+      (mevedel-view--render-status)
+      (goto-char (point-max))
+      (insert "> draft\nsecond line")
+      (let ((order (lambda ()
+                     (mapcar (lambda (text)
+                               (save-excursion (mevedel-view-execution-test--at text) (point)))
+                             '("cargo check-newest" "npm run build" "make test-oldest")))))
+        (should (apply #'< (funcall order)))
+        (setq live (butlast live))
+        (unwind-protect
+            (progn
+              (mevedel-view--render-status)
+              (should (string-search "Completed" (buffer-string)))
+              (should (apply #'< (funcall order)))
+              (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+          (mevedel-view-execution--cancel-release)))))
   :doc "point stays on its row when a row above it finishes"
   (mevedel-view-execution-test--with-view
     (save-window-excursion
