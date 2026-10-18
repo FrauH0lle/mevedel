@@ -14,6 +14,7 @@
 (require 'mevedel-view-composer)
 (require 'mevedel-view-disclosure)
 (require 'mevedel-view-render)
+(require 'mevedel-view-stream)
 (require 'helpers
          (file-name-concat
           (file-name-directory
