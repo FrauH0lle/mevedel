@@ -1506,7 +1506,12 @@ once with the view current. The status zone re-renders from it, so a split
 window does not keep stale wrapped rules until an unrelated redraw changes
 their height. The interaction zone rebuilds from it too, re-fitting its
 separator and queue-backed cards, and pending Ask forms lay themselves out
-again for the new width.
+again for the new width. An Ask form wraps to the smallest text capacity of
+the windows showing the view: each window contributes its body width, less the
+continuation column when that window has no right fringe (a terminal, or
+`overflow-newline-into-fringe` off), so a wider fringed window never grants a
+narrower fringeless one its last column. With no window the selected window's
+width, fringeless, applies.
 
 ```text
  ─── background work · 1 blocked · 2 agents · 1 command · 1 monitor [-] ──
