@@ -152,6 +152,11 @@ normally, and terminal settlement renders the final state.
 Live updates preserve the main view's source-backed disclosure state. An
 incremental update or full-rerender fallback must not collapse response,
 reasoning, tool, or audit sections that the reader expanded.
+When a tool run grows past the grouping threshold beneath a reader, its member
+rows remain visible and the group stays expanded after the reader leaves. This
+also applies before any result arrives: running rows retain point by call key,
+then by transcript tool id on settlement, and remembered group expansion carries
+over to the settled group.
 Grouped tool and reasoning rows use their own transcript source identity,
 so expansion and the reader's cursor survive a row moving out of a group
 when a late audit requires individual presentation.

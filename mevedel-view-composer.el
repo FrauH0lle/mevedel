@@ -393,6 +393,8 @@
 (autoload 'mevedel-tool-render-data-blocks "mevedel-tool-render-data")
 
 ;; `mevedel-transcript'
+(declare-function mevedel-transcript--tool-id-in-range
+                  "mevedel-transcript" (start end))
 (declare-function mevedel-transcript-prompt-transform-start
 		  "mevedel-transcript" nil)
 (autoload 'mevedel-transcript-prompt-transform-start "mevedel-transcript")
@@ -515,7 +517,10 @@
 (declare-function mevedel-view-stream-begin-turn
                   "mevedel-view-stream"
                   (view-turn-start data-turn-start &optional no-spinner))
+(declare-function mevedel-view-stream-in-flight-turn-start-position
+                  "mevedel-view-stream" ())
 (declare-function mevedel-view-stream-stop "mevedel-view-stream" ())
+(autoload 'mevedel-view-stream-in-flight-turn-start-position "mevedel-view-stream")
 (defvar mevedel-view--data-turn-start)
 (defvar mevedel-view--in-flight-turn-start)
 
@@ -1035,6 +1040,10 @@ return nil here."
              (plist-get bounds :namespace)
              (plist-get bounds :id)
              (- pos (plist-get bounds :start))))
+     (when-let* ((key (get-text-property pos 'mevedel-view-pending-key)))
+       (list 'pending key
+             (get-text-property pos 'mevedel-view-pending-tool-use-id)
+             (- pos (save-excursion (goto-char pos) (line-beginning-position)))))
      (when-let* ((identity (mevedel-view--render-anchor-identity pos)))
        (let ((nth 0)
              (scan (point-min))
@@ -1058,6 +1067,29 @@ is clamped into the re-rendered fragment or source run, so a position
 whose content shrank stays inside the same content instead of drifting
 into a neighbor."
   (pcase anchor
+    (`(pending ,key ,id ,offset)
+     (let ((pos (text-property-any (point-min) (point-max)
+                                   'mevedel-view-pending-key key)))
+       ;; Once the result lands, the pipeline id is gptel's transcript id.
+       ;; Search only on that transition; ordinary pending redraws use the key.
+       (when (and (not pos) id)
+         (let ((scan (or (mevedel-view-stream-in-flight-turn-start-position)
+                         (point-min)))
+               (limit (mevedel-view--input-start)))
+           (while (and (not pos) (< scan limit))
+             (let ((source (get-text-property scan 'mevedel-view-source)))
+               (when (and (eq (get-text-property scan 'mevedel-view-type)
+                              'tool-summary)
+                          (consp source) (markerp (car source))
+                          (equal id (with-current-buffer (marker-buffer (car source))
+                                      (mevedel-transcript--tool-id-in-range
+                                       (car source) (cdr source)))))
+                 (setq pos scan)))
+             (setq scan (mevedel-view--render-anchor-run-end scan limit)))))
+       (when pos
+         (save-excursion
+           (goto-char pos)
+           (min (line-end-position) (+ (line-beginning-position) offset))))))
     (`(fragment ,namespace ,id ,offset)
      (when-let* ((bounds (mevedel-view-zone-fragment-bounds namespace id)))
        (min (max (plist-get bounds :start)

@@ -732,6 +732,14 @@ turns rendered as usual.")
   "Tool rows under a reader when the current projection writer started.
 Each element is a row's data source start, or an in-flight call's key.")
 
+(defvar-local mevedel-view-render--pending-reader-group nil
+  "Running-only group opened beneath the reader, as (TURN-MARKER START).
+START is the data end where its first result will arrive; the canonical
+tool segment includes gptel's separator and Org wrapper.  Once a result
+lands, transfer expansion to the source-backed group's disclosure state.
+TURN-MARKER is compared by identity so an aborted turn cannot lend its
+expansion to a later turn starting at the same data position.")
+
 (defvar-local mevedel-view-render--batch nil
   "Pending full-history projection, owned by this view.")
 
@@ -3964,17 +3972,33 @@ finished before its result landed takes the settled marker and is still."
     (add-text-properties start (point)
                          `(mevedel-view-type tool-pending
                            mevedel-view-pending-key ,key
+                           mevedel-view-pending-tool-use-id
+                           ,(plist-get (nth 3 entry) :tool-use-id)
                            mevedel-view-pending-tool-live t))
     (mevedel-view--apply-rendering-indent start (point))))
 
 (defun mevedel-view--insert-pending-run (entries)
   "Insert in-flight tool ENTRIES that no settled activity run absorbed.
 Above the grouping threshold they form one running group row, as they
-will once settled; otherwise each call gets its own running row."
+will once settled; otherwise each call gets its own running row.  When a
+reader is on one of their rows, the group is drawn open beneath its
+header, so that row stays on screen."
   (mevedel-view--insert-activity-rule-after-response)
   (if (and (> mevedel-view-tool-group-collapse-threshold 0)
            (> (length entries) mevedel-view-tool-group-collapse-threshold))
-      (let ((start (point)))
+      (let* ((start (point))
+             (data-buf (mevedel-view-segments-display-buffer))
+             (data-end (and (buffer-live-p data-buf)
+                            (with-current-buffer data-buf (point-max))))
+             (open (or (mevedel-view-render--reader-on-member-p nil entries)
+                       (and data-end
+                            (eq (car mevedel-view-render--pending-reader-group)
+                                mevedel-view--data-turn-start)
+                            (eql (cadr mevedel-view-render--pending-reader-group)
+                                 data-end)))))
+        (when (and open data-end)
+          (setq mevedel-view-render--pending-reader-group
+                (list mevedel-view--data-turn-start data-end)))
         (mevedel-view--insert-summary-region
          (mevedel-view--rendering-header-line
           (list :header (mevedel-view--tool-group-header
@@ -3986,7 +4010,9 @@ will once settled; otherwise each call gets its own running row."
                 :pending-virtual t))
          '(mevedel-view-type tool-pending
            mevedel-view-pending-tool-live t))
-        (mevedel-view--apply-rendering-indent start (point)))
+        (mevedel-view--apply-rendering-indent start (point))
+        (when open
+          (mapc #'mevedel-view--insert-pending-tool-row entries)))
     (mapc #'mevedel-view--insert-pending-tool-row entries)))
 
 (defun mevedel-view--retire-pending-decorations (start end)
@@ -6841,7 +6867,12 @@ Use the name each rendering carries for grouping, never reparsing a call."
                  (memq (get-text-property pos 'mevedel-view-type)
                        '(tool-summary tool-pending)))
         (if-let* ((key (get-text-property pos 'mevedel-view-pending-key)))
-            (push key members)
+            (progn
+              (push key members)
+              ;; Its settled row is found by the call's transcript id.
+              (when-let* ((id (get-text-property
+                               pos 'mevedel-view-pending-tool-use-id)))
+                (push (list :tool-use-id id) members)))
           (when-let* ((start (mevedel-view-disclosure-source-start
                               (get-text-property pos 'mevedel-view-source))))
             (push start members)))))
@@ -6849,16 +6880,32 @@ Use the name each rendering carries for grouping, never reparsing a call."
 
 (defun mevedel-view-render--reader-on-member-p (children pending)
   "Return non-nil when a reader is on one of CHILDREN or PENDING calls.
-CHILDREN are settled group children; PENDING are in-flight entries."
-  (and mevedel-view-render--reader-members
-       (or (cl-some (lambda (child)
-                      (member (mevedel-view-disclosure-source-start
-                               (plist-get child :source))
-                              mevedel-view-render--reader-members))
-                    children)
-           (cl-some (lambda (entry)
-                      (member (car entry) mevedel-view-render--reader-members))
-                    pending))))
+CHILDREN are settled group children; PENDING are in-flight entries.  A
+reader on a running row still holds that call once it settles: the row's
+bound tool-use id is the id its result carries in the transcript."
+  (when-let* ((members mevedel-view-render--reader-members))
+    (let ((ids (delq nil (mapcar (lambda (member)
+                                   (plist-get (and (consp member)
+                                                   (keywordp (car member))
+                                                   member)
+                                              :tool-use-id))
+                                 members))))
+      (or (cl-some (lambda (child)
+                     (let ((source (plist-get child :source)))
+                       (or (member (mevedel-view-disclosure-source-start source)
+                                   members)
+                           (and ids (consp source) (markerp (car source))
+                                (member (with-current-buffer
+                                            (marker-buffer (car source))
+                                          (mevedel-transcript--tool-id-in-range
+                                           (car source) (cdr source)))
+                                        ids)))))
+                   children)
+          (cl-some (lambda (entry)
+                     (or (member (car entry) members)
+                         (and ids (member (plist-get (nth 3 entry) :tool-use-id)
+                                          ids))))
+                   pending)))))
 
 (defun mevedel-view--tool-group-rendering-from-source
     (data-buf start end)
@@ -6920,6 +6967,12 @@ Return non-nil when the group row was inserted."
                       (mevedel-view-disclosure-source-range
                        data-buf group-start group-end))))
     (when rendering
+      (when (and (eq (car mevedel-view-render--pending-reader-group)
+                     mevedel-view--data-turn-start)
+                 (eql (cadr mevedel-view-render--pending-reader-group) group-start))
+        (unless (mevedel-view-disclosure-state-entry source 'tool-group)
+          (mevedel-view-disclosure-record-state source 'tool-group nil))
+        (setq mevedel-view-render--pending-reader-group nil))
       (unless (plist-get
                (mevedel-view-disclosure-apply-rendering-state rendering source)
                :initially-collapsed-p)

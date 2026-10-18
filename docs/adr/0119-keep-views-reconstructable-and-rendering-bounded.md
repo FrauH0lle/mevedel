@@ -133,8 +133,9 @@ running tool rows offer shimmer, braille, ascii, dots, or static indicators.
 Color animations prepare bounded, theme-derived frame banks; each live view
 reserves enough banks for its registered running rows and main label,
 with a four-bank minimum, in addition to a six-bank shared reuse cache. The
-tool grouping threshold bounds this working set: beyond it, running calls share
-one group row. All eligible banks are prepared
+tool grouping threshold bounds the default working set: beyond it, running calls
+share one group row unless grouping would hide the reader's current member.
+That group stays expanded after the reader leaves. All eligible banks are prepared
 at semantic boundaries, preventing other views from evicting an active sample.
 A mixed set of color and portable glyph tool rows keeps both cadences. A frozen
 row retains its phase while adopting changed text or a destination display. Theme changes and edits to the
@@ -825,6 +826,17 @@ continues to take precedence. Full redraws retain source-keyed child states
 hidden by folded groups; capturing only visible rows lost these states.
 Explicit transcript-source changes still clear the table, and source anchors
 prevent stale keys from applying to rewritten content.
+
+An October 2026 regression exposed the same failure before any result arrived:
+a running-only group kept no source-backed child anchor, so grouping could move
+point onto its header or another call. Running rows now anchor by their unique
+pending key, then by the pipeline's transcript tool id when their result arrives.
+A running-only group opened under the reader remembers its future source start
+within that exact turn, and transfers expansion to the ordinary disclosure state
+once results form a source-backed group. This also covers debounced settlement
+that removes all pending entries before the next redraw; it does not depend on
+the reader remaining on the row. A stopped turn cannot lend expansion to a new
+turn reusing its data position.
 
 Managed overlays previously included history inserted at their leading edge.
 Their leading boundary now advances past that history, and progress spacing
