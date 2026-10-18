@@ -39,6 +39,12 @@ A finished row also lingers for ten seconds after the pointer is away, and
 leaving the panel restarts that period, so removals happen when nobody is
 aiming at the panel.
 
+Panel heights depend only on which rows exist, not on their text. Every row,
+finished line, preview line and rule fits one screen row of the narrowest
+window showing the view, and re-renders when that width changes. An open
+execution preview is always three lines. A finished expanded agent keeps
+details of the same height while its row is held.
+
 ## Rationale and consequences
 
 Measured in a terminal Emacs (100x30) with the composer on the last row: the
@@ -66,6 +72,22 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **One-row panel lines and constant-height expansions (2026-10).** Holding
+  the row set did not hold the height. Measured in a 100-column graphical
+  window with the composer fixed at row 40:
+  - An open inspector grew from 11 to 15 rows as output arrived, moving its own
+    row from row 32 to 28.
+  - A two-row agent row became a one-row finished line, so the panel went from
+    8 to 7 rows.
+  - An expanded agent that finished lost its four detail rows under a pointer
+    on `[Interrupt]`.
+  - Separator rules sized for the widest window took three rows in a 48-column
+    split, then shrank at the next unrelated status redraw (6 to 4 rows).
+
+  Fitting every line to the narrowest window and fixing the preview and agent
+  expansion heights keeps all four constant (12, 7, 10 and 4 rows). The extra
+  layout work costs about 21 µs per panel render.
 
 - **Last-page clamp after shrink (2026-10).** Preserving a screen row alone
   preserved empty space too: submitting a question from a scrolled viewport

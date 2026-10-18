@@ -1914,9 +1914,11 @@ idle status redraws remain immediate."
 (defun mevedel-view--zone-separator (label)
   "Return a propertized zone separator line for LABEL.
 Format: ` ─── LABEL ─── ' followed by enough box-drawing dashes
-to reach four columns less than the widest window displaying this
-buffer, then a trailing newline.  The minimum width is ten columns;
-labels are truncated when necessary so all rules use the same width.
+to reach four columns less than `mevedel-view-zone-width', the narrowest
+window displaying this buffer, then a trailing newline.  A rule sized
+for a wider window wrapped onto two or three rows in a narrower one.
+The minimum width is ten columns; labels are truncated when necessary
+so all rules use the same width.
 
 LABEL is a single string like \"tasks\", \"1 permission pending\",
 \"2 previews · 1 plan pending\".  Caller is responsible for
@@ -1925,17 +1927,7 @@ constructing composite count labels via concatenation.
 The returned string carries `mevedel-view-zone-separator' face on
 the dash runs and inherits the same face on the label text so
 tweaks via `customize-face' apply uniformly."
-  (let* ((win-widths
-          ;; Use the widest window currently displaying this buffer
-          ;; if any; fall back to the selected window.  Bare
-          ;; (window-width) returned the selected window's width
-          ;; even when the call originated from an unrelated
-          ;; context (e.g. a sub-agent FSM hook), producing a
-          ;; mis-sized rule for split-window setups.
-          (or (mapcar #'window-width
-                      (get-buffer-window-list (current-buffer) nil t))
-              (list (window-width))))
-         (target-width (max 10 (- (apply #'max win-widths) 4)))
+  (let* ((target-width (max 10 (- (mevedel-view-zone-width) 4)))
          (pre " ─── ")
          (post " ")
          (label-budget (- target-width (string-width pre) (string-width post) 3))
@@ -1951,6 +1943,10 @@ tweaks via `customize-face' apply uniformly."
      (propertize (concat pre decorated-label post tail "\n")
                  'face 'mevedel-view-zone-separator
                  'font-lock-face 'mevedel-view-zone-separator))))
+
+;; Status rules and rows are laid out for the narrowest window showing the
+;; view; redraw them when that width changes.
+(add-hook 'mevedel-view-zone-width-change-functions #'mevedel-view--render-status)
 
 (defun mevedel-view--header-end-position ()
   "Return the position after the current view header, when recognized."

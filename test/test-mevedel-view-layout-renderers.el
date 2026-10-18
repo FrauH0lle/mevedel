@@ -50,7 +50,7 @@
 ;;; Zone separator
 
 (mevedel-deftest mevedel-view--zone-separator
-  (:doc "renders equal-width window-based rules with bounded labels")
+  (:doc "renders equal-width rules for the narrowest window with bounded labels")
   ,test
   (test)
 
@@ -60,7 +60,7 @@
     (should (string-match-p "\n\\'" sep)))
 
   :doc "narrow window clamps to minimum width without negative tail"
-  (cl-letf (((symbol-function 'window-width) (lambda (&rest _) 6)))
+  (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 6)))
     (let ((sep (mevedel-view--zone-separator "x")))
       ;; No error, no infinite repeat
       (should (stringp sep))
@@ -71,8 +71,8 @@
     (dolist (width '(10 20 80 120 200))
       (cl-letf (((symbol-function 'get-buffer-window-list)
                  (lambda (&rest _) nil))
-                ((symbol-function 'window-width)
-                 (lambda (&optional _) width)))
+                ((symbol-function 'window-body-width)
+                 (lambda (&rest _) width)))
         (dolist (label '("tasks · 1 running · 1 blocked · 1 done · RET to collapse"
                          "background work · 1 agent · 2 commands [-]"
                          "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界"))
@@ -83,13 +83,13 @@
             (when (>= width 120)
               (should (string-search label rule))))))))
 
-  :doc "multiple displayed windows use the widest window's rule width"
+  :doc "multiple displayed windows use the narrowest window's rule width, so no window wraps it"
   (with-temp-buffer
     (cl-letf (((symbol-function 'get-buffer-window-list)
                (lambda (&rest _) '(narrow wide)))
-              ((symbol-function 'window-width)
-               (lambda (window) (if (eq window 'wide) 120 40))))
-      (should (= 116 (string-width
+              ((symbol-function 'window-body-width)
+               (lambda (&optional window &rest _) (if (eq window 'wide) 120 40))))
+      (should (= 36 (string-width
                       (string-trim-right
                        (mevedel-view--zone-separator "tasks"))))))))
 

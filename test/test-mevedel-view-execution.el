@@ -253,6 +253,66 @@
       (setf (plist-get (car live) :wall-time-seconds) 20)
       (should (equal-including-properties
                before (plist-get (mevedel-view-execution-fragment session) :body)))))
+  :doc "every panel row, rule and preview line is one screen row in a narrow window, live and finished"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer view-buf)
+      (split-window-right 40)
+      (setq live (list (list :execution-id "m1" :owner "/root/a_rather_long_agent_name"
+                             :yielded t :state 'running :kind 'monitor :event-count 9
+                             :expires-at (current-time)
+                             :description "Watch CI for the release branch build and report"
+                             :started-at 1.0 :output-tail (make-string 90 ?o))))
+      (setq mevedel-view-execution--selected
+            (plist-put (copy-sequence (car live)) :session session))
+      (let ((agents (list (list :path "/root/reviewer_with_a_long_descriptive_name"
+                                :status 'running :depth 0 :started-at 4.0
+                                :model-metadata '(:model "claude-opus-5-5" :effort "high")))))
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda () agents)))
+          (let ((panel-lines
+                 (lambda ()
+                   (let ((bounds (mevedel-view-zone-fragment-bounds 'status 'background)))
+                     ;; Button lines keep their buttons and may wrap below
+                     ;; about fifty columns.
+                     (cl-remove-if (lambda (line) (string-search "[" line))
+                                   (split-string (buffer-substring-no-properties
+                                                  (plist-get bounds :start)
+                                                  (plist-get bounds :end))
+                                                 "\n"))))))
+            (mevedel-view--render-status)
+            (let ((before (length (funcall panel-lines))))
+              (should (< (mevedel-view-zone-width) 40))
+              (dolist (line (funcall panel-lines))
+                (should (< (string-width line) (mevedel-view-zone-width))))
+              (setq agents nil)
+              (unwind-protect
+                  (progn
+                    (mevedel-view--render-status)
+                    (should (string-search "✓ Finished" (buffer-string)))
+                    (should (= before (length (funcall panel-lines))))
+                    (dolist (line (funcall panel-lines))
+                      (should (< (string-width line) (mevedel-view-zone-width)))))
+                (mevedel-view-execution--cancel-release))))))))
+  :doc "a narrower window re-renders the panel's rule and rows for its width"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer view-buf)
+      (mevedel-view--render-status)
+      (goto-char (point-max))
+      (insert "> draft\nsecond line")
+      (let ((rule-width (lambda ()
+                          (save-excursion
+                            (mevedel-view-execution-test--at "background work")
+                            (string-width (buffer-substring-no-properties
+                                           (line-beginning-position) (line-end-position)))))))
+        (should (= (- (window-body-width) 4) (funcall rule-width)))
+        (split-window-right 40)
+        (mevedel-view-zone--on-window-change (selected-window))
+        (should (= (- (mevedel-view-zone-width) 4) (funcall rule-width)))
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
   :doc "point stays on its row when a row above it finishes"
   (mevedel-view-execution-test--with-view
     (save-window-excursion
@@ -846,33 +906,64 @@
       (should (string-search "  ▸ Running   bash" (buffer-string)))
       (should-not (mevedel-view-zone-collapse-state
                    mevedel-view-execution--collapse-key))))
-  :doc "a finished agent drops its expansion and its stale controls refuse"
+  :doc "a finished agent keeps an inert expansion of the same height while held, and its stale controls refuse"
   (mevedel-view-execution-test--with-view
-    (let ((agents (list (list :path "/root/counter" :status 'running :depth 0))))
+    (let* ((agents (list (list :path "/root/counter" :status 'running :depth 0
+                               :model-metadata '(:backend "Claude" :model "opus" :effort "high"))))
+           (clock 1000.0)
+           (float-time-orig (symbol-function 'float-time))
+           (lines (lambda () (count-lines (point-min) (mevedel-view--input-start)))))
       (cl-letf (((symbol-function 'mevedel-view--agent-status-collect) (lambda () agents))
+                ((symbol-function 'float-time)
+                 (lambda (&optional time) (if time (funcall float-time-orig time) clock)))
                 ((symbol-function 'mevedel-agent-control-interrupt-user)
                  (lambda (&rest _) (ert-fail "interrupted a finished agent"))))
         (mevedel-view--render-status)
+        (goto-char (point-max))
+        (insert "> draft\nsecond line")
         (mevedel-view-execution-test--activate "  ▸ Running   agent")
         (mevedel-view-execution-test--at "[Interrupt]")
-        (let ((callback (get-text-property (point) 'mevedel-view-zone-activate)))
+        (let ((callback (get-text-property (point) 'mevedel-view-zone-activate))
+              (expanded (funcall lines)))
           (setq agents nil)
-          (mevedel-view--render-status)
-          (should-not mevedel-view-execution--selected-agent)
-          (should-error (funcall callback) :type 'user-error))))))
+          (unwind-protect
+              (progn
+                (mevedel-view--render-status)
+                (should (equal "/root/counter" mevedel-view-execution--selected-agent))
+                (should (string-search "✓ Finished  agent    /root/counter" (buffer-string)))
+                (should (string-search "    Model     opus\n" (buffer-string)))
+                (should (string-search "    Agent finished.\n" (buffer-string)))
+                (should-not (string-search "[Interrupt]" (buffer-string)))
+                (should (= expanded (funcall lines)))
+                (should-error (funcall callback) :type 'user-error)
+                ;; Once the held row is released, the expansion goes with it.
+                (setq clock (+ clock mevedel-view-execution-grace-seconds 1))
+                (mevedel-view-execution--check-release view-buf)
+                (mevedel-view--render-status)
+                (should-not mevedel-view-execution--selected-agent)
+                (should-not (string-search "Agent finished." (buffer-string)))
+                (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+            (mevedel-view-execution--cancel-release)))))))
 
 (mevedel-deftest mevedel-view-execution--preview ()
   ,test
   (test)
-  :doc "preview is bounded to three lines and 100 columns with visible warnings"
+  :doc "preview is three one-row lines below a header that carries the output-limit warning"
   (let* ((output (mapconcat #'identity (make-list 8 (make-string 500 ?x)) "\n"))
          (preview (mevedel-view-execution--preview
                    (list :output-tail output :termination 'output-limit))))
-    (should (string-search "truncated" preview))
+    (should (string-search "output was truncated" (car (split-string preview "\n"))))
     (should (= 3 (length (cl-remove-if-not
                           (lambda (line) (string-prefix-p "    xxx" line))
                           (split-string preview "\n")))))
-    (dolist (line (split-string preview "\n")) (should (<= (string-width line) 104))))
+    (should (= 4 (cl-count ?\n preview)))
+    (dolist (line (split-string preview "\n"))
+      (should (< (string-width line) (mevedel-view-zone-width)))))
+  :doc "keeps one height from no output through one line to many"
+  (dolist (output '("" "one" "one\ntwo\nthree\nfour" "x\ny"))
+    (ert-info ((format "output %S" output))
+      (should (= 4 (cl-count ?\n (mevedel-view-execution--preview
+                                  (list :output-tail output :output-bytes 0)))))))
   :doc "distinguishes empty live, empty terminal, missing and lost output"
   (dolist (case '(((:output-tail "" :output-bytes 0) . "No output yet.")
                   ((:terminal-p t :whole-output "" :output-bytes 0) . "No output.")

@@ -1461,6 +1461,19 @@ dimmed completed row with a fresh ten-second grace period. Time spent expanded
 does not count; while either cursor or mouse remains in the panel, removal
 stays blocked and leaving restarts the full period.
 
+Every row, finished line, preview line and rule fits one screen row of the
+narrowest window showing the view (`mevedel-view-zone-width`, leaving one
+column for a fringeless window's continuation glyph). A row's name gives way
+first, down to twenty columns, then its metadata is cut. The panel sits above
+the anchored composer, so a wrapped row changed the panel's height whenever
+its text changed length. At 100 columns, a long agent row occupied two rows
+and shrank the panel by one when it became a one-row finished line. Only
+button lines keep their buttons and may wrap below about fifty columns. When
+that width changes, the zone runs `mevedel-view-zone-width-change-functions`
+once with the view current. The status zone re-renders from it, so a split
+window does not keep stale wrapped rules until an unrelated redraw changes
+their height.
+
 ```text
  ─── background work · 1 blocked · 2 agents · 1 command · 1 monitor [-] ──
   ▸ Blocked   agent    /root/reviewer · waiting for permission
@@ -1496,14 +1509,24 @@ the selected window retains normal text selection.
 Only one row is expanded at a time. An expanded agent row shows its provider,
 model and effort with **Open transcript**, **Show in conversation** (the Agent
 call that started it), and **Interrupt**, which interrupts the agent's current
-turn and keeps it retained. An expanded command or Monitor row shows a bounded
-output preview.
+turn and keeps it retained. When an expanded agent finishes, its row becomes a
+finished line and its details stay as inert dimmed lines of the same height,
+with `Agent finished.` in place of the actions, until the row's grace period
+ends. Before this, the panel lost four rows under a pointer aimed at
+`[Interrupt]`. An expanded command or Monitor row shows a bounded output
+preview.
 The preview is not another transcript or process owner: it projects execution
 snapshots and passive progress/terminal events without consuming model output.
-It shows at most three output lines, each limited to 100 columns. It labels its
-output bounds and distinguishes no output yet from unavailable output. An
-expanded execution stays visible after completion until collapsed or replaced,
-so settlement does not close something the user is reading.
+It is always a header and exactly three lines: the last three output lines,
+each cut to one screen row, with blank lines when there are fewer. An open
+inspector therefore keeps one height from no output through completion, and an
+output-limit warning joins the header instead of adding a line. Previously the
+preview grew from one to three lines, wrapping at 100 columns, as output
+arrived, and the selected row moved up four rows during one command. The
+preview labels its output bounds and distinguishes no output yet from
+unavailable output. An expanded execution stays visible after completion until
+collapsed or replaced, so settlement does not close something the user is
+reading.
 
 The expanded execution has explicit **Full output**, **Show in conversation**,
 and live-only **Stop** actions. Full output opens a read-only inspection buffer;
@@ -1661,8 +1684,9 @@ choreography during mutation, uniform composer/point/window preservation,
 reconciliation, stale-region recovery, collapse, and navigation. Producers
 retain their domain text and actions.
 
-Separator rules use a common width, four columns less than the widest window
-displaying the view, with a ten-column minimum. Labels are truncated when
+Separator rules use a common width, four columns less than the narrowest window
+displaying the view, with a ten-column minimum. A rule sized for the widest
+window wrapped onto three rows in a narrower split. Labels are truncated when
 necessary to leave room for the rule, including in narrow windows. If truncation
 would hide the background-work panel's `[+]`/`[-]` control, it replaces the
 rule's leading three dashes so the control remains clickable without changing
