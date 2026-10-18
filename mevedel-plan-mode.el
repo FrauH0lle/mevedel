@@ -672,110 +672,118 @@ window draws there."
                                (mevedel-plan-mode--worktree-warning entry)))
                  (execution (plist-get selection :execution))
                  (budget (plist-get selection :goal-token-budget))
-                 (body
-                  (mevedel--prompt-framed-body
-                   (concat
-                    (if (fboundp 'mevedel-view--fontify-as)
-                        (mevedel-view--fontify-as
-                         (plist-get entry :body) 'markdown-mode)
-                      (plist-get entry :body))
-                    "\n\n"
-                    (propertize (if directive-p
-                                    "Directive implementation"
-                                  "Implementation")
-                                'font-lock-face 'mevedel-view-plan-mode)
-                    "\n\n"
-                    ;; Every setting and the notice slot keep one screen
-                    ;; row whatever their values, so changing a setting or
-                    ;; Location never changes the card's height.
-                    (mapconcat
-                     (lambda (row) (concat (mevedel-plan-mode--fit-row row) "\n"))
-                     (append
-                      (unless directive-p
-                        (list
-                         (concat
-                          (mevedel--prompt-key "l")
-                          "  Location    "
-                          (propertize
-                           (capitalize
-                            (symbol-name (plist-get selection :location)))
-                           'font-lock-face 'bold))
-                         (concat
-                          (mevedel--prompt-key "c")
-                          "  Context     "
-                          (propertize
-                           (capitalize
-                            (symbol-name (plist-get selection :context)))
-                           'font-lock-face 'bold)
-                          " — "
-                          (mevedel-plan-mode--context-description
-                           (plist-get selection :context)))
-                         (concat
-                          (mevedel--prompt-key "e")
-                          "  Execution   "
-                          (propertize
-                           (capitalize (symbol-name execution))
-                           'font-lock-face 'bold)
-                          " — "
-                          (mevedel-plan-mode--execution-description execution))
-                         ;; The row stays when Execution is not Goal.
-                         (if (eq execution 'goal)
-                             (concat
-                              (mevedel--prompt-key "b")
-                              "  Budget      "
-                              (propertize
-                               (if budget
-                                   (format "%d tokens" budget)
-                                 "Unlimited")
-                               'font-lock-face 'bold))
-                           (propertize "   Budget      Goal execution only"
-                                       'font-lock-face 'shadow))))
-                      (list
-                       (concat
-                        (mevedel--prompt-key "m")
-                        "  Mode        "
-                        (propertize
-                         (capitalize
-                          (symbol-name (plist-get selection :mode)))
-                         'font-lock-face 'bold))
-                       (concat
-                        (mevedel--prompt-key "M")
-                        "  Model       "
-                        (propertize
-                         (format
-                          "%s · effort %s"
-                          (plist-get selection :model-provider)
-                          (or (plist-get selection :reasoning-effort)
-                              "default"))
-                         'font-lock-face 'bold))
-                       (concat
-                        (mevedel--prompt-key "s")
-                        "  Skills      "
-                        (propertize
-                         (mevedel-plan-mode--skills-label selection)
-                         'font-lock-face 'bold))
-                       (concat
-                        (mevedel--prompt-key "i")
-                        "  Instructions "
-                        (propertize
-                         (mevedel-plan-mode--instructions-label selection)
-                         'font-lock-face 'bold))
-                       ;; The blank row above the actions holds the notice.
-                       (if warning
+                 ;; Semantic rows are built once.  Only the local body
+                 ;; cuts them to one screen row; the remote descriptor keeps
+                 ;; every setting and notice whole, independent of host splits.
+                 (rows
+                  (append
+                   (unless directive-p
+                     (list
+                      (concat
+                       (mevedel--prompt-key "l")
+                       "  Location    "
+                       (propertize
+                        (capitalize
+                         (symbol-name (plist-get selection :location)))
+                        'font-lock-face 'bold))
+                      (concat
+                       (mevedel--prompt-key "c")
+                       "  Context     "
+                       (propertize
+                        (capitalize
+                         (symbol-name (plist-get selection :context)))
+                        'font-lock-face 'bold)
+                       " — "
+                       (mevedel-plan-mode--context-description
+                        (plist-get selection :context)))
+                      (concat
+                       (mevedel--prompt-key "e")
+                       "  Execution   "
+                       (propertize
+                        (capitalize (symbol-name execution))
+                        'font-lock-face 'bold)
+                       " — "
+                       (mevedel-plan-mode--execution-description execution))
+                      ;; The row stays when Execution is not Goal.
+                      (if (eq execution 'goal)
+                          (concat
+                           (mevedel--prompt-key "b")
+                           "  Budget      "
                            (propertize
-                            (replace-regexp-in-string "\n" " " warning)
-                            'font-lock-face 'warning)
-                         "")))
-                     "")
-                    (mevedel--prompt-key "RET")
-                    " implement    "
-                    (mevedel--prompt-key "f")
-                    " feedback    "
-                    (unless directive-p
-                      (concat (mevedel--prompt-key "q") " hide    "))
-                    (mevedel--prompt-key "C-g")
-                    " cancel\n")
-                   'mevedel-view-plan-mode)))
+                            (if budget
+                                (format "%d tokens" budget)
+                              "Unlimited")
+                            'font-lock-face 'bold))
+                        (propertize "   Budget      Goal execution only"
+                                    'font-lock-face 'shadow))))
+                   (list
+                    (concat
+                     (mevedel--prompt-key "m")
+                     "  Mode        "
+                     (propertize
+                      (capitalize
+                       (symbol-name (plist-get selection :mode)))
+                      'font-lock-face 'bold))
+                    (concat
+                     (mevedel--prompt-key "M")
+                     "  Model       "
+                     (propertize
+                      (format
+                       "%s · effort %s"
+                       (plist-get selection :model-provider)
+                       (or (plist-get selection :reasoning-effort)
+                           "default"))
+                      'font-lock-face 'bold))
+                    (concat
+                     (mevedel--prompt-key "s")
+                     "  Skills      "
+                     (propertize
+                      (mevedel-plan-mode--skills-label selection)
+                      'font-lock-face 'bold))
+                    (concat
+                     (mevedel--prompt-key "i")
+                     "  Instructions "
+                     (propertize
+                      (mevedel-plan-mode--instructions-label selection)
+                      'font-lock-face 'bold))
+                    ;; The blank row above the actions holds the notice.
+                    (if warning
+                        (propertize
+                         (replace-regexp-in-string "\n" " " warning)
+                         'font-lock-face 'warning)
+                      ""))))
+                 (plan-text
+                  (if (fboundp 'mevedel-view--fontify-as)
+                      (mevedel-view--fontify-as
+                       (plist-get entry :body) 'markdown-mode)
+                    (plist-get entry :body)))
+                 (frame
+                  (lambda (fit)
+                    (mevedel--prompt-framed-body
+                     (concat
+                      plan-text
+                      "\n\n"
+                      (propertize (if directive-p
+                                      "Directive implementation"
+                                    "Implementation")
+                                  'font-lock-face 'mevedel-view-plan-mode)
+                      "\n\n"
+                      ;; Every setting and the notice slot keep one screen
+                      ;; row locally, so changing a setting or Location
+                      ;; never changes the card's height.
+                      (mapconcat (lambda (row) (concat (funcall fit row) "\n"))
+                                 rows "")
+                      (mevedel--prompt-key "RET")
+                      " implement    "
+                      (mevedel--prompt-key "f")
+                      " feedback    "
+                      (unless directive-p
+                        (concat (mevedel--prompt-key "q") " hide    "))
+                      (mevedel--prompt-key "C-g")
+                      " cancel\n")
+                     'mevedel-view-plan-mode)))
+                 (body (funcall frame #'mevedel-plan-mode--fit-row))
+                 (remote-body (funcall frame #'identity)))
             (define-key keymap (kbd "RET") #'accept)
             (define-key keymap (kbd "<return>") #'accept)
             (define-key keymap (kbd "C-c C-c") #'accept)
@@ -816,7 +824,7 @@ window draws there."
             ;; request the Emacs feedback draft composes.
             (overlay-put overlay 'mevedel--remote
                          (append
-                          (list :body (substring-no-properties body)
+                          (list :body (substring-no-properties remote-body)
                                 :feedback
                                 (lambda (text)
                                   (settle (list :remote-feedback text))))
