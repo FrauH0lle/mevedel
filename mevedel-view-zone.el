@@ -27,10 +27,12 @@
 (defvar mevedel-view--status-marker)
 
 ;; `mevedel-view-composer'
+(declare-function mevedel-view--clamp-window-starts "mevedel-view-composer" (tails))
 (declare-function mevedel-view--composer-anchors "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--restore-composer-anchors
                   "mevedel-view-composer" (anchors))
+(declare-function mevedel-view--window-tail-lengths "mevedel-view-composer" ())
 (declare-function mevedel-view--sanitize-undo "mevedel-view-composer" ())
 (defvar mevedel-view--input-marker)
 
@@ -775,6 +777,7 @@ live zone text keeps its current bounds until reconciliation finishes."
              (logical-state (and region
                                  (mevedel-view-zone--capture-logical-state
                                   zone region)))
+             (window-tails (mevedel-view--window-tail-lengths))
              owned-p)
         (if (and (null fragments) (null region))
             (progn
@@ -782,6 +785,7 @@ live zone text keeps its current bounds until reconciliation finishes."
                zone
                (lambda ()
                  (mevedel-view-zone--delete-stale-text zone nil)))
+              (mevedel-view--clamp-window-starts window-tails)
               nil)
           (unless region
             ;; History inserted at the boundary belongs before this zone.
@@ -811,6 +815,7 @@ live zone text keeps its current bounds until reconciliation finishes."
               (when (overlay-buffer region)
                 (mevedel-view-zone--restore-trailing-overlays region trailing))))
           (mevedel-view-zone--restore-logical-state zone logical-state)
+          (mevedel-view--clamp-window-starts window-tails)
           (if fragments
               region
             (delete-overlay region)

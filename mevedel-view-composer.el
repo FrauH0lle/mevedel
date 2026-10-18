@@ -1151,6 +1151,34 @@ grows above: free space below the composer is used before scrolling."
                ;; The last line has no newline: `vertical-motion' stops on it.
                (= (line-end-position) (point-max)))))))
 
+(defun mevedel-view--window-tail-lengths ()
+  "Return (WINDOW . LENGTH) entries for displayed windows.
+LENGTH counts characters from the window start to `point-max'."
+  (mapcar (lambda (window)
+            (cons window (- (point-max) (window-start window))))
+          (get-buffer-window-list (current-buffer) nil t)))
+
+(defun mevedel-view--clamp-window-starts (tails)
+  "Fill the last page when text below a restored start shrank.
+TAILS contains (WINDOW . LENGTH) entries captured before mutation by
+`mevedel-view--window-tail-lengths'.  Compare against restored starts,
+after semantic and composer anchoring.  Unchanged or growing tails keep
+their reading position, including deliberate space below the buffer.
+Compute the last page in display rows, including wrapped lines; cached
+`window-end' can be stale after mutations and `set-window-start'."
+  (pcase-dolist (`(,window . ,length) tails)
+    (when (and (window-live-p window)
+               (eq (window-buffer window) (current-buffer))
+               (> (window-start window) (point-min))
+               (< (- (point-max) (window-start window)) length))
+      (let ((last-page
+             (save-excursion
+               (goto-char (point-max))
+               (vertical-motion (- (1- (window-body-height window))) window)
+               (point))))
+        (when (> (window-start window) last-page)
+          (set-window-start window last-page t))))))
+
 (defun mevedel-view--call-preserving-window-state (thunk)
   "Call THUNK while preserving each displayed window's browsing state.
 Preserves those values for every window displaying the current buffer.
@@ -1190,6 +1218,7 @@ above the composer does not strand it in rendered transcript text."
                (- mevedel-view--pww-current-mark
                   (mevedel-view--input-start))))
          (mevedel-view--pww-composer-anchors (mevedel-view--composer-anchors))
+         (window-tails (mevedel-view--window-tail-lengths))
          (mevedel-view--pww-saved
           (mapcar (lambda (w)
                     (with-current-buffer mevedel-view--pww-current-buffer
@@ -1247,6 +1276,7 @@ above the composer does not strand it in rendered transcript text."
                   (goto-char (point-max))
                   (recenter -1))))))
         (mevedel-view--restore-composer-anchors mevedel-view--pww-composer-anchors)
+		(mevedel-view--clamp-window-starts window-tails)
 	(when mevedel-view--pww-current-mark
 	  (set-marker
 	   (mark-marker)

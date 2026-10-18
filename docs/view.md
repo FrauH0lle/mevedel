@@ -951,6 +951,19 @@ buffers keep no undo history.
 Rebuilding the prompt is also chrome: undoing a draft never restores an older
 permission badge or prompt prefix inside the composer.
 
+Zone changes and re-renders preserve the composer's screen row when it is
+visible. After restoring logical positions and composer anchors, if the number
+of characters from a window's start to the buffer end decreased, a start later
+than the last page is clamped backward. Removing a pending interaction thus does
+not strand the composer at the top above empty space, including when the start
+was in surviving transcript above the interaction. Unchanged or growing tails
+keep intentional blank space; windows reading earlier history are not pulled
+toward the bottom, and a window already starting at the buffer beginning stays
+there. The shrink gate counts characters, while the clamp counts display rows,
+including soft wrapping, without changing point or draft text. Equal-length
+reflow alone does not trigger it. Logical restoration runs before the clamp so
+it cannot undo the correction.
+
 A submission that starts in the composer captures the draft it forwards, so a
 draft typed while `UserPromptSubmit`, skill preparation, or a slash command
 runs asynchronously survives the send it started, together with its mention

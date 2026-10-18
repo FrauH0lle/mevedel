@@ -137,6 +137,81 @@
         (should (= (point-min) (window-start)))
         (should (< row (mevedel-view--composer-screen-row (selected-window))))))))
 
+(mevedel-deftest mevedel-view--clamp-window-starts ()
+  (let ((scenario ,scenario))
+    (mevedel-view-test--with-buffers
+      (save-window-excursion
+        (switch-to-buffer view-buf)
+        (delete-other-windows)
+        (when (memq scenario '(transcript transcript-render))
+          (split-window-below -8))
+        (let ((inhibit-read-only t))
+          (goto-char (point-min))
+          (forward-line 1)
+          (dotimes (n 200) (insert (format "transcript %d\n" n))))
+        (goto-char (point-max))
+        (insert "> draft\nsecond line")
+        (let* ((height (window-body-height))
+               (card (mevedel-view--interaction-register
+                      (list :kind 'ask :id 'viewport-test
+                            :body (mapconcat
+                                   (lambda (n) (format "option %d" n))
+                                   (number-sequence 1 (* 2 height)) "\n")))))
+          (goto-char (overlay-start card))
+          (set-window-start
+           nil (cond
+                ((eq scenario 'hidden) (overlay-start card))
+                ((memq scenario '(transcript transcript-render))
+                 (save-excursion (forward-line -5) (point)))
+                (t
+                 (save-excursion
+                   (goto-char (mevedel-view--input-start))
+                   (vertical-motion -5)
+                   (point)))) t)
+          (if (memq scenario '(hidden transcript transcript-render))
+              (should-not (mevedel-view--composer-screen-row (selected-window)))
+            (should (= 5 (mevedel-view--composer-screen-row (selected-window)))))
+          (let ((saved-start (window-start)))
+            (should (= (alist-get (selected-window)
+                                  (mevedel-view--window-tail-lengths))
+                       (- (point-max) saved-start)))
+            (when (memq scenario '(transcript transcript-render))
+              (should-not (mevedel-view-zone-bounds-at saved-start)))
+            (pcase scenario
+              ((or 'render 'transcript-render)
+               (mevedel-view--call-preserving-window-state
+                (lambda () (mevedel-view--interaction-unregister 'viewport-test))))
+              ('truncate
+               (mevedel-view--interaction-register
+                (list :kind 'ask :id 'viewport-test :body "shorter card")))
+              ('survive
+               (mevedel-view--call-preserving-window-state #'ignore))
+              (_ (mevedel-view--interaction-unregister 'viewport-test)))
+            (ert-info ((format "viewport after %s settlement" scenario))
+              (should (= (window-start)
+                         (if (eq scenario 'survive)
+                             saved-start
+                           (save-excursion
+                             (goto-char (point-max))
+                             (vertical-motion (- (1- height)))
+                             (point)))))
+              (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))))
+  (scenario)
+  :doc "settlement fills the last page when the composer was hidden"
+  'hidden
+  :doc "settlement fills the last page when the composer was high on screen"
+  'high
+  :doc "outer render restoration does not undo the last-page clamp"
+  'render
+  :doc "truncation past a saved start fills the last page"
+  'truncate
+  :doc "surviving fragment starts keep deliberate blank space below"
+  'survive
+  :doc "a split window starting in transcript fills after card removal"
+  'transcript
+  :doc "outer restoration fills a transcript-start window after card removal"
+  'transcript-render)
+
 (defun mevedel-view-composer-test--owner (symbol)
   "Return the source feature basename that defines SYMBOL."
   (file-name-base (or (symbol-file symbol 'defun) "")))

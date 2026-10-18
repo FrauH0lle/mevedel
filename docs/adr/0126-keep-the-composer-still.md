@@ -11,8 +11,16 @@ zone mutation and re-render, so that growth scrolls the transcript instead, as i
 a bottom-anchored terminal. While everything from the window start to the end of
 the draft still fits, the start is kept and free space below is used first; a
 window scrolled away from the composer, or starting inside a tall draft, keeps
-its own reading position. View buffers set `scroll-conservatively` to 101 and
-`scroll-margin` to 0 so a draft growing past the bottom scrolls one line.
+its own reading position. Both zone mutations and full re-renders capture the
+number of characters from each window start to the buffer end. After restoring
+logical positions and composer anchors, a smaller tail permits clamping a start
+past the last page backward to that page. This fills empty space left below the
+draft when an interaction disappears, even if the composer was previously
+offscreen or near the top and the start was in surviving transcript. Unchanged
+or growing tails retain deliberate blank space; earlier history views do not
+move toward the bottom, and a window already starting at `point-min` stays
+there. View buffers set `scroll-conservatively` to 101 and `scroll-margin` to 0
+so a draft growing past the bottom scrolls one line.
 
 The line next to the composer never appears or disappears: one permanent rail
 carries the mode badge, an actionable pending count with `C-c C-j`, and the
@@ -59,13 +67,50 @@ focus is explicit.
 
 ## Decision history
 
+- **Last-page clamp after shrink (2026-10).** Preserving a screen row alone
+  preserved empty space too: submitting a question from a scrolled viewport
+  left the composer at row 5 in a 41-row window. When the composer had been
+  offscreen, deleting the interaction collapsed the saved start marker to the
+  rail and left only the rail and composer at the top. An initial unconditional
+  backward clamp fixed these views but broke six reader-position regressions:
+  pinned prompts, history readers, permission starts, and the parent viewport
+  after inspecting an agent transcript all legitimately retained blank space.
+  Restricting the clamp to starts lost by fragment removal or truncation fixed
+  those regressions but missed another real case: a split window starting in
+  surviving transcript just above the Ask card, with the composer offscreen,
+  retained only lines 79--90 in a 39-row window after submission. The current
+  net-tail shrink gate covers both cases without coupling viewport policy to
+  fragment identity. Zone reconciliation and full re-renders capture tail
+  lengths before mutation and clamp after logical and composer restoration.
+  A truncation regression established that clamping before logical restoration
+  lets the latter undo the correction. The six original reader assertions
+  remain unchanged.
+
+  One backward `vertical-motion` computes the last page only when a restored
+  tail shrank; starts at `point-min` skip it. Equal-length reflow alone does not
+  trigger this character-count gate. Cached `window-end` cannot safely gate
+  this calculation because mutations and `set-window-start` leave it stale.
+  Visual spinner frames only change display properties and do not traverse
+  this path. A separate graphical probe with wrapped text and a 1.5-height face
+  kept the buffer end visible and the composer at row 33 in a 34-row window
+  after submission.
+
 - **Grace period for finished rows (2026-10).** Finished rows first left the
   panel at once, since the transcript notice takes over. The user asked for a
   short grace period, as Claude Code keeps finished agents for 30 s, restarted
   whenever the pointer leaves the panel. Ten seconds was chosen: the notice is
   the durable record, so the panel only needs to show what just ended at a glance.
 
-Anchoring costs about 41 µs per displayed window per mutation (compiled, 20-row
-window), dominated by `vertical-motion`; the rail's no-op render about 7 µs and
-its once-per-second elapsed update about 41 µs; spinner ticks are unchanged.
-Graphical variable-height content was not measured separately.
+The original terminal benchmark measured anchoring at about 41 µs per displayed
+window per mutation (compiled, 20-row window), dominated by `vertical-motion`;
+the rail's no-op render about 7 µs and its once-per-second elapsed update about
+41 µs. Those measurements predate the last-page clamp. Visual spinner frames
+are unchanged.
+
+A compiled graphical probe of the net-tail rule (20-row window, medians of
+seven batches of 10,000 calls) measured unchanged-tail capture/check at 0.32 µs
+and a forced shrink calculation at 115 µs. Anchoring alone and anchoring plus
+the unchanged-tail check both measured about 382 µs; their difference was below
+the probe's noise. These graphical timings are not comparable to the earlier
+terminal baseline. Ordinary no-op and growing-tail updates do not pay for the
+last-page display-row calculation.
