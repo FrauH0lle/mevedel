@@ -53,4 +53,11 @@ whole form and the transcript above it.
 - A short open question leaves blank space above Submit, up to the height of
   the tallest open question.
 - Reserved rows are computed by following `word-wrap` over the rendered
-  questions at the window width, once per width.
+  questions at the width a wrapped row holds, once per width. Without a right
+  fringe, as on a terminal, the last column carries the continuation glyph, so
+  that width is one less than the window's. Counting the full width let a row
+  that exactly filled a 100-column terminal count as one row while it wrapped
+  to two: with two such option descriptions in one question, opening it made
+  the form 2 rows taller than any other question, measured as 19 against 17
+  rows. Across realistic descriptions at widths 50-160, about 4% of wrapped
+  lines change their row count between the two widths.

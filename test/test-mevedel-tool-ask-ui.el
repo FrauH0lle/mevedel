@@ -544,7 +544,54 @@ A panel row is a line whose text sits on the source block face."
         ;; Every layout, the last with nothing open, has the same height.
         (should (with-current-buffer view-buffer
                   (eq 'submit (get-text-property (point) 'mevedel-ask-entry))))
-        (should (= 1 (length (delete-dups heights))))))))
+        (should (= 1 (length (delete-dups heights)))))))
+
+  :doc "a row filling a terminal window wraps there, and the height still holds"
+  (test-mevedel-tool-ask-ui--with-form
+    (let* ((width (window-body-width))
+           ;; Option descriptions start ten columns in; fill the row exactly.
+           (description
+            (let ((words (string-trim-right
+                          (substring (apply #'concat (make-list width "word "))
+                                     0 (- width 15)))))
+              (concat words (make-string (- width 10 (length words)) ?x))))
+           (screen-rows
+            (lambda ()
+              (with-current-buffer view-buffer
+                (count-screen-lines (overlay-start registered-overlay)
+                                    (overlay-end registered-overlay)))))
+           heights)
+      (should-not (display-graphic-p))
+      (test-mevedel-tool-ask-ui--show
+       #'ignore
+       (vector (list :question "Full-width descriptions?"
+                     :options (vector (list :label "One" :description description)
+                                      (list :label "Two" :description description)))
+               '(:question "Plain?"
+                 :options [(:label "Alpha" :description "a")
+                           (:label "Beta" :description "b")
+                           (:label "Gamma" :description "c")
+                           (:label "Delta" :description "d")])))
+      (push (funcall screen-rows) heights)
+      (dolist (key '("TAB" "<backtab>"))
+        (call-interactively (lookup-key rendered-keymap (kbd key)))
+        (push (funcall screen-rows) heights))
+      (should (= 1 (length (delete-dups heights)))))))
+
+(mevedel-deftest mevedel-tool-ask-ui--wrap-width ()
+  ,test
+  (test)
+  :doc "a window without a right fringe loses the continuation column"
+  (test-mevedel-tool-ask-ui--with-form
+    (let ((state (mevedel-tool-ask-ui--state-create :chat-buffer view-buffer)))
+      (should (= (1- (window-body-width))
+                 (mevedel-tool-ask-ui--wrap-width state)))
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+                ((symbol-function 'window-fringes) (lambda (&rest _) '(8 8 nil nil))))
+        (should (= (window-body-width) (mevedel-tool-ask-ui--wrap-width state)))
+        (let ((overflow-newline-into-fringe nil))
+          (should (= (1- (window-body-width))
+                     (mevedel-tool-ask-ui--wrap-width state))))))))
 
 
 (mevedel-deftest mevedel-tool-ask-ui--closed-heading ()

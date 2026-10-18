@@ -413,6 +413,20 @@ samples scroll with \\`C-v' and \\`M-v'."
       (window-body-width window)
     (frame-width)))
 
+(defun mevedel-tool-ask-ui--wrap-width (state)
+  "Return the text columns a wrapped row of STATE's form holds.
+Without a right fringe, as on a terminal, the last column carries the
+continuation glyph, so a row that fills the window width wraps."
+  (let ((window (get-buffer-window
+                 (mevedel-tool-ask-ui--state-chat-buffer state) t))
+        (width (mevedel-tool-ask-ui--form-width state)))
+    (if (and window
+             (display-graphic-p (window-frame window))
+             overflow-newline-into-fringe
+             (> (or (nth 1 (window-fringes window)) 0) 0))
+        width
+      (1- width))))
+
 (defun mevedel-tool-ask-ui--wrap-sample-line (line width)
   "Split fontified LINE into rows at WIDTH, marking continuation rows.
 Prefer whitespace boundaries, preserving all text and its properties.
@@ -915,7 +929,7 @@ continuation row starts with the line's `wrap-prefix'."
 That is the tallest its questions get with any one of them open or
 none, so opening and answering never change the form's height.  Cached
 per width."
-  (let ((width (mevedel-tool-ask-ui--form-width state))
+  (let ((width (mevedel-tool-ask-ui--wrap-width state))
         (cached (mevedel-tool-ask-ui--state-height state)))
     (if (eql (car cached) width)
         (cdr cached)
@@ -943,7 +957,7 @@ Submit and the hints keep theirs at the bottom."
   (let* ((questions (mevedel-tool-ask-ui--form-questions state))
          (gap (- (mevedel-tool-ask-ui--reserved-rows state)
                  (mevedel-tool-ask-ui--text-rows
-                  questions (mevedel-tool-ask-ui--form-width state))))
+                  questions (mevedel-tool-ask-ui--wrap-width state))))
          (body
           (concat
            questions
