@@ -623,5 +623,73 @@
                                  (buffer-substring-no-properties
                                   (plist-get next :start) (plist-get next :end)))))))))
 
+(defun mevedel-batch-test--turn-ids ()
+  "Return rendered turn ids before the composer, in buffer order."
+  (let ((pos (point-min)) (limit (mevedel-view--input-marker-position)) ids)
+    (while (< pos limit)
+      (when-let* ((id (get-text-property pos 'mevedel-view-turn-id)))
+        (unless (eq id (car ids)) (push id ids)))
+      (setq pos (or (next-single-property-change pos 'mevedel-view-turn-id nil limit)
+                    limit)))
+    (nreverse ids)))
+
+(defun mevedel-batch-test--append-fork-record (data-buf)
+  "Append a settled fork-point record to DATA-BUF as a save does."
+  (with-current-buffer data-buf
+    (save-excursion
+      (goto-char (point-max))
+      (insert (mevedel--format-hook-audit-record
+               (list :type 'fork-point :fork-point-id "fp-test" :segment 1
+                     :turn 6 :file-turn 6 :cum-turn 6 :captured-file-turn 6))))))
+
+(mevedel-deftest mevedel-view-render-refresh-latest-turn ()
+  ,test
+  (test)
+  :doc "re-renders only the newest turn so its source covers appended metadata"
+  (mevedel-batch-test--with-history
+    (let ((text (buffer-substring-no-properties (point-min) (point-max)))
+          (ids (mevedel-batch-test--turn-ids))
+          full)
+      (mevedel-batch-test--append-fork-record data-buf)
+      (cl-letf (((symbol-function 'mevedel-view-rerender)
+                 (lambda (&rest _) (setq full t))))
+        (mevedel-view-render-refresh-latest-turn data-buf))
+      (should-not full)
+      (should-not mevedel-view-render--batch)
+      (should (equal text (buffer-substring-no-properties (point-min) (point-max))))
+      ;; Earlier turns keep their rendered text; the newest keeps its identity.
+      (should (equal ids (mevedel-batch-test--turn-ids)))
+      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+      (should (= (point) (+ (mevedel-view--input-start) 4)))
+      (goto-char (point-min))
+      (search-forward "Response 5")
+      (let* ((turn-start (car (mevedel-view-disclosure-section-bounds
+                               'mevedel-view-turn-id)))
+             (source (get-text-property turn-start 'mevedel-view-source)))
+        (should (= (cdr source) (with-current-buffer data-buf (point-max)))))))
+  :doc "schedules a full projection when the tail is no longer the newest turn"
+  (mevedel-batch-test--with-history
+    (let (full)
+      (mevedel-view-test--insert-data data-buf "Prompt 6\n" nil)
+      (mevedel-view-test--insert-data data-buf "Response 6.\n" 'response)
+      (cl-letf (((symbol-function 'mevedel-view-rerender)
+                 (lambda (&rest _) (setq full t))))
+        (mevedel-view-render-refresh-latest-turn data-buf))
+      (should full)
+      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))
+  :doc "leaves an in-progress history job to revalidate the changed source"
+  (mevedel-batch-test--with-history
+    (let (full)
+      (mevedel-batch-test--start-projection view-buf)
+      (mevedel-batch-test--append-fork-record data-buf)
+      (cl-letf (((symbol-function 'mevedel-view-rerender)
+                 (lambda (&rest _) (setq full t))))
+        (mevedel-view-render-refresh-latest-turn data-buf))
+      (should-not full)
+      (should mevedel-view-render--batch)
+      (cl-loop repeat 100 while mevedel-view-render--batch do
+        (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+      (should-not (string-search "Loading conversation turn" (buffer-string))))))
+
 (provide 'test-mevedel-view-render-batch)
 ;;; test-mevedel-view-render-batch.el ends here

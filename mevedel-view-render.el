@@ -251,6 +251,7 @@
 (declare-function mevedel-view--render-status
                   "mevedel-view" (&optional data-buf))
 (declare-function mevedel-view--unattended-p "mevedel-view" (&optional buffer))
+(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (defvar mevedel-view--display-map)
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-marker)
@@ -8469,6 +8470,39 @@ turns may follow in callbacks."
       (set-marker-insertion-type start t)
       (set-marker-insertion-type end nil))))
 
+(defun mevedel-view-render--replace-turn (data plan turn pos)
+  "Re-render TURN from DATA under PLAN in place of the rendered turn at POS.
+PLAN supplies the source restriction, session and variants, as a turn
+context does.  Preserve reader, composer and disclosure state.  Return
+non-nil on success; nil leaves the old rendering in place."
+  (let* ((bounds (save-excursion
+                   (goto-char pos)
+                   (mevedel-view-disclosure-section-bounds
+                    'mevedel-view-turn-id)))
+         (from (copy-marker (car bounds)))
+         (to (copy-marker (cdr bounds)))
+         (copy (copy-sequence turn))
+         (job (list :data data :plan plan
+                    :index (make-hash-table :test #'eq)
+                    :audits (make-hash-table :test #'equal)
+                    :states (mevedel-view-disclosure-capture-state from to))))
+    (setf (plist-get copy :render-id)
+          (get-text-property pos 'mevedel-view-turn-id))
+    (unwind-protect
+        (condition-case err
+            (progn
+              (mevedel-view--call-preserving-user-view-state
+               (lambda ()
+                 (atomic-change-group
+                   (mevedel-view-render--batch-turn
+                    job (list copy from to)))))
+              t)
+          (error
+           (mevedel-view--debug-log 'local-render-recovery :error err)
+           nil))
+      (set-marker from nil)
+      (set-marker to nil))))
+
 (defun mevedel-view-render--refresh-source (data start end)
   "Refresh the rendered turn containing DATA's START..END, if still current.
 Return non-nil on success.  The caller already owns view mutation.  A source
@@ -8486,36 +8520,75 @@ change or missing context leaves the existing full-history fallback in charge."
                        (eql tick (plist-get context :tick))
                        (<= (plist-get turn :start) start end
                            (plist-get turn :end)))
-              (let* ((bounds (save-excursion
-                               (goto-char pos)
-                               (mevedel-view-disclosure-section-bounds
-                                'mevedel-view-turn-id)))
-                     (from (copy-marker (car bounds)))
-                     (to (copy-marker (cdr bounds)))
-                     (copy (copy-sequence turn))
-                     (job (list :data data :plan context
-                                :index (make-hash-table :test #'eq)
-                                :audits (make-hash-table :test #'equal)
-                                :states (mevedel-view-disclosure-capture-state from to))))
-                (setf (plist-get copy :render-id)
-                      (get-text-property pos 'mevedel-view-turn-id))
-                (unwind-protect
-                    (throw 'refreshed
-                           (condition-case err
-                               (progn
-                                 (mevedel-view--call-preserving-user-view-state
-                                  (lambda ()
-                                    (atomic-change-group
-                                      (mevedel-view-render--batch-turn
-                                       job (list copy from to)))))
-                                 t)
-                             (error
-                              (mevedel-view--debug-log 'local-render-recovery :error err)
-                              nil)))
-                  (set-marker from nil)
-                  (set-marker to nil))))
+              (throw 'refreshed
+                     (mevedel-view-render--replace-turn data context turn pos)))
             (setq pos (next-single-property-change
                        pos 'mevedel-view-turn-context nil limit))))))))
+
+(defun mevedel-view-render--last-turn-position ()
+  "Return the start of the last rendered turn before the composer, or nil."
+  (let ((pos (mevedel-view--input-marker-position))
+        found)
+    (while (and (not found) pos (> pos (point-min)))
+      (setq pos (previous-single-property-change
+                 pos 'mevedel-view-turn-context nil (point-min)))
+      (when (get-text-property pos 'mevedel-view-turn-context)
+        (setq found pos)))
+    found))
+
+(defun mevedel-view-render--refresh-latest-turn-now (data)
+  "Re-render DATA's newest assistant turn through DATA's end.
+Return non-nil when the view is current afterwards; nil asks for a full
+projection.  The caller owns view mutation."
+  (cond
+   ((not (buffer-live-p data)) t)
+   ;; An archived segment is on display: the live turn is not rendered.
+   ((not (eq data (mevedel-view-segments-display-buffer))) t)
+   ((mevedel-view-stream-in-flight-turn-start-position) nil)
+   (t
+    (when-let* ((pos (mevedel-view-render--last-turn-position))
+                (context (get-text-property pos 'mevedel-view-turn-context))
+                ((eq data (plist-get context :data)))
+                (turn (plist-get context :turn))
+                ((eq (plist-get turn :role) 'assistant))
+                (end (with-current-buffer data (point-max)))
+                ((<= (plist-get turn :end) end))
+                (turns
+                 (with-current-buffer data
+                   (save-restriction
+                     (narrow-to-region (plist-get context :start) end)
+                     (mevedel-view--group-transcript-turns
+                      (mevedel-transcript-segments (plist-get turn :start) end)
+                      data))))
+                (fresh (car turns))
+                ((null (cdr turns)))
+                ((eq (plist-get fresh :role) 'assistant))
+                ((eql (plist-get fresh :start) (plist-get turn :start)))
+                ((equal (plist-get fresh :directive) (plist-get turn :directive))))
+      (let ((plan (copy-sequence context)))
+        (setf (plist-get plan :end) end
+              (plist-get plan :variants)
+              (and (not mevedel-view--agent-transcript-p)
+                   (plist-get (mevedel-view-render--plan-finish
+                               nil nil data mevedel--data-buffer nil)
+                              :variants)))
+        (mevedel-view-render--replace-turn data plan fresh pos))))))
+
+(defun mevedel-view-render-refresh-latest-turn (data)
+  "Re-render the newest assistant turn after settlement appended to DATA.
+Saving a settled turn appends its durable fork-point record after the
+response, outside the coordinates that turn was rendered with.  Only that
+turn needs new source coordinates, so it is rendered again alone instead
+of rebuilding history.  When the newest rendered turn cannot be matched
+to DATA's tail, schedule a full projection instead."
+  ;; A pending history job revalidates the source tick and restarts by
+  ;; itself.  Entering the writer queue would force it to finish now.
+  (unless mevedel-view-render--batch
+    (mevedel-view-render-mutate
+     'latest-turn
+     (lambda ()
+       (unless (mevedel-view-render--refresh-latest-turn-now data)
+         (mevedel-view-rerender (current-buffer)))))))
 
 (defun mevedel-view-render--batch-step (view job)
   "Advance one preparation stage or project one turn of JOB in VIEW."

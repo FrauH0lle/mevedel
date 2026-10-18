@@ -196,8 +196,10 @@
 ;; `mevedel-view'
 (declare-function mevedel-view--ensure
                   "mevedel-view" (data-buf &optional view-name options))
+(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (defvar mevedel-view--abort-function)
 (autoload 'mevedel-view--ensure "mevedel-view")
+(autoload 'mevedel-view-rerender "mevedel-view")
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())

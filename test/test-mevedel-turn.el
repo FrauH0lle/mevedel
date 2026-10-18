@@ -721,6 +721,53 @@
                 (should (stringp (plist-get target :fork-point-id)))
                 (should (= 1 (plist-get target :cum-turn)))))))
       (when (file-directory-p root)
+        (delete-directory root t))))
+  :doc "refreshes only the newest turn instead of rebuilding history"
+  (let ((root (make-temp-file "mevedel-turn-fork-" t)))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (let* ((root-dir (file-name-as-directory root))
+                 (workspace
+                  (mevedel-workspace-get-or-create
+                   'project root-dir root-dir "fork"))
+                 (session (mevedel-session-create "main" workspace))
+                 (fsm (gptel-make-fsm :info (list :buffer data-buf)))
+                 (mevedel-view-rerender-debounce 0)
+                 (draft "> quoted\nsecond line")
+                 full earlier)
+            (setf (mevedel-session-turn-count session) 2)
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session)
+              (insert "*** Earlier prompt\n")
+              (insert (propertize "Earlier response.\n" 'gptel 'response))
+              (insert "*** Prompt\n")
+              (insert (propertize "Settled response.\n" 'gptel 'response)))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session)
+              (mevedel-view--full-rerender)
+              (mevedel-view-test--insert-composer-draft draft 4)
+              (save-excursion
+                (goto-char (point-min))
+                (search-forward "Earlier response.")
+                (setq earlier (get-text-property (point) 'mevedel-view-turn-id))))
+            (cl-letf (((symbol-function 'mevedel-view-render--full-now)
+                       (lambda (&rest _) (setq full t)))
+                      ((symbol-function 'mevedel-view-render--start-batch)
+                       (lambda (&rest _) (setq full t))))
+              (mevedel--run-turn-steps
+               fsm '(mevedel--turn-save mevedel--turn-checkpoint)))
+            (with-current-buffer view-buf
+              (should-not full)
+              (should (equal draft (mevedel-view--input-text)))
+              (should (= (point) (+ (mevedel-view--input-start) 4)))
+              (goto-char (point-min))
+              (search-forward "Earlier response.")
+              (should (eq earlier
+                          (get-text-property (point) 'mevedel-view-turn-id)))
+              (search-forward "Settled response.")
+              (should (= 2 (plist-get (mevedel-view-fork-point-at-point)
+                                      :cum-turn))))))
+      (when (file-directory-p root)
         (delete-directory root t)))))
 
 (mevedel-deftest mevedel--turn-clear-pending-policy ()

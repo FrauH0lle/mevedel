@@ -99,7 +99,10 @@ directive-request setup rollback, an interrupted side answer, and Source's
 refresh after a Session Fork use this scheduler: they only change what is displayed, and nothing after them reads
 view positions. In-flight reconciliation, explicit immediate refreshes, callers
 that read rendered positions, and other writers' correctness fallbacks remain
-synchronous. A large
+synchronous. Saving a settled turn appends its fork-point record after the
+newest response and changes nothing else in the transcript, so the save
+re-renders only that newest assistant turn, regrouped through the new end, and
+falls back to the scheduler when the tail no longer matches it. A large
 individual line, final scanner repair, prompt-first publication, grouped tool
 insertion, and GC can still make a callback exceed its cooperative target. Large
 collapsed tool parsing also has its separate staged preparation lifecycle.
@@ -369,6 +372,18 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### October 2026: refresh only the newest turn after a settled save
+
+July's fork-metadata fix scheduled a full history refresh after every saved
+turn, so a settled reply's source bounds would cover the fork-point record the
+save appends. The save changes nothing else; the old transcript text is an exact
+prefix of the new one. That full refresh ran batched at every turn end: when the
+window showed more than the last reply, one frame showed the previous reply and a
+"Loading conversation turn..." placeholder where the finished reply had been, and
+the rail kept an extra separator line. Re-rendering only the newest turn
+costs 2.0 ms against 153.7 ms for the complete projection of a 40-exchange history
+(compiled, medians of seven), and does not grow with history.
 
 ### October 2026: defer battery initialization out of cold browser restore
 

@@ -248,10 +248,6 @@
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 
-;; `mevedel-view'
-(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
-(autoload 'mevedel-view-rerender "mevedel-view")
-
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-rebuild
                   "mevedel-view-interaction" ())
@@ -261,7 +257,10 @@
 (declare-function mevedel-view--append-request-summary
                   "mevedel-view-render"
                   (data-buf search-start &optional extra))
+(declare-function mevedel-view-render-refresh-latest-turn
+                  "mevedel-view-render" (data))
 (autoload 'mevedel-view--append-request-summary "mevedel-view-render")
+(autoload 'mevedel-view-render-refresh-latest-turn "mevedel-view-render")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -881,7 +880,10 @@ The terminal admission hold stays live between publication and this phase."
              workspace (lambda () (mevedel-memory-pass-schedule workspace))))
           (mevedel-session-collection-schedule mevedel--session)
           (when (buffer-live-p mevedel--view-buffer)
-            (mevedel-view-rerender mevedel--view-buffer)))))))
+            ;; The save appended the turn's fork-point record after the
+            ;; response; only the newest turn needs its new coordinates.
+            (with-current-buffer mevedel--view-buffer
+              (mevedel-view-render-refresh-latest-turn chat-buffer))))))))
 
 (defun mevedel--turn-end-request (fsm)
   "End the active mevedel request for FSM's request buffer."
