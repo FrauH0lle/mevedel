@@ -127,6 +127,60 @@
      '((:namespace interaction :id prompt :body "uvwxyz")))
     (should (eq (char-after) ?x)))
 
+  :doc "preserves point by anchor identity when anchored text before it changes length"
+  (with-temp-buffer
+    (mevedel-view-zone-test--setup-markers)
+    (let ((render
+           (lambda (first)
+             (mevedel-view-zone-reconcile
+              'status (point-min) (point-min)
+              (list (list :namespace 'status :id 'rows
+                          :body (concat
+                                 (propertize first 'mevedel-view-zone-anchor '(row a))
+                                 (propertize "second row\n" 'mevedel-view-zone-anchor '(row b))
+                                 (propertize "[Stop]\n" 'mevedel-view-zone-anchor '(row c)))))))))
+      (funcall render "first\n")
+      (goto-char (point-min))
+      (search-forward "second r")
+      (dolist (first '("a much longer first row\n" "1\n"))
+        (funcall render first)
+        (should (looking-at-p "ow\n"))
+        (should (equal '(row b) (get-text-property (point) 'mevedel-view-zone-anchor))))
+      (ert-info ("a vanished anchor returns to the fragment start, not to other text")
+        (mevedel-view-zone-reconcile
+         'status (point-min) (point-min)
+         (list (list :namespace 'status :id 'rows
+                     :body (propertize "[Stop]\n" 'mevedel-view-zone-anchor '(row c)))))
+        (should (= (point) (plist-get (mevedel-view-zone-fragment-bounds 'status 'rows)
+                                      :start))))))
+
+  :doc "keeps a window start inside a fragment the same screen rows below its start"
+  (save-window-excursion
+    (with-temp-buffer
+      (switch-to-buffer (current-buffer))
+      (insert "> draft")
+      (mevedel-view-zone-test--setup-markers)
+      (let* ((width (window-body-width))
+             (render
+              (lambda (first)
+                (mevedel-view-zone-reconcile
+                 'interaction (point-min) (point-min)
+                 (list (list :namespace 'interaction :id 'form
+                             :body (concat first "row two\nrow three\nrow four\n")))))))
+        (funcall render "one\n")
+        (goto-char (point-max))
+        (let ((bounds (mevedel-view-zone-fragment-bounds 'interaction 'form)))
+          (set-window-start nil (save-excursion
+                                  (goto-char (plist-get bounds :start))
+                                  (forward-line 2)
+                                  (point))))
+        ;; The first line now wraps onto a second screen row.
+        (funcall render (concat (make-string (+ width 10) ?x) "\n"))
+        (should (= 2 (count-screen-lines
+                      (plist-get (mevedel-view-zone-fragment-bounds 'interaction 'form) :start)
+                      (window-start))))
+        (should (equal "> draft" (mevedel-view--input-text))))))
+
   :doc "preserves point at a fragment's final character across redraws"
   (with-temp-buffer
     (mevedel-view-zone-test--setup-markers)
@@ -376,6 +430,52 @@
                   (get-text-property (1- (point)) 'mevedel-view-zone-activate)))
       (should (eq fragment-action
                   (get-text-property (1+ (point)) 'mevedel-view-zone-activate))))))
+
+(mevedel-deftest mevedel-view-zone--anchor-start
+  (:doc "returns the start of the anchor run, bounded by the fragment start")
+  (with-temp-buffer
+    (insert (propertize "aaa" 'mevedel-view-zone-anchor 'a)
+            (propertize "bbbb" 'mevedel-view-zone-anchor 'b))
+    (should (= 4 (mevedel-view-zone--anchor-start 6 'b 1)))
+    (should (= 4 (mevedel-view-zone--anchor-start 4 'b 1)))
+    (should (= 2 (mevedel-view-zone--anchor-start 3 'a 2)))))
+
+(mevedel-deftest mevedel-view-zone--anchor-run
+  (:doc "finds the run whose anchor is equal, not only eq, to the requested one")
+  (with-temp-buffer
+    (insert (propertize "aaa" 'mevedel-view-zone-anchor (list 'row 1))
+            "plain"
+            (propertize "bb" 'mevedel-view-zone-anchor (list 'row 2)))
+    (should (equal '(9 . 11) (mevedel-view-zone--anchor-run (list 'row 2) 1 11)))
+    (should (equal '(1 . 4) (mevedel-view-zone--anchor-run (list 'row 1) 1 11)))
+    (should-not (mevedel-view-zone--anchor-run (list 'row 2) 1 9))
+    (should-not (mevedel-view-zone--anchor-run 'missing 1 11))))
+
+(mevedel-deftest mevedel-view-zone-position-anchor
+  (:doc "returns nil outside zone text; `mevedel-view-zone-anchor-position' resolves the identity after a redraw and returns nil once the fragment is gone")
+  (with-temp-buffer
+    (mevedel-view-zone-test--setup-markers)
+    (let ((render (lambda (first)
+                    (mevedel-view-zone-reconcile
+                     'status (point-min) (point-min)
+                     (list (list :namespace 'status :id 'rows
+                                 :body (concat
+                                        (propertize first 'mevedel-view-zone-anchor 'a)
+                                        (propertize "target\n" 'mevedel-view-zone-anchor 'b))))))))
+      (funcall render "x\n")
+      (goto-char (point-max))
+      (insert "plain text")
+      (should-not (mevedel-view-zone-position-anchor (- (point-max) 2)))
+      (let ((anchor (mevedel-view-zone-position-anchor
+                     (+ 2 (save-excursion (goto-char (point-min))
+                                          (search-forward "target")
+                                          (match-beginning 0))))))
+        (funcall render "a much longer first row\n")
+        (should (equal "rget" (buffer-substring-no-properties
+                               (mevedel-view-zone-anchor-position anchor)
+                               (+ 4 (mevedel-view-zone-anchor-position anchor)))))
+        (mevedel-view-zone-clear 'status)
+        (should-not (mevedel-view-zone-anchor-position anchor))))))
 
 (mevedel-deftest mevedel-view-zone-collapse-state-set-p
   (:doc "reports whether collapse state was explicitly stored")

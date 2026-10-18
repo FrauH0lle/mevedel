@@ -434,6 +434,10 @@ highlighting row ends would join adjacent rows into one hover."
   "Return TEXT displayed with FACE, whether or not font-lock is active."
   (propertize text 'face face 'font-lock-face face))
 
+(defun mevedel-view-execution--anchor (text anchor)
+  "Return TEXT tagged with zone ANCHOR, the identity point keeps across redraws."
+  (propertize text 'mevedel-view-zone-anchor anchor))
+
 (defun mevedel-view-execution--button (text function help)
   "Return link-styled TEXT activating FUNCTION, described by HELP."
   (propertize (mevedel-view-execution--action
@@ -577,27 +581,33 @@ chevron, padded state, padded kind, label, then metadata."
 
 (defun mevedel-view-execution--agent-details (session row)
   "Return expanded model details and controls for SESSION's agent ROW."
-  (let ((path (plist-get row :path)))
+  (let* ((path (plist-get row :path))
+         (key (mevedel-view-execution--key 'agent row)))
     (concat
      (when-let* ((details (mevedel-view-agent-model-details
                            (plist-get row :model-metadata))))
-       (mevedel-view-execution--face
-        (concat (replace-regexp-in-string "^" "    " details) "\n")
-        'mevedel-view-tool-metadata))
-     "    "
-     (mevedel-view-execution--button
-      "[Open transcript]" (mevedel-view-execution--callback 'transcript session path)
-      "RET: open this agent's conversation")
-     (when (plist-get row :tool-use-id)
-       (concat "  " (mevedel-view-execution--button
-                     "[Show in conversation]"
-                     (mevedel-view-execution--callback 'agent-conversation session path)
-                     "RET: show the Agent call that started this agent")))
-     "  "
-     (mevedel-view-execution--button
-      "[Interrupt]" (mevedel-view-execution--callback 'interrupt session path)
-      "RET: interrupt this agent's current turn")
-     "\n")))
+       (mevedel-view-execution--anchor
+        (mevedel-view-execution--face
+         (concat (replace-regexp-in-string "^" "    " details) "\n")
+         'mevedel-view-tool-metadata)
+        (list key 'details)))
+     (mevedel-view-execution--anchor
+      (concat
+       "    "
+       (mevedel-view-execution--button
+        "[Open transcript]" (mevedel-view-execution--callback 'transcript session path)
+        "RET: open this agent's conversation")
+       (when (plist-get row :tool-use-id)
+         (concat "  " (mevedel-view-execution--button
+                       "[Show in conversation]"
+                       (mevedel-view-execution--callback 'agent-conversation session path)
+                       "RET: show the Agent call that started this agent")))
+       "  "
+       (mevedel-view-execution--button
+        "[Interrupt]" (mevedel-view-execution--callback 'interrupt session path)
+        "RET: interrupt this agent's current turn")
+       "\n")
+      (list key 'actions)))))
 
 (defun mevedel-view-execution--preview (snapshot)
   "Return at most three width-bounded preview lines for SNAPSHOT."
@@ -698,31 +708,36 @@ chevron, padded state, padded kind, label, then metadata."
 (defun mevedel-view-execution--details (session snapshot live)
   "Return expanded controls and preview for SESSION's SNAPSHOT.
 LIVE indicates current public live membership, not retained selection state."
-  (concat
-   (mevedel-view-execution--preview snapshot)
-   "    "
-   (mevedel-view-execution--button
-    "[Full output]" (mevedel-view-execution--callback
-                     'output session (plist-get snapshot :owner)
-                     (plist-get snapshot :execution-id))
-    "RET: open the full retained output")
-   "  "
-   (mevedel-view-execution--button
-    "[Show in conversation]"
-    (mevedel-view-execution--callback
-     'conversation session (plist-get snapshot :owner)
-     (plist-get snapshot :execution-id))
-    "RET: show the tool call that started this execution")
-   (when live
-     (concat
-      "  "
-      (mevedel-view-execution--button
-       "[Stop]"
-       (mevedel-view-execution--callback
-        'stop session (plist-get snapshot :owner)
-        (plist-get snapshot :execution-id))
-       "RET: stop this execution")))
-   "\n"))
+  (let ((key (mevedel-view-execution--key 'execution snapshot)))
+    (concat
+     (mevedel-view-execution--anchor (mevedel-view-execution--preview snapshot)
+                                     (list key 'preview))
+     (mevedel-view-execution--anchor
+      (concat
+       "    "
+       (mevedel-view-execution--button
+        "[Full output]" (mevedel-view-execution--callback
+                         'output session (plist-get snapshot :owner)
+                         (plist-get snapshot :execution-id))
+        "RET: open the full retained output")
+       "  "
+       (mevedel-view-execution--button
+        "[Show in conversation]"
+        (mevedel-view-execution--callback
+         'conversation session (plist-get snapshot :owner)
+         (plist-get snapshot :execution-id))
+        "RET: show the tool call that started this execution")
+       (when live
+         (concat
+          "  "
+          (mevedel-view-execution--button
+           "[Stop]"
+           (mevedel-view-execution--callback
+            'stop session (plist-get snapshot :owner)
+            (plist-get snapshot :execution-id))
+           "RET: stop this execution")))
+       "\n")
+      (list key 'actions)))))
 
 (defun mevedel-view-execution--header (session agents live collapsed)
   "Return SESSION's background-work rule for AGENTS and LIVE executions.
@@ -763,28 +778,31 @@ panel's collapse toggle, `[-]' or `[+]' when COLLAPSED."
                 toggle (mevedel-view-execution--callback 'collapse session)
                 (if collapsed "RET: show background work" "RET: hide background work"))
                (substring header (+ start (length toggle))))
-       'mevedel-view-zone-toggle (mevedel-view-execution--callback 'collapse session)))))
+       'mevedel-view-zone-toggle (mevedel-view-execution--callback 'collapse session)
+       'mevedel-view-zone-anchor 'header))))
 
 (defun mevedel-view-execution--controls (session total)
   "Return the panel's last row for SESSION with TOTAL items.
 It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
 `[Manage]', which opens the background-work cockpit."
-  (concat
-   "  "
-   (when (> total mevedel-view-execution--row-limit)
-     (concat (mevedel-view-execution--button
-              (if mevedel-view-execution--show-all
-                  "[Show fewer]"
-                (format "[Show all %d]" total))
-              (mevedel-view-execution--callback 'show-all session)
-              (if mevedel-view-execution--show-all
-                  "RET: list only the first rows"
-                "RET: list every background item here"))
-             "  "))
-   (mevedel-view-execution--button
-    "[Manage]" (mevedel-view-execution--callback 'manage session)
-    "RET: open the background-work cockpit")
-   "\n"))
+  (mevedel-view-execution--anchor
+   (concat
+    "  "
+    (when (> total mevedel-view-execution--row-limit)
+      (concat (mevedel-view-execution--button
+               (if mevedel-view-execution--show-all
+                   "[Show fewer]"
+                 (format "[Show all %d]" total))
+               (mevedel-view-execution--callback 'show-all session)
+               (if mevedel-view-execution--show-all
+                   "RET: list only the first rows"
+                 "RET: list every background item here"))
+              "  "))
+    (mevedel-view-execution--button
+     "[Manage]" (mevedel-view-execution--callback 'manage session)
+     "RET: open the background-work cockpit")
+    "\n")
+   'controls))
 
 (defun mevedel-view-execution-fragment (session)
   "Return SESSION's background-work panel fragment, or nil when idle."
@@ -884,14 +902,20 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
                    (row
                     (cond
                      ((plist-get data :held-p)
-                      (mevedel-view-execution--held-line (car item) data))
+                      (mevedel-view-execution--anchor
+                       (mevedel-view-execution--held-line (car item) data)
+                       (mevedel-view-execution--key (car item) data)))
                      ((eq (car item) 'agent)
-                      (concat (mevedel-view-execution--agent-line session data)
+                      (concat (mevedel-view-execution--anchor
+                               (mevedel-view-execution--agent-line session data)
+                               (mevedel-view-execution--key 'agent data))
                               (when (equal (plist-get data :path)
                                            mevedel-view-execution--selected-agent)
                                 (mevedel-view-execution--agent-details session data))))
                      (t
-                      (concat (mevedel-view-execution--line data)
+                      (concat (mevedel-view-execution--anchor
+                               (mevedel-view-execution--line data)
+                               (mevedel-view-execution--key 'execution data))
                               (when (mevedel-view-execution--same-p
                                      data mevedel-view-execution--selected)
                                 (mevedel-view-execution--details session data selected-live)))))))
