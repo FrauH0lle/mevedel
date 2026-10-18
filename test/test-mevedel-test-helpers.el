@@ -19,6 +19,35 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-engine-test-support"))
 
+(mevedel-deftest mevedel-eask--isolate-test-home
+  (:doc "redirects native caches before a fresh Eask run loads dependencies")
+  (let* ((script (cadr (member "-scriptload" command-line-args)))
+         (cache (make-temp-file "mevedel-test-inherited-eln-" t))
+         (fixture (file-name-concat mevedel-test--worktree-root
+                                    "test/fixtures/eask-startup.el")))
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((default-directory mevedel-test--worktree-root)
+                 (process
+                  (make-process
+                   :name "mevedel-eask-startup" :buffer (current-buffer)
+                   :connection-type 'pipe :sentinel #'ignore :noquery t
+                   :command
+                   (list (expand-file-name invocation-name invocation-directory)
+                         "--batch" "-Q" "--eval"
+                         (prin1-to-string
+                          `(startup-redirect-eln-cache ,cache))
+                         "--script" script fixture))))
+            (with-timeout (60 (delete-process process)
+                             (ert-fail "Eask startup timed out"))
+              (while (process-live-p process)
+                (accept-process-output process 0.05)))
+            (accept-process-output process 0)
+            (ert-info ((buffer-string))
+              (should (zerop (process-exit-status process))))
+            (should-not (directory-files cache nil directory-files-no-dot-files-regexp))))
+      (delete-directory cache t))))
+
 (mevedel-deftest mevedel-deftest
   (:doc "isolates tool registries and cleans up even when a case fails")
   (let ((registry mevedel-tool--registry)
