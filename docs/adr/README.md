@@ -174,3 +174,6 @@ to the decision bearing that ID.
 - [ADR 0126: Keep the composer still](0126-keep-the-composer-still.md): composer
   anchoring, a permanent rail, explicit prompt focus and stable background-work
   rows. No original ADR is replaced.
+
+- [ADR 0127: Open one Ask question at a time](0127-open-one-ask-question-at-a-time.md)
+  shows one open question and one line for each other question.

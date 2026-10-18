@@ -42,8 +42,8 @@ line count, moving the next question by as much on an 80-column window.
 ## Consequences
 
 - Long samples make the form taller, by at most `mevedel-ask-sample-height`
-  rows per question with samples. Answering a question collapses it, panel
-  included.
+  rows: only the open question shows its panel
+  ([ADR 0127](0127-open-one-ask-question-at-a-time.md)).
 - Samples are fontified as Markdown once per form and cached.
 - Wrapping depends on the window width when the form repaints. After a resize,
   rows soft-wrap until the next repaint re-wraps them; no resize hook keeps

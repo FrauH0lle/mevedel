@@ -165,7 +165,7 @@ option its sample panel shows and to the panel's first visible row.
 SAMPLE-CACHE maps sample strings to their fontified lines; SAMPLE-ROWS
 is (WIDTH . TABLE), mapping samples to their rows at WIDTH."
   callback source-buffer origin questions count answers chat-buffer
-  interaction-id overlay expanded
+  interaction-id overlay open
   sample-shown sample-offsets sample-cache sample-rows)
 
 (defvar-local mevedel-tool-ask-ui--states nil
@@ -282,9 +282,20 @@ Custom rows, summaries and Submit name no option."
      (nth option (mevedel-tool-ask-ui--question-options state question)))))
 
 (defun mevedel-tool-ask-ui--question-open-p (state index)
-  "Return non-nil when question INDEX of STATE shows its options."
-  (or (not (aref (mevedel-tool-ask-ui--state-answers state) index))
-      (memq index (mevedel-tool-ask-ui--state-expanded state))))
+  "Return non-nil when question INDEX of STATE shows its options.
+At most one question is open; the others are one line each."
+  (eql index (mevedel-tool-ask-ui--state-open state)))
+
+(defun mevedel-tool-ask-ui--open-question (state index)
+  "Open question INDEX of STATE and put point on its answer or first option.
+Opening is always explicit, so the layout changes only on request."
+  (let ((identity (cons index (or (mevedel-tool-ask-ui--answered-entry
+                                   state index)
+                                  0))))
+    (if (mevedel-tool-ask-ui--question-open-p state index)
+        (mevedel-tool-ask-ui--goto-entry state identity)
+      (setf (mevedel-tool-ask-ui--state-open state) index)
+      (mevedel-tool-ask-ui--refresh state nil identity))))
 
 (defun mevedel-tool-ask-ui--answered-entry (state index)
   "Return the entry selected by question INDEX's answer in STATE."
@@ -392,11 +403,14 @@ samples scroll with \\`C-v' and \\`M-v'."
 
 (defun mevedel-tool-ask-ui--sample-width (state)
   "Return the available sample row width for STATE's view buffer."
-  (max 4 (- (if-let* ((window (get-buffer-window
-                              (mevedel-tool-ask-ui--state-chat-buffer state) t)))
-                (window-body-width window)
-              (frame-width))
-            7)))
+  (max 4 (- (mevedel-tool-ask-ui--form-width state) 7)))
+
+(defun mevedel-tool-ask-ui--form-width (state)
+  "Return the width of a window showing STATE's view, or the frame's."
+  (if-let* ((window (get-buffer-window
+                     (mevedel-tool-ask-ui--state-chat-buffer state) t)))
+      (window-body-width window)
+    (frame-width)))
 
 (defun mevedel-tool-ask-ui--wrap-sample-line (line width)
   "Split fontified LINE into rows at WIDTH, marking continuation rows.
@@ -623,7 +637,9 @@ A settled form ignores every action."
                        (cl-find-if (lambda (head) (< (cddr head) (point)))
                                    (reverse heads))))))
              (when target
-               (mevedel-tool-ask-ui--goto-entry state (cadr target)))))
+               (if (integerp (car target))
+                   (mevedel-tool-ask-ui--open-question state (car target))
+                 (mevedel-tool-ask-ui--goto-entry state (cadr target))))))
           ('focus
            ;; Digits pick among the open question's options, from its
            ;; heading too; the custom row is reached with `c'.
@@ -636,10 +652,7 @@ A settled form ignores every action."
            (cond
             ((eq identity 'submit) (mevedel-tool-ask-ui--dispatch state 'submit))
             ((eq option 'summary)
-             (cl-pushnew question (mevedel-tool-ask-ui--state-expanded state))
-             (mevedel-tool-ask-ui--refresh
-              state nil
-              (cons question (mevedel-tool-ask-ui--answered-entry state question))))
+             (mevedel-tool-ask-ui--open-question state question))
             ((integerp option)
              (if (mevedel-tool-ask-ui--custom-entry-p state question option)
                  (mevedel-tool-ask-ui--dispatch state 'custom)
@@ -661,14 +674,10 @@ A settled form ignores every action."
           ('record
            (pcase-let ((`(,answered . ,answer) value))
              (aset (mevedel-tool-ask-ui--state-answers state) answered answer)
-             (setf (mevedel-tool-ask-ui--state-expanded state)
-                   (delq answered (mevedel-tool-ask-ui--state-expanded state)))
-             (mevedel-tool-ask-ui--refresh
-              state t
-              (if-let* ((next (mevedel-tool-ask-ui--next-unanswered
-                               state answered)))
-                  (cons next 0)
-                'submit))))
+             (let ((next (mevedel-tool-ask-ui--next-unanswered state answered)))
+               (setf (mevedel-tool-ask-ui--state-open state) next)
+               (mevedel-tool-ask-ui--refresh
+                state t (if next (cons next 0) 'submit)))))
           ('submit
            (mevedel--prompt--settle
             (mevedel-tool-ask-ui--state-overlay state)
@@ -781,26 +790,29 @@ A settled form ignores every action."
            (nth index (mevedel-tool-ask-ui--state-questions state))
            :question))
          (answer (aref (mevedel-tool-ask-ui--state-answers state) index))
-         (collapsed (and answer
-                         (not (memq index
-                                    (mevedel-tool-ask-ui--state-expanded state)))))
+         (collapsed (not (mevedel-tool-ask-ui--question-open-p state index)))
+         (gutter
+          (concat
+           (if answer (propertize "✓ " 'font-lock-face 'success) "  ")
+           (propertize (format "%d  " (1+ index)) 'font-lock-face 'bold)))
          (heading
           (propertize
-           (concat
-            (if collapsed (propertize "✓ " 'font-lock-face 'success) "  ")
-            (propertize (format "%d  " (1+ index)) 'font-lock-face 'bold)
-            (propertize
-             (replace-regexp-in-string "\n" "\n     " (format "%s" question) t t)
-             'font-lock-face (if collapsed 'default 'bold))
-            (when collapsed
-              (concat "  → " (propertize answer 'font-lock-face 'success))))
+           (if collapsed
+               (mevedel-tool-ask-ui--closed-heading state gutter question answer)
+             (concat
+              gutter
+              (propertize
+               (replace-regexp-in-string "\n" "\n     " (format "%s" question) t t)
+               'font-lock-face 'bold)))
            'wrap-prefix "     ")))
     (propertize
      (if collapsed
          (concat
           (propertize heading 'mevedel-ask-entry (cons index 'summary)
                       'mouse-face 'highlight
-                      'help-echo "RET or click to edit this answer")
+                      'help-echo
+                      (format "%s\n\nRET or click to %s" question
+                              (if answer "change this answer" "answer")))
           "\n")
        (concat heading "\n"
                (mapconcat
@@ -811,6 +823,23 @@ A settled form ignores every action."
                "\n"
                (mevedel-tool-ask-ui--sample-panel state index)))
      'mevedel-ask-question index)))
+
+(defun mevedel-tool-ask-ui--closed-heading (state gutter question answer)
+  "Return a closed question's one-line heading for STATE.
+GUTTER holds its mark and number.  QUESTION is cut to fit the window,
+with room left for ANSWER when there is one; the full text is in the
+help echo and appears when the question is opened."
+  (let* ((text (string-trim (replace-regexp-in-string
+                             "[ \t\n]+" " " (format "%s" question))))
+         (tail (and answer (concat "  → " answer)))
+         (room (max 20 (- (mevedel-tool-ask-ui--form-width state) 1
+                          (string-width gutter)
+                          (if tail (string-width tail) 0)))))
+    (concat gutter
+            (propertize (truncate-string-to-width text room nil nil "…")
+                        'font-lock-face 'shadow)
+            (when tail
+              (concat "  → " (propertize answer 'font-lock-face 'success))))))
 
 (defun mevedel-tool-ask-ui--footer (state)
   "Return the Ask interaction footer for STATE.
@@ -835,10 +864,19 @@ Question jumps are only advertised when there is another question."
   (let* ((body
           (concat
            "\n"
+           ;; Closed questions stack as a list; a blank line sets off the
+           ;; open one.
            (mapconcat
-            (lambda (index) (mevedel-tool-ask-ui--question-block state index))
+            (lambda (index)
+              (concat
+               (when (and (> index 0)
+                          (or (mevedel-tool-ask-ui--question-open-p state index)
+                              (mevedel-tool-ask-ui--question-open-p
+                               state (1- index))))
+                 "\n")
+               (mevedel-tool-ask-ui--question-block state index)))
             (number-sequence 0 (1- (mevedel-tool-ask-ui--state-count state)))
-            "\n")
+            "")
            "\n"
            (propertize
             (concat
@@ -981,7 +1019,8 @@ changed height, as a re-wrapped sample panel does after a resize."
              (with-current-buffer source-buffer
                (mevedel--prompt--data-buffer)))
             (error "No live view for Ask prompt"))
-           :interaction-id (list :ask (gensym "ask-")))))
+           :interaction-id (list :ask (gensym "ask-"))
+           :open 0)))
     (mevedel-tool-ask-ui--refresh state t)))
 
 (provide 'mevedel-tool-ask-ui)

@@ -746,16 +746,18 @@ WaitAgent adapters. Ask's questionnaire lives in `mevedel-tool-ask-ui.el`; its
 handler, renderer, and schema live in `mevedel-tool-ask.el`. Exact external-path
 authority is part of the normal permission pipeline, not a model-visible tool.
 
-Ask displays unanswered questions together in the interaction zone. Point is
+Ask displays its questions together in the interaction zone, one of them open
+with its options and every other one on a single line, answered ones ending in
+`→ answer` ([ADR 0127](adr/0127-open-one-ask-question-at-a-time.md)). Point is
 the focused entry: `n`/`p`, `C-n`/`C-p`, and the arrow keys move between entries
-without repainting the form; `TAB`/`S-TAB` jump to the next or previous
-question, Submit included; `1`–`9` focus that option of the open question at
-point, from its heading too.
-`RET` or a click chooses the entry, including when point is on its description.
-`c` edits a custom answer in the minibuffer, retaining the previous answer as
-the initial text. Answered questions collapse to summaries; `RET` or a click
-reopens one on its current answer. Choosing an answer advances to the next
-unanswered question, then to the final Submit row. `RET` there or `C-c C-c`
+without repainting the form or opening anything; `TAB`/`S-TAB` open the next or
+previous question, Submit being the last stop; `1`–`9` focus that option of the
+open question, from its heading too.
+`RET` or a click chooses the entry, including when point is on its description,
+and opens a closed question on its current answer. `c` edits a custom answer
+in the minibuffer, retaining the previous answer as the initial text. Choosing
+an answer opens the next unanswered question, then moves to the final Submit
+row. `RET` there or `C-c C-c`
 submits the whole questionnaire; unanswered questions explicitly report no
 preference. `q`/`C-g` cancel only the questionnaire, while `C-c C-k` also aborts
 the run. The form keeps one progress count beside Submit and one keyboard hint

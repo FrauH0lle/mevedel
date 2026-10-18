@@ -201,8 +201,10 @@ A panel row is a line whose text sits on the source block face."
                                     (:label "B" :sample "gamma\n\ndelta")])
       (:question "Second?" :options [(:label "C" :sample "one\n\n\ntwo") "D"])])
     (should (equal (test-mevedel-tool-ask-ui--panel-rows rendered-body)
-                   '("Sample · A" "alpha" "" "omega"
-                     "Sample · C" "one" "" "" "two")))))
+                   '("Sample · A" "alpha" "" "omega")))
+    (call-interactively (lookup-key rendered-keymap (kbd "TAB")))
+    (should (equal (test-mevedel-tool-ask-ui--panel-rows rendered-body)
+                   '("Sample · C" "one" "" "" "two")))))
 
 (mevedel-deftest mevedel-tool-ask-ui--wrap-sample-line-fresh ()
   ,test
@@ -453,12 +455,60 @@ A panel row is a line whose text sits on the source block face."
 (mevedel-deftest mevedel-tool-ask-ui--question-open-p ()
   ,test
   (test)
-  :doc "unanswered and reopened questions are open; answered ones are not"
+  :doc "exactly the question named open is open, answered or not"
   (let ((state (mevedel-tool-ask-ui--state-create
-                :answers (vector nil "A" "B") :expanded '(2))))
-    (should (mevedel-tool-ask-ui--question-open-p state 0))
+                :answers (vector nil "A" "B") :open 2)))
+    (should-not (mevedel-tool-ask-ui--question-open-p state 0))
     (should-not (mevedel-tool-ask-ui--question-open-p state 1))
-    (should (mevedel-tool-ask-ui--question-open-p state 2))))
+    (should (mevedel-tool-ask-ui--question-open-p state 2))
+    (setf (mevedel-tool-ask-ui--state-open state) nil)
+    (should-not (mevedel-tool-ask-ui--question-open-p state 2))))
+
+
+(mevedel-deftest mevedel-tool-ask-ui--open-question ()
+  ,test
+  (test)
+  :doc "opening closes the previous question and lands on the answer or first option"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     #'ignore
+     [(:question "One?" :options ["A" "B"])
+      (:question "Two?" :options ["C" "D"])])
+    (with-current-buffer view-buffer
+      (let ((state (car mevedel-tool-ask-ui--states)))
+        (mevedel-tool-ask-ui--open-question state 1)
+        (should (equal '(1 . 0) (get-text-property (point) 'mevedel-ask-entry)))
+        (should-not (string-match-p "○ 1  A" rendered-body))
+        (should (string-match-p "○ 1  C" rendered-body))
+        ;; Opening the open question again only moves point.
+        (let ((body rendered-body))
+          (mevedel-tool-ask-ui--open-question state 1)
+          (should (eq body rendered-body)))
+        (call-interactively (lookup-key rendered-keymap (kbd "2")))
+        (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+        (mevedel-tool-ask-ui--open-question state 1)
+        (should (equal '(1 . 1) (get-text-property (point) 'mevedel-ask-entry)))))))
+
+
+(mevedel-deftest mevedel-tool-ask-ui--closed-heading ()
+  ,test
+  (test)
+  :doc "a closed question fits one line, keeps its answer whole, and says so on hover"
+  (let ((state (mevedel-tool-ask-ui--state-create)))
+    (cl-letf (((symbol-function 'mevedel-tool-ask-ui--form-width) (lambda (_) 40)))
+      (let ((line (mevedel-tool-ask-ui--closed-heading
+                   state "  1  " "A long question\nthat wraps onto two lines?" nil)))
+        (should (<= (string-width line) 39))
+        (should (string-suffix-p "…" line))
+        (should-not (string-search "\n" line)))
+      (let ((line (mevedel-tool-ask-ui--closed-heading
+                   state "✓ 1  " "A long question that needs cutting?" "Yes")))
+        (should (string-suffix-p "→ Yes" line))
+        (should (<= (string-width line) 39)))
+      (should (equal "  1  Short?"
+                     (substring-no-properties
+                      (mevedel-tool-ask-ui--closed-heading
+                       state "  1  " "Short?" nil)))))))
 
 
 (mevedel-deftest mevedel-tool-ask-ui--refresh ()
@@ -478,15 +528,16 @@ A panel row is a line whose text sits on the source block face."
            :options [(:label "A" :sample "a") (:label "B" :sample "b")])])
         (with-current-buffer view-buffer
           (let ((state (car mevedel-tool-ask-ui--states)))
-            (mevedel-tool-ask-ui--goto-entry state '(1 . 0))
-            ;; The window narrows: the first panel now wraps into more rows
-            ;; above point.  Reaching B repaints the form.
+            ;; Point is on the closed second question, below the open
+            ;; first question's panel.
+            (mevedel-tool-ask-ui--goto-entry state '(1 . summary))
+            ;; The window narrows: that panel now wraps into more rows
+            ;; above point.
             (setq width 20)
-            (call-interactively (lookup-key rendered-keymap (kbd "n")))
-            (should (equal '(1 . 1) (get-text-property (point) 'mevedel-ask-entry)))
-            (should (eq (char-after) ?○))
-            (should (member "Sample · B" (test-mevedel-tool-ask-ui--panel-rows
-                                          rendered-body))))))))
+            (mevedel-tool-ask-ui--refresh state)
+            (should (equal '(1 . summary)
+                           (get-text-property (point) 'mevedel-ask-entry)))
+            (should (looking-at-p "2  Second")))))))
 
   :doc "a settled form is never repainted"
   (test-mevedel-tool-ask-ui--with-form
@@ -584,7 +635,7 @@ A panel row is a line whose text sits on the source block face."
 (mevedel-deftest mevedel-tool-ask-ui--dispatch ()
   ,test
   (test)
-  :doc "TAB and S-TAB jump between questions and Submit without repainting"
+  :doc "TAB and S-TAB open the next or previous question; Submit is the last stop"
   (test-mevedel-tool-ask-ui--with-form
     (mevedel-tool-ask-ui-show
      #'ignore
@@ -592,19 +643,25 @@ A panel row is a line whose text sits on the source block face."
       (:question "Two?" :options [(:label "C" :description "Sea") "D"])
       (:question "Three?" :options ["E"])])
     (should (string-match-p "TAB question" rendered-body))
+    ;; Closed questions stack without blank lines between them.
+    (should (string-match-p "  2  Two\\?\n  3  Three\\?\n" rendered-body))
     (with-current-buffer view-buffer
-      (let ((tick (buffer-chars-modified-tick))
-            (entry (lambda () (get-text-property (point) 'mevedel-ask-entry)))
-            (key (lambda (keys)
-                   (call-interactively (lookup-key rendered-keymap (kbd keys))))))
+      (let* ((entry (lambda () (get-text-property (point) 'mevedel-ask-entry)))
+             (key (lambda (keys)
+                    (call-interactively (lookup-key rendered-keymap (kbd keys)))))
+             (open (lambda () (mevedel-tool-ask-ui--state-open
+                               (car mevedel-tool-ask-ui--states)))))
         (funcall key "TAB")
         (should (equal '(1 . 0) (funcall entry)))
+        (should (eql 1 (funcall open)))
         ;; From inside a question's description, TAB still means "next".
         (search-forward "Sea")
         (funcall key "TAB")
         (should (equal '(2 . 0) (funcall entry)))
         (funcall key "TAB")
         (should (eq 'submit (funcall entry)))
+        ;; Reaching Submit leaves the last question open.
+        (should (eql 2 (funcall open)))
         ;; Submit is the last stop.
         (funcall key "TAB")
         (should (eq 'submit (funcall entry)))
@@ -613,9 +670,29 @@ A panel row is a line whose text sits on the source block face."
         (funcall key "<backtab>")
         (funcall key "<backtab>")
         (should (equal '(0 . 0) (funcall entry)))
+        (should (eql 0 (funcall open)))
         (funcall key "<backtab>")
-        (should (equal '(0 . 0) (funcall entry)))
-        (should (= tick (buffer-chars-modified-tick))))))
+        (should (equal '(0 . 0) (funcall entry))))))
+
+  :doc "moving onto a closed question never opens it; RET or a click does"
+  (test-mevedel-tool-ask-ui--with-form
+    (mevedel-tool-ask-ui-show
+     #'ignore
+     [(:question "One?" :options ["A"])
+      (:question "Two?" :options ["C" "D"])])
+    (with-current-buffer view-buffer
+      (let ((tick (buffer-chars-modified-tick)))
+        (dolist (key '("n" "n"))
+          (call-interactively (lookup-key rendered-keymap (kbd key))))
+        (should (equal '(1 . summary) (get-text-property (point) 'mevedel-ask-entry)))
+        (should (= tick (buffer-chars-modified-tick)))
+        ;; Digits and `c' act only inside the open question.
+        (call-interactively (lookup-key rendered-keymap (kbd "2")))
+        (should (equal '(1 . summary) (get-text-property (point) 'mevedel-ask-entry)))
+        (should (= tick (buffer-chars-modified-tick)))
+        (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+        (should (equal '(1 . 0) (get-text-property (point) 'mevedel-ask-entry)))
+        (should (string-match-p "○ 1  C" rendered-body)))))
 
   :doc "a single question does not advertise question jumps"
   (test-mevedel-tool-ask-ui--with-form
