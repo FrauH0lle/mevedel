@@ -47,6 +47,19 @@ registered-overlay and result for questionnaire assertions."
            (with-current-buffer data-buffer
              ,@body))))))
 
+(defun test-mevedel-tool-ask-ui--show (callback questions)
+  "Show QUESTIONS like `mevedel-tool-ask-ui-show', then visit them.
+A new prompt never moves point, so the user visits it with \\`C-c C-j';
+do the same when the selected window shows the prompt's view, including
+the `post-command-hook' that follows the command."
+  (mevedel-tool-ask-ui-show callback questions)
+  (when-let* ((view (mevedel-view--interaction-target-buffer
+                     (mevedel--prompt--data-buffer)))
+              ((eq (window-buffer (selected-window)) view)))
+    (with-current-buffer view
+      (mevedel-view-jump-to-interaction)
+      (run-hooks 'post-command-hook))))
+
 (defun test-mevedel-tool-ask-ui--panel-rows (body)
   "Return BODY's sample panel rows as trimmed strings, top to bottom.
 A panel row is a line whose text sits on the source block face."
@@ -146,7 +159,7 @@ A panel row is a line whose text sits on the source block face."
   (test)
   :doc "panel width uses the view window and falls back to frame width"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show #'ignore [(:question "Q" :options ["A"])])
+    (test-mevedel-tool-ask-ui--show #'ignore [(:question "Q" :options ["A"])])
     (with-current-buffer view-buffer
       (let ((state (car mevedel-tool-ask-ui--states)))
         (should (= (mevedel-tool-ask-ui--sample-width state)
@@ -195,7 +208,7 @@ A panel row is a line whose text sits on the source block face."
 
   :doc "a form whose samples contain blank lines opens and shows them"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      #'ignore
      [(:question "First?" :options [(:label "A" :sample "alpha\n\nomega")
                                     (:label "B" :sample "gamma\n\ndelta")])
@@ -221,7 +234,7 @@ A panel row is a line whose text sits on the source block face."
   (test)
   :doc "a question's panel is as tall as its longest sample and follows sample-bearing options at point"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      (lambda (value) (setq result value))
      [(:question "Which file?"
        :options [(:label "Project" :sample "# Project\n- one\n- two\n")
@@ -263,7 +276,7 @@ A panel row is a line whose text sits on the source block face."
     (let ((mevedel-ask-sample-height 3))
       (cl-letf (((symbol-function 'mevedel-tool-ask-ui--sample-width)
                  (lambda (_) 40)))
-        (mevedel-tool-ask-ui-show
+        (test-mevedel-tool-ask-ui--show
          #'ignore
          (vector (list :question "Which?"
                        :options (vector (list :label (make-string 60 ?L)
@@ -291,7 +304,7 @@ A panel row is a line whose text sits on the source block face."
   (test-mevedel-tool-ask-ui--with-form
     (with-current-buffer view-buffer
       (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      #'ignore
      [(:question "Which?" :options [(:label "A" :sample "a") (:label "B" :sample "b")])])
     (with-current-buffer view-buffer
@@ -310,7 +323,7 @@ A panel row is a line whose text sits on the source block face."
   :doc "an overflowing panel pages with C-v and M-v and keeps point on its option"
   (test-mevedel-tool-ask-ui--with-form
     (let ((mevedel-ask-sample-height 3))
-      (mevedel-tool-ask-ui-show
+      (test-mevedel-tool-ask-ui--show
        #'ignore
        [(:question "Which?" :options [(:label "Long" :sample "a\nb\nc\nd\ne\nf")
                                       "Plain"])])
@@ -339,7 +352,7 @@ A panel row is a line whose text sits on the source block face."
                  (lambda () (interactive) (push 'up scrolled)))
                 ((symbol-function 'scroll-down-command)
                  (lambda () (interactive) (push 'down scrolled))))
-        (mevedel-tool-ask-ui-show
+        (test-mevedel-tool-ask-ui--show
          #'ignore
          [(:question "Which?" :options [(:label "Long" :sample "a\nb\nc\nd")])])
         (call-interactively (lookup-key rendered-keymap (kbd "RET")))
@@ -358,7 +371,7 @@ A panel row is a line whose text sits on the source block face."
                  (lambda () (interactive) (push 'up scrolled)))
                 ((symbol-function 'scroll-down-command)
                  (lambda () (interactive) (push 'down scrolled))))
-        (mevedel-tool-ask-ui-show
+        (test-mevedel-tool-ask-ui--show
          #'ignore
          [(:question "Which?" :options [(:label "Short" :sample "a") "Plain"])
           (:question "Second?" :options ["Yes" "No"])])
@@ -374,7 +387,7 @@ A panel row is a line whose text sits on the source block face."
   (test)
   :doc "entry identity covers descriptions and custom input, but not adjacent prose"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      #'ignore
      [(:question "Choose a layout\nwith room for a long description?"
        :options [(:label "Compact" :description "First line\nSecond line")
@@ -416,7 +429,7 @@ A panel row is a line whose text sits on the source block face."
     (let (focused)
       (cl-letf (((symbol-function 'mevedel-tool-ask-ui--sync-sample)
                  (lambda (_state entry) (push entry focused))))
-        (mevedel-tool-ask-ui-show
+        (test-mevedel-tool-ask-ui--show
          #'ignore
          [(:question "Layout?"
            :options [(:label "Compact" :description "A long description") "Spacious"])])
@@ -470,7 +483,7 @@ A panel row is a line whose text sits on the source block face."
   (test)
   :doc "opening closes the previous question and lands on the answer or first option"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      #'ignore
      [(:question "One?" :options ["A" "B"])
       (:question "Two?" :options ["C" "D"])])
@@ -528,7 +541,7 @@ A panel row is a line whose text sits on the source block face."
     (let ((width 60))
       (cl-letf (((symbol-function 'mevedel-tool-ask-ui--sample-width)
                  (lambda (_state) width)))
-        (mevedel-tool-ask-ui-show
+        (test-mevedel-tool-ask-ui--show
          #'ignore
          [(:question "First?"
            :options [(:label "Wide" :sample "one two three four five six seven eight nine ten eleven")
@@ -550,7 +563,7 @@ A panel row is a line whose text sits on the source block face."
 
   :doc "a settled form is never repainted"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show #'ignore [(:question "First?" :options ["A"])])
+    (test-mevedel-tool-ask-ui--show #'ignore [(:question "First?" :options ["A"])])
     (let ((state (with-current-buffer view-buffer (car mevedel-tool-ask-ui--states)))
           (registrations 0))
       (mevedel--prompt--settle registered-overlay 'aborted)
@@ -564,7 +577,7 @@ A panel row is a line whose text sits on the source block face."
     (let ((width 60))
       (cl-letf (((symbol-function 'mevedel-tool-ask-ui--sample-width)
                  (lambda (_state) width)))
-        (mevedel-tool-ask-ui-show
+        (test-mevedel-tool-ask-ui--show
          #'ignore
          [(:question "First?"
            :options [(:label "Wide" :sample "one two three four five six seven eight nine ten eleven")
@@ -585,7 +598,7 @@ A panel row is a line whose text sits on the source block face."
   (test)
   :doc "entries anchor at their glyph, headings and panels at their block, prose nowhere"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      #'ignore
      [(:question "First?" :options [(:label "A" :sample "alpha")])])
     (with-current-buffer view-buffer
@@ -609,9 +622,9 @@ A panel row is a line whose text sits on the source block face."
   (test)
   :doc "settling concurrent forms removes only their own motion tracking"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show #'ignore [(:question "First?" :options ["Yes"])])
+    (test-mevedel-tool-ask-ui--show #'ignore [(:question "First?" :options ["Yes"])])
     (let ((first registered-overlay))
-      (mevedel-tool-ask-ui-show #'ignore [(:question "Second?" :options ["Yes"])])
+      (test-mevedel-tool-ask-ui--show #'ignore [(:question "Second?" :options ["Yes"])])
       (with-current-buffer view-buffer
         (should (= 2 (length mevedel-tool-ask-ui--states)))
         (mevedel--prompt--settle first 'aborted)
@@ -628,7 +641,7 @@ A panel row is a line whose text sits on the source block face."
   (test)
   :doc "each question's first entry in form order, an answer's summary included, then Submit"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      #'ignore
      [(:question "One?" :options ["A" "B"])
       (:question "Two?" :options ["C" "D"])])
@@ -646,7 +659,7 @@ A panel row is a line whose text sits on the source block face."
   (test)
   :doc "TAB and S-TAB open the next or previous question; Submit is the last stop"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      #'ignore
      [(:question "One?" :options ["A" "B"])
       (:question "Two?" :options [(:label "C" :description "Sea") "D"])
@@ -685,7 +698,7 @@ A panel row is a line whose text sits on the source block face."
 
   :doc "moving onto a closed question never opens it; RET or a click does"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      #'ignore
      [(:question "One?" :options ["A"])
       (:question "Two?" :options ["C" "D"])])
@@ -705,12 +718,12 @@ A panel row is a line whose text sits on the source block face."
 
   :doc "a single question does not advertise question jumps"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show #'ignore [(:question "One?" :options ["A" "B"])])
+    (test-mevedel-tool-ask-ui--show #'ignore [(:question "One?" :options ["A" "B"])])
     (should-not (string-match-p "TAB" rendered-body)))
 
   :doc "navigation never repaints and RET on a description answers its own row"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      (lambda (value) (setq result value))
      [(:question "Layout?"
        :options [(:label "Compact" :description "Dense text")
@@ -737,7 +750,7 @@ A panel row is a line whose text sits on the source block face."
 
   :doc "custom answer drafts survive reopening and blank edits leave answers intact"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      (lambda (value) (setq result value))
      [(:question "Layout?" :options ["Compact" "Spacious"])])
     (let (initial)
@@ -763,7 +776,7 @@ A panel row is a line whose text sits on the source block face."
   :doc "a custom answer that returns after the form was settled changes nothing"
   (test-mevedel-tool-ask-ui--with-form
     (let ((settled 0))
-      (mevedel-tool-ask-ui-show
+      (test-mevedel-tool-ask-ui--show
        (lambda (_value) (cl-incf settled))
        [(:question "Layout?" :options ["Compact" "Spacious"])
         (:question "Colour?" :options ["Red" "Blue"])])
@@ -783,7 +796,7 @@ A panel row is a line whose text sits on the source block face."
 
   :doc "n from the start of a row moves to the next row"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show #'ignore [(:question "Layout?" :options ["A" "B"])])
+    (test-mevedel-tool-ask-ui--show #'ignore [(:question "Layout?" :options ["A" "B"])])
     (with-current-buffer view-buffer
       (beginning-of-line)
       (should (equal '(0 . 0) (get-text-property (point) 'mevedel-ask-entry)))
@@ -795,7 +808,7 @@ A panel row is a line whose text sits on the source block face."
 
   :doc "digits focus options from the heading but never the custom row"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show #'ignore [(:question "Layout?" :options ["A" "B"])])
+    (test-mevedel-tool-ask-ui--show #'ignore [(:question "Layout?" :options ["A" "B"])])
     (with-current-buffer view-buffer
       (search-backward "Layout?")
       (call-interactively (lookup-key rendered-keymap (kbd "2")))
@@ -805,7 +818,7 @@ A panel row is a line whose text sits on the source block face."
 
   :doc "mouse activation selects the clicked row rather than the previous point"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      (lambda (value) (setq result value))
      [(:question "Layout?" :options ["Compact" "Spacious"])])
     (with-current-buffer view-buffer
@@ -822,7 +835,7 @@ A panel row is a line whose text sits on the source block face."
   (test-mevedel-tool-ask-ui--with-form
     (with-current-buffer view-buffer
       (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      #'ignore [(:question "Layout?" :options ["Compact" "Spacious"])])
     (call-interactively (lookup-key rendered-keymap (kbd "RET")))
     (with-current-buffer view-buffer
@@ -836,9 +849,19 @@ A panel row is a line whose text sits on the source block face."
 (mevedel-deftest mevedel-tool-ask-ui-show ()
   ,test
   (test)
+  :doc "an arriving form leaves point in the draft until the user visits it"
+  (test-mevedel-tool-ask-ui--with-form
+    (with-current-buffer view-buffer
+      (mevedel-view-test--insert-composer-draft "> draft" 3))
+    (mevedel-tool-ask-ui-show #'ignore [(:question "Use cache?" :options ["Yes" "No"])])
+    (with-current-buffer view-buffer
+      (should (= (point) (+ (mevedel-view--input-start) 3)))
+      (mevedel-view-jump-to-interaction)
+      (should (equal '(0 . 0) (get-text-property (point) 'mevedel-ask-entry)))))
+
   :doc "shows every question at once and submits the whole form"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      (lambda (value) (setq result value))
      [(:question "Use cache?" :options ["Yes" "No"])
       (:question "Run tests?" :options ["Yes" "No"])])
@@ -869,7 +892,7 @@ A panel row is a line whose text sits on the source block face."
 
   :doc "RET on an answered summary reopens it on its answer"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      (lambda (value) (setq result value))
      [(:question "Use cache?" :options ["Yes" "No"])
       (:question "Run tests?" :options ["Yes" "No"])])
@@ -889,7 +912,7 @@ A panel row is a line whose text sits on the source block face."
 
   :doc "an unanswered question submits as no preference, never nil"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      (lambda (value) (setq result value))
      [(:question "Use cache?" :options ["Yes" "No"])
       (:question "Run tests?" :options ["Yes" "No"])])
@@ -903,7 +926,7 @@ A panel row is a line whose text sits on the source block face."
 
   :doc "recommended option remains part of the selected Ask answer"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      (lambda (value) (setq result value))
      [(:question "Choose risk profile"
                  :options ["Conservative" "Balanced (Recommended)" "Aggressive"])])
@@ -923,7 +946,7 @@ A panel row is a line whose text sits on the source block face."
 
   :doc "object options show descriptions and samples inline and echo the chosen sample"
   (test-mevedel-tool-ask-ui--with-form
-    (mevedel-tool-ask-ui-show
+    (test-mevedel-tool-ask-ui--show
      (lambda (value) (setq result value))
      [(:question "What should I write?"
                  :options [(:label "Project AGENTS.md (Recommended)"
@@ -955,7 +978,7 @@ A panel row is a line whose text sits on the source block face."
                 (lambda (_overlay) (cl-incf announcements)))
       (with-current-buffer view-buffer
         (setq-local mevedel--prompt-overlays nil))
-      (mevedel-tool-ask-ui-show
+      (test-mevedel-tool-ask-ui--show
        (lambda (value) (setq result value))
        [(:question "Use cache?" :options ["Yes" "No"])])
       ;; The opening render announces once.
@@ -994,7 +1017,7 @@ A panel row is a line whose text sits on the source block face."
             (setq-local mevedel--agent-invocation inv)
             (setq-local mevedel--view-buffer view-buffer)
             (mevedel-request-begin session)
-            (mevedel-tool-ask-ui-show
+            (test-mevedel-tool-ask-ui--show
              (lambda (value) (setq result value))
              [(:question "Proceed?" :options ["Yes" "No"])]))
           (with-current-buffer view-buffer
@@ -1044,7 +1067,7 @@ A panel row is a line whose text sits on the source block face."
             (setq-local mevedel--agent-invocation inv-a)
             (setq-local mevedel--view-buffer view-buffer)
             (mevedel-request-begin session)
-            (mevedel-tool-ask-ui-show
+            (test-mevedel-tool-ask-ui--show
              (lambda (value) (setq result-a value))
              [(:question "A?" :options ["Yes" "No"])]))
           (with-current-buffer agent-buffer-b
@@ -1052,7 +1075,7 @@ A panel row is a line whose text sits on the source block face."
             (setq-local mevedel--agent-invocation inv-b)
             (setq-local mevedel--view-buffer view-buffer)
             (mevedel-request-begin session)
-            (mevedel-tool-ask-ui-show
+            (test-mevedel-tool-ask-ui--show
              (lambda (value) (setq result-b value))
              [(:question "B?" :options ["Yes" "No"])]))
           (with-current-buffer view-buffer
@@ -1122,7 +1145,7 @@ A panel row is a line whose text sits on the source block face."
                     (lambda (_ov) (setq settled t)))
           (with-current-buffer view-buffer
             (setq-local mevedel--prompt-overlays nil))
-          (mevedel-tool-ask-ui-show
+          (test-mevedel-tool-ask-ui--show
            (lambda (value) (setq result value))
            [(:question "Which approach?"
              :options ["MVP first (Recommended)"
@@ -1182,7 +1205,7 @@ A panel row is a line whose text sits on the source block face."
             (mevedel-request-begin session))
           (mevedel-view--setup view-buffer data-buffer)
           (with-current-buffer data-buffer
-            (mevedel-tool-ask-ui-show
+            (test-mevedel-tool-ask-ui--show
              (lambda (value) (push value results))
              [(:question "Which approach?" :options ["MVP" "Risk"])]))
           (with-current-buffer view-buffer
@@ -1227,7 +1250,7 @@ A panel row is a line whose text sits on the source block face."
             (mevedel-request-begin session))
           (mevedel-view--setup view-buffer data-buffer)
           (with-current-buffer data-buffer
-            (mevedel-tool-ask-ui-show
+            (test-mevedel-tool-ask-ui--show
              (lambda (value) (push value results))
              [(:question "Which approach?" :options ["MVP" "Risk"])]))
           (with-current-buffer view-buffer
@@ -1265,7 +1288,7 @@ A panel row is a line whose text sits on the source block face."
             (mevedel-request-begin session))
           (mevedel-view--setup view-buffer data-buffer)
           (with-current-buffer data-buffer
-            (mevedel-tool-ask-ui-show
+            (test-mevedel-tool-ask-ui--show
              (lambda (value) (push value results))
              [(:question "Which approach?" :options ["MVP" "Risk"])]))
           (with-current-buffer view-buffer
