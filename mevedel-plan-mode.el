@@ -681,16 +681,20 @@ runs, and warns that uncommitted source changes stay behind."
                        " — "
                        (mevedel-plan-mode--execution-description execution)
                        "\n"
-                       (when (eq execution 'goal)
-                         (concat
-                          (mevedel--prompt-key "b")
-                          "  Budget      "
-                          (propertize
-                           (if budget
-                               (format "%d tokens" budget)
-                             "Unlimited")
-                           'font-lock-face 'bold)
-                          "\n"))))
+                       ;; The row stays when Execution is not Goal, so
+                       ;; cycling `e' never changes the card's height.
+                       (if (eq execution 'goal)
+                           (concat
+                            (mevedel--prompt-key "b")
+                            "  Budget      "
+                            (propertize
+                             (if budget
+                                 (format "%d tokens" budget)
+                               "Unlimited")
+                             'font-lock-face 'bold)
+                            "\n")
+                         (propertize "   Budget      Goal execution only\n"
+                                     'font-lock-face 'shadow))))
                     (mevedel--prompt-key "m")
                     "  Mode        "
                     (propertize

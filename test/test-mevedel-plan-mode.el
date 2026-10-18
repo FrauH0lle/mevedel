@@ -452,7 +452,9 @@
             (should (eq (lookup-key keymap (kbd "m"))
                         (lookup-key keymap (kbd "<tab>"))))
             (should-not (lookup-key keymap (kbd "b")))
-            (should-not (string-match-p "Budget" body))
+            ;; The Budget row is held, inert, so cycling `e' keeps the height.
+            (should (string-match-p "^   Budget      Goal execution only$" body))
+            (should-not (string-match-p "b  Budget" body))
             (call-interactively (lookup-key keymap (kbd "M")))
             (should (equal '("Implementation model" "OpenAI:gpt-5" low)
                            model-opened))
@@ -467,6 +469,12 @@
             (call-interactively (lookup-key keymap (kbd "e")))
             (should (eq 'goal (plist-get selection :execution)))
             (should rerendered)
+            (let ((lines (length (split-string body "\n"))))
+              (mevedel-plan-mode--render-approval entry)
+              (should (string-match-p "^b  Budget      Unlimited$"
+                                      (plist-get descriptor :body)))
+              (should (= lines (length (split-string (plist-get descriptor :body)
+                                                     "\n")))))
             (setq rerendered nil)
             (call-interactively (lookup-key keymap (kbd "c")))
             (should (eq 'fresh (plist-get selection :context)))

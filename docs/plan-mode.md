@@ -239,7 +239,11 @@ session also shows it because hidden state is not persisted.
 Direct remains the default and sends one ordinary implementation turn. Goal is
 an explicit opt-in that continues automatically until complete, genuinely
 blocked, paused, or budget-limited. When Goal is selected, the approval shows
-the proposal's target token budget. `b` accepts a positive integer; empty input
+the proposal's target token budget. With Direct, the Budget row stays as a
+dimmed `Goal execution only` placeholder without a key, so cycling Execution
+never changes the card's height: with the composer anchored on its screen row,
+each toggle otherwise moved the card and the transcript above it by one row
+(ADR 0126). `b` accepts a positive integer; empty input
 means Unlimited. The setting starts from the effective session default, stays
 local to the pending proposal, survives Execution toggles and revised
 proposals, and on acceptance sets only the new Goal's budget, not the
