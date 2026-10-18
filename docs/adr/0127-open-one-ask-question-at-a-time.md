@@ -32,7 +32,9 @@ movement, and nothing moves under the reader.
 
 ## Consequences
 
-- A closed question's text is cut to one line; the full text is in its help
-  echo and appears when it opens. The cut is computed at repaint, so after a
-  resize it may be too long or too short until the next repaint.
+- A closed question and its answer are flattened and cut to one line, the
+  answer keeping at least half of it; the full text is in the help echo and
+  appears when the question opens. The cut is computed at repaint, so after a
+  resize it may be too long or too short until the next repaint. Below about 25
+  columns each part keeps a 10-column minimum and the line wraps.
 - Digits and `c` act only in the open question.

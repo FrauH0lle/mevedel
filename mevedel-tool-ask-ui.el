@@ -826,20 +826,31 @@ A settled form ignores every action."
 
 (defun mevedel-tool-ask-ui--closed-heading (state gutter question answer)
   "Return a closed question's one-line heading for STATE.
-GUTTER holds its mark and number.  QUESTION is cut to fit the window,
-with room left for ANSWER when there is one; the full text is in the
-help echo and appears when the question is opened."
-  (let* ((text (string-trim (replace-regexp-in-string
-                             "[ \t\n]+" " " (format "%s" question))))
-         (tail (and answer (concat "  → " answer)))
-         (room (max 20 (- (mevedel-tool-ask-ui--form-width state) 1
-                          (string-width gutter)
-                          (if tail (string-width tail) 0)))))
+GUTTER holds its mark and number.  QUESTION and ANSWER are flattened
+to one line and cut to fit the window, the answer keeping at least half
+of the room; the full text is in the help echo and appears when the
+question is opened.  Below about 25 columns the line still wraps."
+  (let* ((flat (lambda (text)
+                 (string-trim (replace-regexp-in-string
+                               "[ \t\n]+" " " (format "%s" text)))))
+         (text (funcall flat question))
+         (reply (and answer (funcall flat answer)))
+         (room (- (mevedel-tool-ask-ui--form-width state) 1
+                  (string-width gutter)))
+         (reply-room
+          (and reply
+               (min (string-width reply)
+                    (max 10 (/ (- room 4) 2)
+                         (- room 4 (string-width text))))))
+         (text-room (max 10 (- room (if reply (+ 4 reply-room) 0)))))
     (concat gutter
-            (propertize (truncate-string-to-width text room nil nil "…")
+            (propertize (truncate-string-to-width text text-room nil nil "…")
                         'font-lock-face 'shadow)
-            (when tail
-              (concat "  → " (propertize answer 'font-lock-face 'success))))))
+            (when reply
+              (concat "  → "
+                      (propertize
+                       (truncate-string-to-width reply reply-room nil nil "…")
+                       'font-lock-face 'success))))))
 
 (defun mevedel-tool-ask-ui--footer (state)
   "Return the Ask interaction footer for STATE.

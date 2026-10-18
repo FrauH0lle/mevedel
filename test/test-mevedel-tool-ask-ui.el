@@ -505,6 +505,15 @@ A panel row is a line whose text sits on the source block face."
                    state "✓ 1  " "A long question that needs cutting?" "Yes")))
         (should (string-suffix-p "→ Yes" line))
         (should (<= (string-width line) 39)))
+      ;; A long, multi-line custom answer is flattened and cut too, keeping
+      ;; at least half of the room.
+      (let ((line (mevedel-tool-ask-ui--closed-heading
+                   state "✓ 1  " "Which layout?"
+                   "A very long custom answer\nthat goes on and on and on")))
+        (should-not (string-search "\n" line))
+        (should (<= (string-width line) 39))
+        (should (string-match-p "Which layout\\?  → A very long" line))
+        (should (string-suffix-p "…" line)))
       (should (equal "  1  Short?"
                      (substring-no-properties
                       (mevedel-tool-ask-ui--closed-heading
