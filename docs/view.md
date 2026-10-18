@@ -1712,6 +1712,10 @@ also carry priority, label/body text, keymap/help text, activation metadata,
 navigation metadata, and a collapse key. Whole-zone reconciliation sorts by
 descending priority and caller order. Unknown zone names and malformed
 descriptors are programming errors; stale disposable UI state is rebuilt.
+When rendered text and all its properties already match a fully owned region,
+with no stale namespace text outside it, reconciliation returns without capturing
+or restoring window state. Property-only updates and stale-region cleanup retain
+the normal mutation transaction.
 
 Fragment metadata lives in `mevedel-view-zone-*` text properties. Those
 properties are valid for view navigation, activation, collapse, and targeted

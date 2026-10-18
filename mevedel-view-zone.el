@@ -437,20 +437,35 @@ Return point when movement succeeds, otherwise nil.  LIMIT defaults to
                       end))))
     (nreverse spans)))
 
-(defun mevedel-view-zone--reconcile (region namespace fragments)
-  "Reconcile FRAGMENTS for NAMESPACE inside managed REGION.
-FRAGMENTS are sorted by descending priority and caller order for equal
-priorities."
-  (let* ((region-id (mevedel-view-zone--region-id region))
-         (fragments
+(defun mevedel-view-zone--render-fragments (region namespace fragments)
+  "Render FRAGMENTS for NAMESPACE inside REGION in stable priority order."
+  (let ((fragments
           (sort (mapcar #'mevedel-view-zone--normalize fragments)
                 :key (lambda (fragment) (or (plist-get fragment :priority) 0))
-                :lessp #'> :in-place t))
-         (text (mapconcat (lambda (fragment)
-                            (unless (eq (plist-get fragment :namespace) namespace)
-                              (error "Fragment namespace mismatch: %S" fragment))
-                            (mevedel-view-zone--render region fragment))
-                          fragments ""))
+                :lessp #'> :in-place t)))
+    (mapconcat (lambda (fragment)
+                 (unless (eq (plist-get fragment :namespace) namespace)
+                   (error "Fragment namespace mismatch: %S" fragment))
+                 (mevedel-view-zone--render region fragment))
+               fragments "")))
+
+(defun mevedel-view-zone--unchanged-p (region namespace text)
+  "Return non-nil if live REGION already contains TEXT with no stale NAMESPACE.
+Compare properties too: equal characters alone can still change display.
+Any namespace text outside REGION takes the ordinary cleanup path."
+  (let ((start (overlay-start region))
+        (end (overlay-end region)))
+    (and (< start end)
+         (not (text-property-not-all start end 'mevedel-view-zone-region region))
+         (not (text-property-any (point-min) start
+                                'mevedel-view-zone-namespace namespace))
+         (not (text-property-any end (point-max)
+                                'mevedel-view-zone-namespace namespace))
+         (equal-including-properties text (buffer-substring start end)))))
+
+(defun mevedel-view-zone--reconcile (region namespace text)
+  "Reconcile rendered TEXT for NAMESPACE inside managed REGION."
+  (let* ((region-id (mevedel-view-zone--region-id region))
          (old-bounds (mevedel-view-zone--region-bounds region))
          (region-start (car old-bounds))
          (spans (mevedel-view-zone--owned-spans region))
@@ -896,66 +911,72 @@ live zone text keeps its current bounds until reconciliation finishes."
   (unwind-protect
       (let* ((table (mevedel-view-zone--region-table))
              (region (mevedel-view-zone--live-region zone))
-             (composer-anchors (and (mevedel-view-zone--composer-live-p)
-                                    (mevedel-view--composer-anchors)))
-             (logical-state (mevedel-view-zone--capture-logical-state
-                             zone region composer-anchors))
-             (window-tails (mevedel-view--window-tail-lengths))
-             owned-p)
-        (if (and (null fragments) (null region))
-            (mevedel-view-zone--call-preserving
-             zone
-             (lambda ()
-               (mevedel-view-zone--delete-stale-text zone nil)))
-          (unless region
-            ;; History inserted at the boundary belongs before this zone.
-            (setq region (make-overlay start end (current-buffer) t nil))
-            (overlay-put region 'mevedel-view-zone zone)
-            (overlay-put region 'evaporate nil)
-            (puthash zone region table))
-          (setq owned-p
-                (and (< (overlay-start region) (overlay-end region))
-                     (text-property-any
-                      (overlay-start region) (overlay-end region)
-                      'mevedel-view-zone-region region)))
-          (let ((neighbors (mevedel-view-zone--capture-neighbor-regions
-                            zone region))
-                (trailing (and owned-p
-                               (mevedel-view-zone--capture-trailing-overlays region))))
-            (unwind-protect
-                (progn
-                  (mevedel-view-zone--call-preserving
-                   zone
-                   (lambda ()
-                     (mevedel-view-zone--delete-stale-text zone region)
-                     (unless owned-p
-                       (move-overlay region start end (current-buffer)))
-                     (mevedel-view-zone--reconcile region zone fragments))))
-              (mevedel-view-zone--restore-neighbor-regions neighbors)
-              (when (overlay-buffer region)
-                (mevedel-view-zone--restore-trailing-overlays region trailing)))))
-        (pcase-let ((`(,visited-windows ,lost-starts)
-                     (mevedel-view-zone--restore-logical-state zone logical-state)))
-          (setq composer-anchors
-                (seq-remove (lambda (anchor)
-                              (memq (car anchor) visited-windows))
-                            composer-anchors))
-          (mevedel-view--restore-composer-anchors composer-anchors)
-          ;; A lost logical start fills the last page even if anchoring
-          ;; exposes longer lines and therefore increases the character tail.
-          (mevedel-view--clamp-window-starts
-           (seq-remove (lambda (tail)
-                         (or (and (assq (car tail) composer-anchors)
-                                  (not (memq (car tail) lost-starts)))
-                             (memq (car tail) visited-windows)))
-                       window-tails)
-           lost-starts))
-        (if fragments
+             (text (and region (mevedel-view-zone--render-fragments
+                                region zone fragments))))
+        (if (and region (mevedel-view-zone--unchanged-p region zone text))
             region
-          (when region
-            (delete-overlay region)
-            (remhash zone table))
-          nil))
+          (let* ((composer-anchors (and (mevedel-view-zone--composer-live-p)
+					(mevedel-view--composer-anchors)))
+		 (logical-state (mevedel-view-zone--capture-logical-state
+				 zone region composer-anchors))
+		 (window-tails (mevedel-view--window-tail-lengths))
+		 owned-p)
+            (if (and (null fragments) (null region))
+		(mevedel-view-zone--call-preserving
+		 zone
+		 (lambda ()
+		   (mevedel-view-zone--delete-stale-text zone nil)))
+              (unless region
+		;; History inserted at the boundary belongs before this zone.
+		(setq region (make-overlay start end (current-buffer) t nil))
+		(overlay-put region 'mevedel-view-zone zone)
+		(overlay-put region 'evaporate nil)
+		(puthash zone region table))
+              (setq owned-p
+                    (and (< (overlay-start region) (overlay-end region))
+			 (text-property-any
+			  (overlay-start region) (overlay-end region)
+			  'mevedel-view-zone-region region)))
+              (let ((neighbors (mevedel-view-zone--capture-neighbor-regions
+				zone region))
+                    (trailing (and owned-p
+				   (mevedel-view-zone--capture-trailing-overlays region))))
+		(unwind-protect
+                    (progn
+                      (mevedel-view-zone--call-preserving
+                       zone
+                       (lambda ()
+			 (mevedel-view-zone--delete-stale-text zone region)
+			 (unless owned-p
+			   (move-overlay region start end (current-buffer)))
+			 (mevedel-view-zone--reconcile
+			  region zone (or text (mevedel-view-zone--render-fragments
+						region zone fragments))))))
+		  (mevedel-view-zone--restore-neighbor-regions neighbors)
+		  (when (overlay-buffer region)
+                    (mevedel-view-zone--restore-trailing-overlays region trailing)))))
+            (pcase-let ((`(,visited-windows ,lost-starts)
+			 (mevedel-view-zone--restore-logical-state zone logical-state)))
+              (setq composer-anchors
+                    (seq-remove (lambda (anchor)
+				  (memq (car anchor) visited-windows))
+				composer-anchors))
+              (mevedel-view--restore-composer-anchors composer-anchors)
+              ;; A lost logical start fills the last page even if anchoring
+              ;; exposes longer lines and therefore increases the character tail.
+              (mevedel-view--clamp-window-starts
+               (seq-remove (lambda (tail)
+                             (or (and (assq (car tail) composer-anchors)
+                                      (not (memq (car tail) lost-starts)))
+				 (memq (car tail) visited-windows)))
+			   window-tails)
+               lost-starts))
+            (if fragments
+		region
+              (when region
+		(delete-overlay region)
+		(remhash zone table))
+              nil))))
     (when (and (boundp 'mevedel-view-render-debug)
                mevedel-view-render-debug)
       (mevedel-view--debug-log

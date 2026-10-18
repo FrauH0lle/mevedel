@@ -37,6 +37,11 @@ Earlier history views do not move toward the bottom, and shrink repair leaves a
 window already starting at `point-min` there. Strict logical-anchor resolution distinguishes
 a surviving row from one removed with its fragment or truncated within it.
 
+A genuinely unchanged zone does not capture or restore a viewport. It first
+compares the rendered text including properties, verifies complete live-region
+ownership, and checks for stale namespace text outside the region. Property-only
+changes and stale text still take the ordinary reconciliation path.
+
 Anchors measure body-relative pixels through Emacs's native visibility query,
 not a row loop. Native backward display traversal restores the window start and
 partial vertical scroll, accounting for remapped faces, wrapping and images.
@@ -114,6 +119,17 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Compare before capturing (2026-10-19).** An unchanged zone still spent
+  0.60--0.99 milliseconds capturing composer geometry, even though its mutation
+  stage already checked text equality. Rendering and checking before capture
+  reduces a compiled unchanged reconcile to 4.8--5.0 microseconds in matched
+  GUI/TTY plain and wrapped-history fixtures (three batches of 300 calls each).
+  Text, character tick, point, buffer end, window start and partial scroll remain
+  unchanged across all 900 calls per layout. The fixture includes the
+  `fontified` property added by redisplay: genuinely changed properties are not
+  ignored to obtain a no-op. This is a synthetic unchanged-zone measurement,
+  not a claim that every production redraw is unchanged.
 
 - **Overflowing bursts consume free space (2026-10-19).** A short transcript
   followed by more than a window of incoming output retained the composer's old
