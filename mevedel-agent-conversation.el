@@ -46,7 +46,7 @@
                   "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-find-artifact-noselect
                   "mevedel-session-artifacts"
-                  (session logical &optional inspection))
+                  (session logical &optional inspection committed-only))
 (declare-function mevedel-session-artifacts-publish-text
                   "mevedel-session-artifacts"
                   (session path content &optional coding))

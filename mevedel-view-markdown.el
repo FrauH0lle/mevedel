@@ -36,7 +36,7 @@
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-find-artifact-noselect
                   "mevedel-session-artifacts"
-                  (session logical &optional inspection))
+                  (session logical &optional inspection committed-only))
 (declare-function mevedel-session-artifacts-read-artifact
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
@@ -225,7 +225,8 @@ Both sources consulted here are already in memory."
                  ((and session logical)
                   (pop-to-buffer
                    (mevedel-session-artifacts-find-artifact-noselect
-                    session logical t)))
+                    session logical t
+                    (button-get button 'mevedel-view-committed-only))))
                  ((and path (file-exists-p path))
                   (find-file-other-window path)))))
       (when (and line (integerp line) (> line 0))
@@ -543,11 +544,16 @@ recreates only stale images."
          (sizing (mevedel-view--image-sizing window)))
     (setq mevedel-view--image-layout-width nil)
     (when-let* ((image (mevedel-view--image-display path (car sizing))))
+      (mevedel-view--make-file-button start end path nil)
+      ;; Override the transcript's explicit keymap, not just its category.
+      (add-text-properties start end
+                           `(keymap ,button-map pointer hand
+                             mevedel-view-committed-only t))
       (add-text-properties
        start end
        (if (floatp mevedel-view-inline-image-max-width)
            `(display ,image
-             help-echo ,(format "Image: %s" path)
+             help-echo ,(format "Open image: %s (RET or click)" path)
              mevedel-view-image-source ,path
              mevedel-view-image-ratio ,mevedel-view-inline-image-max-width
              mevedel-view-image-width ,(cdr sizing)
@@ -555,7 +561,7 @@ recreates only stale images."
                                      mevedel-view-image-ratio
                                      mevedel-view-image-width))
          `(display ,image
-           help-echo ,(format "Image: %s" path)
+           help-echo ,(format "Open image: %s (RET or click)" path)
            rear-nonsticky (display help-echo)))))))
 
 (defun mevedel-view--rerender-images (&optional window)
@@ -660,6 +666,7 @@ discipline."
                (line (mevedel-view--local-link-line url)))
           (push (cons whole-start whole-end) ranges)
           (when (and path
+                     (not (get-text-property whole-start 'display))
                      (not (mevedel-view--linkify-exempt-p whole-start)))
             (mevedel-view--make-file-button mb me path line)))))
     (nreverse ranges)))

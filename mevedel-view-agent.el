@@ -89,7 +89,7 @@
                   (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-find-artifact-noselect
                   "mevedel-session-artifacts"
-                  (session logical &optional inspection))
+                  (session logical &optional inspection committed-only))
 (autoload 'mevedel-session-artifacts-artifact-present-p
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-find-artifact-noselect

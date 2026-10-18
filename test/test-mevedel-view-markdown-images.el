@@ -32,6 +32,61 @@
             (let ((spec (cdr (get-text-property (point-min) 'display))))
               (should (equal file (plist-get spec :file)))
               (should (eql 300 (plist-get spec :max-width))))))
+      (delete-file file)))
+
+  :doc "previews open the original file with RET or the mouse button binding"
+  (let ((file (make-temp-file "mevedel-image-open-" nil ".png"))
+        ;; Batch Emacs cannot activate image-mode; still visit the real file.
+        (auto-mode-alist (cons '("\\.png\\'" . fundamental-mode) auto-mode-alist)))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (set-buffer-multibyte nil)
+            (insert (base64-decode-string
+                     (concat "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC"
+                             "AAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII="))))
+          (dolist (size '(300 0.5))
+            (dolist (markdown '(nil t))
+              (mevedel-test--with-displayed-buffer
+                (let ((mevedel-view-inline-image-max-width size))
+                  (insert (if markdown (format "![preview](%s)" file) file)
+                          "\n")
+                  (put-text-property (point-min) (point-max)
+                                     'keymap mevedel-view--display-map)
+                  (cl-letf (((symbol-function 'display-images-p)
+                             (lambda (&optional _display) t))
+                            ((symbol-function 'create-image)
+                             (lambda (path &rest _) (list 'image :file path))))
+                    (mevedel-view--decorate-markdown-in-range
+                     (point-min) (point-max))
+                    (when (floatp size)
+                      (put-text-property (point-min) (1- (point-max))
+                                         'mevedel-view-image-width nil)
+                      (mevedel-view--rerender-images)))
+                  (goto-char (point-min))
+                  (let ((button (button-at (point))))
+                    (should button)
+                    (should (= (button-start button) (point-min)))
+                    (should (= (button-end button) (1- (point-max))))
+                    (should (button-get button 'follow-link))
+                    (should (eq t (mouse-on-link-p (point))))
+                    (should (eq (key-binding (kbd "RET")) 'push-button))
+                    (should (eq (key-binding [mouse-2]) 'push-button))
+                    (save-window-excursion
+                      (let ((last-command-event 13))
+                        (call-interactively (key-binding (kbd "RET"))))
+                      (should (equal buffer-file-name file)))
+                    (save-window-excursion
+                      (let ((event (list 'mouse-2
+                                         (list (selected-window) (point)
+                                               '(0 . 0) 0))))
+                        (funcall (key-binding [mouse-2]) event))
+                      (should (equal (buffer-local-value
+                                      'buffer-file-name
+                                      (window-buffer (selected-window)))
+                                     file)))))))))
+      (when-let* ((buffer (get-file-buffer file)))
+        (kill-buffer buffer))
       (delete-file file))))
 
 (mevedel-deftest mevedel-view--image-sizing ()

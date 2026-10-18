@@ -342,7 +342,20 @@
               (insert (format "![shot](%s)\n" native-fixed))
               (mevedel-view--decorate-local-images-in-range
                (point-min) (point-max))
-              (should (equal (list content t) created)))
+              (should (equal (list content t) created))
+              (let ((auto-mode-alist
+                     (cons '("\\.png\\'" . fundamental-mode) auto-mode-alist))
+                    opened)
+                (unwind-protect
+                    (save-window-excursion
+                      (button-activate (button-at (point-min)))
+                      (setq opened (window-buffer (selected-window)))
+                      (with-current-buffer opened
+                        (should (equal content (buffer-string)))
+                        (should buffer-read-only)
+                        (should (equal fixed buffer-file-name))))
+                  (when (buffer-live-p opened)
+                    (kill-buffer opened)))))
             (setf (mevedel-session-publication session)
                   (list :head ".publications/generation/manifest.el"
                         :sidecar nil :artifacts nil))
@@ -360,7 +373,7 @@
   (:doc "`mevedel-view--decorate-markdown-in-range' renders Markdown affordances")
   ,test
   (test)
-  :doc "displayed image paths are not also buttonized"
+  :doc "displayed image paths retain their image-opening button"
   (let ((file (make-temp-file "mevedel-image-decoration-" nil ".png")))
     (unwind-protect
         (with-temp-buffer
@@ -377,7 +390,9 @@
           (let ((start (match-beginning 0)))
             (should (equal (list 'image :file file)
                            (get-text-property start 'display)))
-            (should-not (button-at start))))
+            (should (button-at start))
+            (should (equal file (button-get (button-at start)
+                                           'mevedel-view-path)))))
       (delete-file file)))
 
   :doc "renders pipe tables and preserves view-owned properties"

@@ -575,17 +575,19 @@ When COMMITTED-ONLY is non-nil, ignore staged portable writes."
          (and (assoc logical (plist-get publication :artifacts)) t))))))
 
 (defun mevedel-session-artifacts-find-artifact-noselect
-    (session logical &optional inspection)
+    (session logical &optional inspection committed-only)
   "Visit SESSION artifact LOGICAL without exposing immutable storage.
 
 Insert resolver-verified bytes into a buffer visiting the qualified logical
 path.  When INSPECTION is non-nil, make the buffer read-only and ineligible
-for saving."
+for saving.  COMMITTED-ONLY excludes newer staged writes, as in
+`mevedel-session-artifacts-read-artifact'."
   (let* ((save-path (or (mevedel-session-save-path session)
                         (error "Session has no persistence path")))
          (path (expand-file-name logical save-path))
          ;; Read first so the fixed remote cache can never select the bytes.
-         (content (mevedel-session-artifacts-read-artifact session logical))
+         (content (mevedel-session-artifacts-read-artifact
+                   session logical committed-only))
          (existing
           (and
            (not inspection)

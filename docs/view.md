@@ -1958,7 +1958,9 @@ Markdown rendering adds small view-only affordances:
   images; remote portable session-artifact images are decoded only from
   resolver-verified committed publication bytes rather than owned staged
   writes or the mutable fixed-path cache, while PID-lock sessions read their
-  authoritative fixed logical file.
+  authoritative fixed logical file. Click a preview or press `RET` on it to
+  open the image in an Emacs file buffer, using the same verified committed
+  publication for remote session images even when newer staged writes exist.
   `mevedel-view-inline-image-max-width` takes a fixed pixel width
   (default 300) or a float in (0, 1] meaning a fraction of the
   displaying window's pixel width; ratio-sized images retain their path,
