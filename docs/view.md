@@ -101,7 +101,10 @@ A parent window that showed its composer gets back the composer's screen row
 from before the inspection opened: the side window narrowed it, and closing
 the side window widens it again, so its text rewraps into fewer rows. Without
 this, the composer of a 25-row window with wrapped paragraphs rose from the
-last row to row 18 above blank space.
+last row to row 18 above blank space. The row is restored only to windows that
+still show the composer with point in it just before the inspector closes
+(reflow from the close does not qualify a window); a parent window the user
+scrolled or moved into earlier history meanwhile keeps its start and point.
 
 If the observed agent settles while its transcript view is open, the view
 renders the final content immediately and updates its header in place. It

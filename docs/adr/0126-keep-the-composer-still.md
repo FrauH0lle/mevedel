@@ -41,8 +41,11 @@ where free space is used first, an arrival pushes the cards below it down like
 any other growth above the composer.
 
 Closing an agent inspection's side window rewraps the parent's text without
-any zone change. A parent window that showed its composer when the inspection
-opened gets that screen row back on return.
+any zone change. A parent window gets the composer's screen row from before
+the inspection opened back only if, just before the close, it still shows the
+composer with point in it. A window the user moved into history is left alone,
+and a same-window inspection always returns to the parent at that row. Reflow
+caused by the close itself does not make a window eligible.
 
 Background-work rows are in stable start order, newest farthest from the
 composer; state changes, including blocking, update rows in place. While point
