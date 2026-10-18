@@ -698,8 +698,35 @@ rail directly above the composer re-renders every second."
               (setq pos start)))
         (setq pos (point-max))))))
 
-(defun mevedel-view-zone--fragment-position-state (zone region position)
-  "Return fragment-relative state for POSITION inside ZONE REGION."
+(defun mevedel-view-zone--anchor-start (position anchor start)
+  "Return the start of POSITION's ANCHOR run, not before START."
+  (if (and (> position start)
+           (eq anchor (get-text-property (1- position) 'mevedel-view-zone-anchor)))
+      (or (previous-single-property-change position 'mevedel-view-zone-anchor nil start)
+          start)
+    position))
+
+(defun mevedel-view-zone--anchor-run (anchor start end)
+  "Return (RUN-START . RUN-END) of the first text `equal' to ANCHOR.
+Search the `mevedel-view-zone-anchor' runs between START and END."
+  (let ((pos start) found)
+    (while (and (< pos end) (not found))
+      (let ((next (or (next-single-property-change
+                       pos 'mevedel-view-zone-anchor nil end)
+                      end)))
+        (when (equal anchor (get-text-property pos 'mevedel-view-zone-anchor))
+          (setq found (cons pos next)))
+        (setq pos next)))
+    found))
+
+(defun mevedel-view-zone--fragment-position-state (zone region position
+                                                        &optional window)
+  "Return fragment-relative state for POSITION inside ZONE REGION.
+Text a producer tagged with a `mevedel-view-zone-anchor' value is
+located by that value, so a row keeps its identity when text before it
+changes length.  With WINDOW, POSITION is that window's start and the
+offset counts its screen rows, so a re-wrapped line above it does not
+shift the view by a row."
   (when (and (integer-or-marker-p position)
              (< (overlay-start region) (overlay-end region))
              (<= (overlay-start region) position)
@@ -708,17 +735,60 @@ rail directly above the composer re-renders every second."
                 ((eq (get-text-property
                       position 'mevedel-view-zone-namespace)
                      zone)))
-      (list :id (get-text-property position 'mevedel-view-zone-id)
-            :offset (- position (plist-get bounds :start))))))
+      (let* ((anchor (get-text-property position 'mevedel-view-zone-anchor))
+             (start (if anchor
+                        (mevedel-view-zone--anchor-start
+                         position anchor (plist-get bounds :start))
+                      (plist-get bounds :start))))
+        (list :id (get-text-property position 'mevedel-view-zone-id)
+              :anchor anchor
+              :window window
+              :offset (if window
+                          (count-screen-lines start position nil window)
+                        (- position start)))))))
 
 (defun mevedel-view-zone--restore-fragment-position (zone state)
-  "Return the restored buffer position for ZONE STATE, or nil."
+  "Return the restored buffer position for ZONE STATE, or nil.
+An anchored position whose anchor no longer exists returns to the
+fragment start rather than to an offset that now names other text."
   (when state
     (when-let* ((bounds (mevedel-view-zone-fragment-bounds
                          zone (plist-get state :id))))
-      (min (1- (plist-get bounds :end))
-           (+ (plist-get bounds :start)
-              (plist-get state :offset))))))
+      (let* ((start (plist-get bounds :start))
+             (end (plist-get bounds :end))
+             (anchor (plist-get state :anchor))
+             (run (if anchor
+                      (mevedel-view-zone--anchor-run anchor start end)
+                    (cons start end)))
+             (window (plist-get state :window)))
+        (cond
+         ((null run) start)
+         ((and window (window-live-p window))
+          (save-excursion
+            (goto-char (car run))
+            (vertical-motion (plist-get state :offset) window)
+            (min (point) (1- end))))
+         (t (min (1- (cdr run)) (+ (car run) (plist-get state :offset)))))))))
+
+(defun mevedel-view-zone-position-anchor (position &optional window)
+  "Return an opaque identity for POSITION in managed zone text, or nil.
+With WINDOW, POSITION is that window's start, kept by screen rows.
+Pass the result to `mevedel-view-zone-anchor-position' after the zone
+was redrawn.  Producers make sub-parts of a fragment keep their identity
+by tagging them with a `mevedel-view-zone-anchor' text property whose
+value is `equal' across redraws."
+  (when-let* (((integer-or-marker-p position))
+              ((< position (point-max)))
+              (zone (get-text-property position 'mevedel-view-zone-namespace))
+              (region (mevedel-view-zone--live-region zone))
+              (state (mevedel-view-zone--fragment-position-state
+                      zone region position window)))
+    (cons zone state)))
+
+(defun mevedel-view-zone-anchor-position (anchor)
+  "Return the current position of ANCHOR from `mevedel-view-zone-position-anchor'.
+Return nil when its fragment is gone."
+  (mevedel-view-zone--restore-fragment-position (car anchor) (cdr anchor)))
 
 (defun mevedel-view-zone--capture-logical-state (zone region)
   "Capture point and displayed-window positions inside ZONE REGION."
@@ -733,7 +803,7 @@ rail directly above the composer re-renders every second."
             (mevedel-view-zone--fragment-position-state
              zone region (window-point window))
             (mevedel-view-zone--fragment-position-state
-             zone region (window-start window))))
+             zone region (window-start window) window)))
     (get-buffer-window-list (current-buffer) nil t))))
 
 (defun mevedel-view-zone--restore-logical-state (zone state)

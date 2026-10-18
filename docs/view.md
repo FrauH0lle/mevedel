@@ -1699,6 +1699,23 @@ owns managed region overlays. Remaining interaction overlays are opaque
 callback handles for permission, plan, Ask, and preview flows;
 they are not parallel renderers.
 
+Zone reconciliation keeps point, mark, window points and window starts inside
+a fragment on the same content. A producer tags sub-parts of a fragment body
+with a `mevedel-view-zone-anchor` text property whose value is `equal` across
+redraws, such as a row key. A position in tagged text keeps its anchor and its
+offset within that anchor's run, so text before it can change length without
+moving it. If the anchor is gone, the position returns to the fragment start
+rather than to an offset that now names other text. Untagged text keeps the
+fragment offset. A window start keeps its screen-row distance below the
+anchor or fragment start, measured with a bounded `vertical-motion`, so
+re-wrapped text above it does not shift the view by a row. The
+background-work panel tags its header, every row, each inspector's preview
+and action line, and its controls. Before this, a cursor on one execution's
+row landed on another execution's `[Stop]` when 35 characters of output
+arrived in an inspector above it. `mevedel-view-zone-position-anchor` and
+`mevedel-view-zone-anchor-position` expose the same identity to other redraw
+paths.
+
 `mevedel-interaction-prompt.el` owns the common lifecycle for those opaque
 handles: exactly-once settlement, request-local cancellation, buffer-kill
 cleanup, weak request-registration bookkeeping, and standard prompt framing.

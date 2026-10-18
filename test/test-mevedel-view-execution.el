@@ -252,7 +252,46 @@
     (let ((before (plist-get (mevedel-view-execution-fragment session) :body)))
       (setf (plist-get (car live) :wall-time-seconds) 20)
       (should (equal-including-properties
-               before (plist-get (mevedel-view-execution-fragment session) :body))))))
+               before (plist-get (mevedel-view-execution-fragment session) :body)))))
+  :doc "point stays on its row when a row above it finishes"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (setf (plist-get (car live) :started-at) 1.0)
+      (let ((agents (list (list :path "/root/worker" :status 'running :depth 0
+                                :model-metadata '(:model "claude-opus-5-5" :effort "high")
+                                :started-at 4.0))))
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda () agents)))
+          (mevedel-view--render-status)
+          (goto-char (point-max))
+          (insert "> draft\nsecond line")
+          (mevedel-view-execution-test--at "same command")
+          (setq agents nil)
+          (unwind-protect
+              (progn
+                (mevedel-view--render-status)
+                (should (string-search "✓ Finished  agent    /root/worker" (buffer-string)))
+                (should (looking-at-p "same command"))
+                (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+            (mevedel-view-execution--cancel-release))))))
+  :doc "output arriving above point never moves point onto another execution's Stop"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (setq live (list (list :execution-id "e1" :owner "/root" :yielded t :state 'running
+                             :command "make test-oldest" :started-at 1.0)
+                       (list :execution-id "e2" :owner "/root" :yielded t :state 'running
+                             :command "npm run build" :started-at 2.0 :output-tail "x")))
+      (setq mevedel-view-execution--selected
+            (plist-put (copy-sequence (nth 1 live)) :session session))
+      (mevedel-view--render-status)
+      (mevedel-view-execution-test--at "make test-oldest")
+      (forward-char 6)
+      (setf (plist-get (nth 1 live) :output-tail) (make-string 36 ?a))
+      (mevedel-view--render-status)
+      (should (looking-at-p "est-oldest"))
+      (should-not (get-text-property (point) 'help-echo)))))
 
 (mevedel-deftest mevedel-view-execution--line ()
   ,test
