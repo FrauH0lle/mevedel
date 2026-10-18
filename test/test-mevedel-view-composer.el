@@ -2661,17 +2661,45 @@
             (should-not (mevedel-view-test--skill-hint-string))))
       (delete-directory root t)))
 
-  :doc "history-region refresh skips prompt scan"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (goto-char (point-min))
-      (cl-letf (((symbol-function 'mevedel-view--input-start)
-                 (lambda ()
-                   (error "Prompt scan should be skipped"))))
-        (mevedel-view--refresh-skill-argument-hint)
-        (should-not mevedel-view--skill-argument-hint-overlay))))
+  :doc "motion neither moves nor hides the hint, and does no prompt scan"
+  ;; The hint used to follow point: moving into the draft reflowed the line
+  ;; around it, and leaving the composer removed it.
+  (let* ((root (make-temp-file "mevedel-view-motion-hint-" t))
+         (ws (mevedel-workspace--create
+              :type 'file :id root :root root :name "view-motion-hint"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "deploy-api"
+                 :argument-names '("service" "environment"))))
+    (setf (mevedel-session-skills session) (list skill))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "$deploy-api billing")
+            (run-hooks 'post-command-hook)
+            (let ((hint (mevedel-view-test--skill-hint-string)))
+              (should (string-match-p "\\[environment\\]" hint))
+              (should (= (point-max) (overlay-start
+                                      mevedel-view--skill-argument-hint-overlay)))
+              (cl-letf (((symbol-function 'mevedel-view--input-start)
+                         (lambda () (error "Motion must not scan the prompt"))))
+                (dolist (position (list (- (point-max) 9) (point-min)))
+                  (goto-char position)
+                  (run-hooks 'post-command-hook)
+                  (should (equal hint (mevedel-view-test--skill-hint-string)))
+                  (should (= (point-max)
+                             (overlay-start
+                              mevedel-view--skill-argument-hint-overlay))))))
+            (should (equal "$deploy-api billing" (mevedel-view--input-text)))))
+      (delete-directory root t)))
 
-  :doc "refresh repairs drifted input marker"
+  :doc "a draft edit repairs a drifted input marker"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let ((prompt-start (mevedel-view--prompt-start-position))
@@ -2679,8 +2707,8 @@
         (goto-char input-start)
         (insert "draft")
         (set-marker mevedel-view--input-marker (point-max))
-        (goto-char input-start)
-        (mevedel-view--refresh-skill-argument-hint)
+        (goto-char (point-max))
+        (insert "s")
         (should (= prompt-start
                    (marker-position mevedel-view--input-marker)))))))
 

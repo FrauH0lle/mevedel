@@ -2407,9 +2407,11 @@ commands; root `$` completion offers user-invocable skills. Both insert a
 real space after a completed root name. Command argument completion is
 available for commands with useful candidate sets, such as `/mode` and
 `/model`. Skill hints are rendered
-as a zero-width overlay near point from `argument-hint` or remaining
-`arguments` names. They are not buffer text and are never sent to the
-model.
+as a zero-width overlay at the end of the draft from `argument-hint` or
+remaining `arguments` names. Their place and visibility depend only on the
+draft, never on point, so moving the cursor never reflows the composer; a
+motion command does no hint work at all. They are not buffer text and are
+never sent to the model.
 
 Root prompt producers share `mevedel--insert-user-turn`, which applies the
 configured gptel separator and clears copied view, tool,
