@@ -551,7 +551,6 @@ priorities."
     (list
      :input (and input-start
                  (buffer-substring-no-properties input-start (point-max)))
-     :composer-anchors (and input-start (mevedel-view--composer-anchors))
      :point (copy-marker (point) t)
      :mark (and (mark t) (copy-marker (mark t) t))
      :mark-active mark-active
@@ -597,7 +596,6 @@ priorities."
             (set-window-start window window-start t))
           (when (eq window (plist-get state :selected-window))
             (goto-char (window-point window)))))))
-  (mevedel-view--restore-composer-anchors (plist-get state :composer-anchors))
   (when-let* ((mark (plist-get state :mark)))
     (set-marker (mark-marker) (min (point-max) mark)))
   (setq mark-active (plist-get state :mark-active)
@@ -720,39 +718,83 @@ rail directly above the composer re-renders every second."
            (+ (plist-get bounds :start)
               (plist-get state :offset))))))
 
-(defun mevedel-view-zone--capture-logical-state (zone region)
-  "Capture point and displayed-window positions inside ZONE REGION."
+(defun mevedel-view-zone--capture-logical-state (zone region composer-anchors)
+  "Capture logical positions and each window's viewport policy for ZONE REGION.
+REGION may be nil on first render.  A visible interaction visit anchors
+point's screen row, even when another zone is being reconciled.  Only
+visiting windows pay for the bounded display-row measurement.
+COMPOSER-ANCHORS identify other windows whose visible composer stays still."
   (list
-   :point (mevedel-view-zone--fragment-position-state zone region (point))
-   :mark (and (mark t)
+   :point (and region
+               (mevedel-view-zone--fragment-position-state zone region (point)))
+   :mark (and region (mark t)
               (mevedel-view-zone--fragment-position-state zone region (mark t)))
    :windows
    (mapcar
     (lambda (window)
-      (list window
-            (mevedel-view-zone--fragment-position-state
-             zone region (window-point window))
-            (mevedel-view-zone--fragment-position-state
-             zone region (window-start window))))
+      (let* ((position (window-point window))
+             (composer (assq window composer-anchors))
+             (visit (and (not (mevedel-view-zone--input-offset position))
+                         (when-let* ((interaction
+                                      (mevedel-view-zone--live-region 'interaction)))
+                           (mevedel-view-zone--fragment-position-state
+                            'interaction interaction position))))
+             (row (and visit (<= (window-start window) position)
+                       (save-excursion
+                         (goto-char (window-start window))
+                         (let ((row 0)
+                               (limit (window-body-height window))
+                               found)
+                           (while (and (not found) (< row limit))
+                             (if (or (/= 1 (vertical-motion 1 window))
+                                     (> (point) position))
+                                 (setq found t)
+                               (setq row (1+ row))))
+                           (and found row))))))
+        (list window
+              (and region (mevedel-view-zone--fragment-position-state
+                           zone region position))
+              (and region (mevedel-view-zone--fragment-position-state
+                           zone region (window-start window)))
+              composer visit row)))
     (get-buffer-window-list (current-buffer) nil t))))
 
 (defun mevedel-view-zone--restore-logical-state (zone state)
-  "Restore point and displayed-window positions for ZONE STATE."
+  "Restore positions for ZONE STATE, returning windows anchored on visits.
+Composer windows leave start restoration to their composer anchor.  A
+surviving visible interaction visit keeps point's screen row instead.
+Other windows retain their logical or marker-backed reading starts."
   (when-let* ((position (mevedel-view-zone--restore-fragment-position
                          zone (plist-get state :point))))
     (goto-char position))
   (when-let* ((position (mevedel-view-zone--restore-fragment-position
                          zone (plist-get state :mark))))
     (set-marker (mark-marker) position))
-  (dolist (window-state (plist-get state :windows))
-    (pcase-let ((`(,window ,point-state ,start-state) window-state))
-      (when (window-live-p window)
-        (when-let* ((position (mevedel-view-zone--restore-fragment-position
-                               zone point-state)))
-          (set-window-point window position))
-        (when-let* ((position (mevedel-view-zone--restore-fragment-position
-                               zone start-state)))
-          (set-window-start window position t))))))
+  (let (visited-windows)
+    (dolist (window-state (plist-get state :windows))
+      (pcase-let ((`(,window ,point-state ,start-state ,composer ,visit ,row)
+                   window-state))
+        (when (and (window-live-p window)
+                   (eq (window-buffer window) (current-buffer)))
+          (when-let* ((position (mevedel-view-zone--restore-fragment-position
+                                 zone point-state)))
+            (set-window-point window position))
+          (let ((visited (and row (mevedel-view-zone--restore-fragment-position
+                                   'interaction visit))))
+            (cond
+             (visited
+              (set-window-point window visited)
+              (set-window-start window
+                                (save-excursion
+                                  (goto-char visited)
+                                  (vertical-motion (- row) window)
+                                  (point)) t)
+              (push window visited-windows))
+             ((not composer)
+              (when-let* ((position (mevedel-view-zone--restore-fragment-position
+                                     zone start-state)))
+                (set-window-start window position t))))))))
+    visited-windows))
 
 (defun mevedel-view-zone-reconcile (zone start end fragments)
   "Reconcile complete FRAGMENTS for fixed ZONE between START and END.
@@ -774,19 +816,16 @@ live zone text keeps its current bounds until reconciliation finishes."
   (unwind-protect
       (let* ((table (mevedel-view-zone--region-table))
              (region (mevedel-view-zone--live-region zone))
-             (logical-state (and region
-                                 (mevedel-view-zone--capture-logical-state
-                                  zone region)))
+             (composer-anchors (mevedel-view--composer-anchors))
+             (logical-state (mevedel-view-zone--capture-logical-state
+                             zone region composer-anchors))
              (window-tails (mevedel-view--window-tail-lengths))
              owned-p)
         (if (and (null fragments) (null region))
-            (progn
-              (mevedel-view-zone--call-preserving
-               zone
-               (lambda ()
-                 (mevedel-view-zone--delete-stale-text zone nil)))
-              (mevedel-view--clamp-window-starts window-tails)
-              nil)
+            (mevedel-view-zone--call-preserving
+             zone
+             (lambda ()
+               (mevedel-view-zone--delete-stale-text zone nil)))
           (unless region
             ;; History inserted at the boundary belongs before this zone.
             (setq region (make-overlay start end (current-buffer) t nil))
@@ -813,14 +852,27 @@ live zone text keeps its current bounds until reconciliation finishes."
                      (mevedel-view-zone--reconcile region zone fragments))))
               (mevedel-view-zone--restore-neighbor-regions neighbors)
               (when (overlay-buffer region)
-                (mevedel-view-zone--restore-trailing-overlays region trailing))))
-          (mevedel-view-zone--restore-logical-state zone logical-state)
-          (mevedel-view--clamp-window-starts window-tails)
-          (if fragments
-              region
+                (mevedel-view-zone--restore-trailing-overlays region trailing)))))
+        (let ((visited-windows
+               (mevedel-view-zone--restore-logical-state zone logical-state)))
+          (setq composer-anchors
+                (seq-remove (lambda (anchor)
+                              (memq (car anchor) visited-windows))
+                            composer-anchors))
+          (mevedel-view--restore-composer-anchors composer-anchors)
+          ;; Screen-row anchors already preserve deliberate blank space.
+          ;; Only windows without one need the settlement fallback.
+          (mevedel-view--clamp-window-starts
+           (seq-remove (lambda (tail)
+                         (or (assq (car tail) composer-anchors)
+                             (memq (car tail) visited-windows)))
+                       window-tails)))
+        (if fragments
+            region
+          (when region
             (delete-overlay region)
-            (remhash zone table)
-            nil)))
+            (remhash zone table))
+          nil))
     (when (and (boundp 'mevedel-view-render-debug)
                mevedel-view-render-debug)
       (mevedel-view--debug-log

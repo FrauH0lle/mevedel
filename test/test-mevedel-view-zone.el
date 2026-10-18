@@ -209,6 +209,152 @@
         (set-marker anchor nil)
         (should (equal "TailLive\n" (buffer-string))))))
 
+  :doc "each window anchors its composer, visited card, or reading start independently"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (forward-line 1)
+        (dotimes (n 100) (insert (format "transcript %d\n" n))))
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+      (let* ((visitor (selected-window))
+             (writer (split-window-right))
+             (reader (split-window writer nil 'below))
+             (card (list :namespace 'interaction :id 'visited :priority 2
+                         :body "question\noption one\noption two\nanswer"))
+             (lower (list :namespace 'interaction :id 'lower :priority 1
+                          :body (mapconcat (lambda (_) "permission")
+                                           (number-sequence 1 30) "\n")))
+             (upper (list :namespace 'interaction :id 'upper :priority 3
+                          :body "new\nupper\ncard"))
+             (render (lambda (fragments)
+                       (mevedel-view-zone-reconcile
+                        'interaction mevedel-view--interaction-marker
+                        mevedel-view--input-marker fragments))))
+        (funcall render (list card))
+        (goto-char (plist-get (mevedel-view-zone-fragment-bounds
+                              'interaction 'visited) :start))
+        (forward-line 2)
+        (set-window-start visitor
+                          (save-excursion (vertical-motion -5 visitor) (point)) t)
+        (set-window-point writer (+ 4 (mevedel-view--input-start)))
+        (set-window-start writer
+                          (save-excursion
+                            (goto-char (mevedel-view--input-start))
+                            (vertical-motion (- (1- (window-body-height writer)))
+                                             writer)
+                            (point)) t)
+        (let ((reader-start (save-excursion
+                              (goto-char (point-min)) (forward-line 10) (point))))
+          (set-window-start reader reader-start t)
+          (set-window-point reader reader-start)
+          (let ((writer-row (mevedel-view--composer-screen-row writer)))
+            (dolist (fragments (list (list card lower) (list upper card lower)
+                                    (list upper card) (list card)))
+              (funcall render fragments)
+              (should (= (window-start visitor)
+                         (save-excursion
+                           (goto-char (window-point visitor))
+                           (vertical-motion -5 visitor)
+                           (point))))
+              (should (= writer-row (mevedel-view--composer-screen-row writer)))
+              (should (= (+ 4 (mevedel-view--input-start))
+                         (window-point writer)))
+              (should (= reader-start (window-start reader)))
+              (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+            ;; A different zone's growth must use the same visiting policy.
+            (mevedel-view-zone-reconcile
+             'status mevedel-view--status-marker mevedel-view--status-marker
+             '((:namespace status :id work :body "working\nnew task\nprogress")))
+            (should (= (window-start visitor)
+                       (save-excursion
+                         (goto-char (window-point visitor))
+                         (vertical-motion -5 visitor) (point))))
+            (should (= writer-row (mevedel-view--composer-screen-row writer)))
+            (should (= reader-start (window-start reader))))))))
+
+  :doc "composer anchoring preserves deliberate blank rows when a card shrinks"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (forward-line 1)
+        (dotimes (n 100) (insert (format "transcript %d\n" n))))
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+      (mevedel-view-zone-reconcile
+       'interaction mevedel-view--interaction-marker mevedel-view--input-marker
+       '((:namespace interaction :id card :body "one\ntwo\nthree")))
+      (set-window-start nil
+                        (save-excursion
+                          (goto-char (mevedel-view--input-start))
+                          (vertical-motion -6) (point)) t)
+      (mevedel-view-zone-clear 'interaction)
+      (should (= 6 (mevedel-view--composer-screen-row (selected-window))))
+      (should (= (+ 4 (mevedel-view--input-start)) (point)))
+      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))
+
+  :doc "composer anchoring wins over a logical start inside a growing card"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+      (let ((render (lambda (rows)
+                      (mevedel-view-zone-reconcile
+                       'interaction mevedel-view--interaction-marker
+                       mevedel-view--input-marker
+                       (list (list :namespace 'interaction :id 'tall
+                                   :body (mapconcat
+                                          (lambda (n) (format "row %d" n))
+                                          (number-sequence 1 rows) "\n")))))))
+        (funcall render 60)
+        (set-window-start nil
+                          (save-excursion
+                            (goto-char (mevedel-view--input-start))
+                            (vertical-motion -10) (point)) t)
+        (should (mevedel-view-zone-bounds-at (window-start)))
+        (should (= 10 (mevedel-view--composer-screen-row (selected-window))))
+        (funcall render 90)
+        (should (= 10 (mevedel-view--composer-screen-row (selected-window))))
+        (should (= (+ 4 (mevedel-view--input-start)) (point)))
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+
+  :doc "removed tall cards still fill the last page without a surviving row anchor"
+  (dolist (start-in-card '(t nil))
+    (mevedel-view-test--with-buffers
+      (save-window-excursion
+        (switch-to-buffer view-buf)
+        (delete-other-windows)
+        (let ((inhibit-read-only t))
+          (goto-char (point-min))
+          (forward-line 1)
+          (dotimes (n 100) (insert (format "transcript %d\n" n))))
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+        (mevedel-view-zone-reconcile
+         'interaction mevedel-view--interaction-marker mevedel-view--input-marker
+         (list (list :namespace 'interaction :id 'tall
+                     :body (mapconcat (lambda (_) "option")
+                                      (number-sequence 1 (* 2 (window-body-height)))
+                                      "\n"))))
+        (goto-char (plist-get (mevedel-view-zone-fragment-bounds
+                              'interaction 'tall) :start))
+        (unless start-in-card (forward-line -5))
+        (set-window-start nil (point) t)
+        (should-not (mevedel-view--composer-screen-row (selected-window)))
+        (should (eq (not (null (mevedel-view-zone-bounds-at (window-start))))
+                    start-in-card))
+        (mevedel-view-zone-clear 'interaction)
+        (should (= (window-start)
+                   (save-excursion
+                     (goto-char (point-max))
+                     (vertical-motion (- (1- (window-body-height))))
+                     (point))))
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+
   :doc "a line's own activation wins over the fragment default in rendered text"
   (with-temp-buffer
     (insert "> draft")

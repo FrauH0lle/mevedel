@@ -189,21 +189,27 @@
               (_ (mevedel-view--interaction-unregister 'viewport-test)))
             (ert-info ((format "viewport after %s settlement" scenario))
               (should (= (window-start)
-                         (if (eq scenario 'survive)
-                             saved-start
+                         (cond
+                          ((eq scenario 'survive) saved-start)
+                          ((memq scenario '(high truncate))
+                           (save-excursion
+                             (goto-char (mevedel-view--input-start))
+                             (vertical-motion -5)
+                             (point)))
+                          (t
                            (save-excursion
                              (goto-char (point-max))
                              (vertical-motion (- (1- height)))
-                             (point)))))
+                             (point))))))
               (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))))
   (scenario)
   :doc "settlement fills the last page when the composer was hidden"
   'hidden
-  :doc "settlement fills the last page when the composer was high on screen"
+  :doc "settlement preserves blank space when the composer was high on screen"
   'high
   :doc "outer render restoration does not undo the last-page clamp"
   'render
-  :doc "truncation past a saved start fills the last page"
+  :doc "truncation past a saved start preserves the visible composer's row"
   'truncate
   :doc "surviving fragment starts keep deliberate blank space below"
   'survive
