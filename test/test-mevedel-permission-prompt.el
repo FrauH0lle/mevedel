@@ -1265,6 +1265,35 @@
                               'font-lock-face 'font-lock-string-face)
                   entry nil 400))))))
 
+(mevedel-deftest mevedel-permission--anchor
+  ()
+  ,test
+  (test)
+  :doc "expanding and collapsing a visited card keeps point on its Keys row"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (mevedel-view-test--insert-composer-draft "> draft\nnext" 3)
+      (let ((entry (list :kind 'bash :origin "/root"
+                         :command (mapconcat (lambda (n) (format "echo step-%d" n))
+                                             (number-sequence 1 60) " && ")
+                         :command-class 'safe
+                         :permission-mode-effective 'ask
+                         :permission-via 'mode)))
+        (cl-flet ((render ()
+                    (with-current-buffer data-buf
+                      (mevedel-permission-prompt-render entry "/root" #'ignore 1)))
+                  (on-keys ()
+                    (should (looking-at-p "RET allow once"))))
+          (render)
+          (mevedel-view-jump-to-interaction)
+          (on-keys)
+          (dolist (expanded '(t nil))
+            (mevedel-queue--entry-metadata-put entry :expanded expanded)
+            (render)
+            (on-keys))
+          (should (equal "> draft\nnext" (mevedel-view--input-text))))))))
+
 (mevedel-deftest mevedel--prompt-block-face ()
   ,test
   (test)

@@ -212,6 +212,10 @@ interaction redraws preserve the active scoped draft and point exactly,
 including a multiline draft whose first editable character is `>`.
 Permission cards in the interaction zone start folded; `TAB` re-renders the
 queue head with its details, which also preserves the draft and point. The
+card tags its Keys row, its command or expression, and its two detail blocks
+with zone anchors, so point on the Keys row stays on it when `TAB`, `c`, `n`,
+`p` or `g` redraws text above it; restoring by offset had moved point from the
+Keys row into the middle of the expanded command. The
 [permissions manual](permissions.md) owns what a folded card must show.
 
 Directive prompt construction remains independent of this visible chronology.
