@@ -951,18 +951,34 @@ buffers keep no undo history.
 Rebuilding the prompt is also chrome: undoing a draft never restores an older
 permission badge or prompt prefix inside the composer.
 
-Zone changes and re-renders preserve the composer's screen row when it is
-visible. After restoring logical positions and composer anchors, if the number
-of characters from a window's start to the buffer end decreased, a start later
-than the last page is clamped backward. Removing a pending interaction thus does
-not strand the composer at the top above empty space, including when the start
-was in surviving transcript above the interaction. Unchanged or growing tails
-keep intentional blank space; windows reading earlier history are not pulled
-toward the bottom, and a window already starting at the buffer beginning stays
-there. The shrink gate counts characters, while the clamp counts display rows,
-including soft wrapping, without changing point or draft text. Equal-length
-reflow alone does not trigger it. Logical restoration runs before the clamp so
-it cannot undo the correction.
+Zone changes and re-renders preserve one active surface per window: point in a
+surviving visited interaction takes priority, then a visible composer, then the
+logical reading position. Anchors use body-relative pixels and native display
+geometry, including wrapping, remapped faces, inline images and partial vertical
+scrolling. Logical positions are restored before the pixel anchor. A surviving
+composer anchor retains intentional blank space. A lost or truncated logical
+window start instead permits filling the last page, even if anchoring exposes
+longer history lines and grows the character tail. Visiting windows repair only
+new blank pixels created below the buffer, retaining their prior blank area.
+For unanchored windows, a smaller character tail also permits clamping a start
+later than the last page backward; unchanged or growing tails retain their
+reading position. Equal-length reflow alone does not trigger that fallback.
+
+Draft editing captures blank pixels before the first mutation of a command and
+repairs only new blank space after the complete command. Ordinary self-insertion
+without overwrite or auto-fill skips capture. Short plain deletions whose line
+fits every window also skip viewport capture; wrapping, remapping and display
+properties take the exact path. Other deletions (including multiline
+delete-selection) and insertion-first commands retain it. Commandless mutations
+repair immediately. History/snapshot replacement and sending a folded draft are
+single transactions, not independent insertion/deletion viewport states. Only
+an actual increase in blank pixels triggers backward traversal. Height-only
+window growth infers the old blank area from the height delta when the buffer
+and width are unchanged; width changes
+and newly displayed buffers are not inferred. Text scaling captures actual blank
+pixels around `text-scale-mode`, including programmatic calls, without adding
+work to ordinary commands or redisplay. Both repairs retain pre-existing blank
+space.
 
 A submission that starts in the composer captures the draft it forwards, so a
 draft typed while `UserPromptSubmit`, skill preparation, or a slash command

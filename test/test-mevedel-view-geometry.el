@@ -14,6 +14,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view-composer)
+(require 'mevedel-view-zone)
 
 (defmacro mevedel-view-geometry-test--with-window (&rest body)
   "Run BODY in an isolated, redisplayed text window."
@@ -27,6 +28,7 @@
          (setq-local truncate-lines nil)
          (let ((scroll-margin 0)
                (scroll-conservatively 10000)
+               (resize-mini-windows nil)
                (auto-window-vscroll nil))
            (redisplay t)
            (let ((body-height (window-body-height nil t))
@@ -87,7 +89,7 @@
                  (scroll (window-vscroll window t)))
             (should (= 80 scroll))
             (should before)
-            (mevedel-view--call-preserving-composer-view
+            (mevedel-view--call-preserving-window-state
              (lambda () (delete-region deletion-start (+ deletion-start 5))))
             (redisplay t)
             (should (= before (mevedel-view--position-screen-y (point-max) window)))
@@ -122,7 +124,7 @@
       (let* ((window (selected-window))
              (before (mevedel-view--position-screen-y (point-max) window)))
         (should before)
-        (mevedel-view--call-preserving-composer-view
+        (mevedel-view--call-preserving-window-state
          (lambda ()
            (put-text-property image-start (1+ image-start)
                               'display (funcall image 170))))
@@ -150,6 +152,79 @@
         (mevedel-view--restore-draft-window-state)
         (redisplay t)
         (should (= before (mevedel-view--position-screen-y (point-max) window)))))))
+
+(mevedel-deftest mevedel-view-geometry-draft-final-image ()
+  (let ((blank ,blank))
+    (mevedel-view-geometry-test--with-window
+      (skip-unless (and (display-graphic-p) (image-type-available-p 'svg)))
+      (dotimes (_ 100) (insert "history\n"))
+      (setq-local mevedel-view--input-marker (copy-marker (point)))
+      (insert (propertize "I" 'display
+                          (create-image
+                           "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='180'><rect width='40' height='180' fill='red'/></svg>"
+                           'svg t))
+              " final draft line")
+      (let* ((window (selected-window))
+             (height (cdr (window-text-pixel-size window (point-max) (point-max))))
+             (y (- (window-body-height window t) height blank)))
+        (should (> y 0))
+        (mevedel-view--set-viewport
+         window (mevedel-view--viewport-at-y window (point-max) y))
+        (redisplay t)
+        (let ((before-blank (mevedel-view--window-blank-pixels window))
+              (before-y (mevedel-view--position-screen-y (point-max) window t)))
+          (should before-blank)
+          (should (= blank before-blank))
+          ;; Observe the actual cursor row independently of production's
+          ;; fresh iterator calculation.  Point is at EOF after redisplay.
+          (let ((row (window-line-height nil window)))
+            (should row)
+            (should (= blank (- (window-body-height window t)
+                                (nth 2 row) (car row)))))
+          ;; Removing the image changes the final line's height, not its
+          ;; screen-row count.  Keeping EOF Y alone would add blank pixels.
+          (mevedel-view--call-preserving-draft-window-state
+           (lambda ()
+             (delete-region (mevedel-view--input-start)
+                            (1+ (mevedel-view--input-start)))))
+          (redisplay t)
+          (should (equal " final draft line"
+                         (buffer-substring-no-properties
+                          (mevedel-view--input-start) (point-max))))
+          (should (= before-blank (mevedel-view--window-blank-pixels window)))
+          (let ((row (window-line-height nil window)))
+            (should row)
+            (should (= blank (- (window-body-height window t)
+                                (nth 2 row) (car row)))))
+          (should (> (mevedel-view--position-screen-y (point-max) window t)
+                     before-y))))))
+  (blank)
+  :doc "Shrinking the final image line keeps a full draft window full." 0
+  :doc "Shrinking the final image line retains deliberate blank pixels." 60)
+
+(mevedel-deftest mevedel-view-geometry-end-row
+  (:doc "Fresh EOF rows match native cursor rows before and after mutation.")
+  (mevedel-view-geometry-test--with-window
+    (dotimes (_ 100) (insert "history\n"))
+    (insert "draft")
+    (let ((window (selected-window)))
+      (mevedel-view--set-viewport
+       window (mevedel-view--viewport-at-y window (point-max) 300))
+      (set-window-vscroll window 7 t)
+      (redisplay t)
+      (let* ((native (window-line-height nil window))
+             (expected (cons (nth 2 native) (car native))))
+        (should (equal expected (mevedel-view--window-end-row window)))
+        (delete-region (- (point-max) 5) (point-max))
+        ;; Query before redisplay; the final line is now empty.
+        (should (equal expected (mevedel-view--window-end-row window)))
+        (redisplay t)
+        (let ((row (window-line-height nil window)))
+          (should (equal expected (cons (nth 2 row) (car row))))))
+      (goto-char (point-min))
+      (set-window-start window (point-min) t)
+      (redisplay t)
+      (should-not (mevedel-view--window-end-row window)))))
 
 (provide 'test-mevedel-view-geometry)
 ;;; test-mevedel-view-geometry.el ends here

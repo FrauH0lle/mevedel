@@ -4,36 +4,68 @@ Status: accepted
 
 ## Current decision
 
-The view keeps the user's active surface on its screen row. Zone reconciliation
+The view keeps the user's active surface at its screen position. Zone reconciliation
+and its enclosing full-render transaction
 chooses one viewport anchor per window: point inside a surviving visited
 interaction card takes priority; otherwise a previously visible composer keeps
-its row regardless of point. Logical positions are restored before applying that
-row anchor. Windows with neither retain logical/marker reading positions and
-may use the net-tail shrink clamp last. Row-anchored windows do not clamp away
-their deliberate blank space.
+its position regardless of point. Logical positions are restored before applying
+that anchor. A visited card retains its screen position unless its shrink creates
+new blank space below the buffer; repairing only that excess takes priority over
+the visited row. Existing blank space is retained.
 
-Chrome above the composer (the
-background-work panel, tasks, interaction prompts) changes height while the user
-types; a window that shows the composer keeps the composer's row across every
-zone mutation and re-render, so that growth scrolls the transcript instead, as in
-a bottom-anchored terminal. While everything from the window start to the end of
-the draft still fits, the start is kept and free space below is used first; a
-window scrolled away from the composer, or starting inside a tall draft, keeps
-its own reading position. Full re-renders capture the number of characters from
-each window start to the buffer end. Windows with a visible composer anchor do
-not receive the last-page fallback: that anchor also records deliberate blank
-space. For other windows, after restoring logical positions, a smaller tail
-permits clamping a start past the last page backward to that page. This fills
-empty space left when an offscreen interaction disappears. Unchanged or growing
-tails retain deliberate blank space; earlier history views do not move toward
-the bottom, and a window already starting at `point-min` stays there.
+Chrome above the composer (background work, tasks and interaction prompts)
+changes height while the user types. Composer anchoring scrolls the transcript
+instead, as in a bottom-anchored terminal. While everything from the window start
+through the draft fits, growth uses free space below before scrolling. A window
+scrolled away from the composer, or starting inside a tall draft, keeps its own
+reading position.
 
-Deleting draft text captures the buffer end's display row before the deletion
-and repairs only newly created blank space. Prompt, history and saved-draft
-replacement are single mutations: their temporary empty draft is not a viewport
-state to restore. Ordinary insertion does not capture display geometry. View
+Zone reconciliation and full re-renders also capture each logical window start
+and its character tail. After logical restoration, they apply this policy:
+
+| Window context before mutation | Viewport policy | Discriminating case |
+| --- | --- | --- |
+| Point visits a surviving interaction card | Retain the visited row, then fill only newly created blank pixels | Shrinking a visited card below point must not leave a newly empty viewport |
+| Composer visible, saved logical start survives | Retain the composer position and pre-existing blank space | Shorter status text must not erase intentional blank space |
+| Composer visible, saved logical start removed or truncated | Fill the last page, bypassing the character-tail guard | Ask submission can expose longer history lines and increase the tail despite losing rows |
+| Neither a composer nor visited-card anchor | Clamp backward only when the character tail shrank | An offscreen composer returns to a full last page after an interaction disappears |
+
+Earlier history views do not move toward the bottom, and a window already
+starting at `point-min` stays there. Strict logical-anchor resolution distinguishes
+a surviving row from one removed with its fragment or truncated within it.
+
+Anchors measure body-relative pixels through Emacs's native visibility query,
+not a row loop. Native backward display traversal restores the window start and
+partial vertical scroll, accounting for remapped faces, wrapping and images.
+Measurements are valid before redisplay, when the cached window end is stale.
+Terminal geometry uses the same API in character-cell units. Batch policy tests
+model only the visibility seam; native graphical tests establish pixel geometry.
+
+Draft commands capture blank pixels before their first mutation and repair only
+newly created blank space after the command. Insertion-before-deletion commands
+must capture before insertion too: a temporary extra line is not the original
+viewport. Ordinary `self-insert-command` skips capture when overwrite and auto-fill
+are disabled: it can only grow the draft. A short plain deletion also skips
+capture when the entire logical line fits every displaying window. Newlines,
+wrapping, remapping, display/face properties and non-ASCII text take the exact
+path. Graphical windows also require a monospaced default font; proportional
+fonts use exact geometry. Other deletions, including multiline
+delete-selection before typing, and all other insertion-first commands capture.
+Commandless mutations repair immediately. Prompt, history and saved-draft
+replacement and folded prompt submission are single mutations: neither a temporary
+empty draft nor a user echo above the uncleared draft is a viewport state to
+restore. Backward traversal runs only when blank pixels actually increased. View
 buffers set `scroll-conservatively` to 101 and `scroll-margin` to 0 so a draft
 growing past the bottom scrolls one line.
+
+Height-only window growth repairs newly exposed blank space using the height
+delta, provided the same buffer and width were displayed previously. This
+inference covers popup closure with an unchanged start, not arbitrary simultaneous
+scrolling, reflow or buffer replacement. The buffer-local window-size-change hook
+requires no continuous geometry recording. Text scaling uses one guarded advice
+around `text-scale-mode`: capture actual blank pixels before face remapping and
+fill only the new excess afterward. Other buffers take the direct path. Both
+repairs preserve deliberate pre-existing blank space.
 
 The line next to the composer never appears or disappears: one permanent rail
 carries the mode badge, an actionable pending count with `C-c C-j`, and the
@@ -80,6 +112,43 @@ focus is explicit.
 
 ## Decision history
 
+- **Draft commands are one mutation (2026-10-18).** Per-change repair moved a
+  five-line replacement before its insertion half, consuming five deliberate
+  blank rows. Deferring repair until `post-command-hook` fixes that ordering,
+  but capturing at the first deletion is insufficient: `transpose-lines`
+  inserts first. A native replay captured EOF at pixel 525 after that temporary
+  insertion, then repaired the original pixel 504 position to 525 after deletion,
+  consuming a row although the command changed no height. Capture now starts at
+  the first mutation, and the repair compares actual blank pixels, including the
+  final line's height. The first short-line gate was removed: besides missing
+  insertion-first commands, its `window-max-chars-per-line` call alone cost
+  639--647 microseconds in quiet graphical plain/wrapped-history probes. Its
+  replacement uses cheap body width and conservative line-local checks only
+  for deletions; insertion-first transactions still capture at their first edit.
+
+- **Lost starts still fill the last page (2026-10-18).** Exempting every visible
+  composer from the shrink clamp regressed the original Ask submission: a
+  recentered submission left roughly eighteen blank rows. Comparing numeric
+  start movement was insufficient, and the character-tail guard could reject a
+  real row loss: an 83-character tail became 98 characters after anchoring
+  exposed longer history lines. Strict anchor resolution now distinguishes a
+  surviving row from a removed or truncated one; a lost start bypasses that
+  character guard. A surviving composer anchor still preserves deliberate
+  blanks. A visited card that shrinks below point repairs only newly created
+  blank pixels rather than retaining an otherwise empty viewport.
+
+- **Native pixel anchors and event-local geometry repair (2026-10-18).** Counting
+  rows loses image height, remapped glyph height and partial scrolling. Native
+  geometry replaces the production row loop rather than adding a second path.
+  Popup closure in a graphical probe enlarged the body by 160 pixels and created
+  exactly 160 new blank pixels while retaining the start and content height;
+  subtracting the height delta recovered the previous 98 blank pixels. Text
+  scaling from +2 to 0 created 216 blank pixels without running a size-change
+  hook; a row-count approximation predicted 240, so scaling captures actual
+  geometry at its own event. A folded 20-line submission previously consumed
+  three deliberate blank rows because deletion captured the end after the folded
+  echo was inserted. Submission now repairs net shrink from before that insertion.
+
 - **One viewport anchor per window (2026-10-18).** Logical window-start
   restoration previously overrode the composer's row inside growing cards,
   while composer anchoring displaced visited controls when unrelated cards
@@ -92,11 +161,13 @@ focus is explicit.
   terminal window when a streaming status summary became shorter in characters
   but not in display rows. The character-count gate alone cannot distinguish
   this from removed content. A captured composer row already carries the needed
-  viewport intent, so full re-renders now exempt those windows from the fallback
-  rather than adding an end-of-buffer geometry scan to every render. Separately,
+  viewport intent, so full re-renders initially exempted those windows from the
+  fallback rather than adding an end-of-buffer geometry scan to every render.
+  The lost-start refinement above supersedes that blanket exemption. Separately,
   deleting five draft lines left five new blank rows; clearing a tall draft could
-  leave almost the entire window empty. Deletion now captures and restores the
-  old end row, bounded by one window. Replacing a draft runs this repair once,
+  leave almost the entire window empty. The first repair captured and restored
+  the old end row, bounded by one window; pixel geometry and first-mutation
+  capture now supersede that representation. Replacing a draft runs this repair once,
   after insertion, so navigating to a shorter history entry does not scroll for
   the temporary empty draft. These paths preserve pre-existing blank space
   instead of consuming it.
@@ -112,7 +183,7 @@ focus is explicit.
   Restricting the clamp to starts lost by fragment removal or truncation fixed
   those regressions but missed another real case: a split window starting in
   surviving transcript just above the Ask card, with the composer offscreen,
-  retained only lines 79--90 in a 39-row window after submission. The current
+  retained only lines 79--90 in a 39-row window after submission. The subsequent
   net-tail shrink gate covered both cases without coupling viewport policy to
   fragment identity. Zone reconciliation and full re-renders capture tail
   lengths before mutation and clamp after logical and composer restoration.
@@ -120,7 +191,7 @@ focus is explicit.
   lets the latter undo the correction. The six original reader assertions
   remain unchanged.
 
-  One backward `vertical-motion` computes the last page only when a restored
+  At that stage, one backward `vertical-motion` computed the last page when a restored
   tail shrank; starts at `point-min` skip it. Equal-length reflow alone does not
   trigger this character-count gate. Cached `window-end` cannot safely gate
   this calculation because mutations and `set-window-start` leave it stale.
@@ -148,3 +219,25 @@ the unchanged-tail check both measured about 382 µs; their difference was below
 the probe's noise. These graphical timings are not comparable to the earlier
 terminal baseline. Ordinary no-op and growing-tail updates do not pay for the
 last-page display-row calculation.
+
+The revised first-mutation transaction was measured compiled in Emacs 31.1,
+using real keyboard commands and post-command hooks (60 observations per command
+and layout). Plain / wrapped transcript-history medians, in microseconds:
+
+| Command | TTY, 41 rows | GUI, 30 rows | GUI draft hooks disabled |
+| --- | ---: | ---: | ---: |
+| Self-insert | 45 / 46 | 55 / 57 | 51 / 50 |
+| Short-line Backspace | 56 / 57 | 63 / 65 | 46 / 46 |
+| C-k joining lines | 981 / 1780 | 1058 / 1810 | 302 / 420 |
+| Yank | 699 / 1014 | 819 / 1096 | 58 / 59 |
+| Transpose lines | 696 / 1020 | 752 / 1046 | 73 / 73 |
+
+The GUI body geometry matches its control (636 pixels, 90 columns). Typing stays
+near baseline; the cheap deletion gate replaces the initial 440--767 microsecond
+TTY Backspace capture. Backspace in a *wrapped draft*, where deleting one character
+can remove a row, still takes the exact path: about 1.58 milliseconds in both
+environments (GUI hooks-off control 150 microseconds). These command timings
+include dispatch and garbage collection, not the following explicit redisplay.
+Every candidate preserves the expected draft text and blank-space budget;
+hooks-off controls fail the shrink cases. Correct wrapped and multiline edits
+remain more expensive than edits without viewport repair.

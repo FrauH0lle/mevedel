@@ -178,7 +178,7 @@
                                   (forward-line 2)
                                   (point))))
         ;; The first line now wraps onto a second screen row.
-        (should-not (mevedel-view--composer-screen-row (selected-window)))
+        (should-not (mevedel-view-test--composer-screen-y (selected-window)))
         (funcall render (concat (make-string (+ width 10) ?x) "\n"))
         (should (= 2 (count-screen-lines
                       (plist-get (mevedel-view-zone-fragment-bounds 'interaction 'form) :start)
@@ -311,27 +311,114 @@
           (let ((writer-row (mevedel-view-test--composer-screen-y writer)))
             (dolist (fragments (list (list card lower) (list upper card lower)
                                     (list upper card) (list card)))
-              (funcall render fragments)
-              (should (= (window-start visitor)
-                         (save-excursion
-                           (goto-char (window-point visitor))
-                           (vertical-motion -5 visitor)
-                           (point))))
+              (let ((visit-row (count-screen-lines
+                                (window-start visitor) (window-point visitor)
+                                nil visitor)))
+                (funcall render fragments)
+                (if (equal fragments (list upper card))
+                    ;; Removing the tall lower card exposes NEW blank rows.
+                    ;; Fill those rows even though the visited option moves.
+                    (progn
+                      (should (= (window-start visitor)
+                                 (save-excursion
+                                   (goto-char (point-max))
+                                   (vertical-motion
+                                    (- (1- (window-body-height visitor))) visitor)
+                                   (point))))
+                      (should (< visit-row
+                                 (count-screen-lines
+                                  (window-start visitor) (window-point visitor)
+                                  nil visitor))))
+                  (should (= visit-row
+                             (count-screen-lines
+                              (window-start visitor) (window-point visitor)
+                              nil visitor)))))
+              (should (eq 'visited (get-text-property
+                                   (window-point visitor) 'mevedel-view-zone-id)))
+              (should (save-excursion
+                        (goto-char (window-point visitor))
+                        (looking-at-p "option two")))
               (should (= writer-row (mevedel-view-test--composer-screen-y writer)))
               (should (= (+ 4 (mevedel-view--input-start))
                          (window-point writer)))
               (should (= reader-start (window-start reader)))
               (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
-            ;; A different zone's growth must use the same visiting policy.
-            (mevedel-view-zone-reconcile
-             'status mevedel-view--status-marker mevedel-view--status-marker
-             '((:namespace status :id work :body "working\nnew task\nprogress")))
-            (should (= (window-start visitor)
-                       (save-excursion
-                         (goto-char (window-point visitor))
-                         (vertical-motion -5 visitor) (point))))
+            ;; A different zone's growth preserves the repaired visit row.
+            (let ((visit-row (count-screen-lines
+                              (window-start visitor) (window-point visitor)
+                              nil visitor)))
+              (mevedel-view-zone-reconcile
+               'status mevedel-view--status-marker mevedel-view--status-marker
+               '((:namespace status :id work :body "working\nnew task\nprogress")))
+              (should (= visit-row
+                         (count-screen-lines
+                          (window-start visitor) (window-point visitor)
+                          nil visitor))))
             (should (= writer-row (mevedel-view-test--composer-screen-y writer)))
             (should (= reader-start (window-start reader))))))))
+
+  :doc "visitor shrink fills newly exposed rows but preserves existing blanks and option identity"
+  (dolist (old-blanks '(0 3))
+    (mevedel-view-test--with-buffers
+      (save-window-excursion
+        (switch-to-buffer view-buf)
+        (delete-other-windows)
+        ;; A finite viewport makes the previously hidden end observable after
+        ;; shrink; three deliberate blanks exercise a different repair target.
+        (set-window-buffer (split-window (selected-window) 16 'below) data-buf)
+        (let ((inhibit-read-only t))
+          (goto-char (point-min))
+          (forward-line 1)
+          (dotimes (n 100) (insert (format "transcript %d\n" n))))
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+        (let* ((visitor (selected-window))
+               (card '(:namespace interaction :id visited :priority 2
+                       :body "question\noption one\noption two\nanswer"))
+               (lower (list :namespace 'interaction :id 'lower :priority 1
+                            :body (mapconcat (lambda (_) "permission")
+                                             (number-sequence
+                                              1 (if (zerop old-blanks) 30 3))
+                                             "\n")))
+               (render (lambda (fragments)
+                         (mevedel-view-zone-reconcile
+                          'interaction mevedel-view--interaction-marker
+                          mevedel-view--input-marker fragments))))
+          (funcall render (list card lower))
+          (goto-char (plist-get (mevedel-view-zone-fragment-bounds
+                                'interaction 'visited) :start))
+          (forward-line 2)
+          (set-window-start
+           visitor (save-excursion
+                     (if (zerop old-blanks)
+                         (vertical-motion -3 visitor)
+                       (goto-char (point-max))
+                       (vertical-motion
+                        (- (+ 1 old-blanks) (window-body-height visitor)) visitor))
+                     (point)) t)
+          (let* ((visit-row (count-screen-lines (window-start) (point)))
+                 (end-row (- (window-body-height visitor) 1 old-blanks)))
+            (should (< visit-row (window-body-height visitor)))
+            (if (zerop old-blanks)
+                (should-not (mevedel-view--position-screen-y (point-max) visitor))
+              (should (= end-row (mevedel-view--position-screen-y
+                                 (point-max) visitor))))
+            (funcall render (list card))
+            ;; This independent row calculation fails both a missing repair
+            ;; and an unconditional last-page clamp that consumes old blanks.
+            (should (= (window-start visitor)
+                       (save-excursion
+                         (goto-char (point-max))
+                         (vertical-motion (- end-row) visitor)
+                         (point))))
+            (should (= end-row (mevedel-view--position-screen-y
+                               (point-max) visitor)))
+            (should (< visit-row (count-screen-lines (window-start) (point))))
+            (when (> old-blanks 0)
+              (should (= (+ visit-row 3)
+                         (count-screen-lines (window-start) (point)))))
+            (should (eq 'visited (get-text-property (point) 'mevedel-view-zone-id)))
+            (should (looking-at-p "option two"))
+            (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))))
 
   :doc "composer anchoring preserves deliberate blank rows when a card shrinks"
   (mevedel-view-test--with-buffers
@@ -345,7 +432,11 @@
       (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
       (mevedel-view-zone-reconcile
        'interaction mevedel-view--interaction-marker mevedel-view--input-marker
-       '((:namespace interaction :id card :body "one\ntwo\nthree")))
+       ;; Removing these rows must shrink the character tail even after
+       ;; composer anchoring exposes three shorter transcript rows.
+       (list (list :namespace 'interaction :id 'card
+                   :body (mapconcat #'identity
+                                    (make-list 3 (make-string 50 ?x)) "\n"))))
       (set-window-start nil
                         (save-excursion
                           (goto-char (mevedel-view--input-start))
@@ -435,6 +526,49 @@
       (should (eq fragment-action
                   (get-text-property (1+ (point)) 'mevedel-view-zone-activate))))))
 
+(mevedel-deftest mevedel-view-zone-reconcile-read-only-end ()
+  (let ((inspector ,inspector))
+    (require 'mevedel-directive-activity)
+    (mevedel-view-test--with-buffers
+      (save-window-excursion
+        (switch-to-buffer view-buf)
+        (delete-other-windows)
+        (if inspector
+            (mevedel-directive-activity-mode)
+          (setq-local mevedel-view--agent-transcript-p t))
+        ;; Both read-only surfaces keep layout markers at EOF, not a composer.
+        (let ((inhibit-read-only t)
+              (inhibit-modification-hooks t))
+          (erase-buffer)
+          (dotimes (n 100) (insert (format "history %d\n" n)))
+          (setq-local mevedel-view--status-marker (copy-marker (point) t)
+                      mevedel-view--interaction-marker (copy-marker (point) t)
+                      mevedel-view--input-marker (copy-marker (point) nil)))
+        (mevedel-view-zone-reconcile
+         'status mevedel-view--status-marker mevedel-view--status-marker
+         (list (list :namespace 'status :id 'work
+                     :body (mapconcat #'identity
+                                      (make-list 3 (make-string 50 ?x)) "\n"))))
+        (goto-char (point-max))
+        (set-window-start nil (save-excursion (vertical-motion -6) (point)) t)
+        (mevedel-view-zone-clear 'status)
+        ;; Without an editable composer, net-tail shrink fills the last page.
+        ;; Treating the EOF marker as a composer instead preserves six rows.
+        ;; Reserve a row for the empty EOF line too: a start one row too early
+        ;; leaves EOF outside the viewport, despite filling all history rows.
+        (should (= (1- (window-body-height))
+                   (save-excursion
+                     (goto-char (window-start))
+                     (vertical-motion (window-body-height)))))
+        (should (= (window-start)
+                   (save-excursion
+                     (goto-char (point-max))
+                     (vertical-motion (- (1- (window-body-height))))
+                     (point)))))))
+  (inspector)
+  :doc "agent transcript EOF is not an editable composer anchor" nil
+  :doc "directive inspector EOF is not an editable composer anchor" t)
+
 (mevedel-deftest mevedel-view-zone--anchor-start
   (:doc "returns the start of the anchor run, bounded by the fragment start")
   (with-temp-buffer
@@ -480,6 +614,34 @@
                                (+ 4 (mevedel-view-zone-anchor-position anchor)))))
         (mevedel-view-zone-clear 'status)
         (should-not (mevedel-view-zone-anchor-position anchor))))))
+
+(mevedel-deftest mevedel-view-zone-anchor-position-strict
+  (:doc "strict resolution rejects lost sub-anchors and truncated character or screen-row offsets")
+  (with-temp-buffer
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (mevedel-view-zone-test--setup-markers)
+      (let ((render (lambda (body)
+                      (mevedel-view-zone-reconcile
+                       'status (point-min) (point-min)
+                       (list (list :namespace 'status :id 'rows :body body))))))
+        (funcall render (propertize "first\nsecond\nthird\n"
+                                    'mevedel-view-zone-anchor 'row))
+        (goto-char (point-min))
+        (forward-line 2)
+        (let ((character (mevedel-view-zone-position-anchor (point)))
+              (screen-row (mevedel-view-zone-position-anchor
+                           (point) (selected-window))))
+          (should (= (point) (mevedel-view-zone-anchor-position character t)))
+          (should (= (point) (mevedel-view-zone-anchor-position screen-row t)))
+          (funcall render (propertize "short\n" 'mevedel-view-zone-anchor 'row))
+          (dolist (anchor (list character screen-row))
+            (should (mevedel-view-zone-anchor-position anchor))
+            (should-not (mevedel-view-zone-anchor-position anchor t)))
+          (funcall render (propertize "other\n" 'mevedel-view-zone-anchor 'replacement))
+          (dolist (anchor (list character screen-row))
+            (should (= (point-min) (mevedel-view-zone-anchor-position anchor)))
+            (should-not (mevedel-view-zone-anchor-position anchor t))))))))
 
 (mevedel-deftest mevedel-view-zone-collapse-state-set-p
   (:doc "reports whether collapse state was explicitly stored")
