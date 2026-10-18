@@ -53,6 +53,10 @@
                           "\n")
                   (put-text-property (point-min) (point-max)
                                      'keymap mevedel-view--display-map)
+                  (put-text-property (point-min) (point-max)
+                                     'font-lock-face
+                                     '(:underline t :overline t
+                                       :strike-through t :box t))
                   (cl-letf (((symbol-function 'display-images-p)
                              (lambda (&optional _display) t))
                             ((symbol-function 'create-image)
@@ -68,6 +72,10 @@
                     (should button)
                     (should (= (button-start button) (point-min)))
                     (should (= (button-end button) (1- (point-max))))
+                    (let ((face (get-text-property (point) 'face)))
+                      (dolist (attribute '(:underline :overline :strike-through :box))
+                        (should (plist-member face attribute))
+                        (should-not (plist-get face attribute))))
                     (should (button-get button 'follow-link))
                     (should (eq t (mouse-on-link-p (point))))
                     (should (eq (key-binding (kbd "RET")) 'push-button))

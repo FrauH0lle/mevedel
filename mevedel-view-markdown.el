@@ -546,8 +546,11 @@ recreates only stale images."
     (when-let* ((image (mevedel-view--image-display path (car sizing))))
       (mevedel-view--make-file-button start end path nil)
       ;; Override the transcript's explicit keymap, not just its category.
+      ;; Link decorations otherwise draw across the image's text baseline.
       (add-text-properties start end
                            `(keymap ,button-map pointer hand
+                             face (:underline nil :overline nil
+                                   :strike-through nil :box nil)
                              mevedel-view-committed-only t))
       (add-text-properties
        start end
