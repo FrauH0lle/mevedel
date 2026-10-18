@@ -1137,12 +1137,27 @@ grows above: free space below the composer is used before scrolling."
       (pcase-dolist (`(,window . ,y) anchors)
         (when (and (window-live-p window)
                    (eq (window-buffer window) (current-buffer)))
-          (let ((anchored (mevedel-view--viewport-at-y window input-start y))
-                (current (window-start window)))
-            (unless (and (or (< current (car anchored))
-                             (and (= current (car anchored))
-                                  (< (window-vscroll window t) (cdr anchored))))
+          (let* ((anchored (mevedel-view--viewport-at-y window input-start y))
+                 (current (window-start window))
+                 (growing (or (< current (car anchored))
+                              (and (= current (car anchored))
+                                   (< (window-vscroll window t) (cdr anchored))))))
+            (unless (and growing
                          (mevedel-view--window-shows-end-p window))
+              ;; A burst that overflows a short view must consume its free
+              ;; space, not preserve an anchor beyond the last full page.
+              (when growing
+                (let* ((end (point-max))
+                       (last-y (max 0 (- (window-body-height window t)
+                                         (with-selected-window window
+                                           (save-excursion
+                                             (goto-char end)
+                                             (line-pixel-height))))))
+                       (last-page (mevedel-view--viewport-at-y window end last-y)))
+                  (when (or (> (car anchored) (car last-page))
+                            (and (= (car anchored) (car last-page))
+                                 (> (cdr anchored) (cdr last-page))))
+                    (setq anchored last-page))))
               (mevedel-view--set-viewport window anchored))))))))
 
 (defun mevedel-view--window-shows-end-p (window)

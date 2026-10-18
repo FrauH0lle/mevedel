@@ -1687,15 +1687,21 @@ the width.
 ### Composer anchoring
 
 Chrome above the composer (status, interactions, progress) changes height while
-the user types. A window that shows the composer keeps the composer on its screen
-row across every zone mutation and re-render: growth above it scrolls the
+the user types. Unless the window visits an interaction card, a window showing
+the composer keeps its screen position across zone mutations and re-renders:
+growth above it scrolls the
 transcript up, and shrinkage reveals more transcript, as in a bottom-anchored
 terminal. While everything from the window start through the end of the draft
 still fits, the start is kept and free space below the composer is used first.
+When one large burst overflows that free space, restoration chooses the earlier
+of the saved composer viewport and the last full page. It consumes the remaining
+space instead of leaving the composer high above an empty tail.
 A window scrolled away from the composer keeps its own start, so reading history
-is not disturbed. Rows are counted with `vertical-motion` from the window start
-(`count-screen-lines` disagreed by one line depending on how the start was
-reached). View buffers set `scroll-conservatively` to 101 and `scroll-margin` to
+is not disturbed. Native visibility and pixel traversal account for remapped
+faces, images and partial vertical scrolling. A removed logical start instead
+fills the last page; a visited card keeps its row unless shrink creates new blank
+pixels. See ADR 0126 for the complete per-window policy.
+View buffers set `scroll-conservatively` to 101 and `scroll-margin` to
 0, so a draft growing past the window bottom scrolls one line instead of
 recentering. Measured in a terminal Emacs: with the previous top anchoring, the
 first status row added at the window bottom recentred the composer by thirteen

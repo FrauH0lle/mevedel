@@ -16,7 +16,10 @@ the visited row. Existing blank space is retained.
 Chrome above the composer (background work, tasks and interaction prompts)
 changes height while the user types. Composer anchoring scrolls the transcript
 instead, as in a bottom-anchored terminal. While everything from the window start
-through the draft fits, growth uses free space below before scrolling. A window
+through the draft fits, growth uses free space below before scrolling. Growth
+that overflows the window uses the earlier of the saved composer viewport and
+the last full page, consuming remaining free space even in a single large burst.
+This comparison includes partial vertical scroll. A window
 scrolled away from the composer, or starting inside a tall draft, keeps its own
 reading position.
 
@@ -26,12 +29,12 @@ and its character tail. After logical restoration, they apply this policy:
 | Window context before mutation | Viewport policy | Discriminating case |
 | --- | --- | --- |
 | Point visits a surviving interaction card | Retain the visited row, then fill only newly created blank pixels | Shrinking a visited card below point must not leave a newly empty viewport |
-| Composer visible, saved logical start survives | Retain the composer position and pre-existing blank space | Shorter status text must not erase intentional blank space |
+| Composer visible, saved logical start survives | Retain the composer position and pre-existing blank space, except when growth overflows the window | Shorter status text must not erase intentional blank space; oversized incoming growth fills the last page |
 | Composer visible, saved logical start removed or truncated | Fill the last page, bypassing the character-tail guard | Ask submission can expose longer history lines and increase the tail despite losing rows |
 | Neither a composer nor visited-card anchor | Clamp backward only when the character tail shrank | An offscreen composer returns to a full last page after an interaction disappears |
 
-Earlier history views do not move toward the bottom, and a window already
-starting at `point-min` stays there. Strict logical-anchor resolution distinguishes
+Earlier history views do not move toward the bottom, and shrink repair leaves a
+window already starting at `point-min` there. Strict logical-anchor resolution distinguishes
 a surviving row from one removed with its fragment or truncated within it.
 
 Anchors measure body-relative pixels through Emacs's native visibility query,
@@ -111,6 +114,17 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Overflowing bursts consume free space (2026-10-19).** A short transcript
+  followed by more than a window of incoming output retained the composer's old
+  high position and left blank space below the draft. The regression reproduces
+  this through the render preserver with both single-line and multiline drafts;
+  small growth remains a keep-start control. When growth no longer fits from the
+  current start, restoration now chooses the earlier of the composer anchor and
+  last-page viewport. Only that overflow branch computes the extra last page;
+  shrinkage still preserves deliberate blanks. Native pixel traversal retains
+  the final draft line's height and compares partial vertical scroll as well as
+  buffer positions.
 
 - **Draft commands are one mutation (2026-10-18).** Per-change repair moved a
   five-line replacement before its insertion half, consuming five deliberate
