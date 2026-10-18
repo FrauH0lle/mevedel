@@ -66,8 +66,9 @@ without reparsing hidden results or changing execution identity. Live/composed
 programs and invalid/failed envelopes retain the outer presentation.
 Nested compound rows retain their own metadata and
 depth, so disclosure replacement removes descendants without consuming siblings.
-Failed tool calls split activity groups and start
-collapsed with a red `×`; warning rows remain groupable and mark their group
+Failed tool calls stay in their activity group, which takes a red `×` and
+counts them as `· N failed`; their own rows start
+collapsed with a red `×`. Warning rows remain groupable and mark their group
 with `!`. Only markers receive severity highlighting, and an accompanying
 sandbox warning cannot downgrade an error. Full rerender is the correctness
 fallback. One scheduler coalesces redraws;
@@ -372,6 +373,20 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### October 2026: failures and prepared results keep a run's grouping
+
+September's change made failed calls split their group so a failure was not
+hidden inside a folded row. That made a run's shape depend on its calls'
+outcomes: a four-call running group, one row, became four rows when its last
+result was an error, moving the transcript three rows while the reader watched.
+A large result being prepared off the main thread split its run the same way
+and refolded it when published. Failed calls now stay in the group, which
+shows the failure where the reader looks: the folded row takes `×` and ends
+with `· N failed`, as the running row already did for an early failure, and the
+failed child keeps its collapsed `×` row. It does not name the failed call in
+the folded row; opening the group shows it. A preparing result is a running
+member of its group.
 
 ### October 2026: refresh only the newest turn after a settled save
 

@@ -2203,12 +2203,23 @@ Execution outcome remains independent of lifecycle and disclosure state."
         (when-let* ((hint (mevedel-view--permission-approval-hint
                           (plist-get rendering :permission-approval-reason))))
           (setq line (concat line "  " hint)))
-        (let ((count (plist-get rendering :pending-count))
-              (failed (plist-get rendering :pending-failed)))
-          (if (or count failed)
-              (mevedel-view--running-header
-               line count (plist-get rendering :pending-virtual) failed)
-            line))))))
+        (let* ((count (plist-get rendering :pending-count))
+               (pending-failed (plist-get rendering :pending-failed))
+               (settled-failed (plist-get rendering :failed-count))
+               (failed (and (or pending-failed settled-failed)
+                            (+ (or pending-failed 0) (or settled-failed 0)))))
+          (cond
+           ((or count pending-failed)
+            (mevedel-view--running-header
+             line count (plist-get rendering :pending-virtual) failed))
+           ;; A settled group keeps the count its running form showed, so
+           ;; settling neither unfolds nor reshapes it.
+           (settled-failed
+            (concat line
+                    (propertize " · " 'font-lock-face 'mevedel-view-tool-metadata)
+                    (propertize (format "%d failed" settled-failed)
+                                'font-lock-face 'error)))
+           (t line)))))))
 
 (defun mevedel-view--sandbox-summary-line (summary)
   "Return the durable disclosure line for material sandbox SUMMARY.
@@ -6652,9 +6663,16 @@ COMPLETIONS are the distinct execution completions among them."
 INDEX discriminates the row's disclosure key from its siblings.  A
 segment whose own rendering is hidden yields nil so grouping does not
 resurrect rows the renderer suppressed.  SUMMARY-ONLY permits a cached
-tool name instead of reparsing arguments and results for a collapsed group."
+tool name instead of reparsing arguments and results for a collapsed group.
+A large result still being prepared off the main thread is never parsed
+here; its row shows the call as running until the result is published."
   (when-let* ((child
-               (or (and summary-only
+               (or (and (eq (plist-get (plist-get entry :rendering) :vtype)
+                            'tool-preparing)
+                        (list :tool (plist-get (plist-get entry :rendering)
+                                               :group-tool)
+                              :status 'running))
+                   (and summary-only
                         (when-let* ((name (plist-get (plist-get entry :rendering)
                                                     :group-tool)))
                           (list :tool name)))
@@ -6706,13 +6724,14 @@ and follow the settled children."
             :child-calls children
             :pending-count (mevedel-view--pending-running-count pending)
             :pending-failed (mevedel-view--pending-failed-count pending)
-            :status (and (cl-some
-                          (lambda (entry)
-                            (eq (mevedel-view--rendering-status
-                                 (plist-get entry :rendering))
-                                'warning))
-                          entries)
-                         'warning)
+            :failed-count (mevedel-view--group-failed-count entries)
+            :status (let ((statuses
+                           (mapcar (lambda (entry)
+                                     (mevedel-view--rendering-status
+                                      (plist-get entry :rendering)))
+                                   entries)))
+                      (cond ((memq 'error statuses) 'error)
+                            ((memq 'warning statuses) 'warning)))
             :reader-open reader-p
             ;; A new group must not hide a row the reader already opened or
             ;; is on.  An explicit fold of the group itself still takes
@@ -6727,6 +6746,17 @@ and follow the settled children."
                                        child (plist-get child :source)))))
                           (not (cdr state))))
                       settled))))))))
+
+(defun mevedel-view--group-failed-count (entries)
+  "Return how many settled activity ENTRIES failed, or nil for none."
+  (let ((count (cl-count-if
+                (lambda (entry)
+                  (and (eq (plist-get entry :kind) 'tool)
+                       (eq (mevedel-view--rendering-status
+                            (plist-get entry :rendering))
+                           'error)))
+                entries)))
+    (and (> count 0) count)))
 
 (defun mevedel-view-render--reader-members ()
   "Return the tool rows under this view's point and its window points."
@@ -6777,17 +6807,19 @@ reasoning occurrence."
 
 (defun mevedel-view--tool-group-entry-p (entry)
   "Return non-nil when ENTRY may fold into a grouped activity row.
-Rows that demand individual presentation stay out: failed calls, agent
-handles and other non-tool vtypes, compound tools with their own nested
+Rows that demand individual presentation stay out: agent handles and other
+non-tool vtypes, compound tools with their own nested
 rows, rows carrying hook audits, rows their renderer wants expanded or compact,
 coalesced rows, and renderer fallbacks.  Warning and note disclosures
-stay with their nested row inside the group."
+stay with their nested row inside the group.  Failed calls and results still
+being prepared stay too: a run's grouping must not change when a call fails
+or its result is published."
   (let ((rendering (plist-get entry :rendering)))
     (or (eq (plist-get entry :kind) 'completion)
     (and rendering
          (= (plist-get entry :count) 1)
-         (not (eq (mevedel-view--rendering-status rendering) 'error))
-         (eq (or (plist-get rendering :vtype) 'tool-summary) 'tool-summary)
+         (memq (or (plist-get rendering :vtype) 'tool-summary)
+               '(tool-summary tool-preparing))
          (null (plist-get rendering :child-calls))
          (null (plist-get rendering :hook-audits))
          (not (plist-get rendering :force-expanded-p))

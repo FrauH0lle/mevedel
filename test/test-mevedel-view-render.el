@@ -8295,9 +8295,6 @@
   :doc "rows demanding individual presentation are not"
   (dolist (rendering
            '(nil
-             (:header "h" :status error)
-             (:header "h" :status failed)
-             (:header "h" :status blocked)
              (:header "h" :vtype agent-handle)
              (:header "h" :child-calls ((:id "1")))
              (:header "h" :hook-audits ((:type x)))
@@ -8306,6 +8303,15 @@
              (:header "h" :initially-collapsed-p nil)))
     (should-not (mevedel-view--tool-group-entry-p
                  (list :count 1 :rendering rendering))))
+  :doc "failed calls and results still being prepared keep their run's grouping"
+  (dolist (rendering
+           '((:header "h" :status error)
+             (:header "h" :status failed)
+             (:header "h" :status blocked)
+             (:header "Read: preparing result…" :vtype tool-preparing
+              :status running :group-tool "Read" :initially-collapsed-p t)))
+    (should (mevedel-view--tool-group-entry-p
+             (list :count 1 :rendering rendering))))
   :doc "coalesced rows are not groupable"
   (should-not (mevedel-view--tool-group-entry-p
                '(:count 2 :rendering (:header "h"))))
@@ -8327,6 +8333,19 @@
              (list :count 1 :rendering
                    (list :header "Bash: ls" :status 'success
                          :sandbox-summary summary))))))
+
+(mevedel-deftest mevedel-view--group-failed-count ()
+  ,test
+  (test)
+  :doc "counts failed tool entries only"
+  (should (= 2 (mevedel-view--group-failed-count
+                '((:kind tool :rendering (:status error))
+                  (:kind tool :rendering (:status success))
+                  (:kind tool :rendering (:status failed))
+                  (:kind completion :rendering (:status error))))))
+  :doc "returns nil without failures"
+  (should-not (mevedel-view--group-failed-count
+               '((:kind tool :rendering (:status warning))))))
 
 (mevedel-deftest mevedel-view--insert-tool-group ()
   ,test
@@ -8511,7 +8530,7 @@
         (should (string-match-p "Read 4 files, thought 1 time"
                                 (buffer-string)))
         (should-not (string-match-p "HiddenMixed" (buffer-string))))))
-  :doc "a failed call splits successful runs and stays collapsed through redraws"
+  :doc "a failed call stays in its run, counted in the folded header, through redraws"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (goto-char (mevedel-view--input-start))
@@ -8533,22 +8552,25 @@
       (dotimes (_ 2)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (= 2 (cl-count-if
-                        (lambda (line) (string-match-p "✓ Read 4 files" line))
+          (should (= 1 (cl-count-if
+                        (lambda (line)
+                          (string-match-p
+                           "× Read 8 files, ran 1 command · 1 failed" line))
                         (split-string text "\n"))))
-          (should (string-match-p "× Bash:" text))
+          (should-not (string-match-p "Bash:" text))
           (should-not (string-match-p "Error: command failed" text)))
-        (goto-char (point-min))
-        (search-forward "Bash:")
-        (should (eq 'tool-summary
-                    (get-text-property (match-beginning 0) 'mevedel-view-type)))
-        (should (get-text-property (point) 'mevedel-view-collapsed))
-        (should-not (eq 'mevedel-view-tool-warning
-                        (get-text-property (match-beginning 0) 'font-lock-face)))
         (mevedel-view--full-rerender)
         (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
       (goto-char (point-min))
+      (search-forward "Read 8 files")
+      (mevedel-view-toggle-section)
+      (goto-char (point-min))
       (search-forward "Bash:")
+      (should (eq 'tool-child
+                  (get-text-property (match-beginning 0) 'mevedel-view-type)))
+      (should (string-match-p "×" (buffer-substring-no-properties
+                                   (line-beginning-position) (point))))
+      (should-not (string-search "Error: command failed" (buffer-string)))
       (mevedel-view-toggle-section)
       (should (string-search "Error: command failed" (buffer-string)))
       (mevedel-view--full-rerender)

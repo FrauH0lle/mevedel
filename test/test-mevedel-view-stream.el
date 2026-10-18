@@ -2787,6 +2787,33 @@ turn's later text, live and after reconstruction."
           (should (string-match-p "✓ Read 4 files" text))
           (should (string-match-p "Read: c" text))))))
 
+  :doc "a running group keeps its single row when one of its calls fails"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3)
+          (calls '((:name "Read" :args (:file_path "a"))
+                   (:name "Read" :args (:file_path "b"))
+                   (:name "Read" :args (:file_path "c"))
+                   (:name "Grep" :args (:pattern "x")))))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      (with-current-buffer view-buf
+        (mevedel-view-stream-test--insert-composer-draft "> quoted\nsecond line" 4))
+      (mevedel-view-stream-test--batch data-buf calls)
+      (dolist (call (butlast calls))
+        (mevedel-view-stream-test--batch data-buf (list call) t))
+      (with-current-buffer data-buf
+        (mevedel-view-stream-test--insert-data
+         data-buf "(:name \"Grep\" :args (:pattern \"x\"))\n\nError: tool failed\n"
+         (cons 'tool "grep-x"))
+        (mevedel-view-stream-post-tool (car (last calls))))
+      (let ((text (mevedel-view-stream-test--history view-buf)))
+        (should (string-match-p
+                 "× Read 3 files, searched 1 pattern · 1 failed" text))
+        (should-not (string-match-p "Read: a\\|Grep: x" text)))
+      (with-current-buffer view-buf
+        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+
   :doc "calls after assistant text start their own run"
   (mevedel-view-stream-test--with-buffers
     (let ((mevedel-view-tool-boundary-render-delay 0)

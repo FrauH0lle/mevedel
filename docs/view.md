@@ -805,8 +805,10 @@ calls that reached it, and one formed only by running calls returns to plain
 rows. If that redraw fails, the running decorations are still removed and a
 running group's settled marker is restored in place.
 
-Failed calls split that run around their standalone rows and use
-a red `×` in the `error` face. Warning rows stay groupable; a group containing
+Failed calls stay in their run, so a call failing never reshapes it. A folded
+group containing one takes the red `×` marker in the `error` face and ends its
+summary with `· N failed`, the same count its running form showed; the failed
+row inside the group carries its own `×`. Warning rows stay groupable; a group containing
 a warning carries `!`, and the warning stays visible on its nested row.
 Failed tool rows, including nested calls inside compound tools, start collapsed.
 Only the marker uses warning or error highlighting; the tool name, argument,
@@ -2141,7 +2143,10 @@ enclosing block. These reduce first-arrival allocation without deferring decodin
 or changing metadata validation and ownership checks.
 Scheduled projections show a non-toggleable `Tool: preparing result...` row for
 uncached collapsed tool spans of at least 256 Ki characters. The row indicates
-pending presentation, not a successful tool outcome. One parser thread per view
+pending presentation, not a successful tool outcome. Inside an activity run it
+stays a member of the run's group, shown running, so publication does not
+unfold or refold the group; an open group never parses the deferred span on the
+main thread. One parser thread per view
 processes admitted spans sequentially, waiting between the canonical parser's
 stages. Checkpoints block on a condition variable released by the main-thread
 preparation callback; worker waits never dispatch editor timers or process
