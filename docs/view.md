@@ -1491,9 +1491,14 @@ column for a fringeless window's continuation glyph). A row's name gives way
 first, down to twenty columns, then its metadata is cut. The panel sits above
 the anchored composer, so a wrapped row changed the panel's height whenever
 its text changed length. At 100 columns, a long agent row occupied two rows
-and shrank the panel by one when it became a one-row finished line. Only
-button lines keep their buttons and may wrap below about fifty columns. When
-that width changes, the zone runs `mevedel-view-zone-width-change-functions`
+and shrank the panel by one when it became a one-row finished line. Expanded
+controls pack whole buttons into explicit rows, shortening a label only when
+it cannot fit alone; all actions stay reachable. This may take an extra row
+in a narrow window rather than wrapping a button label. Completion reserves
+the same control-row budget: the execution's Stop slot becomes inert space,
+and a held agent's controls become a finished notice padded to the live row
+count. Model detail lines fit identically in live and held states. When that
+width changes, the zone runs `mevedel-view-zone-width-change-functions`
 once with the view current. The status zone re-renders from it, so a split
 window does not keep stale wrapped rules until an unrelated redraw changes
 their height. The interaction zone rebuilds from it too, re-fitting its
