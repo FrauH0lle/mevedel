@@ -97,6 +97,11 @@ the observation-only contract. Close an existing inspector before changing its
 placement. The header's **← Parent** action and `q` close inspection and return
 to the original parent view, including when inspecting another agent from an
 already-open inspector. The parent's draft, point and scroll position survive.
+A parent window that showed its composer gets back the composer's screen row
+from before the inspection opened: the side window narrowed it, and closing
+the side window widens it again, so its text rewraps into fewer rows. Without
+this, the composer of a 25-row window with wrapped paragraphs rose from the
+last row to row 18 above blank space.
 
 If the observed agent settles while its transcript view is open, the view
 renders the final content immediately and updates its header in place. It

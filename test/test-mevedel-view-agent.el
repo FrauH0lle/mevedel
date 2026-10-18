@@ -227,6 +227,60 @@
             (dolist (buffer (list first-view second-view first second))
               (when (buffer-live-p buffer) (kill-buffer buffer)))))))))
 
+(mevedel-deftest mevedel-view--kill-agent-transcript-view
+  (:doc "returning from a side window restores the parent composer's row")
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let* ((session (mevedel-view-agent-test--session))
+             (mevedel-agent-view-display-action
+              '(display-buffer-in-side-window (side . right) (window-width . 0.4)))
+             (agent (generate-new-buffer " *agent-return*"))
+             agent-view)
+        (unwind-protect
+            (progn
+              (with-current-buffer data-buf (setq-local mevedel--session session))
+              (let ((record (mevedel-view-agent-test--record "/root/agent" 'running)))
+                (setf (mevedel-agent-record-conversation-buffer record) agent)
+                (push (cons "/root/agent" record)
+                      (mevedel-session-agent-registry session)))
+              (with-current-buffer agent
+                (org-mode)
+                (setq-local mevedel--session session mevedel--view-buffer view-buf)
+                (insert (propertize "Agent response\n" 'gptel 'response)))
+              ;; Paragraphs that fit the full width but wrap beside the side window.
+              (mevedel-view-test--insert-data
+               data-buf
+               (apply #'concat
+                      (make-list 60 (concat (make-string 30 ?a) " "
+                                            (make-string 30 ?b) "\n\n")))
+               'response)
+              (switch-to-buffer view-buf)
+              (delete-other-windows)
+              (mevedel-view--full-rerender)
+              (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 3)
+              (recenter -1)
+              (let ((parent-window (selected-window))
+                    (row (mevedel-view--composer-screen-row (selected-window))))
+                (should row)
+                (mevedel-view-open-agent-transcript "/root/agent")
+                (setq agent-view (window-buffer (selected-window)))
+                (should-not (eq parent-window (selected-window)))
+                ;; Redisplay keeps the parent's point, in the composer, on screen.
+                (with-selected-window parent-window
+                  (goto-char (+ (mevedel-view--input-start) 3))
+                  (recenter -1))
+                (with-current-buffer agent-view
+                  (mevedel-view-close-agent-transcript))
+                (should (eq parent-window (selected-window)))
+                (should (= (window-total-width parent-window) (frame-width)))
+                (with-current-buffer view-buf
+                  (should (= row (mevedel-view--composer-screen-row parent-window)))
+                  (should (= (point) (+ (mevedel-view--input-start) 3)))
+                  (should (equal "> keep\nsecond line"
+                                 (mevedel-view--input-text))))))
+          (dolist (buffer (list agent-view agent))
+            (when (buffer-live-p buffer) (kill-buffer buffer))))))))
+
 (mevedel-deftest mevedel-view-agent-model-label
   (:doc "formats only known model metadata without inventing effort")
   (progn

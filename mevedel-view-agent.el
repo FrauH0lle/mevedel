@@ -142,6 +142,9 @@
 (declare-function mevedel-view--call-preserving-input-point "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--call-preserving-input-text "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--call-preserving-window-state "mevedel-view-composer" (thunk))
+(declare-function mevedel-view--composer-anchors "mevedel-view-composer" ())
+(declare-function mevedel-view--restore-composer-anchors
+                  "mevedel-view-composer" (anchors))
 (declare-function mevedel-view--transcript-gptel-send-blocked
                   "mevedel-view-composer" (&optional arg))
 (defvar mevedel-view--input-marker)
@@ -246,6 +249,12 @@ badges promptly."
 
 (defvar-local mevedel-view--agent-transcript-window nil
   "Side window currently displaying an agent transcript for this view buffer.")
+
+(defvar-local mevedel-view--agent-transcript-parent-anchors nil
+  "Parent composer anchors from before this inspection opened.
+Entries are (WINDOW . ROW) as `mevedel-view--composer-anchors' returns
+them.  Nested inspections inherit them, so returning restores the view
+the user left, whatever the inspection window did to its width.")
 
 (defvar mevedel-view--agent-transcript-data-kill-in-progress nil
   "Non-nil while transcript view/data kill hooks are already paired.")
@@ -600,17 +609,27 @@ growing header, and hover details are built only when shown."
 (defun mevedel-view--kill-agent-transcript-view
     (view-buffer &optional kill-retained)
   "Kill transcript inspection VIEW-BUFFER and disposable data.
-Also kill retained conversation data when KILL-RETAINED is non-nil."
+Also kill retained conversation data when KILL-RETAINED is non-nil.
+Closing the inspection's window widens or restores the parent view's
+windows, and their text rewraps.  Their composers return to the screen
+rows they had before the inspection opened instead of rising above
+empty space."
   (when (mevedel-view--agent-transcript-view-p view-buffer)
-    (let (data-buffer live-p transcript-info)
+    (let ((windows (get-buffer-window-list view-buffer nil t))
+          data-buffer live-p transcript-info parent anchors)
       (with-current-buffer view-buffer
         (setq data-buffer mevedel--data-buffer
               transcript-info mevedel-view--agent-transcript-info
+              parent mevedel-view--agent-transcript-parent-view
+              anchors mevedel-view--agent-transcript-parent-anchors
               live-p (plist-get mevedel-view--agent-transcript-info
                                 :live-buffer)))
-      (dolist (win (get-buffer-window-list view-buffer nil t))
+      (dolist (win windows)
         (ignore-errors
           (quit-window nil win)))
+      (when (and windows anchors (buffer-live-p parent))
+        (with-current-buffer parent
+          (mevedel-view--restore-composer-anchors anchors)))
       (when (buffer-live-p view-buffer)
         (kill-buffer view-buffer))
       (when (and (not live-p)
@@ -921,7 +940,17 @@ Signals `user-error' when no transcript source can be opened."
     (when (and (buffer-live-p parent-view)
                (not (eq parent-view view-buf)))
       (with-current-buffer parent-view
-        (let ((win mevedel-view--agent-transcript-window))
+        (let* ((win mevedel-view--agent-transcript-window)
+               (shown (and (window-live-p win) (window-buffer win)))
+               ;; An inspection replacing another keeps the anchors from
+               ;; before the first one opened.
+               (anchors
+                (if (and (buffer-live-p shown)
+                         (buffer-local-value 'mevedel-view--agent-transcript-p
+                                             shown))
+                    (buffer-local-value
+                     'mevedel-view--agent-transcript-parent-anchors shown)
+                  (mevedel-view--composer-anchors))))
           (setq win
                 (cond
                  ((and (window-live-p win)
@@ -950,6 +979,8 @@ Signals `user-error' when no transcript source can be opened."
                      (selected-window)))))
           (setq mevedel-view--agent-transcript-window
                 (and (window-live-p win) win))
+          (with-current-buffer view-buf
+            (setq mevedel-view--agent-transcript-parent-anchors anchors))
           (when (window-live-p win)
             (select-window win)
             (with-current-buffer view-buf
