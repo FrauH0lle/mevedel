@@ -166,11 +166,12 @@
                 (t
                  (save-excursion
                    (goto-char (mevedel-view--input-start))
-                   (vertical-motion -5)
+                   (vertical-motion (if (eq scenario 'full) (- 2 height) -5))
                    (point)))) t)
           (if (memq scenario '(hidden transcript transcript-render))
               (should-not (mevedel-view--composer-screen-row (selected-window)))
-            (should (= 5 (mevedel-view--composer-screen-row (selected-window)))))
+            (should (= (if (eq scenario 'full) (- height 2) 5)
+                       (mevedel-view--composer-screen-row (selected-window)))))
           (let ((saved-start (window-start)))
             (should (= (alist-get (selected-window)
                                   (mevedel-view--window-tail-lengths))
@@ -191,7 +192,7 @@
               (should (= (window-start)
                          (cond
                           ((eq scenario 'survive) saved-start)
-                          ((memq scenario '(high truncate))
+                          ((memq scenario '(high truncate render))
                            (save-excursion
                              (goto-char (mevedel-view--input-start))
                              (vertical-motion -5)
@@ -207,7 +208,9 @@
   'hidden
   :doc "settlement preserves blank space when the composer was high on screen"
   'high
-  :doc "outer render restoration does not undo the last-page clamp"
+  :doc "removing the card containing a full window start keeps that window full"
+  'full
+  :doc "outer render restoration preserves a visible composer's deliberate row"
   'render
   :doc "truncation past a saved start preserves the visible composer's row"
   'truncate

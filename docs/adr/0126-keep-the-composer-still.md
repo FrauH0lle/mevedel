@@ -4,7 +4,15 @@ Status: accepted
 
 ## Current decision
 
-The view keeps the composer on its screen row. Chrome above it (the
+The view keeps the user's active surface on its screen row. Zone reconciliation
+chooses one viewport anchor per window: point inside a surviving visited
+interaction card takes priority; otherwise a previously visible composer keeps
+its row regardless of point. Logical positions are restored before applying that
+row anchor. Windows with neither retain logical/marker reading positions and
+may use the net-tail shrink clamp last. Row-anchored windows do not clamp away
+their deliberate blank space.
+
+Chrome above the composer (the
 background-work panel, tasks, interaction prompts) changes height while the user
 types; a window that shows the composer keeps the composer's row across every
 zone mutation and re-render, so that growth scrolls the transcript instead, as in
@@ -71,6 +79,13 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **One viewport anchor per window (2026-10-18).** Logical window-start
+  restoration previously overrode the composer's row inside growing cards,
+  while composer anchoring displaced visited controls when unrelated cards
+  arrived or disappeared. A graphical replay kept a visited Ask control at row
+  3 through arrivals above and below it and removal after choosing the visited
+  row first. Only visiting windows pay for the additional bounded row capture.
 
 - **Preserve intentional blank space, repair draft shrink (2026-10-18).** A
   recentered transcript with a visible composer jumped 24 rows in a 41-row
