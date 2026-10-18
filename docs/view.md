@@ -2222,7 +2222,11 @@ and reapply collapse state, including temporary in-flight anchors that later
 settle, so expanded tool/response sections do not collapse again during
 live refreshes. Rebuilding the same transcript retains remembered states for
 children hidden inside folded groups; an explicit transcript-source change
-clears them. Source anchors prevent unmatched states from applying to rewritten
+clears them. Only chosen states are remembered: a toggle, a state already
+remembered, or a captured state that differs from its section type's default
+(responses and turns open, other sections folded). A section shown in its
+default state is not remembered, so a group that once folded by default does
+not later fold over a row the reader opened. Source anchors prevent unmatched states from applying to rewritten
 content at the same position.
 `mevedel-view-render-settle` computes those keys with their durable
 post-settle anchors (`mevedel-view-disclosure--settling-p`): it runs before

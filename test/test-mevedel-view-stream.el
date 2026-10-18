@@ -2787,6 +2787,35 @@ turn's later text, live and after reconstruction."
           (should (string-match-p "✓ Read 4 files" text))
           (should (string-match-p "Read: c" text))))))
 
+  :doc "a transient default fold is not remembered over a row opened later"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0)
+          (mevedel-view-tool-group-collapse-threshold 3)
+          (calls '((:name "Read" :args (:file_path "a"))
+                   (:name "Read" :args (:file_path "b"))
+                   (:name "Read" :args (:file_path "c")))))
+      (mevedel-view-stream-test--begin-live-turn view-buf data-buf)
+      ;; Results land before their post-tool hooks run, so for a moment the
+      ;; run counts past the threshold and folds by default.
+      (mevedel-view-stream-test--batch data-buf calls)
+      (mevedel-view-stream-test--batch data-buf calls t)
+      (with-current-buffer view-buf
+        (should (string-match-p "✓ Read: c"
+                                (mevedel-view-stream-test--history view-buf)))
+        (goto-char (point-min))
+        (search-forward "Read: c")
+        (mevedel-view-toggle-section)
+        (should (string-match-p "result" (mevedel-view-stream-test--history view-buf)))
+        (mevedel-view-stream-test--insert-composer-draft "> quoted\nsecond line" 4))
+      (mevedel-view-stream-test--batch
+       data-buf '((:name "Read" :args (:file_path "d"))))
+      (let ((text (mevedel-view-stream-test--history view-buf)))
+        (should (string-match-p "Read 4 files · 1 running" text))
+        (should (string-match-p "Read: c" text))
+        (should (string-match-p "result" text)))
+      (with-current-buffer view-buf
+        (should (equal "> quoted\nsecond line" (mevedel-view--input-text))))))
+
   :doc "a running group keeps its single row when one of its calls fails"
   (mevedel-view-stream-test--with-buffers
     (let ((mevedel-view-tool-boundary-render-delay 0)
