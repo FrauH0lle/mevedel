@@ -8696,8 +8696,12 @@ Until the complete plan is ready, keep the previous view in place."
          (mevedel-view-render--prepared-responses (plist-get job :fontified))
          (mevedel-transcript--tool-block-index (plist-get job :index))
          (mevedel-transcript-audit--decode-cache (plist-get job :audits))
-         (priority (mevedel-view-render--priority-turns (plist-get plan :turns)))
-           (immediate (mevedel-view-render--priority-turns (plist-get plan :turns) t))
+         ;; Everything a reader can see renders now.  A visible placeholder
+         ;; would be drawn and then replaced, moving text the reader is on.
+         (immediate (append (mevedel-view-render--priority-turns
+                             (plist-get plan :turns))
+                            (mevedel-view-render--priority-turns
+                             (plist-get plan :turns) t)))
            (states (mevedel-view-disclosure-capture-state
                     (point-min) (mevedel-view--input-marker-position)))
            installed)
@@ -8751,11 +8755,6 @@ Until the complete plan is ready, keep the previous view in place."
                    (setf (plist-get job :pending)
                          (cl-remove-if (lambda (entry) (memq (car entry) immediate))
                                        (plist-get job :pending)))
-                   (let ((pending (plist-get job :pending)))
-                     (setf (plist-get job :pending)
-                           (append
-                            (cl-remove-if-not (lambda (entry) (memq (car entry) priority)) pending)
-                            (cl-remove-if (lambda (entry) (memq (car entry) priority)) pending))))
                    (mevedel-view--full-rerender-finish
                     data live-data (list :view-buffer view) historical
                     started)))))

@@ -33,6 +33,14 @@
            do (mevedel-view-render--batch-step view mevedel-view-render--batch))
   (should (eq 'project (plist-get mevedel-view-render--batch :phase))))
 
+(defun mevedel-batch-test--start-projection-showing (view text)
+  "Start a batch in VIEW while its window shows only through TEXT.
+Turns below TEXT stay offscreen, so they remain pending placeholders."
+  (let ((end (save-excursion
+               (goto-char (point-min)) (search-forward text) (point))))
+    (cl-letf (((symbol-function 'window-end) (lambda (&rest _) end)))
+      (mevedel-batch-test--start-projection view))))
+
 (mevedel-deftest mevedel-view-render-batched-full ()
   ,test
   (test)
@@ -99,7 +107,7 @@
       (search-forward "Response 0 with target text")
       (set-window-start nil (line-beginning-position) t)
       (search-forward "Response 4 with target text")
-      (mevedel-batch-test--start-projection view-buf)
+      (mevedel-batch-test--start-projection-showing view-buf "Response 0")
       (should mevedel-view-render--batch)
       (goto-char (point-min))
       (search-forward "Response 4 with target text")
@@ -120,7 +128,7 @@
       (goto-char (point-min))
       (search-forward "Response 0 with target text")
       (set-window-start nil (line-beginning-position) t)
-      (mevedel-batch-test--start-projection view-buf)
+      (mevedel-batch-test--start-projection-showing view-buf "Response 0")
       (let ((entry (cl-find-if
                     (lambda (entry)
                       (and (eq 'assistant (plist-get (car entry) :role))
@@ -599,7 +607,7 @@
       (should (= (1- count) (length (plist-get job :pending)))))))
 
 (mevedel-deftest mevedel-view-render--priority-turns/visible-queue
-  (:doc "renders prompts and reader anchors immediately, then queues visible responses before offscreen history")
+  (:doc "renders prompts, reader anchors and every visible response at publication")
   (mevedel-batch-test--with-history
     (save-window-excursion
       (set-window-buffer (selected-window) view-buf)
@@ -615,13 +623,17 @@
       (cl-loop repeat 100 while (and mevedel-view-render--batch
                                      (eq 'prepare (plist-get mevedel-view-render--batch :phase)))
                do (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
-      (should (string-search "Response 1" (buffer-string)))
-      (should (string-search "Prompt 2" (buffer-string)))
-      (let ((next (car (car (plist-get mevedel-view-render--batch :pending)))))
-        (should (with-current-buffer data-buf
-                  (string-search "Response 2"
-                                 (buffer-substring-no-properties
-                                  (plist-get next :start) (plist-get next :end)))))))))
+      (should mevedel-view-render--batch)
+      (dolist (visible '("Response 1" "Response 2" "Response 3" "Response 4"))
+        (should (string-search visible (buffer-string))))
+      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+      (dolist (entry (plist-get mevedel-view-render--batch :pending))
+        (should-not (with-current-buffer data-buf
+                      (string-match-p
+                       "Response [1-4]"
+                       (buffer-substring-no-properties
+                        (plist-get (car entry) :start)
+                        (plist-get (car entry) :end)))))))))
 
 (defun mevedel-batch-test--turn-ids ()
   "Return rendered turn ids before the composer, in buffer order."

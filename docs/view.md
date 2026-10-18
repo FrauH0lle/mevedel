@@ -312,11 +312,11 @@ tick before publication; changing the source cancels and restarts the job.
 Markdown fontification sees each whole response but yields between line-aligned
 regions. Tool entries are prepared in small groups; the job owns and releases
 their private buffers and caches. Once ready, the refresh
-renders the turns needed to restore point, selection, and window anchors and
-all chat prompt turns immediately (so moving onto pending responses still has
-an accurate prompt and click target), then replace other visible turns and
-offscreen turn placeholders one per timer
-callback, in that priority order. Each callback
+renders every turn a displaying window shows, the turns needed to restore
+point, selection, and window anchors, and all chat prompt turns immediately (so
+moving onto pending responses still has an accurate prompt and click target).
+Offscreen turn placeholders are then replaced one per timer callback; a reader
+never sees a placeholder replaced in front of them. Each callback
 captures the current draft and reader state, so typing between callbacks is
 preserved. Source text or property changes retire the old plan. Callbacks pause
 while the view is unattended or its transport is busy, and view teardown cancels
