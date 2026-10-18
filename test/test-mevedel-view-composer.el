@@ -662,6 +662,59 @@
       "◆ Discuss ·"
       (mevedel-view--input-prompt-string 'ask)))))
 
+(defun mevedel-view-test--prompt-rows ()
+  "Return the directive prompt's rows above the draft."
+  (split-string (buffer-substring-no-properties
+                 (mevedel-view--input-marker-position)
+                 (mevedel-view--input-start))
+                "\n"))
+
+(mevedel-deftest mevedel-view--refit-input-prompt
+  (:doc "directive prompt rows fit the narrowest window, keeping the draft")
+  ;; The banner (request up to 80 columns) and the hint row (about 85
+  ;; columns with the frame keys) wrapped in narrow directive windows, so
+  ;; the prompt's height depended on window width.
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer view-buf)
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert "> quoted\nsecond line")
+        (goto-char (+ (mevedel-view--input-start) 4))
+        ;; The frame's keys join the hint row only while its mode is on.
+        (setq-local mevedel-directive-frame-mode t)
+        (let ((other (split-window-right 30)))
+          (setq mevedel-view--composer-scope
+                (list :directive-id "abcdef123456" :action 'request-changes
+                      :record (mevedel-directive--create
+                               :request (make-string 50 ?r))))
+          (mevedel-view-refresh-input-prompt)
+          (let ((rows (mevedel-view-test--prompt-rows))
+                (limit (1- (min (window-body-width (selected-window) 'remap)
+                                (window-body-width other 'remap)))))
+            (should (< limit 30))
+            (should (= 4 (length rows)))
+            (dolist (row rows)
+              (should (<= (string-width row) limit)))
+            (should (string-suffix-p "…" (nth 1 rows)))
+            (should (string-suffix-p "…" (nth 2 rows))))
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ 4 (mevedel-view--input-start))))
+          ;; Widening refits through the view's own size hook.
+          (delete-window other)
+          (run-hook-with-args 'window-size-change-functions (selected-window))
+          (let ((rows (mevedel-view-test--prompt-rows)))
+            (should (= 4 (length rows)))
+            (should (string-match-p "C-c C-z Close\\'" (nth 2 rows)))
+            (should (string-suffix-p (make-string 50 ?r) (nth 1 rows))))
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ 4 (mevedel-view--input-start))))
+          ;; An unchanged width does not rewrite the prompt.
+          (let ((tick (buffer-modified-tick)))
+            (mevedel-view--refit-input-prompt)
+            (should (= tick (buffer-modified-tick)))))))))
+
 (mevedel-deftest mevedel-view--switch-composer-scope (:quiet t)
   ,test
   (test)
@@ -2661,17 +2714,45 @@
             (should-not (mevedel-view-test--skill-hint-string))))
       (delete-directory root t)))
 
-  :doc "history-region refresh skips prompt scan"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (goto-char (point-min))
-      (cl-letf (((symbol-function 'mevedel-view--input-start)
-                 (lambda ()
-                   (error "Prompt scan should be skipped"))))
-        (mevedel-view--refresh-skill-argument-hint)
-        (should-not mevedel-view--skill-argument-hint-overlay))))
+  :doc "motion neither moves nor hides the hint, and does no prompt scan"
+  ;; The hint used to follow point: moving into the draft reflowed the line
+  ;; around it, and leaving the composer removed it.
+  (let* ((root (make-temp-file "mevedel-view-motion-hint-" t))
+         (ws (mevedel-workspace--create
+              :type 'file :id root :root root :name "view-motion-hint"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "deploy-api"
+                 :argument-names '("service" "environment"))))
+    (setf (mevedel-session-skills session) (list skill))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "$deploy-api billing")
+            (run-hooks 'post-command-hook)
+            (let ((hint (mevedel-view-test--skill-hint-string)))
+              (should (string-match-p "\\[environment\\]" hint))
+              (should (= (point-max) (overlay-start
+                                      mevedel-view--skill-argument-hint-overlay)))
+              (cl-letf (((symbol-function 'mevedel-view--input-start)
+                         (lambda () (error "Motion must not scan the prompt"))))
+                (dolist (position (list (- (point-max) 9) (point-min)))
+                  (goto-char position)
+                  (run-hooks 'post-command-hook)
+                  (should (equal hint (mevedel-view-test--skill-hint-string)))
+                  (should (= (point-max)
+                             (overlay-start
+                              mevedel-view--skill-argument-hint-overlay))))))
+            (should (equal "$deploy-api billing" (mevedel-view--input-text)))))
+      (delete-directory root t)))
 
-  :doc "refresh repairs drifted input marker"
+  :doc "a draft edit repairs a drifted input marker"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let ((prompt-start (mevedel-view--prompt-start-position))
@@ -2679,8 +2760,8 @@
         (goto-char input-start)
         (insert "draft")
         (set-marker mevedel-view--input-marker (point-max))
-        (goto-char input-start)
-        (mevedel-view--refresh-skill-argument-hint)
+        (goto-char (point-max))
+        (insert "s")
         (should (= prompt-start
                    (marker-position mevedel-view--input-marker)))))))
 

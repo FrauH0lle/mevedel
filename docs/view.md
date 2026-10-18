@@ -205,6 +205,9 @@ changes, Retry, or Implement this stashes the chat draft and shows a compact
 directive header, a distinct prompt prefix, and modeline state. The header names
 the next scoped action; its secondary line shows chat isolation, the effective
 permission mode, `Plan paused` when applicable, and `C-c C-k` for Back to chat.
+Both lines are truncated to the narrowest window showing the view, so the scoped
+prompt is always the same four rows; resizing or displaying the view in a
+window of another width refits them before redisplay.
 Directive scope is sticky across sends and exits only through Back to chat;
 leaving restores the chat draft, and resume always starts in chat scope. Queued
 inputs retain the scope in which they were accepted. Status, agent, task, and
@@ -930,6 +933,12 @@ Terminology:
   idle. The rail fits the narrowest window showing the view: activity yields
   space before the mode and pending-action hint. It is not part of the history,
   status, or interaction zones; its internal zone name remains `progress`.
+  A window resize refits the rail from `window-size-change-functions`, which
+  run before windows redisplay. Scrolling never rewrites it:
+  `window-scroll-functions` run inside a window's redisplay, which then
+  restores point to its earlier buffer position, so text changed above the
+  composer there would move the cursor within or out of the draft. A label
+  that went stale while offscreen waits for the next once-a-second refresh.
   Its elapsed value measures active request work, excluding
   time spent awaiting an Ask answer, permission decision, Plan approval,
   ApplyPatch review decision, or direct request input. During those waits it
@@ -2459,9 +2468,11 @@ commands; root `$` completion offers user-invocable skills. Both insert a
 real space after a completed root name. Command argument completion is
 available for commands with useful candidate sets, such as `/mode` and
 `/model`. Skill hints are rendered
-as a zero-width overlay near point from `argument-hint` or remaining
-`arguments` names. They are not buffer text and are never sent to the
-model.
+as a zero-width overlay at the end of the draft from `argument-hint` or
+remaining `arguments` names. Their place and visibility depend only on the
+draft, never on point, so moving the cursor never reflows the composer; a
+motion command does no hint work at all. They are not buffer text and are
+never sent to the model.
 
 Root prompt producers share `mevedel--insert-user-turn`, which applies the
 configured gptel separator and clears copied view, tool,
