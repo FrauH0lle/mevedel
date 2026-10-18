@@ -57,9 +57,13 @@ and a same-window inspection always returns to the parent at that row. Reflow
 caused by the close itself does not make a window eligible.
 
 Background-work rows are in stable start order, newest farthest from the
-composer; state changes, including blocking, update rows in place. While point
-or the mouse is on the panel, it keeps exactly the rows it showed: finished rows
-stay as inert dimmed lines and new work is only counted, until both leave.
+composer. Agent trees form units, with members in path order. Equal unit starts
+put agents before executions, then sort lexicographically by agent root path or
+execution owner path and ID, ascending; live, held and retained rows use the
+same identity tiebreaks. State changes, including blocking, update rows in place.
+While point or the mouse is on the panel, it keeps exactly the rows it showed:
+finished rows stay as inert dimmed lines and new work is only counted, until
+both leave.
 A finished row also lingers for ten seconds after the pointer is away, and
 leaving the panel restarts that period, so removals happen when nobody is
 aiming at the panel.
@@ -101,6 +105,12 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Equal-start ordering (2026-10).** Sorting only by start time let completion
+  reorder tied rows as they moved between the live, held and retained lists.
+  A held finished agent could shift a retained execution's action despite the
+  unchanged panel height. Kind and stable unit identity now break start-time
+  ties, independently of collection order and lifecycle state.
 
 - **Narrow expanded controls (2026-10).** A 47-column display wrapped live
   execution controls onto two rows but finished controls onto one; expanded

@@ -4,7 +4,7 @@
 
 ;; The status zone's background-work panel: one rule with counts and a
 ;; collapse toggle, then one row per active agent and per live yielded
-;; execution (Bash or Monitor), needs-attention first.  Rows expand in place
+;; execution (Bash or Monitor), newest unit first.  Rows expand in place
 ;; to show the item's actions; a last row offers overflow and the
 ;; background-work cockpit.  Finished items leave the panel; their transcript
 ;; notices take over.
@@ -240,6 +240,8 @@ New work then appears at the panel edge farthest from the composer, so
 rows already shown keep their screen position: with the composer
 anchored, only text above a change moves.  An agent and its descendants
 form one unit, ordered by their top-level agent, in path order inside.
+Equal starts put agent units first, then sort by agent root path or by
+execution owner path and ID, all lexicographically ascending.
 STARTS, a hash table, remembers each unit's start across calls and is
 pruned to the units present."
   (let (units groups)
@@ -270,11 +272,12 @@ pruned to the units present."
                                                       members))))))
                (when starts (puthash (car unit) start starts))
                (cons start
-                     (sort members
-                           (lambda (left right)
-                             (and (eq (nth 1 left) 'agent) (eq (nth 1 right) 'agent)
-                                  (string-lessp (plist-get (nth 2 left) :path)
-                                                (plist-get (nth 2 right) :path))))))))
+                     (cons (car unit)
+                           (sort members
+                                 (lambda (left right)
+                                   (and (eq (nth 1 left) 'agent) (eq (nth 1 right) 'agent)
+                                        (string-lessp (plist-get (nth 2 left) :path)
+                                                      (plist-get (nth 2 right) :path)))))))))
            (nreverse units)))
     (when starts
       (let (stale)
@@ -283,7 +286,22 @@ pruned to the units present."
                  starts)
         (dolist (group stale) (remhash group starts))))
     (apply #'append
-           (mapcar #'cdr (sort units (lambda (left right) (> (car left) (car right))))))))
+           (mapcar #'cddr
+                   (sort units
+                         (lambda (left right)
+                           (let ((left-key (cadr left))
+                                 (right-key (cadr right)))
+                             (cond
+                              ((/= (car left) (car right)) (> (car left) (car right)))
+                              ;; Agent unit keys are root paths; execution keys
+                              ;; contain the owner path and execution ID.
+                              ((stringp left-key)
+                               (or (not (stringp right-key))
+                                   (string-lessp left-key right-key)))
+                              ((stringp right-key) nil)
+                              ((equal (nth 1 left-key) (nth 1 right-key))
+                               (string-lessp (nth 2 left-key) (nth 2 right-key)))
+                              (t (string-lessp (nth 1 left-key) (nth 1 right-key)))))))))))
 
 (defun mevedel-view-execution--pointer-on-panel-p ()
   "Return non-nil when point or the mouse is on the background-work panel.

@@ -1545,7 +1545,10 @@ row (see [Composer anchoring](#composer-anchoring)), so rows already shown do no
 move. State changes, including blocking, update a row in place; blocked agents
 are marked by the warning face and the rule's count, not by reordering. An agent
 and its descendants form one unit ordered by the top-level agent, children
-indented under their parent. A Bash row shows the
+indented under their parent in path order. Equal unit start times put agent
+trees before executions, then sort lexicographically by agent root path or by
+execution owner path and ID, ascending. These identity tiebreaks do not change
+when a row finishes or is retained. A Bash row shows the
 model-written `description` when present, else the command; a row owned by an
 agent names that owner. The footer progress line shows only the root turn's
 own activity and elapsed time; it never repeats these counts.

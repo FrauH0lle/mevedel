@@ -120,6 +120,42 @@ mouse events in them, which later interactive calls would read."
                          "    ▸ Running   agent    /root/counter/sub\n"
                          "  ▸ Blocked   agent    /root/reviewer · waiting for permission\n")
                  text)))))
+  :doc "equal starts keep a held agent and retained execution in place across completion"
+  (mevedel-view-execution-test--with-view
+    (let ((agents (list (list :path "/root/counter" :status 'running :depth 0
+                              :started-at 0.0))))
+      (setf (plist-get (car live) :started-at) 0.0)
+      (cl-letf (((symbol-function 'mevedel-view--agent-status-collect) (lambda () agents))
+                ((symbol-function 'mevedel-view-execution--pointer-on-panel-p) (lambda () t)))
+        (unwind-protect
+            (progn
+              (mevedel-view--render-status)
+              (goto-char (point-max))
+              (insert "> draft\nsecond line")
+              (mevedel-view-execution-test--activate "  ▸ Running   bash")
+              (goto-char (point-max))
+              (let ((action-line (save-excursion
+                                   (mevedel-view-execution-test--at "[Full output]")
+                                   (line-number-at-pos))))
+                (setq agents nil)
+                (dotimes (_ 2)
+                  (mevedel-view--render-status)
+                  (should (string-search "✓ Finished  agent    /root/counter" (buffer-string)))
+                  (should (= action-line (save-excursion
+                                           (mevedel-view-execution-test--at "[Full output]")
+                                           (line-number-at-pos)))))
+                (setq live nil)
+                (mevedel-view-execution--event
+                 (list :session session :data-buffer data-buf :owner "/root" :type 'terminal
+                       :facts '(:execution-id "e1" :state completed :termination exited :exit-code 0)))
+                (dotimes (_ 2)
+                  (mevedel-view--render-status)
+                  (should (plist-get mevedel-view-execution--selected :terminal-p))
+                  (should (= action-line (save-excursion
+                                           (mevedel-view-execution-test--at "[Full output]")
+                                           (line-number-at-pos))))
+                  (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+          (mevedel-view-execution--cancel-release)))))
   :doc "a finished row lingers while point is on the panel and the grace period restarts on leaving"
   (mevedel-view-execution-test--with-view
     (save-window-excursion
@@ -799,6 +835,28 @@ mouse events in them, which later interactive calls would read."
                                   (funcall entry 'execution '(:owner "/root" :execution-id "e"
                                                               :started-at 5.0))
                                   (funcall entry 'agent '(:path "/root/new" :started-at 9.0))))))))
+  :doc "equal unit starts sort by kind and identity regardless of input order"
+  (let* ((entry (lambda (kind data) (list (mevedel-view-execution--key kind data) kind data)))
+         (entries (list (funcall entry 'execution '(:owner "/root/b" :execution-id "a"))
+                        (funcall entry 'agent '(:path "/root/b" :started-at 0.0))
+                        (funcall entry 'execution '(:owner "/root/a" :execution-id "b" :started-at 0))
+                        (funcall entry 'agent '(:path "/root/a/z" :started-at 90.0))
+                        (funcall entry 'agent '(:path "/root/a" :started-at (0 0 0 0)))
+                        (funcall entry 'execution '(:owner "/root/a" :execution-id "a" :started-at 0.0))))
+         (expected '((agent "/root/a") (agent "/root/a/z") (agent "/root/b")
+                     (execution "/root/a" "a") (execution "/root/a" "b")
+                     (execution "/root/b" "a")))
+         (starts (make-hash-table :test #'equal)))
+    (dotimes (offset (length entries))
+      (let ((rotated (append (nthcdr offset entries) (seq-take entries offset))))
+        (dolist (input (list rotated (reverse rotated)))
+          (should (equal expected (mapcar #'car (mevedel-view-execution--ordered input starts)))))))
+    ;; Losing the root row must not change a tied tree's unit identity.
+    (should (equal (cdr expected)
+                   (mapcar #'car
+                           (mevedel-view-execution--ordered
+                            (cl-remove '(agent "/root/a") entries :key #'car :test #'equal)
+                            starts)))))
   :doc "an agent tree keeps its place after its top-level agent finishes"
   (let ((entry (lambda (kind data) (list (mevedel-view-execution--key kind data) kind data)))
         (starts (make-hash-table :test #'equal)))
