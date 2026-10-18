@@ -2060,7 +2060,10 @@ with another 250 ms between them. The callback also realigns ratio-sized images.
 
 The callback enters normal projection mutation ownership before locating work,
 so queued work discovers current positions and the changed window's width when
-it actually runs. Updates stay off the undo list and preserve the modified flag,
+it actually runs. A formatted table or resized image usually changes height:
+the callback keeps each visible composer on its screen row, so the change
+scrolls the transcript above it, and gives a window left past a shortened end
+its last page back. Updates stay off the undo list and preserve the modified flag,
 data buffer, composer draft, point, mark, other markers, overlays, and displayed
 window anchors. Table replacement uses cell identity and unwrapped character
 offsets instead of whole-table text diffing. This distinguishes repeated words

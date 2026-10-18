@@ -71,6 +71,10 @@
                   (agent-path))
 (autoload 'mevedel-view-open-agent-transcript "mevedel-view-agent")
 
+;; `mevedel-view-composer'
+(declare-function mevedel-view--call-preserving-composer-view
+                  "mevedel-view-composer" (thunk))
+
 ;; `mevedel-view-fontify'
 (declare-function mevedel-view--fontify-as "mevedel-view-fontify" (text mode))
 
@@ -1041,8 +1045,14 @@ undo state, the modified flag, selections and the authoritative transcript."
                    rendered)
                (unwind-protect
                    (when window
-                     (setq rendered (mevedel-view-table-rerender window))
-                     (mevedel-view--rerender-images window))
+                     ;; A table or image changes height above the composer.
+                     ;; The splice keeps point and window starts on their
+                     ;; content; the composer keeps its row, and a window
+                     ;; left past its shortened end gets its last page back.
+                     (mevedel-view--call-preserving-composer-view
+                      (lambda ()
+                        (setq rendered (mevedel-view-table-rerender window))
+                        (mevedel-view--rerender-images window))))
                  (restore-buffer-modified-p modified))
                (when rendered
                  (mevedel-view--realign-on-window-change window)))))))))))
