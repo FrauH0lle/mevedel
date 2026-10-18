@@ -235,7 +235,13 @@ applies while handoff preparation or retry owns the session.
 
 The approval card keeps the Markdown proposal expanded above a compact
 Implementation section. Cycle keys appear beside their settings; accept,
-feedback, hide, and cancel remain in the action footer. A hidden approval stays
+feedback, hide, and cancel remain in the action footer. Each setting is one
+screen row of the narrowest window showing the view, cut with an ellipsis and
+its full text on hover, and the Worktree notice takes the blank row above the
+actions the same way. Changing a setting therefore never changes the card's
+height: the Context and Execution descriptions differ in length and wrapped
+below about 84 columns, and the notice used to add two or three rows. The
+card is laid out again when that width changes. A hidden approval stays
 pending and hidden across live-session redraws. `RET` or a mouse click on its
 `1 plan` interaction-counter segment shows the card again; resuming a persisted
 session also shows it because hidden state is not persisted.

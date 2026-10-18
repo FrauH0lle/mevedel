@@ -158,6 +158,10 @@
 (declare-function mevedel-view--interaction-unregister
                   "mevedel-view-interaction" (id))
 
+;; `mevedel-view-zone'
+(declare-function mevedel-view-zone-width "mevedel-view-zone" ())
+(autoload 'mevedel-view-zone-width "mevedel-view-zone")
+
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-collect-status "mevedel-worktree"
 		  (&optional context))
@@ -549,6 +553,20 @@ An explicit change also refreshes the cached source checkout state."
               (if (string-match-p "\n" instructions) "s" ""))
     "None"))
 
+(defun mevedel-plan-mode--fit-row (row)
+  "Return ROW cut to one screen row of the current view.
+A cut row ends in an ellipsis and keeps its full text in the help echo.
+The last column is left for a continuation glyph, which a terminal
+window draws there."
+  (let ((width (1- (mevedel-view-zone-width))))
+    (if (<= (string-width row) width)
+        row
+      (let ((cut (truncate-string-to-width row width nil nil "…")))
+        (add-text-properties 0 (length cut)
+                             (list 'help-echo (substring-no-properties row))
+                             cut)
+        cut))))
+
 (defun mevedel-plan-mode--render-approval (entry)
   "Render standalone Plan approval ENTRY in the interaction zone."
   (let ((chat-buffer (plist-get entry :chat-buffer))
@@ -667,82 +685,88 @@ An explicit change also refreshes the cached source checkout state."
                                   "Implementation")
                                 'font-lock-face 'mevedel-view-plan-mode)
                     "\n\n"
-                    (unless directive-p
-                      (concat
-                       (mevedel--prompt-key "l")
-                       "  Location    "
-                       (propertize
-                        (capitalize
-                         (symbol-name (plist-get selection :location)))
-                        'font-lock-face 'bold)
-                       "\n"
-                       (mevedel--prompt-key "c")
-                       "  Context     "
-                       (propertize
-                        (capitalize
-                         (symbol-name (plist-get selection :context)))
-                        'font-lock-face 'bold)
-                       " — "
-                       (mevedel-plan-mode--context-description
-                        (plist-get selection :context))
-                       "\n"
-                       (mevedel--prompt-key "e")
-                       "  Execution   "
-                       (propertize
-                        (capitalize (symbol-name execution))
-                        'font-lock-face 'bold)
-                       " — "
-                       (mevedel-plan-mode--execution-description execution)
-                       "\n"
-                       ;; The row stays when Execution is not Goal, so
-                       ;; cycling `e' never changes the card's height.
-                       (if (eq execution 'goal)
-                           (concat
-                            (mevedel--prompt-key "b")
-                            "  Budget      "
-                            (propertize
-                             (if budget
-                                 (format "%d tokens" budget)
-                               "Unlimited")
-                             'font-lock-face 'bold)
-                            "\n")
-                         (propertize "   Budget      Goal execution only\n"
-                                     'font-lock-face 'shadow))))
-                    (mevedel--prompt-key "m")
-                    "  Mode        "
-                    (propertize
-                     (capitalize
-                      (symbol-name (plist-get selection :mode)))
-                     'font-lock-face 'bold)
-                    "\n"
-                    (mevedel--prompt-key "M")
-                    "  Model       "
-                    (propertize
-                     (format
-                      "%s · effort %s"
-                      (plist-get selection :model-provider)
-                      (or (plist-get selection :reasoning-effort)
-                          "default"))
-                     'font-lock-face 'bold)
-                    "\n"
-                    (mevedel--prompt-key "s")
-                    "  Skills      "
-                    (propertize
-                     (mevedel-plan-mode--skills-label selection)
-                     'font-lock-face 'bold)
-                    "\n"
-                    (mevedel--prompt-key "i")
-                    "  Instructions "
-                    (propertize
-                     (mevedel-plan-mode--instructions-label selection)
-                     'font-lock-face 'bold)
-                    "\n"
-                    (when warning
-                      (concat "\n"
-                              (propertize warning
-                                          'font-lock-face 'warning)
-                              "\n"))
-                    "\n"
+                    ;; Every setting and the notice slot keep one screen
+                    ;; row whatever their values, so changing a setting or
+                    ;; Location never changes the card's height.
+                    (mapconcat
+                     (lambda (row) (concat (mevedel-plan-mode--fit-row row) "\n"))
+                     (append
+                      (unless directive-p
+                        (list
+                         (concat
+                          (mevedel--prompt-key "l")
+                          "  Location    "
+                          (propertize
+                           (capitalize
+                            (symbol-name (plist-get selection :location)))
+                           'font-lock-face 'bold))
+                         (concat
+                          (mevedel--prompt-key "c")
+                          "  Context     "
+                          (propertize
+                           (capitalize
+                            (symbol-name (plist-get selection :context)))
+                           'font-lock-face 'bold)
+                          " — "
+                          (mevedel-plan-mode--context-description
+                           (plist-get selection :context)))
+                         (concat
+                          (mevedel--prompt-key "e")
+                          "  Execution   "
+                          (propertize
+                           (capitalize (symbol-name execution))
+                           'font-lock-face 'bold)
+                          " — "
+                          (mevedel-plan-mode--execution-description execution))
+                         ;; The row stays when Execution is not Goal.
+                         (if (eq execution 'goal)
+                             (concat
+                              (mevedel--prompt-key "b")
+                              "  Budget      "
+                              (propertize
+                               (if budget
+                                   (format "%d tokens" budget)
+                                 "Unlimited")
+                               'font-lock-face 'bold))
+                           (propertize "   Budget      Goal execution only"
+                                       'font-lock-face 'shadow))))
+                      (list
+                       (concat
+                        (mevedel--prompt-key "m")
+                        "  Mode        "
+                        (propertize
+                         (capitalize
+                          (symbol-name (plist-get selection :mode)))
+                         'font-lock-face 'bold))
+                       (concat
+                        (mevedel--prompt-key "M")
+                        "  Model       "
+                        (propertize
+                         (format
+                          "%s · effort %s"
+                          (plist-get selection :model-provider)
+                          (or (plist-get selection :reasoning-effort)
+                              "default"))
+                         'font-lock-face 'bold))
+                       (concat
+                        (mevedel--prompt-key "s")
+                        "  Skills      "
+                        (propertize
+                         (mevedel-plan-mode--skills-label selection)
+                         'font-lock-face 'bold))
+                       (concat
+                        (mevedel--prompt-key "i")
+                        "  Instructions "
+                        (propertize
+                         (mevedel-plan-mode--instructions-label selection)
+                         'font-lock-face 'bold))
+                       ;; The blank row above the actions holds the notice.
+                       (if warning
+                           (propertize
+                            (replace-regexp-in-string "\n" " " warning)
+                            'font-lock-face 'warning)
+                         "")))
+                     "")
                     (mevedel--prompt-key "RET")
                     " implement    "
                     (mevedel--prompt-key "f")

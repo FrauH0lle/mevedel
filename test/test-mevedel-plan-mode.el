@@ -769,18 +769,29 @@
                    (lambda (&optional _) '(:dirty-p nil))))
           ;; Nothing blocks yet: the card carries no notice.
           (mevedel-plan-mode--render-approval entry)
-          (should-not (string-search notice (plist-get descriptor :body)))
+          (should-not (string-search (substring notice 0 30)
+                                     (plist-get descriptor :body)))
           ;; Queue mutation rebuilds the interaction zone, which re-renders
           ;; the approval with the blocker named.
-          (mevedel-session-enqueue-pending-input
-           session 'follow-up (list :input "Also update the docs"))
-          (mevedel-plan-mode--render-approval entry)
-          (let* ((body (plist-get descriptor :body))
-                 (position (string-search notice body)))
-            (should position)
-            (should (memq 'warning
-                          (flatten-tree
-                           (get-text-property position 'font-lock-face body)))))
+          (let ((lines (length (split-string (plist-get descriptor :body) "\n"))))
+            (mevedel-session-enqueue-pending-input
+             session 'follow-up (list :input "Also update the docs"))
+            (mevedel-plan-mode--render-approval entry)
+            (let* ((body (plist-get descriptor :body))
+                   (position (string-search (substring notice 0 30) body)))
+              (should position)
+              (should (memq 'warning
+                            (flatten-tree
+                             (get-text-property position 'font-lock-face body))))
+              ;; The notice takes the blank row above the actions, cut to
+              ;; one screen row with its full text on hover.
+              (should (= lines (length (split-string body "\n"))))
+              (should (string-prefix-p notice (get-text-property position 'help-echo body)))
+              (let ((width (with-current-buffer view-buffer
+                             (1- (mevedel-view-zone-width)))))
+                (dolist (line (split-string body "\n"))
+                  (unless (string-prefix-p "#" line)
+                    (should (<= (string-width line) width)))))))
           (should
            (equal notice
                   (condition-case err
