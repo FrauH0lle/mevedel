@@ -559,6 +559,28 @@
 (defvar-local mevedel-view--composer-drafts nil
   "Draft snapshots keyed by chat or directive composer scope.")
 
+(defvar-local mevedel-view--input-prompt-width nil
+  "Column budget the current directive prompt was fitted to, or nil.")
+
+(defun mevedel-view--input-prompt-columns ()
+  "Return the columns one row of prompt chrome may use.
+This is the narrowest body width among windows showing the view, in
+units of its remapped default face, less one column for the cursor."
+  (let ((windows (get-buffer-window-list (current-buffer) nil t)))
+    (max 1 (1- (apply #'min (mapcar (lambda (window)
+                                      (window-body-width window 'remap))
+                                    (or windows (list (selected-window)))))))))
+
+(defun mevedel-view--refit-input-prompt ()
+  "Rebuild a directive prompt whose rows no longer fit the view's windows.
+Run from window size and buffer changes, before windows redisplay.  An
+undisplayed view keeps its prompt until a window shows it again."
+  (when (and mevedel-view--composer-scope
+             (get-buffer-window-list (current-buffer) nil t)
+             (not (eql mevedel-view--input-prompt-width
+                       (mevedel-view--input-prompt-columns))))
+    (mevedel-view-refresh-input-prompt)))
+
 (defun mevedel-view-composer-scope-label (&optional scope)
   "Return a concise label for SCOPE or the current composer scope."
   (when-let* ((scope (or scope mevedel-view--composer-scope)))
@@ -625,8 +647,11 @@ their distinct labels; directive scope keeps Plan paused."
 
 (defun mevedel-view--input-prompt-string (&optional mode)
   "Return the read-only input prompt string for permission MODE.
-The ordinary prompt sits directly below the permanent composer rail."
+The ordinary prompt sits directly below the permanent composer rail.
+A directive prompt has a banner and a hint row, each truncated to the
+narrowest window showing the view, so its height never depends on width."
   (let ((mode (or mode (mevedel-view--effective-permission-mode))))
+    (setq mevedel-view--input-prompt-width nil)
     (if mevedel-view--composer-scope
         (let* ((record (plist-get mevedel-view--composer-scope :record))
                (action (plist-get mevedel-view--composer-scope :action))
@@ -655,23 +680,32 @@ The ordinary prompt sits directly below the permanent composer rail."
                (permission-display
                 (mevedel-view--permission-mode-display mode))
                (permission-label (car permission-display))
-               (permission-face (cadr permission-display)))
+               (permission-face (cadr permission-display))
+               (width (mevedel-view--input-prompt-columns)))
+          (setq mevedel-view--input-prompt-width width)
           (concat
            "\n"
-           (propertize (format "◆ %s · %s\n" action-label request-label)
+           (propertize (concat
+                        (truncate-string-to-width
+                         (format "◆ %s · %s" action-label request-label)
+                         width nil nil "…")
+                        "\n")
                        'font-lock-face 'mevedel-view-directive-scope-banner)
-           (propertize "  isolated from chat · " 'font-lock-face 'shadow)
-           (propertize permission-label 'font-lock-face permission-face)
-           (when (mevedel-view--plan-mode-p)
-             (concat
-              (propertize " · " 'font-lock-face 'shadow)
-              (propertize "Plan paused"
-                          'font-lock-face 'mevedel-view-plan-mode)))
-           (propertize " · C-c C-k Back" 'font-lock-face 'shadow)
-           ;; The frame's own keys are only reachable while it is showing.
-           (when (bound-and-true-p mevedel-directive-frame-mode)
-             (propertize " · C-c C-f Filter · C-c C-z Close"
-                         'font-lock-face 'shadow))
+           (truncate-string-to-width
+            (concat
+             (propertize "  isolated from chat · " 'font-lock-face 'shadow)
+             (propertize permission-label 'font-lock-face permission-face)
+             (when (mevedel-view--plan-mode-p)
+               (concat
+                (propertize " · " 'font-lock-face 'shadow)
+                (propertize "Plan paused"
+                            'font-lock-face 'mevedel-view-plan-mode)))
+             (propertize " · C-c C-k Back" 'font-lock-face 'shadow)
+             ;; The frame's own keys are only reachable while it is showing.
+             (when (bound-and-true-p mevedel-directive-frame-mode)
+               (propertize " · C-c C-f Filter · C-c C-z Close"
+                           'font-lock-face 'shadow)))
+            width nil nil (propertize "…" 'font-lock-face 'shadow))
            (propertize "\n" 'font-lock-face 'shadow)
            (propertize "◆ > "
                        'font-lock-face 'mevedel-view-directive-scope)))

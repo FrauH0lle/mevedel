@@ -180,6 +180,7 @@
 (declare-function mevedel-view--permission-mode-display
                   "mevedel-view-composer" (mode))
 (declare-function mevedel-view--plan-mode-p "mevedel-view-composer" ())
+(declare-function mevedel-view--refit-input-prompt "mevedel-view-composer" ())
 (declare-function mevedel-view--position-in-input-region-p
                   "mevedel-view-composer" (position))
 (declare-function mevedel-view--sanitize-undo "mevedel-view-composer" ())
@@ -1654,10 +1655,11 @@ then move the cursor within the draft, or out of it."
     (mevedel-view--recheck-spinner-after-redisplay)))
 
 (defun mevedel-view--resume-on-window-resize (window)
-  "Refit the rail and update animation scheduling after WINDOW resized.
-Size changes run before windows are redisplayed, so the rail's text can
+  "Refit the rail and prompt, and update animation, after WINDOW resized.
+Size changes run before windows are redisplayed, so their text can
 change here with the usual composer point preservation."
   (when (eq (window-buffer window) (current-buffer))
+    (mevedel-view--refit-input-prompt)
     (mevedel-view--render-request-progress))
   (mevedel-view--resume-on-window-scroll window))
 
@@ -1679,6 +1681,7 @@ still release animation and power observers when it becomes invisible."
       (mevedel-view--resume-render-if-attended (current-buffer))
     (when (fboundp 'mevedel-view--start-spinner-timer)
       (mevedel-view--start-spinner-timer t)))
+  (mevedel-view--refit-input-prompt)
   (mevedel-view--render-request-progress))
 
 (defun mevedel-view--schedule-render (kind data-buffer delay)

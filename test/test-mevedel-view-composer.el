@@ -662,6 +662,59 @@
       "◆ Discuss ·"
       (mevedel-view--input-prompt-string 'ask)))))
 
+(defun mevedel-view-test--prompt-rows ()
+  "Return the directive prompt's rows above the draft."
+  (split-string (buffer-substring-no-properties
+                 (mevedel-view--input-marker-position)
+                 (mevedel-view--input-start))
+                "\n"))
+
+(mevedel-deftest mevedel-view--refit-input-prompt
+  (:doc "directive prompt rows fit the narrowest window, keeping the draft")
+  ;; The banner (request up to 80 columns) and the hint row (about 85
+  ;; columns with the frame keys) wrapped in narrow directive windows, so
+  ;; the prompt's height depended on window width.
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer view-buf)
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert "> quoted\nsecond line")
+        (goto-char (+ (mevedel-view--input-start) 4))
+        ;; The frame's keys join the hint row only while its mode is on.
+        (setq-local mevedel-directive-frame-mode t)
+        (let ((other (split-window-right 30)))
+          (setq mevedel-view--composer-scope
+                (list :directive-id "abcdef123456" :action 'request-changes
+                      :record (mevedel-directive--create
+                               :request (make-string 50 ?r))))
+          (mevedel-view-refresh-input-prompt)
+          (let ((rows (mevedel-view-test--prompt-rows))
+                (limit (1- (min (window-body-width (selected-window) 'remap)
+                                (window-body-width other 'remap)))))
+            (should (< limit 30))
+            (should (= 4 (length rows)))
+            (dolist (row rows)
+              (should (<= (string-width row) limit)))
+            (should (string-suffix-p "…" (nth 1 rows)))
+            (should (string-suffix-p "…" (nth 2 rows))))
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ 4 (mevedel-view--input-start))))
+          ;; Widening refits through the view's own size hook.
+          (delete-window other)
+          (run-hook-with-args 'window-size-change-functions (selected-window))
+          (let ((rows (mevedel-view-test--prompt-rows)))
+            (should (= 4 (length rows)))
+            (should (string-match-p "C-c C-z Close\\'" (nth 2 rows)))
+            (should (string-suffix-p (make-string 50 ?r) (nth 1 rows))))
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ 4 (mevedel-view--input-start))))
+          ;; An unchanged width does not rewrite the prompt.
+          (let ((tick (buffer-modified-tick)))
+            (mevedel-view--refit-input-prompt)
+            (should (= tick (buffer-modified-tick)))))))))
+
 (mevedel-deftest mevedel-view--switch-composer-scope (:quiet t)
   ,test
   (test)

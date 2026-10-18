@@ -200,6 +200,9 @@ changes, Retry, or Implement this stashes the chat draft and shows a compact
 directive header, a distinct prompt prefix, and modeline state. The header names
 the next scoped action; its secondary line shows chat isolation, the effective
 permission mode, `Plan paused` when applicable, and `C-c C-k` for Back to chat.
+Both lines are truncated to the narrowest window showing the view, so the scoped
+prompt is always the same four rows; resizing or displaying the view in a
+window of another width refits them before redisplay.
 Directive scope is sticky across sends and exits only through Back to chat;
 leaving restores the chat draft, and resume always starts in chat scope. Queued
 inputs retain the scope in which they were accepted. Status, agent, task, and
