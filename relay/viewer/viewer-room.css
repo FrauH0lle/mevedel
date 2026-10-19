@@ -165,10 +165,8 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 #artifacts .dock-chip-meta { display:none; }
 #session-box .activity { margin-bottom:24px; }
 .activity h2 { font-size:14px; font-weight:600; margin:0 0 12px; }
-#agents,#agents-done-list,#tasks-list { padding:0; }
-#agents-done-list { margin:0 0 10px; }
+#tasks-list { padding:0; }
 #tasks-list .task { border:0; padding:8px 0; font-size:13px; }
-#agents .dock-chip,.done-row { background:none; border:0; padding:8px 0; font-size:13px; }
 /* The room-wide actions read as rows, like the section headings above them. */
 #session-box .dock-actions { flex-direction:column; flex-wrap:nowrap; gap:0; border-top:1px solid var(--line)!important; padding-top:12px!important; }
 #session-box .dock-actions .btn { display:flex; align-items:baseline; gap:6px; width:100%; padding:8px 0; border:0; border-radius:0; background:none; color:var(--ink); font-size:14px; font-weight:600; text-align:left; }

@@ -35,6 +35,34 @@ class Element {
     this.children.push(...children);
   }
   replaceChildren(...children) { this.children = children; }
+  insertBefore(node, anchor) {
+    node.remove(); node.parent = this;
+    const index = anchor ? this.children.indexOf(anchor) : this.children.length;
+    this.children.splice(index, 0, node);
+  }
+  get lastElementChild() { return this.children.at(-1); }
+  get classList() {
+    const node = this;
+    const list = {toggle(name, force) {
+      const names = new Set(node.className.split(' ').filter(Boolean));
+      if (force) names.add(name); else names.delete(name);
+      node.className = [...names].join(' ');
+    }, add(name) { this.toggle(name, true); }, remove(name) { this.toggle(name, false); },
+    contains(name) { return node.className.split(' ').includes(name); }};
+    return list;
+  }
+  contains(node) { return node === this || this.children.some(child => typeof child !== 'string' && child.contains(node)); }
+  get parentElement() { return this.parent; }
+  querySelectorAll(selector) {
+    const result = [];
+    for (const child of this.children) if (typeof child !== 'string') {
+      if ((selector === '[data-tool-use-id]' && child.dataset.toolUseId)
+          || (selector === 'details' && child.tagName === 'details')) result.push(child);
+      result.push(...child.querySelectorAll(selector));
+    }
+    return result;
+  }
+  scrollIntoView() { this.scrolled = true; }
   remove() {
     if (this.parent) this.parent.children = this.parent.children.filter(x => x !== this);
   }
@@ -707,7 +735,7 @@ async function main() {
                'send-button', 'stop-button', 'filter', 'requests',
                'session-label', 'queue-state', 'attachments',
                'attach-button', 'image-input', 'notify-button',
-               'composer-scope', 'own-queue', 'agents', 'agent-panel',
+               'composer-scope', 'own-queue', 'agent-panel',
                'agent-title', 'agent-meta', 'agent-close',
                'agent-transcript', 'commands-box', 'commands-summary',
                'skill-chips', 'artifacts-box', 'artifacts-summary',
@@ -716,7 +744,7 @@ async function main() {
                'artifact-close', 'artifact-body',
                'appearance-menu', 'palette', 'appearance', 'accents', 'skill-search', 'skills-button', 'activity', 'modeline', 'empty-state',
                'session-box', 'session-summary',
-               'tasks-list', 'agents-done-list',
+               'tasks-list', 'background-work', 'background-summary', 'background-collapse', 'background-list', 'background-more',
                'new-session-button', 'new-session', 'new-session-form',
                'new-session-result', 'new-session-name',
                'new-session-prompt', 'new-session-model',
@@ -742,7 +770,7 @@ async function main() {
   nodes.filter.hidden = true;
   nodes['notify-button'].hidden = true;
   nodes['own-queue'].hidden = true;
-  nodes.agents.hidden = true;
+  nodes['background-work'].hidden = true;
   nodes['session-box'].hidden = true;
   nodes['commands-box'].hidden = true;
   nodes['artifacts-box'].hidden = true;
@@ -920,6 +948,7 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-artifact.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-history.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-agent.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-background.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-task.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-goal.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-session.js', 'utf8'), context);
@@ -1503,21 +1532,25 @@ async function main() {
   removeAttachment.dispatch('click');
   assert.equal(nodes.attachments.children.length, 0);
 
-  // Routed agent frames cross the sealed transport into the controller,
-  // whose detailed behavior has a focused test. A settled row lands in
-  // the finished-agents list instead of the live strip, and both counts
-  // ride on the one session summary line.
+  // Retained metadata and host-ordered background rows cross the real
+  // sealed transport; the unified panel opens agent inspection.
   await deliver({t: 'agents', agents: [
     {path: '/root/worker-1', role: 'worker', status: 'running'},
     {path: '/root/settled-1', role: 'explorer', status: 'done'},
   ]});
-  assert.equal(nodes.agents.children.length, 1);
-  assert.equal(nodes['agents-done-list'].children.length, 1);
+  await deliver({t: 'background-work', rows: [
+    {key: 'agent-1', kind: 'agent', path: '/root/worker-1', status: 'running', statusLabel: 'Running', description: '/root/worker-1', toolUseId: 'source-control'},
+    {key: 'agent-2', kind: 'agent', path: '/root/settled-1', status: 'done', statusLabel: 'Finished', description: '/root/settled-1', terminal: true},
+  ]});
+  assert.equal(nodes['background-list'].children.length, 2);
+  assert.equal(nodes['background-work'].hidden, false);
   assert.equal(nodes['session-box'].hidden, false);
   assert.equal(textOf(nodes['session-summary']),
-               '3 commands · 1 agent · 1 finished · Shared');
+               '3 commands · Shared');
   const agentFetchBefore = first.sent.length;
-  nodes.agents.children[0].dispatch('click');
+  const backgroundRow = nodes['background-list'].children[0];
+  backgroundRow.children[0].dispatch('click');
+  backgroundRow.children[1].children.at(-1).children[0].dispatch('click');
   await waitFor(() => first.sent.length === agentFetchBefore + 1,
                 'sealed agent fetch');
   const agentFetch = await unseal(key, first.sent[agentFetchBefore]);
@@ -1537,6 +1570,18 @@ async function main() {
   await deliver({t: 'agents', agents: []});
   assert.equal(textOf(nodes['session-summary']),
                '3 commands · Shared');
+
+  await deliver({t: 'record', record: {id: 'source-tool', kind: 'tool', toolUseId: 'source-control',
+    presentation: {name: 'Agent', body: 'source launch details', collapsed: true}}});
+  const locateBefore = first.sent.length;
+  backgroundRow.children[1].children.at(-1).children[1].dispatch('click');
+  await waitFor(() => first.sent.length > locateBefore, 'sealed background locate');
+  const locate = await unseal(key, first.sent[locateBefore]);
+  assert.equal(locate.t, 'background-locate');
+  assert.equal(locate.path, '/root/worker-1');
+  await deliver({t: 'background-source', reqId: locate.reqId, owner: '/root', current: true, toolUseId: 'source-control'});
+  assert.equal(findByRecordId(nodes.transcript, 'source-tool').disclosures.get('root').open, true);
+  await deliver({t: 'remove', ids: ['source-tool']});
 
   // The session task list renders as a collapsible summary with one
   // line per task: in-progress first, completed last and counted.
@@ -1561,20 +1606,23 @@ async function main() {
   assert.equal(nodes['session-box'].hidden, false);
   assert.match(textOf(nodes['session-summary']), /⚠ 1 active omitted/);
   assert.equal(nodes['session-summary'].dataset.warning, 'true');
-  // Agents and tasks report side by side on that one line, and either
-  // reporter alone can raise the warning.
+  // Agent attention lives in the unified work panel, not duplicated in
+  // the task/session summary.
   await deliver({t: 'agents', agents: [
     {path: '/root/worker-1', role: 'worker', status: 'blocked'},
   ]});
+  await deliver({t: 'background-work', rows: [{key: 'agent-1', kind: 'agent', path: '/root/worker-1',
+    status: 'blocked', statusLabel: 'Blocked', description: '/root/worker-1'}]});
+  assert.match(textOf(nodes['background-summary']), /1 blocked/);
   assert.equal(textOf(nodes['session-summary']),
-               '3 commands · 1 agent · 0/1 tasks · 1 omitted · ⚠ 1 active omitted · Shared');
+               '3 commands · 0/1 tasks · 1 omitted · ⚠ 1 active omitted · Shared');
   await deliver({t: 'tasks', total: 1, completed: 0, omitted: 0,
     omittedActive: 0, tasks: [
     {id: 1, subject: 'Still going', status: 'pending'},
   ]});
   assert.equal(textOf(nodes['session-summary']),
-               '3 commands · 1 agent · 0/1 tasks · Shared');
-  assert.equal(nodes['session-summary'].dataset.warning, 'true');
+               '3 commands · 0/1 tasks · Shared');
+  assert.equal(nodes['session-summary'].dataset.warning, 'false');
   await deliver({t: 'agents', agents: []});
   assert.equal(nodes['session-summary'].dataset.warning, 'false');
   // A genuinely empty list hides the block again.

@@ -6,7 +6,15 @@ window.mevedelHistoryView = Object.freeze({
     const rows = new Map();
     let sequence = 0, online = false, staging = null, catalog = [];
 
+    function finishReveal(row, found) {
+      if (!row.sourceReveal) return;
+      clearTimeout(row.sourceReveal.timer);
+      row.sourceReveal.resolve(found);
+      row.sourceReveal = null;
+    }
+
     function failure(row, message) {
+      finishReveal(row, false);
       row.reqId = null;
       row.body.replaceChildren(el('p', 'history-note', message));
       const retry = el('button', 'btn quiet', 'Retry');
@@ -79,6 +87,8 @@ window.mevedelHistoryView = Object.freeze({
         row.records = [];
         row.loaded = true;
         row.reqId = null;
+        if (row.sourceReveal) finishReveal(row,
+          window.mevedelTranscriptRenderer.revealTool(row.body, row.sourceReveal.id));
       }
     }
 
@@ -89,6 +99,22 @@ window.mevedelHistoryView = Object.freeze({
         rows.forEach(row => { if (row.reqId !== null) failure(row, 'Connection lost. Reconnect, then retry.'); });
       }
     }
-    return Object.freeze({handle, connection, artifacts:() => catalog});
+    function reveal(segment, id) {
+      const row = rows.get(segment);
+      if (!row || !online) return Promise.resolve(false);
+      let ancestor = row.node;
+      while (ancestor && ancestor !== root.parentElement) {
+        if (ancestor.tagName === 'DETAILS') ancestor.open = true;
+        ancestor = ancestor.parentElement;
+      }
+      if (row.loaded) return Promise.resolve(window.mevedelTranscriptRenderer.revealTool(row.body, id));
+      finishReveal(row, false);
+      return new Promise(resolve => {
+        row.sourceReveal = {id, resolve, timer: setTimeout(() => failure(row,
+          'Source navigation timed out. Reconnect or retry this archive.'), 20000)};
+        load(row);
+      });
+    }
+    return Object.freeze({handle, connection, reveal, artifacts:() => catalog});
   },
 });

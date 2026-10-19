@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="/viewer-session.css">
     <link rel="stylesheet" href="/viewer-panel.css">
     <link rel="stylesheet" href="/viewer-agent.css">
+    <link rel="stylesheet" href="/viewer-background.css">
     <link rel="stylesheet" href="/viewer-artifact.css">
     <link rel="stylesheet" href="/viewer-discussions.css">
     <link rel="stylesheet" href="/viewer-task.css">
@@ -106,6 +107,7 @@
         <button id="agent-close" class="back" type="button">‹</button>
         <div class="room-heading"><span class="project-name"><span id="agent-crumbs" class="crumbs"></span><span id="agent-meta" class="head-meta"></span></span><h2 id="agent-title" class="heading-title"></h2></div>
         <div class="header-actions">
+          <button id="agent-latest" class="btn quiet keep" type="button" hidden>Latest</button>
         </div>
       </header>
       <div id="agent-transcript" class="ledger agent-ledger"
@@ -158,6 +160,12 @@
         <button id="live-button" class="live-button" type="button" hidden
                 title="Jump back to the newest turn">Return to live</button>
       </div>
+      <section id="background-work" class="background-work" hidden aria-label="Background work">
+        <header><span id="background-summary">Background work</span>
+          <button id="background-collapse" type="button" aria-label="Collapse background work" aria-expanded="true">−</button></header>
+        <ul id="background-list"></ul>
+        <button id="background-more" class="btn quiet" type="button" hidden>Show all</button>
+      </section>
       <details id="session-box" class="dock-disclosure" hidden
                aria-label="Session menu: commands, sub-agents, tasks, artifacts, rooms">
         <summary><span class="sidebar-title">In this room</span><span id="session-summary">Session</span></summary>
@@ -182,8 +190,6 @@
             <nav id="artifacts" class="dock-strip" aria-label="Session artifacts"></nav>
           </details>
           <section id="activity" class="activity" aria-label="Progress"><h2>Progress</h2>
-          <nav id="agents" class="dock-strip" aria-label="Live sub-agents" hidden></nav>
-          <ul id="agents-done-list" class="dock-disclosure-list agents-done-list"></ul>
           <ul id="tasks-list" class="dock-disclosure-list tasks-list"></ul>
 </section>
           <details id="commands-box" class="dock-submenu" hidden>
@@ -394,6 +400,7 @@
     <script src="/viewer-artifact.js" defer></script>
     <script src="/viewer-history.js" defer></script>
     <script src="/viewer-agent.js" defer></script>
+    <script src="/viewer-background.js" defer></script>
     <script src="/viewer-task.js" defer></script>
     <script src="/viewer-goal.js" defer></script>
     <script src="/qrcode.js" defer></script>

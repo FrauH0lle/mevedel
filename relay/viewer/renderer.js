@@ -503,6 +503,7 @@
   function renderToolPresentation(presentation, disclosures, path) {
     const status = presentation.status || 'completed';
     const details = el('details', `tool ${status}`);
+    if (presentation.sourceId && presentation.sourceId !== 'root') details.dataset.toolUseId = presentation.sourceId;
     details.open = presentation.collapsed === false;
     disclosures.set(path, details);
     const summary = el('summary');
@@ -673,8 +674,10 @@
 
   // Group the original record elements, rather than rendering a second copy.
   // IDs, result links, filters and per-tool disclosure state stay addressable.
+  const activityStates = new WeakMap();
   function groupActivity(transcript) {
-    const groups = new Map();
+    const groups = activityStates.get(transcript) || new Map();
+    activityStates.set(transcript, groups);
     const turns = [];
     for (const node of transcript.children) {
       if (node.groupDetails) {
@@ -682,6 +685,8 @@
         turns.push(...[...node.groupDetails.children].filter(child => child.dataset.recordId));
       } else turns.push(node);
     }
+    const current = new Set(turns.map(node => node.activity?.id).filter(Boolean));
+    for (const key of groups.keys()) if (!current.has(key)) groups.delete(key);
     const desired = [];
     for (let index = 0; index < turns.length;) {
       const first = turns[index];
@@ -709,6 +714,7 @@
         group.groupLabel = label;
         group.groupCounts = counts;
         group.groupMarker = marker;
+        groups.set(activity.id, group);
         details.open = members.some(node => [...(node.disclosures?.values() || [])].some(d => d.open)
           || node.contains(document.activeElement)
           || window.getSelection()?.containsNode(node, true));
@@ -738,6 +744,7 @@
   function renderRecord(record, scopeChip, onArtifactOpen, previous, onExecutionOpen, onAgentOpen) {
     const turn = el('article', `turn ${roleOf(record)}`);
     turn.dataset.recordId = record.id;
+    if (record.toolUseId) turn.dataset.toolUseId = record.toolUseId;
     turn.dataset.role = roleOf(record);
     turn.activity = record.activity;
     const rail = el('div', 'rail');
@@ -760,6 +767,21 @@
     return turn;
   }
 
+  function revealTool(transcript, id) {
+    const target = [...transcript.querySelectorAll('[data-tool-use-id]')]
+      .find(node => node.dataset.toolUseId === id);
+    if (!target) return false;
+    let node = target;
+    while (node && node !== transcript) {
+      if (node.tagName === 'DETAILS') node.open = true;
+      node = node.parentElement;
+    }
+    const root = target.disclosures?.get('root');
+    if (root) root.open = true;
+    target.scrollIntoView({block: 'center', behavior: 'smooth'});
+    return true;
+  }
+
   window.mevedelTranscriptRenderer = Object.freeze(
-    {renderRecord, markContinuations, groupActivity, renderDiff, renderMarkdown, formatBytes, scopeKey});
+    {renderRecord, markContinuations, groupActivity, revealTool, renderDiff, renderMarkdown, formatBytes, scopeKey});
 })();

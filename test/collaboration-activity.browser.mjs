@@ -23,8 +23,9 @@ test('activity summaries preserve failures, children and disclosure at phone and
           const target = document.getElementById('transcript');
           for (let n = 1; n <= 4; n++) {
             const old = target.querySelector(`[data-record-id="tool-${n}"]`);
-            const turn = window.mevedelTranscriptRenderer.renderRecord({id: `tool-${n}`, kind: 'tool',
+            const turn = window.mevedelTranscriptRenderer.renderRecord({id: `tool-${n}`, kind: 'tool', toolUseId: `source-${n}`,
               activity: window.activity, presentation: {name: n === 2 ? 'Grep' : 'Read',
+                sourceId: n === 1 ? 'nested-control' : undefined,
                 body: `result-${n}`, collapsed: true}}, null, null, old);
             if (old) old.replaceWith(turn); else target.append(turn);
           }
@@ -45,7 +46,52 @@ test('activity summaries preserve failures, children and disclosure at phone and
       assert.equal(await page.locator('#draft').inputValue(), '> exact\nmultiline draft');
       assert.equal(await page.locator('.activity-group > summary').evaluate(node =>
         node.scrollWidth <= node.clientWidth), true);
+      assert.equal(await page.evaluate(() => window.mevedelTranscriptRenderer.revealTool(
+        document.getElementById('transcript'), 'source-4')), true);
+      assert.equal(await page.locator('[data-record-id="tool-4"] details').evaluate(node => node.open), true);
+      assert.equal(await page.evaluate(() => window.mevedelTranscriptRenderer.revealTool(
+        document.getElementById('transcript'), 'nested-control')), true);
+      assert.equal(await page.locator('[data-record-id="tool-1"] details').evaluate(node => node.open), true);
+      await page.locator('.activity-group > summary').click();
+      await page.evaluate(() => {
+        const target = document.getElementById('transcript');
+        target.replaceChildren(...target.querySelectorAll('[data-record-id]'));
+        window.mevedelTranscriptRenderer.groupActivity(target);
+      });
+      assert.equal(await page.locator('.activity-group').evaluate(node => node.open), false,
+        'an explicit group fold survives a snapshot or agent transcript rebuild');
       await page.close();
     }
+  } finally { await browser.close(); }
+});
+
+test('source navigation loads exactly the host-located archive', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<section id="history"></section>');
+    for (const asset of ['renderer.js', 'viewer-history.js']) {
+      await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer', asset), 'utf8')});
+    }
+    await page.evaluate(() => {
+      const el = (tag, cls, text) => { const node = document.createElement(tag);
+        node.className = cls || ''; node.textContent = text || ''; return node; };
+      window.sourceSent = [];
+      window.sourceHistory = window.mevedelHistoryView.create({el, onArtifacts() {},
+        send: frame => { window.sourceSent.push(frame); return Promise.resolve(true); },
+        renderRecord: record => window.mevedelTranscriptRenderer.renderRecord(record)});
+      window.sourceHistory.connection(true);
+      window.sourceHistory.handle({t: 'history-index', currentSegment: 4, records: [], final: true});
+      window.sourceReveal = window.sourceHistory.reveal(2, 'source-two');
+    });
+    assert.equal(await page.evaluate(() => window.sourceSent.length), 1);
+    assert.equal(await page.evaluate(() => window.sourceSent[0].segment), 2);
+    await page.evaluate(() => window.sourceHistory.handle({t: 'history', reqId: window.sourceSent[0].reqId,
+      segment: 2, final: true, records: [{id: 'tool-two', kind: 'tool', toolUseId: 'source-two',
+        presentation: {name: 'Bash', body: 'located output', collapsed: true}}]}));
+    assert.equal(await page.evaluate(() => window.sourceReveal), true);
+    assert.equal(await page.locator('.history-segment[open]').count(), 1);
+    assert.equal(await page.locator('[data-record-id="tool-two"] details').evaluate(node => node.open), true);
+    assert.equal(await page.evaluate(() => window.sourceSent.length), 1);
   } finally { await browser.close(); }
 });

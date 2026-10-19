@@ -109,6 +109,8 @@
     history.connection(className === 'connected');
     if (className !== 'connected') {
       state.connected = false;
+      pendingBackgroundSource = null;
+      if (backgroundSourceTimer) clearTimeout(backgroundSourceTimer);
       recoveryFrame = null;
       recoverySignature = '';
       recoveryAuthSignature = '';
@@ -122,6 +124,7 @@
       editing.connection(false);
     }
     renderModeline();
+    background.refresh();
     renderEmptyState();
   }
 
@@ -211,8 +214,53 @@
   });
   const agents = window.mevedelAgentView.create({
     send, el, scopeChip, openArtifact: artifacts.open,
-    summarize: summarizeSession, openExecution: openExecutionResult,
+    openExecution: openExecutionResult, flash: flashNotice,
   });
+  const background = window.mevedelBackgroundView.create({state, send, el,
+    openAgent: row => agents.open(row), openExecution: openExecutionResult,
+    showConversation: locateBackground,
+  });
+  let backgroundSourceSequence = 0, pendingBackgroundSource = null, backgroundSourceTimer = null;
+
+  function locateBackground(row) {
+    if (backgroundSourceTimer) clearTimeout(backgroundSourceTimer);
+    const reqId = ++backgroundSourceSequence;
+    pendingBackgroundSource = {reqId, row};
+    backgroundSourceTimer = setTimeout(() => {
+      pendingBackgroundSource = null;
+      flashNotice('Source navigation timed out. Reconnect or try again.');
+    }, 20000);
+    send(row.kind === 'agent' ? {t: 'background-locate', reqId, path: row.path}
+      : {t: 'background-locate', reqId, owner: row.owner, id: row.id}).then(ok => {
+      if (!ok && pendingBackgroundSource?.reqId === reqId) {
+        pendingBackgroundSource = null;
+        clearTimeout(backgroundSourceTimer);
+        flashNotice('Source navigation is unavailable while disconnected.');
+      }
+    });
+  }
+
+  async function showBackgroundSource(frame) {
+    if (!pendingBackgroundSource || frame.reqId !== pendingBackgroundSource.reqId) return;
+    const {row} = pendingBackgroundSource;
+    pendingBackgroundSource = null;
+    clearTimeout(backgroundSourceTimer);
+    if (!state.connected) return;
+    if (frame.unavailable) {
+      flashNotice(frame.unavailable);
+      if (row.kind !== 'agent') openExecutionResult({owner: row.owner, id: row.id});
+    } else if (frame.owner && frame.owner !== '/root') {
+      agents.open({path: frame.owner, revealTool: frame.toolUseId,
+        segment: frame.current ? null : frame.segment});
+    } else if (frame.current) {
+      selectFilter('all');
+      if (!window.mevedelTranscriptRenderer.revealTool(transcript, frame.toolUseId)) {
+        flashNotice('The located source has not reached the browser yet. Try again after the next update.');
+      }
+    } else if (!await history.reveal(frame.segment, frame.toolUseId)) {
+      flashNotice('Could not load the located source. Reconnect or retry the archive.');
+    }
+  }
   const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
   const goal = window.mevedelGoalView.create({el, onChange: renderModeline});
   const editing = window.mevedelEditingView.create({state, send, el, flash: flashNotice, summarize: summarizeSession,
@@ -1236,6 +1284,7 @@
     agents.close();
     artifacts.close();
     agents.show([]);
+    background.reset();
     tasks.show();
     goal.show();
     showQueueState({pending: 0});
@@ -1328,6 +1377,10 @@
       showOwnQueue(Array.isArray(frame.own) ? frame.own : []);
     } else if (frame.t === 'agents') {
       agents.show(Array.isArray(frame.agents) ? frame.agents : []);
+    } else if (frame.t === 'background-work') {
+      background.show(frame);
+    } else if (frame.t === 'background-source') {
+      showBackgroundSource(frame);
     } else if (frame.t === 'tasks') {
       tasks.show(frame);
     } else if (frame.t === 'goal') {

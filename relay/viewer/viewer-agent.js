@@ -1,31 +1,26 @@
-/* viewer-agent.js -- retained-agent roster and transcript panel */
+/* viewer-agent.js -- retained-agent metadata and transcript inspection */
 'use strict';
 
 (() => {
   const POLL_MS = 2500;
 
-  // Active and finished agents share the session disclosure: the counts
-  // ride on its summary line, the rosters sit inside it.
-  const ACTIVE = new Set(['running', 'blocked', 'waiting']);
-  const FINISHED = new Set(['done', 'errored', 'interrupted']);
-
-  function create({send, el, scopeChip, openArtifact, summarize, openExecution}) {
-    const nav = document.getElementById('agents');
-    const doneList = document.getElementById('agents-done-list');
+  function create({send, el, scopeChip, openArtifact, openExecution, flash}) {
     const panel = document.getElementById('agent-panel');
     const title = document.getElementById('agent-title');
     const metaEl = document.getElementById('agent-meta');
     const closeButton = document.getElementById('agent-close');
+    const latestButton = document.getElementById('agent-latest');
     const transcript = document.getElementById('agent-transcript');
     const view = {path: null, row: null, reqId: 0, digest: null, staging: null,
                   timer: null};
     let requestSequence = 0;
+    let roster = [];
 
-    function meta(row, full = false) {
+    function meta(row) {
       const bits = [];
       if (typeof row.role === 'string' && row.role) bits.push(row.role);
       bits.push(row.status);
-      if (full && row.backend) bits.push(row.backend);
+      if (row.backend) bits.push(row.backend);
       if (row.model) bits.push(row.model + (row.effort ? `:${row.effort}` : ''));
       return bits.join(' · ');
     }
@@ -41,6 +36,7 @@
       view.reqId = ++requestSequence;
       view.staging = null;
       const frame = {t: 'fetch-agent', reqId: view.reqId, path: view.path};
+      if (Number.isSafeInteger(view.segment)) frame.segment = view.segment;
       if (view.digest) frame.known = view.digest;
       send(frame);
     }
@@ -49,7 +45,8 @@
       if (!transcript) return;
       const follow = atLiveEdge();
       const renderer = window.mevedelTranscriptRenderer;
-      const previous = new Map([...transcript.children].map(turn =>
+      const previous = new Map([...transcript.children].flatMap(turn => turn.groupDetails
+        ? [...turn.groupDetails.children].filter(child => child.dataset.recordId) : [turn]).map(turn =>
         [turn.dataset.recordId, turn]));
       transcript.replaceChildren();
       records.forEach(record => {
@@ -66,23 +63,34 @@
                              'Nothing visible in this transcript yet.'));
       }
       if (follow) transcript.scrollTop = transcript.scrollHeight;
+      if (view.toolId) {
+        const toolId = view.toolId;
+        view.toolId = null;
+        if (!renderer.revealTool(transcript, toolId)) {
+          flash('The located source has not reached the browser. Try Show in conversation again after the next update.');
+        }
+      }
     }
 
     function open(row) {
       if (!panel) return;
+      row = {...roster.find(item => item.path === row.path), ...row};
       view.path = row.path;
+      view.toolId = row.revealTool || null;
+      view.segment = Number.isSafeInteger(row.segment) ? row.segment : null;
       view.row = {...row};
       view.digest = null;
       view.staging = null;
       if (title) title.textContent = row.path;
-      if (metaEl) metaEl.textContent = meta(row, true);
+      if (metaEl) metaEl.textContent = (view.segment ? `Segment ${view.segment} · ` : '') + meta(row);
+      if (latestButton) latestButton.hidden = view.segment === null;
       if (transcript) {
         transcript.replaceChildren(el('p', 'panel-note', 'Loading…'));
       }
       panel.hidden = false;
       fetch();
       if (view.timer) clearInterval(view.timer);
-      view.timer = setInterval(fetch, POLL_MS);
+      view.timer = view.segment === null ? setInterval(fetch, POLL_MS) : null;
     }
 
     function close() {
@@ -97,61 +105,14 @@
     }
 
     function show(rows) {
-      if (!nav) return;
-      const valid = rows.filter(row => row && typeof row.path === 'string'
-        && (ACTIVE.has(row.status) || FINISHED.has(row.status)));
-      const active = valid.filter(row => ACTIVE.has(row.status));
-      const done = valid.filter(row => FINISHED.has(row.status));
-      nav.replaceChildren();
-      nav.hidden = active.length === 0;
-      active.forEach(row => {
-        const status = row.status;
-        const stuck = status !== 'running';
-        const chip = el('button', `dock-chip${stuck ? ' stuck' : ''}`);
-        chip.type = 'button';
-        chip.title = status === 'blocked'
-          ? `${row.path} is blocked — awaiting an interaction`
-          : `${row.path} is ${status} — tap to watch`;
-        chip.append(el('span', 'agent-dot'));
-        chip.append(el('span', 'dock-chip-name', row.path));
-        const label = meta(row);
-        if (label) chip.append(el('span', 'dock-chip-meta', label));
-        chip.addEventListener('click', () => open(row));
-        nav.append(chip);
-      });
-      // Settled agents keep their retained transcripts reachable, at no
-      // dock height at all until the reader opens the disclosure.
-      if (doneList) {
-        doneList.replaceChildren();
-        done.forEach(row => {
-          const item = el('li');
-          const button = el('button', 'done-row');
-          button.type = 'button';
-          button.title = `Read ${row.path}'s transcript`;
-          button.append(el('span', 'agent-dot'));
-          button.append(el('span', 'done-path', row.path));
-          button.append(el('span', 'done-meta', meta(row)));
-          button.addEventListener('click', () => open(row));
-          item.append(button);
-          doneList.append(item);
-        });
-      }
-      // Waiting is an active state, not necessarily a request for host input.
-      if (summarize) {
-        const bits = [];
-        if (active.length) {
-          bits.push(`${active.length} agent${active.length === 1 ? '' : 's'}`);
-        }
-        if (done.length) bits.push(`${done.length} finished`);
-        summarize('agents', bits.join(' · '),
-                  active.some(row => row.status === 'blocked'));
-      }
+      roster = rows.filter(row => row && typeof row.path === 'string');
       if (view.path) {
-        const watched = valid.find(row => row.path === view.path) || null;
-        if (metaEl) metaEl.textContent = watched ? meta(watched, true) : 'settled';
+        const watched = roster.find(row => row.path === view.path) || null;
+        if (metaEl) metaEl.textContent = (view.segment ? `Segment ${view.segment} · ` : '')
+          + (watched ? meta(watched) : 'settled');
         if (watched) {
           view.row = {...watched};
-          fetch();
+          if (view.segment === null) fetch();
         }
       }
     }
@@ -159,6 +120,7 @@
     function handle(frame) {
       if (!view.path || frame.reqId !== view.reqId) return;
       if (typeof frame.error === 'string') {
+        view.toolId = null;
         if (transcript) {
           transcript.replaceChildren(el('p', 'panel-note', frame.error));
         }
@@ -176,9 +138,13 @@
     }
 
     if (closeButton) closeButton.addEventListener('click', close);
+    if (latestButton) latestButton.addEventListener('click', () => {
+      if (view.row) open({...view.row, segment: null, revealTool: null});
+    });
     // The open transcript, as {agent: ROW}, or null.
     function describe() {
-      return panel && !panel.hidden && view.row ? {agent: view.row} : null;
+      return panel && !panel.hidden && view.row
+        ? {agent: {...view.row, ...(view.segment ? {segment: view.segment} : {})}} : null;
     }
 
     return Object.freeze({show, handle, close, open, describe});

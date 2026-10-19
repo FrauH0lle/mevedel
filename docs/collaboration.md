@@ -862,6 +862,32 @@ any omitted rows explicitly. Changed frames broadcast once; joining guests
 receive the current frame directly. Expansion, hover/focus freezing and the
 ten-second visible finished-row grace belong to each browser, not the host view.
 
+The panel replaces the separate agent chips and finished-agent list. It shows
+up to five host-ordered rows, the selected inspector and recent finished rows;
+**Show all** expands that limit in place. Its own scroll area is capped at
+34% of the viewport (300px maximum), keeping work from growing over the composer
+on a narrow phone. Row names and metadata fit one line; execution inspectors
+reserve three preview lines and the same action slots through completion.
+Only one inspector opens at a time. Expanded completed executions remain until
+collapsed; collapse starts a fresh ten-second grace. Mouse hover or keyboard
+focus freezes the currently shown row set and holds its finished rows; new work
+is counted until the pointer and focus leave, which restarts their grace. Touch
+does not acquire a synthetic hover hold: expansion and focus provide the hold,
+and tapping elsewhere releases focus. The panel's collapse control hides its
+rows without discarding durable transcript completion notices.
+
+**Open transcript** reads an active retained agent in its existing sheet.
+**Show in conversation** asks the host to locate the original call in its
+owner's current or archived conversation, then loads exactly that segment.
+It opens the tool row, including a nested ToolCall child and its enclosing
+activity disclosure; child-owned rows open that child's transcript sheet.
+The browser neither scans archives sequentially nor guesses a nearby row.
+Only a host-reported unavailable source falls back to retained execution
+output; connection, loading and projection failures report a retryable notice
+instead. Inspecting work never edits the parent's draft or changes its workspace.
+Finished agent controls become inert in place; the final report's durable
+transcript link remains available afterwards.
+
 Source navigation is read-only for every link tier. A typed `background-locate`
 request names an execution owner/ID or a known child's path; the host obtains
 the tool ID from current scoped execution facts, retained evidence, or the
@@ -911,7 +937,7 @@ are each capped at 4 KiB with an explicit truncation notice, keeping the frame
 below 64 KiB even with JSON escaping. Goal changes stay in Emacs:
 the browser adds no Goal editing, pause, resume, or completion authority.
 
-Tapping a chip opens that agent's live transcript as a full-screen
+The panel's **Open transcript** action opens that agent's live transcript as a full-screen
 sheet. The viewer polls with `fetch-agent` frames while the sheet is
 open and refetches promptly on a roster change; the host validates the
 path against the agent registry -- never the filesystem -- and answers
@@ -931,8 +957,9 @@ stays until a later poll finds the conversation. A failed load is
 remembered for the room and refused instead of retried. The frame handler
 itself never starts target I/O. Artifact cards in an agent reply receive
 room-wide ids derived from the agent path and transcript-local id, so they
-remain openable without colliding with a root-transcript card. Agent control
--- chat, interrupt, kill -- stays in Emacs.
+remain openable without colliding with a root-transcript card. Agent chat and
+kill stay in Emacs; writable browser links can interrupt through the scoped
+background-work control described above.
 
 ## Remote interactions
 

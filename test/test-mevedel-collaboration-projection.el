@@ -62,6 +62,10 @@
             "#+end_tool\n")
     (let* ((record (car (mevedel-collaboration--canonical-records (current-buffer))))
            (presentation (plist-get record :presentation)))
+      (should (equal "approved" (plist-get record :toolUseId)))
+      (should (equal "approved" (alist-get "toolUseId"
+                                          (mevedel-collaboration--json-record record)
+                                          nil nil #'equal)))
       (should (equal "Safe inspection" (plist-get presentation :approval)))
       (should (equal "failed" (plist-get presentation :status)))
       (should-not (string-match-p "Safe inspection" (plist-get record :result))))))
@@ -119,6 +123,7 @@
                        :result "Error: failed" :render-data data))
            (nested (mevedel-collaboration-tool-presentation call)))
       (should-not (plist-get nested :approval))
+      (should (equal "outer/1" (plist-get (aref (plist-get nested :children) 0) :sourceId)))
       (should (equal "failed" (plist-get (aref (plist-get nested :children) 0) :status)))
       (should (<= (length (plist-get (aref (plist-get nested :children) 0) :approval)) 1024))
       (setf (plist-get call :render-data) (plist-put data :direct-tool "ApprovalProbe"))

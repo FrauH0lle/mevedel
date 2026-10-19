@@ -87,6 +87,15 @@ history, and the host returns the receiving transcript's owner and exact segment
 instead of asking the browser to guess or sequentially load archives. Child
 archive fetches are confined to that retained child's canonical history.
 
+The browser replaces separate agent chips and finished-agent rows with this
+single panel. A bounded scroll area and three fixed preview lines keep status
+growth away from the composer. Expansion retains completed rows until collapse;
+collapse starts a fresh ten-second grace. Mouse hover and keyboard focus hold
+the displayed row set, but touch does not acquire a synthetic hover hold.
+Disclosure and hold state belong to the inspecting browser, not shared native
+view state. Original tool IDs also reveal the source inside folded activity
+groups without replacing records or disturbing a draft.
+
 Artifact cards are settled live or archived transcript records; bytes are fetched on demand by
 record ID, resolved and bounded by the host. HTML runs in a sandboxed iframe
 with scripts permitted but no same-origin authority and a restrictive CSP.
@@ -134,6 +143,13 @@ inherit the viewer origin that holds decrypted content and credentials.
 
 ## Decision history
 
+- **Unified work inspection, 2026-10-19:** the browser's independent agent chips
+  and finished-agent list omitted running Bash and Monitor work, their previews
+  and stop controls even after native execution changes. A shared native
+  collector now supplies all work and ordering; one browser-local inspector
+  preserves expanded completions and grants only explicitly tier-checked stop
+  actions. This replaces the old agent-only presentation rather than keeping
+  competing status surfaces.
 - **Lobby crash recovery, 2026-10-14:** lobby opens previously refused even a
   provably stale same-host PID lock because lock acquisition asked Emacs to
   confirm. A crashed host therefore stranded browser users until someone

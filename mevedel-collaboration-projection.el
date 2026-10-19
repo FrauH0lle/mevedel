@@ -243,7 +243,8 @@ an artifact only by its record id, never by a filesystem path."
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
                        :truncated :guest :directive :item :detail :diff
                        :artifact :store :size :missing :presentation :shared
-                       :execution :description :sender :mailType :outcome :activity))
+                       :execution :description :sender :mailType :outcome :activity
+                       :toolUseId))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -566,6 +567,7 @@ are exported, with one shared text/structure budget across the entire tree."
                        ('error "failed") ('denied "denied") ('cancelled "cancelled")
                        ('running "running") ('warning "warning") (_ "completed")))
                     (row (list :id (text id 200) :name (text name 200)
+                               :sourceId (text (if direct (plist-get direct :id) id) 200)
                                :groupable (if (and (not (plist-get rendering :coalesce-key))
                                                     (mevedel-view--tool-group-entry-p
                                                      (list :kind 'tool :count 1 :rendering rendering)))
@@ -665,6 +667,7 @@ are exported, with one shared text/structure budget across the entire tree."
              id "tool"
              :revision 0
              :name (format "%s" name)
+             :toolUseId tool-use-id
              :status status
              :summary (format "%s" name)
              :result result
