@@ -3512,7 +3512,9 @@ asynchronous preparation ran is left alone instead of cleared."
 
 (defun mevedel-view--agent-fsm-p (info data-buffer)
   "Return non-nil when INFO or DATA-BUFFER belongs to an agent request."
-  (or (and (fboundp 'mevedel-agent-invocation-p)
+  ;; An autoload makes `fboundp' true without loading the struct metadata
+  ;; that an inlined predicate needs.  Root requests must not load agents.
+  (or (and (featurep 'mevedel-agents)
            (mevedel-agent-invocation-p
             (plist-get info :mevedel-agent-invocation)))
       (and (buffer-live-p data-buffer)
