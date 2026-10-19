@@ -244,7 +244,8 @@
     }
 
     // A room handed over rather than asked for: someone else's request
-    // that an owner approved, which this owner may also join.
+    // that an owner approved, which this owner may also join, or the room
+    // that continues this one's work after a handoff.
     function offerRoom({name, link}) {
       const parts = splitLink(link);
       if (!name || !parts) return;

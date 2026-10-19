@@ -210,6 +210,15 @@ The following changes belong to ADR 0099 unless another ID is named.
   tab could use an owner tab's stored offer to open as owner. Per-tab current-share
   storage prevents reload from choosing an older notification-enabled room.
   The original browser manual supplied no separate dates for these corrections.
+- **Room handoff, 2026-10-19:** accepting a plan with Worktree forks the session
+  and kills the planning buffers, so its guests saw only "Session ended" and lost
+  the work they were following. The host now shares the successor without
+  repeating `/collab`'s consent question, because those guests were already
+  admitted to this work, and ends the old room with a per-guest goodbye linking
+  the successor at the tier that guest holds. A bearer link still never
+  retargets: the old room ends and the successor has fresh credentials.
+  Reaching the goodbye exposed a relay race that dropped a host's last queued
+  frames on close; the relay now flushes them before room-closed.
 
 - **Retained projection, 2026-10-10:** every publish reprojected the whole
   transcript. At 1,001 records that took 62 ms on a desktop and 360-500 ms on
