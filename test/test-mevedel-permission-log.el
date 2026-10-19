@@ -46,5 +46,25 @@
                            (plist-get data :nested)))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-permission-log--persist-content
+  (:doc "creates missing parents once and appends UTF-8 independent of the caller")
+  (let* ((root (make-temp-file "mevedel-permission-append-" t))
+         (session (mevedel-session--create
+                   :save-path (file-name-concat root "nested" "session")))
+         (mevedel-permission-log-enabled t)
+         (content "(:reason \"\u2603\")\n"))
+    (unwind-protect
+        (let ((coding-system-for-write 'utf-16le))
+          (should (mevedel-permission-log--persist-content session content))
+          (cl-letf (((symbol-function 'make-directory)
+                     (lambda (&rest _) (ert-fail "Recreated existing directory"))))
+            (should (mevedel-permission-log--persist-content session content)))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally (mevedel-permission-log-path session))
+            (should (equal (encode-coding-string (concat content content) 'utf-8-unix)
+                           (buffer-string)))))
+      (delete-directory root t))))
+
 (provide 'test-mevedel-permission-log)
 ;;; test-mevedel-permission-log.el ends here

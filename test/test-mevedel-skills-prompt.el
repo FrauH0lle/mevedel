@@ -97,6 +97,21 @@
     (should (string-match-p "^- s1: d1$" listing))
     (should (string-match-p "^- s2: d2$" listing)))
 
+  :doc "does not resolve unused name-only fallback prefixes when the roster fits"
+  (let ((skill (mevedel-skill--create :name "s1" :description "Purpose"))
+        (original (symbol-function 'mevedel-skills--entry-base))
+        (calls 0))
+    (cl-letf (((symbol-function 'mevedel-skills--entry-base)
+               (lambda (&rest args)
+                 (cl-incf calls)
+                 (apply original args))))
+      (let ((result (mevedel-skills--format-listing-result (list skill))))
+        (should-not (plist-get result :status))
+        (should (string-search "s1: Purpose" (plist-get result :text)))
+        ;; The full entry and its description limit each need a prefix;
+        ;; a name-only fallback must not resolve a third one.
+        (should (= 2 calls)))))
+
   :doc "budget shortens descriptions before omitting skill names"
   (let* ((mevedel-model-context-limit 25)
          (mevedel-skills-listing-budget 1.0)
@@ -196,6 +211,27 @@
     (should-not (string-match-p "SKILL\\.md" section))
     (should-not (string-match-p "hidden" section))
     (should-not (string-match-p "^- dormant:" section)))
+
+  :doc "records roster rendering only during detailed profiling"
+  (let ((session (mevedel-skills-test--make-session))
+        recorded detailed)
+    (setf (mevedel-session-skills session)
+          (list (mevedel-skill--create :name "roster" :description "Guidance"
+                                       :active-p t :model-invocable-p t)))
+    (cl-letf (((symbol-function 'mevedel-telemetry-detailed-p)
+               (lambda (_session) detailed))
+              ((symbol-function 'mevedel-telemetry-record)
+               (lambda (_session event &rest props)
+                 (push (cons event props) recorded))))
+      (let ((section (mevedel-skills-prompt-section session)))
+        (should (string-search "Guidance" section))
+        (should-not recorded)
+        (setq detailed t)
+        (should (equal section (mevedel-skills-prompt-section session)))
+        (should (= 1 (length recorded)))
+        (should (eq 'skills-roster-advertised (caar recorded)))
+        (should (= 1 (plist-get (cdar recorded) :skill-count)))
+        (should (equal '("roster") (plist-get (cdar recorded) :skill-names))))))
 
   :doc "keeps skill discovery reachable when no roster names fit"
   (let ((session (mevedel-skills-test--make-session))

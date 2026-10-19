@@ -21,6 +21,10 @@ and path-activation notices. `mevedel-skills-ui.el` owns local commands, the
 skills cockpit, command/skill completion, font-lock, and send-dispatch
 composition.
 
+Roster-render telemetry (`skills-roster-advertised`) is emitted only during
+detailed profiling. Rendering can also be requested for prompt sizing or an
+unchanged retained-context observation, so it does not prove a new delivery.
+
 Plugin ownership follows its existing trust boundaries:
 `mevedel-plugin-registry.el` owns manifests, discovery, activation state, and
 hook consent; `mevedel-plugin-lifecycle.el` owns managed Git installation,

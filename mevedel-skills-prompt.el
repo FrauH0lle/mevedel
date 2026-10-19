@@ -55,6 +55,7 @@
 (declare-function mevedel-tool-ptc--roster "mevedel-tool-ptc" ())
 
 ;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
@@ -132,9 +133,12 @@ omitted only when name-only entries cannot fit in
            (format "%d skills omitted; ListSkills(query)." count)))
       (let* ((full-body (body full-lines))
              (name-lines
-              (mapcar (lambda (skill)
-                        (concat (mevedel-skills--entry-base skill) " "))
-                      skills))
+              ;; Prefixes resolve canonical skill source paths.  Do not
+              ;; repeat those filesystem queries for an unused fallback.
+              (unless (fits-p full-body)
+                (mapcar (lambda (skill)
+                          (concat (mevedel-skills--entry-base skill) " "))
+                        skills)))
              (name-body (body name-lines))
              (short-note
               "Skill descriptions were shortened; ListSkills(query).")
@@ -207,7 +211,10 @@ rendering."
   (when-let* ((skills (mevedel-skills--system-roster-candidates session)))
     (let* ((listing-result (mevedel-skills--format-listing-result skills))
            (listing (plist-get listing-result :text)))
-      (when (fboundp 'mevedel-telemetry-record)
+      ;; Rendering also happens for prompt sizing and unchanged retained
+      ;; context.  It is not evidence of a new advertisement to the model.
+      (when (and (fboundp 'mevedel-telemetry-detailed-p)
+                 (mevedel-telemetry-detailed-p session))
         (mevedel-telemetry-record
          session 'skills-roster-advertised
          :skill-count (length skills)

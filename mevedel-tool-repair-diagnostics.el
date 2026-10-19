@@ -249,8 +249,12 @@
                   (require 'mevedel-session-publication))
                 (mevedel-session-publication-append-diagnostic
                  session file content))
-            (make-directory (file-name-directory file) t)
-            (write-region content nil file t 'silent)
+            (let ((coding-system-for-write 'utf-8-unix))
+              (condition-case nil
+                  (write-region content nil file t 'silent)
+                (file-missing
+                 (make-directory (file-name-directory file) t)
+                 (write-region content nil file t 'silent))))
             t))
       (error
        (mevedel--warn-once 'repair-telemetry-persistence
@@ -281,9 +285,13 @@
         (setf (mevedel-session-repair-log-pending session) pending)))))
 
 (defun mevedel-tool-repair-log-event (session event)
-  "Record redacted telemetry EVENT for SESSION without blocking execution."
+  "Record nontrivial redacted EVENT for SESSION without blocking execution.
+Unchanged valid inputs do not enter memory, persistence, or telemetry."
   (condition-case nil
-      (when session
+      (when (and session
+                 (or (not (eq (plist-get event :outcome) 'valid))
+                     (plist-get event :rules)
+                     (plist-get event :issue-kinds)))
         (let* ((event (mevedel-tool-repair--safe-event event))
                (log (append (mevedel-session-repair-log session)
                             (list event))))
@@ -302,19 +310,14 @@
                          (mevedel-tool-repair--persist-event session event)))
                 (setf (mevedel-session-repair-log-pending session)
                       (append pending (list event))))))
-          ;; A valid no-op repair carries no information in any tier;
-          ;; detailed profiler runs get no exception.
-          (when (or (not (eq (plist-get event :outcome) 'valid))
-                    (plist-get event :rules)
-                    (plist-get event :issue-kinds))
-            (apply #'mevedel-telemetry-record-audit
-                   session 'tool-input-repair
-                   (append
-                    (list :stage 'settled
-                          :repair-count (length (plist-get event :rules))
-                          :issue-count
-                          (length (plist-get event :issue-kinds)))
-                    event))))
+          (apply #'mevedel-telemetry-record-audit
+                 session 'tool-input-repair
+                 (append
+                  (list :stage 'settled
+                        :repair-count (length (plist-get event :rules))
+                        :issue-count
+                        (length (plist-get event :issue-kinds)))
+                  event)))
         t)
     (error
      (ignore-errors
@@ -379,9 +382,12 @@
                                                      result)))
                            'error
                          'success))))
-              (mevedel-tool-repair-log-event
-               (plist-get entry :session)
-               (mevedel-tool-repair--event entry outcome classification)))
+              (when (or (not (eq outcome 'valid))
+                        (plist-get entry :repairs)
+                        (plist-get entry :issues))
+                (mevedel-tool-repair-log-event
+                 (plist-get entry :session)
+                 (mevedel-tool-repair--event entry outcome classification))))
           (mevedel-tool-repair--release-entry entry)))
     (error
      (ignore-errors (mevedel-tool-repair--release-entry entry))

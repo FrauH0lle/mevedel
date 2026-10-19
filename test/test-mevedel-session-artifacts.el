@@ -984,8 +984,8 @@
                (buf (generate-new-buffer "*test-data-buf*"))
                (repair-event
                 '(:time "now" :origin "main" :backend backend
-                  :model model :tool "Read" :outcome valid
-                  :repair-enabled t :rules nil :paths nil
+                  :model model :tool "Read" :outcome repaired
+                  :repair-enabled t :rules (clamp-range) :paths ((limit))
                   :issue-kinds nil :execution executed :result success)))
           (unwind-protect
               (progn
