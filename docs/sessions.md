@@ -1379,12 +1379,11 @@ sidecar therefore exists before mevedel reports the child publication or wakes
 a mailbox consumer; the root turn's later DONE publication still establishes
 its first stable fork point.
 
-Once that initial snapshot exists, acknowledged registry and mailbox changes
-publish the sidecar together with any retained transcript/artifact batches.
-They preserve the committed root segment and prompt index instead of taking
-another full root checkpoint. Acknowledged messages and their staged artifact
-dependencies are therefore reachable in the same head; unrelated in-flight
-root text continues to use the normal checkpoint and settlement paths.
+Acknowledged registry and mailbox changes force a full root checkpoint together
+with any retained transcript/artifact batches. Root turn metadata may advance
+before its deferred settlement save; rebuilding only the sidecar here would
+pair that new metadata with older transcript bytes. The full checkpoint keeps
+the acknowledged mutation and matching root state reachable in the same head.
 
 An acknowledged agent mutation refuses reentrant publication queueing: its
 caller returns only after that batch changes the immutable head.  Once the head
@@ -1404,6 +1403,12 @@ reentrant queueing. If the checkpoint fails, consumed records return to the
 mailbox without removing newer arrivals. A crash may redeliver mail but cannot
 leave a committed removal without its delivered text. Empty acknowledgements
 do no work; each nonempty batch checkpoints once.
+
+Checkpoint preparation excludes nested writers for the same session, including
+observational sidecar writes from save hooks. Only the owning writer's final
+prepared publication is admitted. This prevents a hook from committing tentative
+mailbox removal before the outer checkpoint has frozen its delivered text.
+Other sessions remain independent; the exclusion unwinds on failure.
 
 Observational agent persists are not acknowledged mutations.  Activity
 transitions (blocked/waiting flavors and their release) and explicit mailbox

@@ -3906,7 +3906,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
            'mevedel-session-artifacts-assert-mutation-authority)
           (lambda (_) t))
          ((symbol-function 'mevedel-session-publication-publish)
-          (lambda (_session artifacts)
+          (lambda (_session artifacts &rest _options)
             (setq published artifacts)
             'queued)))
       (should

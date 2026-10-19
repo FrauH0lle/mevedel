@@ -1609,8 +1609,10 @@ as the reservation that opens a publication does."
        (signal (car err) (cdr err))))
     (plist-get outcome :result)))
 
+(defvar mevedel-session-artifacts--preparing-sessions)
+
 (defun mevedel-session-publication-publish
-    (session artifacts &optional require-commit)
+    (session artifacts &optional require-commit prepared)
   "Serialize and publish SESSION's critical ARTIFACTS.
 
 Each artifact is `(:path TARGET-PATH :content STRING [:coding CODING])' or a
@@ -1621,7 +1623,12 @@ before target I/O.  Pre-commit failure retains the staged batch
 in SESSION and blocks later mutation.  When REQUIRE-COMMIT is non-nil, reject
 reentrant queueing so the caller returns only after its own batch commits, and
 treat a post-commit cleanup error as diagnostic.  Ordinary callers receive
-that error so their lifecycle owner can classify it."
+that error so their lifecycle owner can classify it.
+PREPARED admits the owning checkpoint's final frozen artifacts, never a nested
+writer called while that checkpoint is still preparing its bytes."
+  (when (and (memq session (bound-and-true-p mevedel-session-artifacts--preparing-sessions))
+             (not prepared))
+    (user-error "Session checkpoint is being prepared"))
   (if (fboundp 'mevedel-telemetry-measure)
       (mevedel-telemetry-measure
        session 'session-publication 0

@@ -129,6 +129,7 @@
 (autoload 'mevedel-session-artifacts-inhibit-so-long
   "mevedel-session-artifacts")
 (defvar mevedel-session-artifacts-require-agent-commit-p)
+(defvar mevedel-session-artifacts--preparing-sessions)
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-authority-mode-for-path "mevedel-session-codec" (session-dir &optional session explicit-mode))
@@ -208,7 +209,7 @@
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-call-with-diagnostic-batch
                   "mevedel-session-publication" (session function))
-(declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit))
+(declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit prepared))
 (declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir &optional head names))
 (declare-function mevedel-session-publication-read-batch
                   "mevedel-session-publication" (directories listings))
@@ -671,14 +672,17 @@ The argument UPDATES is the change plist."
                            nil nil #'equal)
                 merged))))))
 
-(defun mevedel-session-persistence-write-sidecar-now (session buffer)
+(defun mevedel-session-persistence-write-sidecar-now (session buffer &optional prepared)
   "Best-effort sidecar rewrite for SESSION and BUFFER.
 
 Only writes when the sidecar file already exists on disk -- i.e.
 a full root snapshot has written `session.meta.el'.  Before that, the session
 may be shallowly materialized (directory + lock + agents/ but no sidecar), so
 this observational rewrite remains deferred to the next critical agent commit
-or root autosave."
+or root autosave.  PREPARED admits the owning checkpoint's final sidecar."
+  (when (and (memq session (bound-and-true-p mevedel-session-artifacts--preparing-sessions))
+             (not prepared))
+    (user-error "Session checkpoint is being prepared"))
   (when (and session (mevedel-session-save-path session))
     (let* ((sidecar (mevedel-session-artifacts-sidecar-path
                      (mevedel-session-save-path session)))
@@ -707,7 +711,8 @@ or root autosave."
                      (mevedel-session-artifacts-printed-value
                       (mevedel-session-artifacts-build-sidecar
                        session buffer))
-                     :commit-marker t))))
+                     :commit-marker t))
+                   nil prepared))
               (mevedel-session-codec-write
                sidecar
                (mevedel-session-artifacts-build-sidecar session buffer)))
@@ -718,17 +723,12 @@ or root autosave."
 
 (defun mevedel-session-persistence-save-agent-state (session)
   "Commit SESSION's agent state through its authoritative root buffer.
-An existing portable publication needs only its sidecar and retained
-artifact batches.  Initial materialization still takes a full snapshot."
+Checkpoint the root too: its live turn and history metadata may have advanced
+before the deferred root save has published the matching transcript."
   (when-let* ((buffer (mevedel-session-root-buffer session))
               ((buffer-live-p buffer)))
     (let ((mevedel-session-artifacts-require-agent-commit-p t))
-      (when (if (and (mevedel-session-codec-portable-authority-p session)
-                     (assoc "session.meta.el"
-                            (plist-get (mevedel-session-publication session)
-                                       :artifacts)))
-                (mevedel-session-artifacts-save-agent-registry session buffer)
-              (mevedel-session-artifacts-save session buffer nil t))
+      (when (mevedel-session-artifacts-save session buffer nil t)
         ;; The committed sidecar already carries the current registry,
         ;; so a pending observational save is absorbed.
         (mevedel-session-persistence-cancel-deferred-agent-save session)
