@@ -103,10 +103,9 @@ Keep this intent through deferred and coalesced status redraws.")
   "Rows of the last rendered panel, as (KEY KIND DATA) in display order.")
 
 (defvar-local mevedel-view-execution--held nil
-  "Finished rows kept as inert lines while the pointer is on the panel.
+  "Finished rows kept as inert lines during pointer protection and grace.
 Each entry is (KEY KIND DATA).  Removing a row under the mouse or point
-would shift the rows the user is aiming at, so finished rows stay in
-place until both leave the panel.")
+would shift the rows the user is aiming at.")
 
 (defvar-local mevedel-view-execution--release-timer nil
   "Timer that releases held rows once the pointer leaves the panel.")
@@ -120,9 +119,16 @@ start would otherwise be lost.")
   "Seconds between checks whether held rows can be released.")
 
 (defvar mevedel-view-execution-grace-seconds 10
-  "Seconds a finished row stays on the panel after the pointer is away.
-While point or the mouse is on the panel, finished rows never leave;
-leaving restarts this period.")
+  "Seconds a finished row stays after pointer protection ends.
+Focused point or a bounded mouse lease protects rows; losing that
+protection restarts this period.")
+
+(defconst mevedel-view-execution--hover-seconds 60
+  "Maximum seconds of passive mouse protection per observed panel visit.")
+
+(defvar-local mevedel-view-execution--hover-deadline nil
+  "Deadline of the current mouse visit, including an expired visit.
+Only observed exit or focus loss clears it; polling cannot renew it.")
 
 (defvar-local mevedel-view-execution--hovering nil
   "Whether the pointer was on the panel at the last check.")
@@ -238,6 +244,7 @@ Retain only its summary, not the inspector's output payloads."
         mevedel-view-execution--shown nil
         mevedel-view-execution--held nil
         mevedel-view-execution--unit-starts nil
+        mevedel-view-execution--hover-deadline nil
         mevedel-view-execution--hovering nil)
   (mevedel-view-execution--cancel-release)
   (mevedel-view-zone-set-collapse-state mevedel-view-execution--collapse-key nil)
@@ -333,25 +340,51 @@ pruned to the units present."
                                (string-lessp (nth 2 left-key) (nth 2 right-key)))
                               (t (string-lessp (nth 1 left-key) (nth 1 right-key)))))))))))
 
+(defun mevedel-view-execution--frame-focused-p (frame)
+  "Return non-nil when FRAME is visible and its top-level frame has focus.
+Unknown focus is acceptable only on terminals, where focus may be unavailable."
+  (when (frame-live-p frame)
+    (let ((top frame))
+      (while (frame-parent top)
+        (setq top (frame-parent top)))
+      (and (eq (frame-visible-p frame) t)
+           (let ((focus (frame-focus-state top)))
+             (or (eq focus t)
+                 (and (eq focus 'unknown) (not (display-graphic-p top)))))))))
+
 (defun mevedel-view-execution--pointer-on-panel-p ()
-  "Return non-nil when point or the mouse is on the background-work panel.
-Point counts in every window showing this view."
-  (when-let* ((bounds (mevedel-view-zone-fragment-bounds 'status 'background)))
-    (let ((start (plist-get bounds :start))
-          (end (plist-get bounds :end)))
-      (or (cl-some (lambda (window)
-                     (and (<= start (window-point window)) (< (window-point window) end)))
-                   (get-buffer-window-list (current-buffer) nil t))
-          (pcase-let ((`(,frame ,x . ,y) (mouse-pixel-position)))
-            ;; A pointer above or left of the frame reports negative
-            ;; coordinates, which `posn-at-x-y' rejects.
-            (when (and (frame-live-p frame) (natnump x) (natnump y))
-              (let* ((posn (posn-at-x-y x y frame))
-                     (window (posn-window posn))
-                     (pos (posn-point posn)))
-                (and (windowp window)
-                     (eq (window-buffer window) (current-buffer))
-                     (integerp pos) (<= start pos) (< pos end)))))))))
+  "Return non-nil while focused point or a mouse lease protects the panel.
+Point counts in every focused window showing this view.  A mouse visit
+lasts at most `mevedel-view-execution--hover-seconds'; only observed exit
+or focus loss permits another lease.  Poll even while point protects rows
+so it cannot hide a mouse exit or renew an expired visit."
+  (let* ((bounds (mevedel-view-zone-fragment-bounds 'status 'background))
+         (start (plist-get bounds :start))
+         (end (plist-get bounds :end))
+         (mouse
+          (and bounds
+               (pcase-let ((`(,frame ,x . ,y) (mouse-pixel-position)))
+                 ;; Negative coordinates are outside the frame.
+                 (when (and (natnump x) (natnump y)
+                            (mevedel-view-execution--frame-focused-p frame))
+                   (let* ((posn (posn-at-x-y x y frame))
+                          (window (posn-window posn))
+                          (pos (posn-point posn)))
+                     (and (windowp window)
+                          (eq (window-buffer window) (current-buffer))
+                          (integerp pos) (<= start pos) (< pos end))))))))
+    (if mouse
+        (unless mevedel-view-execution--hover-deadline
+          (setq mevedel-view-execution--hover-deadline
+                (+ (float-time) mevedel-view-execution--hover-seconds)))
+      (setq mevedel-view-execution--hover-deadline nil))
+    (or (and bounds
+             (cl-some (lambda (window)
+                        (and (<= start (window-point window))
+                             (< (window-point window) end)
+                             (mevedel-view-execution--frame-focused-p (window-frame window))))
+                      (get-buffer-window-list (current-buffer) nil t)))
+        (and mouse (< (float-time) mevedel-view-execution--hover-deadline)))))
 
 (defun mevedel-view-execution--cancel-release ()
   "Cancel the held-row release timer."
@@ -361,8 +394,8 @@ Point counts in every window showing this view."
 
 (defun mevedel-view-execution--check-release (buffer &optional timer)
   "Re-render BUFFER's panel when its held rows may change.
-That is when the pointer enters or leaves the panel, restarting the grace
-period, or when a held row's grace period ends away from the pointer.
+That is when pointer protection changes, restarting the grace period,
+or when a held row's unprotected grace period ends.
 TIMER is the calling timer, cancelled alone when BUFFER is gone."
   (if (not (buffer-live-p buffer))
       (when (timerp timer) (cancel-timer timer))
@@ -381,8 +414,8 @@ TIMER is the calling timer, cancelled alone when BUFFER is gone."
 (defun mevedel-view-execution--update-held (entries hover)
   "Return held rows after rendering live ENTRIES, scheduling their release.
 Rows shown last time and finished since stay for
-`mevedel-view-execution-grace-seconds'.  While HOVER, the pointer or point
-being on the panel, holds they never leave; leaving restarts the period."
+`mevedel-view-execution-grace-seconds'.  While HOVER indicates focused
+point or a mouse lease, rows stay; losing protection restarts the period."
   (let ((live-keys (mapcar #'car entries))
         (deadline (+ (float-time) mevedel-view-execution-grace-seconds)))
     (dolist (shown mevedel-view-execution--shown)
@@ -1046,6 +1079,10 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
                                 (and (member key live-keys)
                                      (list key (car item) (cdr item)))))
                             rows)))))
+    ;; No panel means the visit ended.  The last held row also cancels its
+    ;; timer, so no later poll could otherwise observe this exit.
+    (unless rows
+      (setq mevedel-view-execution--hover-deadline nil))
     (prog1
         (when rows
           (let ((body (mevedel-view-execution--header session agents live collapsed)))

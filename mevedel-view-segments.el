@@ -467,19 +467,23 @@ The newest earlier chat comes first; the line opens the chat picker."
                                               (plist-get chat :current-p))
                                             chats))))
     (propertize
-     (format "◂ %d earlier chat%s in this session: %s\n\n"
-             (length earlier) (if (cdr earlier) "s" "")
-             (truncate-string-to-width
-              (mapconcat (lambda (chat) (plist-get chat :title)) earlier " · ")
-              100 nil nil "…"))
+     (concat
+      (propertize
+       (format "◂ %d earlier chat%s in this session: %s"
+               (length earlier) (if (cdr earlier) "s" "")
+               (truncate-string-to-width
+                (mapconcat (lambda (chat) (plist-get chat :title)) earlier " · ")
+                100 nil nil "…"))
+       'keymap mevedel-view-segments--chats-map
+       'mouse-face 'highlight
+       'help-echo "Show an earlier chat of this session")
+      "\n\n")
      'read-only t
+     'front-sticky '(read-only)
      ;; History starts right after this line: point there must keep the
      ;; history's own keymap and stay editable for the renderer.
      'rear-nonsticky t
      'font-lock-face 'shadow
-     'keymap mevedel-view-segments--chats-map
-     'mouse-face 'highlight
-     'help-echo "Show an earlier chat of this session"
      'mevedel-view-chats-line t)))
 
 (defun mevedel-view-return-to-latest-segment (&optional _event)

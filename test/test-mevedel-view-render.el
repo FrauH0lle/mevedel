@@ -4764,10 +4764,18 @@
                       data-buf "call-custom"))
              (source (nth 2 region)))
         (should region)
-        (should
-         (equal source
-                (with-current-buffer data-buf
-                  (mevedel-tool-render-data-segment-bounds "call-custom"))))
+        (with-current-buffer data-buf
+          (let ((raw (mevedel-tool-render-data-segment-bounds "call-custom")))
+            ;; The canonical tool span includes its structural wrapper, not
+            ;; just the narrower gptel property run recovered from disk.
+            (should (equal source (cons (point-min) (point-max))))
+            (should (< (car source) (car raw)))
+            (should (< (cdr raw) (cdr source)))
+            (let ((call (mevedel-view--tool-call-parse
+                         data-buf (car source) (cdr source))))
+              (should (equal "call-custom" (plist-get call :tool-use-id)))
+              (should (equal "Custom" (plist-get call :name)))
+              (should (equal "initial" (plist-get call :result))))))
         (should
          (equal "call-custom"
                 (get-text-property

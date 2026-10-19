@@ -3246,7 +3246,18 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
             ;; first child, or every progress refresh duplicates the children.
             (setq found (list pos (mevedel-view-render-child-calls-end
                                    next limit source)
-                              bounds)))
+                              ;; Restoring transcript properties can split the
+                              ;; metadata into an ignored run.  The projected
+                              ;; source still owns the complete canonical span.
+                              (if (and (markerp (car source))
+                                       (markerp (cdr source))
+                                       (eq (marker-buffer (car source)) data-buffer)
+                                       (eq (marker-buffer (cdr source)) data-buffer)
+                                       (<= (car source) (car bounds))
+                                       (<= (cdr bounds) (cdr source)))
+                                  (cons (marker-position (car source))
+                                        (marker-position (cdr source)))
+                                bounds))))
           (setq pos next)))
       found)))
 
@@ -3275,6 +3286,8 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
            (previously-forced-p
             (get-text-property start 'mevedel-view-force-expanded))
            (turn-id (get-text-property start 'mevedel-view-turn-id)))
+      ;; Rebase visible nested choices before replacing their source-backed row.
+      (mevedel-view-disclosure-capture-state start end)
       ;; Progress changes rendering even when its source text stays unchanged.
       (mevedel-view--retire-tool-renderings data-buffer (car source) (cdr source))
       (when-let* ((rendering
@@ -7336,7 +7349,10 @@ Return the normalized source coordinates used for the insertion."
           (and (eq vtype 'thinking-summary)
                (mevedel-view--reasoning-source-bounds
                 data-buf (car source) (cdr source))))
-         (source (or trimmed source))
+         (source (if trimmed
+                     (mevedel-view-disclosure-source-range
+                      data-buf (car trimmed) (cdr trimmed))
+                   source))
          (data-start (car source))
          (data-end (cdr source))
          (rendering
@@ -7436,7 +7452,10 @@ The result contains normalized `:source', `:summary', and `:face' values."
           (and (eq vtype 'thinking-summary)
                (mevedel-view--reasoning-source-bounds
                 data-buf (car source) (cdr source))))
-         (source (or trimmed source))
+         (source (if trimmed
+                     (mevedel-view-disclosure-source-range
+                      data-buf (car trimmed) (cdr trimmed))
+                   source))
          (data-start (car source))
          (data-end (cdr source))
          (rendering

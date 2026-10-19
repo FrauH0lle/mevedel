@@ -40,7 +40,14 @@ mouse events in them, which later interactive calls would read."
          (cl-letf (((symbol-function 'mevedel-execution-count-user)
                     (lambda (owner) (should (eq owner session)) (length live)))
                    ((symbol-function 'mevedel-execution-list-user)
-                    (lambda (owner) (should (eq owner session)) (copy-tree live))))
+                    (lambda (owner) (should (eq owner session)) (copy-tree live)))
+                   ;; Window/point tests model an attended frame even in a
+                   ;; graphical runner deliberately opened without focus.
+                   ((symbol-function 'frame-focus-state) (lambda (&optional _) t))
+                   ;; A real desktop pointer must not add an accidental hold
+                   ;; to keyboard/grace tests.  Mouse tests override this.
+                   ((symbol-function 'mouse-pixel-position)
+                    (lambda () (cons (selected-frame) '(-1 . -1)))))
            ,@body)))))
 
 (defun mevedel-view-execution-test--at (text)
@@ -779,6 +786,29 @@ mouse events in them, which later interactive calls would read."
         (goto-char (mevedel-view--input-start))
         (should (eq (key-binding [down-mouse-1]) 'mouse-drag-region))))))
 
+(mevedel-deftest mevedel-view-execution--frame-focused-p ()
+  ,test
+  (test)
+  :doc "only visible focused frames hold rows; terminals tolerate unknown focus"
+  (dolist (graphical '(nil t))
+    (dolist (focus '(nil t unknown))
+      (dolist (visible '(nil t icon))
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) graphical))
+                  ((symbol-function 'frame-focus-state) (lambda (&optional _) focus))
+                  ((symbol-function 'frame-visible-p) (lambda (&optional _) visible)))
+          (should (eq (and (eq visible t)
+                           (or (eq focus t) (and (not graphical) (eq focus 'unknown))))
+                      (mevedel-view-execution--frame-focused-p (selected-frame))))))))
+  :doc "child frames use their top-level focus, not the selected frame"
+  (cl-letf (((symbol-function 'frame-live-p) (lambda (frame) (memq frame '(child top))))
+            ((symbol-function 'frame-parent) (lambda (frame) (and (eq frame 'child) 'top)))
+            ((symbol-function 'frame-visible-p) (lambda (_) t))
+            ((symbol-function 'display-graphic-p) (lambda (_) t))
+            ((symbol-function 'frame-focus-state)
+             (lambda (frame) (should (eq frame 'top)) t)))
+    (should (mevedel-view-execution--frame-focused-p 'child))
+    (should-not (mevedel-view-execution--frame-focused-p 'dead))))
+
 (mevedel-deftest mevedel-view-execution--pointer-on-panel-p ()
   ,test
   (test)
@@ -795,7 +825,110 @@ mouse events in them, which later interactive calls would read."
       (mevedel-view-execution-test--at "  ▸ Running")
       (cl-letf (((symbol-function 'mouse-pixel-position)
                  (lambda () (cons (selected-frame) '(0 . -27)))))
-        (should (mevedel-view-execution--pointer-on-panel-p))))))
+        (should (mevedel-view-execution--pointer-on-panel-p)))))
+  :doc "mouse lease expires without movement; point holds only while its frame has focus"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (mevedel-view--render-status)
+      (goto-char (point-max))
+      (let ((clock 1000.0) (focus t) (inside t) (window (selected-window)))
+        (cl-letf (((symbol-function 'float-time) (lambda (&optional _) clock))
+                  ((symbol-function 'frame-focus-state) (lambda (&optional _) focus))
+                  ((symbol-function 'mouse-pixel-position)
+                   (lambda () (cons (selected-frame) (if inside '(1 . 1) '(-1 . -1)))))
+                  ((symbol-function 'posn-at-x-y)
+                   (lambda (&rest _)
+                     (list window
+                           (1+ (plist-get (mevedel-view-zone-fragment-bounds
+                                           'status 'background) :start))
+                           '(1 . 1) 0))))
+          (should (mevedel-view-execution--pointer-on-panel-p))
+          (setq clock 1059.0)
+          (should (mevedel-view-execution--pointer-on-panel-p))
+          (setq clock 1060.0)
+          (should-not (mevedel-view-execution--pointer-on-panel-p))
+          ;; Polling cannot reacquire an expired lease without leaving.
+          (setq clock 1500.0)
+          (should-not (mevedel-view-execution--pointer-on-panel-p))
+          (mevedel-view-execution-test--at "  ▸ Running")
+          (should (mevedel-view-execution--pointer-on-panel-p))
+          (setq focus nil)
+          (should-not (mevedel-view-execution--pointer-on-panel-p))
+          (goto-char (point-max))
+          (setq focus t)
+          (should (mevedel-view-execution--pointer-on-panel-p))
+          (setq clock 1560.0)
+          (should-not (mevedel-view-execution--pointer-on-panel-p))
+          (setq inside nil)
+          (should-not (mevedel-view-execution--pointer-on-panel-p))
+          (setq inside t)
+          (should (mevedel-view-execution--pointer-on-panel-p))))))
+  :doc "lease expiry or frame focus loss releases completed rows through the normal grace timer"
+  (dolist (release '(expiry focus-loss))
+    (mevedel-view-execution-test--with-view
+      (save-window-excursion
+        (switch-to-buffer view-buf)
+        (let* ((clock 1000.0) (focus t) (window (selected-window))
+               (draft-offset nil)
+               (agents (list (list :path "/root/worker" :status 'running :depth 0)))
+               (float-time-orig (symbol-function 'float-time)))
+          (cl-letf (((symbol-function 'float-time)
+                     (lambda (&optional time) (if time (funcall float-time-orig time) clock)))
+                    ((symbol-function 'frame-focus-state) (lambda (&optional _) focus))
+                    ((symbol-function 'mevedel-view--agent-status-collect) (lambda () agents))
+                    ((symbol-function 'mouse-pixel-position)
+                     (lambda () (cons (selected-frame) '(1 . 1))))
+                    ((symbol-function 'posn-at-x-y)
+                     (lambda (&rest _)
+                       (list window
+                             (1+ (plist-get (mevedel-view-zone-fragment-bounds
+                                             'status 'background) :start))
+                             '(1 . 1) 0))))
+            (unwind-protect
+                (progn
+                  (mevedel-view--render-status)
+                  (goto-char (point-max))
+                  (insert "> draft\nsecond line")
+                  (setq draft-offset (- (point) (mevedel-view--input-start)))
+                  ;; Observe entry before completion, not a fresh lease when
+                  ;; completed rows change the panel's geometry.
+                  (mevedel-view--render-status)
+                  (setq clock 1059.0 live nil agents nil)
+                  (mevedel-view--render-status)
+                  (should (string-search "✓ Completed bash" (buffer-string)))
+                  (should (string-search "✓ Finished  agent" (buffer-string)))
+                  (should (timerp mevedel-view-execution--release-timer))
+                  (let ((tick (buffer-chars-modified-tick)))
+                    ;; Unchanged release polls do not mutate the view.
+                    (dotimes (_ 3) (mevedel-view-execution--check-release view-buf))
+                    (should (= tick (buffer-chars-modified-tick))))
+                  (setq clock (if (eq release 'expiry) 1060.0 1059.5))
+                  (when (eq release 'focus-loss) (setq focus nil))
+                  (mevedel-view-execution--check-release view-buf)
+                  (should-not mevedel-view-execution--hovering)
+                  (setq clock (+ clock 9.0))
+                  (mevedel-view-execution--check-release view-buf)
+                  (should (string-search "✓ Completed bash" (buffer-string)))
+                  (setq clock (+ clock 1.0))
+                  (mevedel-view-execution--check-release view-buf)
+                  (should-not (string-search "✓ Completed bash" (buffer-string)))
+                  (should-not (string-search "✓ Finished  agent" (buffer-string)))
+                  (should-not mevedel-view-execution--held)
+                  (should-not mevedel-view-execution--release-timer)
+                  (should (= draft-offset (- (point) (mevedel-view--input-start))))
+                  (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+                  ;; Disappearance ends the observed visit, even with no
+                  ;; subsequent timer available to observe mouse exit.
+                  (should-not mevedel-view-execution--hover-deadline)
+                  (setq clock 2000.0 focus t
+                        live (list '(:execution-id "new" :owner "/root" :yielded t
+                                     :state running :command "new work")))
+                  (mevedel-view--render-status)
+                  (mevedel-view--render-status)
+                  (should mevedel-view-execution--hovering)
+                  (should (= 2060.0 mevedel-view-execution--hover-deadline)))
+              (mevedel-view-execution--cancel-release))))))))
 
 (mevedel-deftest mevedel-view-execution--retain-selected ()
   ,test
@@ -969,6 +1102,7 @@ mouse events in them, which later interactive calls would read."
     (setq mevedel-view-execution--selected-agent "/root/a"
           mevedel-view-execution--show-all t
           mevedel-view-execution--reflow-pending t
+          mevedel-view-execution--hover-deadline 99999.0
           mevedel-view-execution--held (list (list '(agent "/root/a") 'agent '(:path "/root/a")))
           mevedel-view-execution--release-timer (run-with-timer 3600 nil #'ignore))
     (mevedel-view-zone-set-collapse-state mevedel-view-execution--collapse-key t)
@@ -977,6 +1111,7 @@ mouse events in them, which later interactive calls would read."
     (should-not mevedel-view-execution--show-all)
     (should-not mevedel-view-execution--reflow-pending)
     (should-not mevedel-view-execution--held)
+    (should-not mevedel-view-execution--hover-deadline)
     (should-not mevedel-view-execution--release-timer)
     (should-not (mevedel-view-zone-collapse-state mevedel-view-execution--collapse-key))
     (should (string-search "▸ Running" (buffer-string)))))

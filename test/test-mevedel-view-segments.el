@@ -617,6 +617,36 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
       ;; Point where history starts must not inherit the line's keymap.
       (should-not (eq mevedel-view-segments--chats-map
                       (get-pos-property after 'keymap)))))
+  :doc "protects earlier-chat chrome but highlights only its label"
+  (mevedel-view-segments-test--with-view
+    (setf (mevedel-session-chapters session)
+          '((:segment 1 :title "First chat" :closed-at "t1")))
+    (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 7)
+    (let ((draft (mevedel-view--input-text))
+          (draft-offset (- (point) (mevedel-view--input-start))))
+      (mevedel-view--full-rerender)
+      (save-excursion
+        (goto-char (point-min))
+        (forward-line 1)
+        (let ((start (point))
+              (label-end (line-end-position))
+              (after (mevedel-view--after-header-position)))
+          (should (eq 'highlight (get-text-property start 'mouse-face)))
+          (should (eq mevedel-view-segments--chats-map
+                      (get-text-property (1- label-end) 'keymap)))
+          (cl-loop for pos from start below after do
+                   (goto-char pos)
+                   (should-error (insert "x") :type 'text-read-only)
+                   (should-error (delete-char 1) :type 'text-read-only))
+          (cl-loop for pos from label-end below after do
+                   (should-not (get-text-property pos 'mouse-face))
+                   (should-not (get-text-property pos 'keymap)))
+          (should-not (eq mevedel-view-segments--chats-map
+                          (get-pos-property after 'keymap)))))
+      (should (= draft-offset (- (point) (mevedel-view--input-start))))
+      (should (equal draft (mevedel-view--input-text)))
+      (insert "x")
+      (should (string-search "x" (mevedel-view--input-text)))))
   :doc "an archived projection shows its banner instead"
   (mevedel-view-segments-test--with-view
     (setf (mevedel-session-chapters session)

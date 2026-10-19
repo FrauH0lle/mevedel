@@ -1434,6 +1434,12 @@ needs one menu. It only inspects, and never changes session state:
 Those are the keys the view buffer's own keymap binds, so the cockpit teaches
 one vocabulary rather than two.
 
+When the session has earlier chats, a read-only line below the live header
+opens the chat picker. Only its visible label is clickable and highlighted on
+hover; its trailing line break and blank separator remain protected chrome,
+not part of the hover target. Insertion at the label's leading boundary is
+protected too, without making the live composer read-only.
+
 An archived segment is a read-only projection, not a second live session.
 Its banner shows the segment number and a clickable `[Latest]` action. The
 live composer draft is hidden and preserved. Live requests continue updating
@@ -1518,17 +1524,23 @@ the theme's success or error face for a known successful or failed outcome;
 explicit stops use the warning face, and unknown outcomes stay subdued until
 terminal facts arrive. Successful command outcomes include expected no-match,
 different, and false results, not just exit zero. Names and metadata stay dim.
-While point (in any window
-showing the view) or the mouse is on the panel, finished lines never leave, and
-leaving restarts their grace period. The panel then also keeps exactly the rows
-it showed, so the row being aimed at cannot shift: new work, including a new
-child agent, is only counted in the rule and `[Show all N]` until both leave.
-In-place updates still apply. A timer runs only while finished lines are held,
-to notice the pointer leaving and grace periods ending; the layout then
-recomputes in one step. Collapsing a retained finished inspector leaves its
-completed row with a fresh ten-second grace period. Time spent expanded
-does not count; while either cursor or mouse remains in the panel, removal
-stays blocked and leaving restarts the full period.
+Point in any focused window showing the panel protects finished lines from
+removal. Mouse-only protection lasts at most 60 seconds per observed visit;
+polling, motion within the panel and status updates do not renew it. Observed
+exit, panel disappearance or frame focus loss ends that visit. Both protections
+require a visible frame whose top-level frame has focus; terminal frames may
+also protect rows when their window system cannot report focus. Unfocused
+frames do not retain rows merely because a pointer is parked on them.
+While protected, the panel also keeps exactly the rows it showed, so the row
+being aimed at cannot shift: new work, including a new child agent, is only
+counted in the rule and `[Show all N]`. In-place updates still apply.
+Losing protection, including mouse-lease expiry, restarts the ordinary
+ten-second grace period. A timer runs only while finished lines are held, to
+notice protection changes and grace periods ending; the layout then recomputes
+in one step. Thus a parked mouse alone cannot retain old completions forever.
+Collapsing a retained finished inspector leaves its completed row with a fresh
+ten-second grace period. Time spent expanded does not count, and an explicitly
+expanded execution inspector stays open independently of passive protection.
 
 Every row, finished line, preview line and rule fits one screen row of the
 narrowest window showing the view (`mevedel-view-zone-width`, leaving one
@@ -2374,6 +2386,17 @@ remembered, or a captured state that differs from its section type's default
 default state is not remembered, so a group that once folded by default does
 not later fold over a row the reader opened. Source anchors prevent unmatched states from applying to rewritten
 content at the same position.
+Normalized reasoning-block bounds remain marker-backed after both expansion
+and collapse. Earlier background-result metadata can change length without
+changing that reasoning block; its markers move with the source, allowing the
+next redraw to rebase the remembered choice instead of folding it again.
+Targeted tool-row refreshes likewise retain the row's complete marker-backed
+source span when restored properties split off its hidden render metadata.
+Before replacing that row, they capture its visible nested disclosure choices
+at their current source positions. A background update therefore keeps both
+the compound tool's children and their expanded/collapsed choices. Capturing
+those choices is limited to the replaced row, not an additional transcript-wide
+state scan.
 `mevedel-view-render-settle` computes those keys with their durable
 post-settle anchors (`mevedel-view-disclosure--settling-p`): it runs before
 the stream clears the in-flight turn markers, and keys captured or stamped

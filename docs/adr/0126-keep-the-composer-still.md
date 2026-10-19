@@ -135,17 +135,22 @@ composer. Agent trees form units, with members in path order. Equal unit starts
 put agents before executions, then sort lexicographically by agent root path or
 execution owner path and ID, ascending; live, held and retained rows use the
 same identity tiebreaks. State changes, including blocking, update rows in place.
-While point or the mouse is on the panel, it keeps exactly the rows it showed:
-finished rows stay as inert lines and new work is only counted, until both
-leave. Completion glyphs and state labels use success/error faces for known
+While focused point or a bounded mouse visit protects the panel, it keeps
+exactly the rows it showed: finished rows stay as inert lines and new work is
+only counted. Mouse-only protection expires after 60 seconds, without renewal
+by polling, status updates or motion within the panel. An observed exit, panel
+disappearance or focus loss resets the visit. Both protections need a visible
+frame with a focused top-level frame; terminals may also protect on unknown
+focus, since their window system may not report it. Explicitly unfocused frames
+never hold rows. Completion glyphs and state labels use success/error faces for known
 outcomes, warning for explicit stops, and a subdued face while unknown; names
 and metadata remain dim. Explicit Show fewer is a user-requested layout change,
 so it applies the normal limit under the pointer while preserving selected
 inspectors and retained finished rows. Subsequent passive updates freeze that
 reduced set. This intent survives deferred and coalesced status rendering.
-A finished row also lingers for ten seconds after the pointer is away, and
-leaving the panel restarts that period, so removals happen when nobody is
-aiming at the panel.
+A finished row also lingers for ten seconds after protection ends, including
+mouse-lease expiry or focus loss. Ending protection restarts that period;
+explicitly expanded execution inspectors remain independently retained.
 
 Panel heights depend only on which rows exist, not on their text. Every row,
 finished line, preview line and rule fits one screen row of the narrowest
@@ -174,16 +179,29 @@ that point can reach and activate.
 
 With the composer anchored, only text above a change moves, so new rows go to the
 far edge and existing rows keep their place. Reordering (previously "blocked
-first") and removals under the pointer still moved targets; the hold on hover
-addresses both without a timed lock, whose expiry could move a target while the
-user acts. The hold uses a short timer only while rows are held, to notice that
-the pointer left.
+first") and removals under the pointer still moved targets. Indefinite hover
+protection initially avoided expiry under an active mouse, but also accumulated
+hours-old completions under a parked pointer while the user was absent. The
+bounded mouse visit and focused-frame requirement trade that stale retention
+for expiry after a minute plus the existing grace period. Focused keyboard point
+and explicit execution inspection retain their intentional-reading protection.
+The same short timer, active only while rows are held, observes protection
+changes and expiry; no additional timer or motion tracking is needed.
 
 Automatic focus let a keystroke typed into the draft land on a newly arrived
 approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Bound passive pointer protection (2026-10-19).** The user reported many
+  hours-old completed rows after returning from a locked screen. Previously,
+  any mouse presence or window point held rows indefinitely, regardless of
+  frame focus. Passive mouse visits now last at most 60 seconds, then use the
+  ordinary ten-second grace, and unfocused frames cannot hold rows. Repeated
+  updates cannot renew the lease; observed exit, panel disappearance or focus
+  loss starts a new visit next time. Focused point and expanded execution
+  inspectors keep their independent protection.
 
 - **Explicit overflow reduction and outcome colors (2026-10-19).** Applying
   passive row freezing after Show fewer left every expanded row visible while
