@@ -21,6 +21,20 @@ async function askedCount(page, n) {
   }
 }
 
+// Set up both editor and DOM selection. A DOM-only range can race
+// ProseMirror's deferred focus reconciliation and revert to the old caret.
+async function selectPassage(frame, from, to) {
+  const {actual, expected} = await frame.locator('.tiptap p').evaluate((p, {from, to}) => {
+    const editor = p.closest('.tiptap').editor;
+    editor.commands.setTextSelection({
+      from: editor.view.posAtDOM(p.firstChild, from),
+      to: editor.view.posAtDOM(p.firstChild, to),
+    });
+    return {actual: document.getSelection().toString(), expected: p.textContent.slice(from, to)};
+  }, {from, to});
+  assert.equal(actual, expected);
+}
+
 // The real packaged iframe and port, without room setup, for interaction regressions.
 test('editor interaction regressions', async (t) => {
   const {open, browser, url} = await editorFixture(t);
@@ -1138,7 +1152,7 @@ test('editor interaction regressions', async (t) => {
       const {page, frame} = await open({kind:'document'});
       await frame.locator('.tiptap').click();
       await page.keyboard.type('A useful passage.');
-      await frame.locator('.tiptap p').evaluate(p => document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,8));
+      await selectPassage(frame, 2, 8);
       await frame.locator('#discuss-selection').click();
       assert.equal(await shown(frame).locator('.ds-quote').textContent(),'useful');
       await box(frame).fill('Explain this word');
@@ -1224,7 +1238,7 @@ test('editor interaction regressions', async (t) => {
       const {page, frame} = await open({kind:'document'});
       await frame.locator('.tiptap').click();
       await page.keyboard.type('A useful passage.');
-      await frame.locator('.tiptap p').evaluate(p => document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,8));
+      await selectPassage(frame, 2, 8);
       await frame.locator('#discuss-selection').click();
       assert.equal(await askBox(frame).isChecked(), true, 'asking is the default');
       await box(frame).fill('Explain this word');
@@ -1262,8 +1276,9 @@ test('editor interaction regressions', async (t) => {
       const {page, frame} = await open({kind:'document'});
       await frame.locator('.tiptap').click();
       await page.keyboard.type('A useful passage.');
-      await frame.locator('.tiptap p').evaluate(p => document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,8));
+      await selectPassage(frame, 2, 8);
       await frame.locator('#discuss-selection').click();
+      assert.equal(await shown(frame).locator('.ds-quote').textContent(), 'useful');
       await box(frame).fill('Explain useful');
       await askBox(frame).uncheck();
       await send(frame);
@@ -1295,7 +1310,7 @@ test('editor interaction regressions', async (t) => {
       const {page, frame} = await open({kind:'document',viewport:{width:375,height:500}});
       await frame.locator('.tiptap').click();
       await page.keyboard.type('A data model.');
-      await frame.locator('.tiptap p').evaluate(p=>document.getSelection().setBaseAndExtent(p.firstChild,2,p.firstChild,12));
+      await selectPassage(frame, 2, 12);
       const toolbar = frame.locator('#selection-actions');
       await toolbar.waitFor();
       const bounds = await toolbar.boundingBox();
