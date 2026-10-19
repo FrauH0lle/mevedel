@@ -37,7 +37,11 @@ implementation settings; they do not replace the session policy or the
 directive's planning model. Selection survives proposal feedback, while a fresh
 directive action starts with fresh defaults seeded with the directive's own
 skill selection (deduplicated by skill source); the card's selection at accept
-time is the single authority for that attempt.
+time is the single authority for that attempt. Browser feedback from a full or
+owner link continues that directive's planning conversation directly, with the
+current proposal as reference; it neither submits ordinary chat nor enters the
+host's composer. View links cannot answer the approval. Feedback captured from
+a replaced, cancelled, or invalidated attempt cannot restart its planning.
 
 ## Directive skills
 
@@ -214,16 +218,19 @@ switching to Worktree keeps Current. A Worktree starts at `HEAD`: uncommitted
 changes in the source checkout are not copied, apart from the files the session
 itself edited, which the fork restores. Accepting a Worktree proposal first
 checks that the session can fork (no pending input, request, live execution,
-active agent turn or active Goal), then prompts for its branch name in Emacs.
+active agent turn or active Goal), then asks for its branch name. Native
+acceptance uses the minibuffer; browser owner acceptance uses the card's branch
+input. Both validate the branch through the same Git checker before acceptance.
 While Worktree is selected, the card names whatever would refuse that check,
 in the same words as the refusal, so a queued follow-up is resolved in the
 Pending Inputs cockpit first instead of being discovered on `RET`. The notice
 that uncommitted changes stay behind comes from a git status check of about
 40 ms; it runs when the card first shows and after each selection change, and
 other redraws, such as queue events and the control-transfer poll, reuse it.
-The blocker check is in memory and stays current on every redraw. Browser
-acceptance is available only for Here, using the host-selected settings;
-settings changes and Worktree acceptance remain in Emacs.
+The blocker check is in memory and stays current on every redraw. Full and owner
+links can accept Here using the host-selected settings. Only owner links can
+accept Worktree; full links can still send feedback, and the host rejects forged
+full-link acceptance. Settings changes remain in Emacs.
 
 Pending input remains available while the approval overlay is open. `C-c TAB`
 queues a follow-up without demoting or settling the proposal. Same-turn
@@ -241,10 +248,14 @@ its full text on hover, and the Worktree notice takes the blank row above the
 actions the same way. Changing a setting therefore never changes the local
 card's height: the Context and Execution descriptions differ in length and
 wrapped below about 84 columns, and the notice used to add two or three rows.
-The cut applies to the local card only: semantic rows are built once and the
-remote (browser) payload keeps every setting, model, skill list, and notice
-whole, so a guest's approval information never depends on the host's split
-geometry. The card is laid out again when that width changes. A hidden approval
+The cut applies to the local card only. The browser shows read-only Markdown
+with every setting, model, skill list, notice and full implementation instructions,
+without inactive native keyboard hints. A guest's approval information therefore
+does not depend on the host's split geometry. If the complete review exceeds
+the browser frame budget, the card explicitly directs the user to review and
+accept in Emacs instead of offering acceptance with truncated information;
+browser feedback remains available. The native card is laid out again
+when that width changes. A hidden approval
 stays pending and hidden across live-session redraws. `RET` or a mouse click on its
 `1 plan` interaction-counter segment shows the card again; resuming a persisted
 session also shows it because hidden state is not persisted.
@@ -373,6 +384,13 @@ view, and the planning session, now saved with only its accepted-plan archive,
 is closed once the accepting command returns. Both sessions stay linked
 through the fork's recorded parent and fork point; the planning conversation
 remains reachable through the variant button at the plan reply.
+
+If the planning session is shared, handoff shares the implementation fork and
+ends the old room with an explicit continuation notice. Each connected browser
+receives an Open link for the new room at its existing view, full, or owner tier;
+the old bearer never changes which session it names. An unshared planning
+session does not start sharing. If sharing the fork fails, the old room ends
+with an explicit handoff-failed notice and the native handoff still completes.
 
 Each step is durable before the next. The source retry records the fork point,
 then the branch and directory reservation before any Git mutation, then the

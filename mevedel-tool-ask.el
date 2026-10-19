@@ -43,20 +43,29 @@ user as an empty or `nil' form."
     (seq-doseq (question questions)
       (setq index (1+ index))
       (let ((text (and (listp question) (plist-get question :question)))
-            (options (and (listp question) (plist-get question :options))))
+            (options (and (listp question) (plist-get question :options)))
+            labels)
         (unless (and (stringp text) (not (string-blank-p text)))
           (error "Ask question %d needs a non-empty question string; got %S"
                  index question))
         (unless (and (sequencep options) (not (stringp options))
                      (> (length options) 0))
           (error "Ask question %d (%s) needs a non-empty options list" index text))
+        (unless (memq (plist-get question :multiSelect) '(nil t :json-false))
+          (error "Ask question %d (%s): multiSelect must be a boolean" index text))
         (seq-doseq (option options)
           (unless (or (and (stringp option) (not (string-blank-p option)))
                       (and (listp option)
                            (stringp (plist-get option :label))
                            (not (string-blank-p (plist-get option :label)))))
             (error "Ask question %d (%s): each option must be a string or an \
-object with a non-empty label; got %S" index text option)))))))
+object with a non-empty label; got %S" index text option))
+          (let ((label (string-trim (if (stringp option) option
+                                      (plist-get option :label)))))
+            (when (member label labels)
+              (error "Ask question %d (%s): option labels must be unique after trimming; got %S"
+                     index text label))
+            (push label labels)))))))
 
 (defun mevedel-tool-ask--ask (callback args)
   "Ask the user questions.
@@ -113,6 +122,8 @@ CALLBACK receives the formatted answers.  ARGS is a plist with :questions."
                       :items (:type object
                               :properties
                               (:question (:type string :description "The question to ask.")
+                               :multiSelect
+                               (:type boolean :description "Allow multiple answers; defaults to false.")
                                :options
                                (:type array
                                 :description "Predefined answers: strings, or objects with label, description and sample."

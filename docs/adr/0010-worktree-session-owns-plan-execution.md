@@ -13,6 +13,12 @@ the planning view in the same windows, and the planning session, saved with
 only its approval archive, is closed. Execution stays attached to the session
 that changes files, and the user keeps the conversation that led to the plan.
 
+For a shared planning session, the fork gets its own room before the source
+closes. Connected guests receive fresh continuation links at their existing
+authority tier and an explicit room-ended explanation with an Open action.
+Existing bearers never retarget to the fork. Sharing failure is visible but
+does not block native handoff. Unshared sessions do not start sharing.
+
 Selected model, effort, and permission mode belong to the one Direct request or
 the durable Goal's implementation policy, not to session defaults, which the
 fork copies from the planning session. The selected Goal budget sets the Goal
@@ -36,6 +42,13 @@ not acquire implementation settings. See [ADR 0067](0067-separate-planning-from-
 for policy ownership and the strict Goal record.
 
 ## Decision history
+
+The first Worktree Fork handoff preserved native conversational continuity but
+ended a browser's room as a killed buffer, without an explanation or a route to
+the implementation. Explicit same-tier continuation replaces that abrupt end;
+fresh room credentials retain the session-bound bearer contract in ADR 0099.
+Worktree acceptance is also available to browser owners through a host-validated
+branch input, while full-link guests retain feedback but cannot accept Worktree.
 
 The worktree session was originally a clean session created beside the source,
 which kept the retry record and a separate target-preparation step. Context

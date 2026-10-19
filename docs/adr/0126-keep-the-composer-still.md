@@ -117,6 +117,12 @@ one that has waited longest, and repeated presses cycle outward. In a window
 not yet full, where free space is used first, an arrival pushes the cards
 below it down like any other growth above the composer.
 
+Browser request cards likewise keep their arrival slot on updates. Its
+scrollable stack reads oldest first from the top, exposing the longest-waiting
+decision initially. Replacing a changed card in place, rather than removing it
+and appending a new one, preserves that order; an unchanged frame leaves the
+card, its draft and its scroll untouched.
+
 Closing an agent inspection's side window rewraps the parent's text without
 any zone change. A parent window gets the composer's screen row from before
 the inspection opened back only if, just before the close, it still shows the

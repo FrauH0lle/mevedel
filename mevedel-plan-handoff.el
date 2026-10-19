@@ -24,6 +24,10 @@
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
 (autoload 'mevedel--display-chat-buffer "mevedel-chat")
 
+;; `mevedel-collaboration'
+(declare-function mevedel-collaboration-hand-off
+                  "mevedel-collaboration" (source-data-buffer target-data-buffer))
+
 ;; `mevedel-compact-evidence'
 (declare-function mevedel-compact-evidence-previous-summary
                   "mevedel-compact-evidence" ())
@@ -446,6 +450,10 @@ the fork.  Closing waits for the accepting command to return."
         (set-window-buffer window fork-view)))
     (unless windows
       (mevedel--display-chat-buffer fork-buffer))
+    ;; Sharing is optional; a shared source necessarily loaded its owner.
+    ;; Deliver fresh continuation credentials before buffer teardown revokes it.
+    (when (featurep 'mevedel-collaboration)
+      (mevedel-collaboration-hand-off chat-buffer fork-buffer))
     (run-at-time
      0 nil
      (lambda ()

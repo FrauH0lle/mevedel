@@ -428,8 +428,9 @@ signals instead:
 - a queued message is dropped with its attachments, as on a retraction; its
   sender gets the same notice, and the host a warning naming the guest.
 
-Either way the host's warning quotes the question; guests see only the notice,
-since prompts can name hosts and paths.
+Either way the host's warning quotes the question when the refusing API supplies
+it; some Emacs input functions signal without question data. Guests see only the
+notice, since prompts can name hosts and paths.
 
 A queued message the host refuses for another reason, such as `/compact` in a
 Claude session, is dropped the same way rather than blocking the queue. Its
@@ -975,8 +976,8 @@ Full-link guests are also presented pending interactions as `ui-request`
 frames — generic requests (approve/deny/feedback), permission prompts
 (one-shot allow-once/deny-once/feedback; session, workspace, and always
 authority is never mintable remotely), plan approval (accept with the
-host-configured axes; Worktree acceptance and feedback drafts stay in
-Emacs), ApplyPatch review (apply the staged selection or request a
+host-configured axes; Worktree acceptance requires an owner link and an explicit
+branch name), ApplyPatch review (apply the staged selection or request a
 revision with whole-patch feedback; side-by-side editing stays in
 Emacs), and Ask questionnaires (the frame carries questions, option
 descriptions and samples, and current answers; the guest answers atomically,
@@ -989,8 +990,79 @@ A session shared while an interaction already waits presents that one too:
 starting a room adopts the session's pending prompts in the order they
 arrived, since each announces itself only once, when it is raised.
 `mevedel-collaboration-remote-interactions` gates that surface. Lease
-transfer, save, rewind, fork, publication, and execution-target changes are
-impossible from the browser regardless of link strength.
+transfer, save, rewind, arbitrary forks, publication, and execution-target
+changes remain host operations. Owner acceptance of a Worktree plan is the typed,
+host-validated exception, not a general browser fork command.
+
+Plan cards render Markdown with the full implementation instructions and
+read-only settings, without native keyboard hints that a browser cannot use.
+Full-link guests may accept Here plans and send feedback, but Worktree acceptance
+is owner-only. Owners supply the branch name through a prefilled text input;
+the host applies the same Git branch validation as the native workflow and never
+opens a minibuffer for a browser response. The host rechecks owner authority on
+receipt, independently of which controls the browser shows.
+If the complete plan, instructions and settings exceed the bounded card payload,
+the card explicitly requires full review in Emacs and offers feedback only. It
+never offers browser acceptance of an undisclosed truncated plan.
+
+Ask shows one open question and single-line summaries of the others. For a
+single-select question, choosing an option or pressing Enter in a custom answer
+opens the next unanswered question. A question with `multiSelect: true` instead
+allows several checked options plus optional custom text; toggling or editing
+keeps it open. Clearing custom text leaves selected options intact. Enter on
+custom text matching an offered multi-select label
+commits that option and clears the custom field. Custom text is trimmed; whitespace
+alone is no preference. Submit sends
+the entire form, including unanswered questions as no
+preference. Previous/Next question and the summaries reopen answers for review.
+Tab and Shift-Tab retain normal browser focus traversal instead of skipping
+HTML controls, unlike Emacs's question-navigation bindings. The navigation row
+keeps its space at both ends of the form.
+
+Question descriptors expose the optional `multiSelect` boolean. Atomic response
+`answers` contain strings for single-select questions and arrays of strings for
+multi-select questions, including `[]` for no preference. The host validates
+each answer's shape before changing any state, rejects duplicate multi answers
+and more than one custom value, and orders selected labels by the offered
+options with custom text last. The same submission path settles native and browser
+answers; the first accepted submission wins.
+The shared JSON decoder represents empty arrays, null and false as Lisp nil, so
+these three wire values all mean no preference in a multi-select answer slot.
+
+Option descriptions are visible text, including on touch devices. Focus or
+hover inspects an option's inline sample without selecting it; **Sample** does
+the same on touch. The last inspected sample remains when an option has none.
+Samples wrap at the browser's own width in a fixed-height panel, with long
+samples scrolling. The whole form reserves the tallest question at that width;
+changing questions, answers or samples does not move its footer or the composer.
+Resizing recomputes that reservation. Repeated unchanged host frames preserve
+drafts, focus and scroll. Changed cards replace their existing slot rather than
+moving behind later requests. When feedback remains available, a changed card
+also retains its open feedback disclosure, text and focused selection without
+stealing focus from the composer. Browser requests read oldest first, so the
+scrolling stack initially exposes the decision that has waited longest.
+For the same questionnaire definition, host answer updates refresh untouched
+questions but preserve locally edited answers, custom drafts, the open question,
+sample inspection and focused selection. Changing the question definitions resets
+that local form; settling the request clears it everywhere.
+
+A refused interaction action is reported to the answering browser through the
+same error boundary as other guest actions: owners receive the actionable host
+diagnostic, while full-link guests receive a redacted notice. Rejection does not
+pretend that the pending request was approved. Option IDs must name a nonnegative
+offered option; malformed IDs cannot select the first choice accidentally.
+
+Permission cards include the same warnings as Emacs, including a
+side-conversation mutation's still-active parent. Their full operation and
+authority details remain available regardless of whether the host folded its
+native card. Remote permission outcomes remain one-shot only.
+
+Patch cards show the current host-selected, host-edited changes rather than the
+original authored patch. A plain-text notice before the diff explains the
+selection, staged feedback, parent activity and any conflict or incomplete
+rollback. The primary action follows the current selection (apply changes,
+request revision, or reject). Selection/editing stay in Emacs; semantic changes
+refresh the same pending card. Explicit truncation marks oversized review text.
 
 ## Commands, skills, and tool display
 

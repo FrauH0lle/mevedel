@@ -55,6 +55,328 @@ function ask(page) {
   });
 }
 
+async function requestRenderer(page) {
+  await page.addScriptTag({content: await readFile(
+    resolve(root, 'relay/viewer/viewer-requests.js'), 'utf8')});
+  await page.addScriptTag({content: `(() => {
+    const requests = document.getElementById('requests');
+    const el = (tag, className = '', text = '') => {
+      const node = document.createElement(tag);
+      node.className = className; node.textContent = text; return node;
+    };
+    window.requestSent = [];
+    window.requestState = {owner: false};
+    const send = frame => window.requestSent.push(frame);
+    window.requestView = window.mevedelRequestView.create({requests, el, send, state: window.requestState});
+  })();`});
+}
+
+test('plan cards render Markdown and expose full implementation instructions', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await room(browser);
+    await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
+    await requestRenderer(page);
+    await page.evaluate(() => requestView.render({reqId: 1, bodyKind: 'markdown',
+      body: '# Implementation plan\n\n## Instructions\n\nKeep **all checks** enabled.\n\n<script>unsafe()</script>', options: []}));
+    assert.equal(await page.getByRole('heading', {name: 'Implementation plan', exact: true}).count(), 1);
+    assert.equal(await page.locator('.request-card strong').innerText(), 'all checks');
+    assert.equal(await page.locator('.request-card script').count(), 0);
+  } finally { await browser.close(); }
+});
+
+test('only owners receive Worktree acceptance with a retained branch input', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 1200]) {
+      const page = await room(browser);
+      await page.setViewportSize({width, height: 812});
+      await requestRenderer(page);
+      await page.evaluate(() => {
+        window.planFrame = {reqId: 1, body: 'Worktree plan', optionsOwnerOnly: true,
+          optionInput: {label: 'Worktree branch', value: 'plan/default'},
+          options: [{id: 0, label: 'Implement plan'}], allowFeedback: true};
+        requestView.render(planFrame);
+      });
+      assert.equal(await page.getByRole('button', {name: 'Implement plan', exact: true}).count(), 0);
+      assert.equal(await page.getByRole('textbox', {name: 'Worktree branch', exact: true}).count(), 0);
+      assert.equal(await page.getByText('Suggest a change', {exact: true}).count(), 1);
+      await page.evaluate(() => { requestState.owner = true; requestView.render(planFrame); });
+      const branch = page.getByRole('textbox', {name: 'Worktree branch', exact: true});
+      assert.equal(await branch.inputValue(), 'plan/default');
+      await branch.fill('plan/phone-choice');
+      await page.evaluate(() => requestView.render({...planFrame, body: 'Updated settings'}));
+      assert.equal(await branch.inputValue(), 'plan/phone-choice');
+      assert.equal(await branch.evaluate(node => document.activeElement === node), true);
+      await page.getByRole('button', {name: 'Implement plan', exact: true}).click();
+      assert.deepEqual(await page.evaluate(() => requestSent.at(-1)),
+        {t: 'ui-response', reqId: 1, option: 0, value: 'plan/phone-choice'});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('changed pending cards keep their original arrival order', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await room(browser);
+    await requestRenderer(page);
+    await page.evaluate(() => {
+      requestView.render({reqId: 1, body: 'First', options: []});
+      requestView.render({reqId: 2, body: 'Second', options: []});
+      requestView.render({reqId: 1, body: 'First updated', options: []});
+    });
+    assert.deepEqual(await page.locator('.request-card').evaluateAll(
+      cards => cards.map(card => card.dataset.reqId)), ['1', '2']);
+  } finally { await browser.close(); }
+});
+
+test('changed pending cards preserve feedback text, disclosure and focused selection', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await room(browser);
+    await requestRenderer(page);
+    await page.evaluate(() => requestView.render({reqId: 1, body: 'Original', allowFeedback: true}));
+    await page.getByText('Suggest a change', {exact: true}).click();
+    const input = page.locator('.request-feedback');
+    await input.fill('> keep this draft');
+    await input.evaluate(node => node.setSelectionRange(2, 6));
+    await page.evaluate(() => requestView.render({reqId: 1, body: 'Updated', allowFeedback: true}));
+    assert.equal(await input.inputValue(), '> keep this draft');
+    assert.equal(await input.isVisible(), true);
+    assert.deepEqual(await input.evaluate(node => [document.activeElement === node,
+      node.selectionStart, node.selectionEnd]), [true, 2, 6]);
+    await page.locator('#composer-input').focus();
+    await page.evaluate(() => requestView.render({reqId: 1, body: 'Updated again', allowFeedback: true}));
+    assert.equal(await page.locator('#composer-input').evaluate(node => document.activeElement === node), true);
+    await page.getByRole('button', {name: 'Send feedback', exact: true}).click();
+    assert.deepEqual(await page.evaluate(() => requestSent.at(-1)),
+      {t: 'ui-response', reqId: 1, feedback: '> keep this draft'});
+  } finally { await browser.close(); }
+});
+
+test('pending patch notices precede the diff and update safely in place', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 1200]) {
+      const page = await room(browser);
+      await page.setViewportSize({width, height: 812});
+      await page.addScriptTag({content: await readFile(
+        resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
+      await requestRenderer(page);
+      await page.evaluate(() => {
+        requestView.render({reqId: 1, bodyKind: 'diff', body: '+selected change',
+          notice: 'Current host selection. Warning: parent request is still active.', options: []});
+        requestView.render({reqId: 2, body: 'Later request', options: []});
+      });
+      const notice = page.locator('[data-req-id="1"] .request-notice');
+      assert.match(await notice.innerText(), /parent request is still active/);
+      assert.ok((await notice.boundingBox()).y < (await page.locator('.diff').boundingBox()).y);
+      await page.evaluate(() => requestView.render({reqId: 1, bodyKind: 'diff',
+        body: '+selected change', notice: '<img src=x onerror="alert(1)"> Conflict: file changed.', options: []}));
+      assert.match(await notice.innerText(), /<img src=x.*Conflict: file changed/);
+      assert.equal(await notice.locator('img').count(), 0);
+      assert.deepEqual(await page.locator('.request-card').evaluateAll(
+        cards => cards.map(card => card.dataset.reqId)), ['1', '2']);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('Ask focuses one question with inspectable samples and stable phone geometry', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 1200]) {
+      const page = await room(browser);
+      await page.setViewportSize({width, height: 812});
+      await requestRenderer(page);
+      await page.evaluate(() => requestView.render({reqId: 3, allowCancel: true,
+        questions: [
+          {question: 'Which implementation?', options: [
+            {label: 'Small', description: 'Ship the smallest useful implementation.',
+             sample: 'short sample'},
+            {label: 'Long', sample: 'long wrapped sample '.repeat(90)},
+            {label: 'No sample'}]},
+          {question: 'Which branch?', options: [{label: 'main'}]},
+        ]}));
+      assert.equal(await page.locator('.question-panel:not([inert])').count(), 1);
+      assert.equal(await page.getByText('Ship the smallest useful implementation.').isVisible(), true);
+      await page.waitForFunction(() => document.querySelector('.questionnaire').style.height);
+      const height = () => page.locator('[data-req-id="3"]').evaluate(node => node.getBoundingClientRect().height);
+      const before = await height();
+      await page.getByRole('button', {name: 'Long', exact: true}).focus();
+      assert.match(await page.locator('.question-sample:visible').innerText(), /long wrapped/);
+      assert.equal(await height(), before, 'inspecting a longer sample holds height');
+      await page.getByRole('button', {name: 'No sample', exact: true}).focus();
+      assert.match(await page.locator('.question-sample:visible').innerText(), /long wrapped/);
+      await page.getByRole('button', {name: 'Small', exact: true}).click();
+      assert.equal(await page.getByRole('button', {name: 'main', exact: true}).isVisible(), true);
+      assert.equal(await height(), before, 'advancing to a short question holds height');
+      await page.getByRole('textbox', {name: 'Custom answer 2'}).fill('topic/browser');
+      await page.getByRole('textbox', {name: 'Custom answer 2'}).press('Enter');
+      assert.equal(await page.locator('.question-panel:not([inert])').count(), 0);
+      assert.equal(await height(), before, 'reviewing answers holds height');
+      await page.getByRole('button', {name: 'Previous question', exact: true}).click();
+      assert.equal(await page.getByRole('button', {name: 'main', exact: true}).isVisible(), true);
+      assert.equal(await page.getByRole('button', {name: 'Next question', exact: true}).isDisabled(), true);
+      assert.equal(await height(), before, 'reopening answers holds height');
+      await page.getByRole('button', {name: 'Submit answers', exact: true}).click();
+      assert.deepEqual(await page.evaluate(() => requestSent.at(-1)),
+        {t: 'ui-response', reqId: 3, answers: ['Small', 'topic/browser']});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('multi-select keeps choices and custom text together without advancing or resizing', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 1200]) {
+      const page = await room(browser);
+      await page.setViewportSize({width, height: 812});
+      await requestRenderer(page);
+      await page.evaluate(() => requestView.render({reqId: 7, questions: [
+        {question: 'Which checks?', multiSelect: true, answer: [], options: [
+          {label: 'Desktop', sample: 'Desktop checks'},
+          {label: 'Phone', sample: 'Phone checks '.repeat(30)}]},
+        {question: 'When?', options: [{label: 'Before shipping'}]},
+        {question: 'Anything unknown?', multiSelect: true, answer: [], options: [{label: 'Uncertain'}]},
+      ]}));
+      await page.waitForFunction(() => document.querySelector('.questionnaire').style.height);
+      const height = () => page.locator('[data-req-id="7"]').evaluate(node => node.getBoundingClientRect().height);
+      const before = await height();
+      const phone = page.getByRole('button', {name: 'Phone', exact: true});
+      const desktop = page.getByRole('button', {name: 'Desktop', exact: true});
+      await phone.click();
+      assert.equal(await phone.isVisible(), true, 'multi choice stays on this question');
+      assert.equal(await phone.getAttribute('aria-pressed'), 'true');
+      await desktop.click();
+      await phone.click();
+      assert.equal(await phone.getAttribute('aria-pressed'), 'false');
+      await phone.click();
+      const custom = page.getByRole('textbox', {name: 'Custom answer 1'});
+      await custom.fill('Keyboard');
+      await custom.press('Enter');
+      assert.equal(await desktop.isVisible(), true, 'multi custom stays on this question');
+      assert.equal(await desktop.getAttribute('aria-pressed'), 'true');
+      assert.equal(await phone.getAttribute('aria-pressed'), 'true');
+      assert.equal(await height(), before);
+      await page.getByRole('button', {name: 'Next question', exact: true}).click();
+      assert.match(await page.locator('.question-summary-answer').first().innerText(), /Desktop, Phone, Keyboard/);
+      await page.getByRole('button', {name: 'Before shipping', exact: true}).click();
+      assert.equal(await height(), before);
+      await page.getByRole('button', {name: 'Submit answers', exact: true}).click();
+      assert.deepEqual(await page.evaluate(() => requestSent.at(-1)),
+        {t: 'ui-response', reqId: 7, answers: [['Desktop', 'Phone', 'Keyboard'], 'Before shipping', []]});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('Ask host updates preserve dirty answers and focused drafts but refresh untouched answers', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 1200]) {
+      const page = await room(browser);
+      await page.setViewportSize({width, height: 812});
+      await requestRenderer(page);
+      await page.evaluate(() => {
+        window.askFrame = {reqId: 8, questions: [
+          {question: 'Checks?', multiSelect: true, answer: [], options: [{label: 'A'}, {label: 'B'}]},
+          {question: 'When?', answer: '', options: [{label: 'Now'}, {label: 'Later'}]},
+        ]};
+        requestView.render(askFrame);
+      });
+      await page.getByRole('button', {name: 'A', exact: true}).click();
+      const custom = page.getByRole('textbox', {name: 'Custom answer 1'});
+      await custom.fill('My local draft');
+      await custom.evaluate(node => node.setSelectionRange(3, 8));
+      await page.evaluate(() => requestView.render({...askFrame, questions: askFrame.questions.map(
+        (q, i) => ({...q, answer: i === 0 ? ['B'] : 'Later'}))}));
+      assert.equal(await custom.inputValue(), 'My local draft');
+      assert.deepEqual(await custom.evaluate(node => [document.activeElement === node,
+        node.selectionStart, node.selectionEnd]), [true, 3, 8]);
+      assert.equal(await page.getByRole('button', {name: 'A', exact: true}).getAttribute('aria-pressed'), 'true');
+      await page.getByRole('button', {name: 'Submit answers', exact: true}).click();
+      assert.deepEqual(await page.evaluate(() => requestSent.at(-1).answers), [['A', 'My local draft'], 'Later']);
+      await page.getByRole('button', {name: 'Next question', exact: true}).click();
+      await page.getByRole('textbox', {name: 'Custom answer 2'}).fill('Not yet');
+      await page.getByRole('textbox', {name: 'Custom answer 2'}).fill('');
+      await page.evaluate(() => requestView.render({...askFrame, questions: askFrame.questions.map(
+        (q, i) => ({...q, answer: i === 0 ? [] : 'Now'}))}));
+      assert.equal(await page.getByRole('textbox', {name: 'Custom answer 2'}).isVisible(), true);
+      await page.getByRole('button', {name: 'Submit answers', exact: true}).click();
+      assert.deepEqual(await page.evaluate(() => requestSent.at(-1).answers), [['A', 'My local draft'], '']);
+      await page.getByRole('button', {name: 'Previous question', exact: true}).click();
+      await page.getByRole('button', {name: 'A', exact: true}).click();
+      await custom.fill('');
+      await page.locator('#composer-input').fill('Independent composer draft');
+      await page.evaluate(() => requestView.render({...askFrame, questions: askFrame.questions.map(
+        (q, i) => ({...q, answer: i === 0 ? ['B'] : 'Later'}))}));
+      assert.equal(await page.locator('#composer-input').evaluate(node => document.activeElement === node), true);
+      await page.getByRole('button', {name: 'Submit answers', exact: true}).click();
+      assert.deepEqual(await page.evaluate(() => requestSent.at(-1).answers), [[], '']);
+      await custom.fill('Old question draft');
+      await page.evaluate(() => requestView.render({...askFrame, questions: askFrame.questions.map(
+        q => ({...q, question: `New ${q.question}`}))}));
+      assert.equal(await custom.inputValue(), '');
+      await page.getByRole('button', {name: 'Submit answers', exact: true}).click();
+      assert.deepEqual(await page.evaluate(() => requestSent.at(-1).answers), [[], '']);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('custom option commits survive further editing and whitespace stays unanswered', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await room(browser);
+    await requestRenderer(page);
+    await page.evaluate(() => requestView.render({reqId: 9, questions: [
+      {question: 'Checks?', multiSelect: true, options: [{label: 'A'}]},
+      {question: 'When?', options: [{label: 'Now'}]},
+    ]}));
+    const custom = page.getByRole('textbox', {name: 'Custom answer 1'});
+    await custom.fill(' A ');
+    await custom.press('Enter');
+    assert.equal(await custom.inputValue(), '');
+    await custom.fill('Other');
+    assert.equal(await page.getByRole('button', {name: 'A', exact: true}).getAttribute('aria-pressed'), 'true');
+    await page.getByRole('button', {name: 'Next question', exact: true}).click();
+    const single = page.getByRole('textbox', {name: 'Custom answer 2'});
+    await single.fill('   ');
+    await single.press('Enter');
+    assert.equal(await single.isVisible(), true, 'blank answer remains the unanswered question');
+    await page.getByRole('button', {name: 'Submit answers', exact: true}).click();
+    assert.deepEqual(await page.evaluate(() => requestSent.at(-1).answers), [['A', 'Other'], '']);
+    await single.fill('  Tomorrow  ');
+    await page.getByRole('button', {name: 'Submit answers', exact: true}).click();
+    assert.equal(await page.evaluate(() => requestSent.at(-1).answers[1]), 'Tomorrow');
+  } finally { await browser.close(); }
+});
+
+test('a long closed question keeps its answer visible on a phone', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await room(browser);
+    await page.setViewportSize({width: 375, height: 812});
+    await requestRenderer(page);
+    await page.evaluate(() => requestView.render({reqId: 5, questions: [
+      {question: 'A very long question '.repeat(20), options: [{label: 'Chosen answer'}]},
+      {question: 'Second?', options: [{label: 'Next'}]},
+    ]}));
+    await page.getByRole('button', {name: 'Chosen answer', exact: true}).click();
+    const answer = page.locator('.question-summary-answer').first();
+    assert.equal(await answer.isVisible(), true);
+    assert.match(await answer.innerText(), /Chosen answer/);
+    assert.ok((await answer.boundingBox()).width >= 100);
+  } finally { await browser.close(); }
+});
+
 test('a pending interaction rises above every open panel', async () => {
   const browser = await chromium.launch();
   try {

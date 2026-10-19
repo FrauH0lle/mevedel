@@ -116,19 +116,21 @@
                   "mevedel-collaboration-presence" (frame))
 
 ;; `mevedel-collaboration-owner'
-(declare-function mevedel-collaboration--owner "mevedel-collaboration-owner" (room peer))
 (declare-function mevedel-collaboration--handle-new-session
                   "mevedel-collaboration-owner" (room peer frame))
 (declare-function mevedel-collaboration--handle-session-models
                   "mevedel-collaboration-owner" (room peer))
 (declare-function mevedel-collaboration--handle-set-mode
                   "mevedel-collaboration-owner" (room peer frame))
+(declare-function mevedel-collaboration--owner
+                  "mevedel-collaboration-owner" (room peer))
 (autoload 'mevedel-collaboration--handle-new-session
   "mevedel-collaboration-owner")
 (autoload 'mevedel-collaboration--handle-session-models
   "mevedel-collaboration-owner")
 (autoload 'mevedel-collaboration--handle-set-mode
   "mevedel-collaboration-owner")
+(autoload 'mevedel-collaboration--owner "mevedel-collaboration-owner")
 
 ;; `mevedel-collaboration-goal'
 (declare-function mevedel-collaboration--goal-frame
@@ -570,6 +572,12 @@ guest, the ordinary case."
                      collect `(("id" . ,index) ("label" . ,label))))
            :allowFeedback
            (if (plist-get remote :feedback) t :json-false))
+     (when-let* ((notice (plist-get remote :notice)))
+       (list :notice notice))
+     (when (plist-get remote :options-owner-only)
+       (list :optionsOwnerOnly t))
+     (when-let* ((input (plist-get remote :option-input)))
+       (list :optionInput input))
      ;; A cancel handler settles just this interaction -- for the Ask
      ;; questionnaire, the run continues -- so the guest gets a Dismiss.
      (when (plist-get remote :cancel)
@@ -696,6 +704,32 @@ callback.  Each affected guest receives one nonterminal batch notice."
                            (length entries)
                            (if (= 1 (length entries)) "request" "requests"))))))))))
 
+(defun mevedel-collaboration--questionnaire-answers (answers)
+  "Normalize ANSWERS atomically within the shared guest input budget.
+Each answer is text or a list of selected texts.  Return nil for invalid
+input; the questionnaire handler validates the shape for each question."
+  (when (and (listp answers) answers)
+    (catch 'invalid
+      (let ((bytes 0))
+        (cl-labels
+            ((text (value)
+               (unless (and (stringp value)
+                            (<= (string-bytes value)
+                                mevedel-collaboration--max-prompt-bytes))
+                 (throw 'invalid nil))
+               (let ((trimmed (string-trim value)))
+                 (cl-incf bytes (string-bytes trimmed))
+                 trimmed)))
+          (let ((normalized
+                 (mapcar (lambda (answer)
+                           (cond
+                            ((stringp answer) (text answer))
+                            ((listp answer) (mapcar #'text answer))
+                            (t (throw 'invalid nil))))
+                         answers)))
+            (when (<= bytes mevedel-collaboration--max-prompt-bytes)
+              normalized)))))))
+
 (defun mevedel-collaboration--handle-ui-response (room peer frame)
   "Settle the ui-request answered by writable guest PEER through FRAME.
 
@@ -737,27 +771,14 @@ answer can execute the same path the host key binding would."
                  ((and (eq (plist-get frame :cancel) t)
                        (functionp cancel-handler))
                   cancel-handler)
-                 ;; A questionnaire response is submitted atomically.  A
-                 ;; blank string is the Ask tool's explicit no-preference.
+                 ;; Single answers are strings; multi-select answers are
+                 ;; string lists.  Blank strings/empty lists mean no preference.
                  ((and answers
                        (functionp answer-handler)
-                       (listp answers)
-                       (let ((trimmed
-                              (mapcar
-                               (lambda (answer)
-                                 (and
-                                  (stringp answer)
-                                  (<= (string-bytes answer)
-                                      mevedel-collaboration--max-prompt-bytes)
-                                  (string-trim answer)))
-                               answers)))
-                         (and (not (memq nil trimmed))
-                              ;; Every answer lands in one tool result, so
-                              ;; the set shares the budget its parts pass.
-                              (<= (apply #'+ (mapcar #'string-bytes trimmed))
-                                  mevedel-collaboration--max-prompt-bytes)
-                              (lambda ()
-                                (funcall answer-handler trimmed))))))
+                       (when-let* ((normalized
+                                    (mevedel-collaboration--questionnaire-answers
+                                     answers)))
+                         (lambda () (funcall answer-handler normalized)))))
                  ((and feedback-handler
                        (mevedel-collaboration--guest-text feedback))
                   ;; A function handler owns the whole feedback flow, for
@@ -766,21 +787,29 @@ answer can execute the same path the host key binding would."
                     (if (functionp feedback-handler)
                         (lambda () (funcall feedback-handler text))
                       (cons 'feedback text))))
-                 ((and (integerp option) (nth option options))
-                  (car (nth option options))))))
+                 ((and (natnump option) (nth option options)
+                       (or (not (plist-get remote :options-owner-only))
+                           (plist-get guest :owner)))
+                  (let ((handler (car (nth option options))))
+                    (if (plist-get remote :option-input)
+                        (let ((value (plist-get frame :value)))
+                          (unless (and (stringp value)
+                                       (<= (string-bytes value)
+                                           mevedel-collaboration--max-prompt-bytes))
+                            (user-error "Option input must be bounded text"))
+                          (lambda () (funcall handler (string-trim value))))
+                      handler))))))
           (when (and outcome (buffer-live-p (overlay-buffer overlay)))
             (message "mevedel: interaction answered by guest %s"
                      (plist-get guest :name))
             (with-current-buffer (overlay-buffer overlay)
               (let ((mevedel-collaboration-remote-guest
                      (plist-get guest :name)))
-                (condition-case err
-                    (if (functionp outcome)
-                        (funcall outcome)
-                      (mevedel--prompt--settle overlay outcome))
-                  (user-error
-                   (message "mevedel: remote answer rejected: %s"
-                            (error-message-string err))))))))))))
+                ;; The frame boundary reports failures to the answering peer,
+                ;; with owner-only diagnostics, like every other guest action.
+                (if (functionp outcome)
+                    (funcall outcome)
+                  (mevedel--prompt--settle overlay outcome))))))))))
 
 
 ;;

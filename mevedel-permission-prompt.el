@@ -674,7 +674,8 @@ workspace approval would store."
         ;; The remote surface gets the one-shot outcomes only: durable
         ;; session or workspace authority is never mintable from a guest.
         (overlay-put ov 'mevedel--remote
-                     (list :body (substring-no-properties remote-content)
+                     (list :body (substring-no-properties
+                                  (concat remote-content parent-active-warning))
                            :options '((allow-once . "Allow once")
                                       (deny-once . "Deny"))
                            :feedback t))

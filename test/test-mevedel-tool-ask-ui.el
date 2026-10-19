@@ -82,6 +82,17 @@ A panel row is a line whose text sits on the source block face."
 ;;
 ;;; Ask User
 
+(mevedel-deftest mevedel-tool-ask-ui--option-label ()
+  ,test
+  (test)
+  :doc "trim labels consistently for strings, objects, display and sample lookup"
+  (progn
+    (should (equal "A" (mevedel-tool-ask-ui--option-label " A ")))
+    (should (equal "B" (mevedel-tool-ask-ui--option-label '(:label " B "))))
+    (should (equal "A" (mevedel-tool-ask-ui--format-option " A ")))
+    (should (equal "sample" (mevedel-tool-ask-ui--selected-sample
+                             "B" '((:label " B " :sample "sample")))))))
+
 (mevedel-deftest mevedel-tool-ask-ui--format-option ()
   ,test
   (test)
@@ -826,9 +837,156 @@ A panel row is a line whose text sits on the source block face."
         (should (apply #'< (mapcar #'cddr heads)))))))
 
 
+(mevedel-deftest mevedel-tool-ask-ui--multi-p ()
+  ,test
+  (test)
+  :doc "only true enables multi-select"
+  (let ((state (mevedel-tool-ask-ui--state-create
+                :questions '((:multiSelect t) (:multiSelect :json-false) nil))))
+    (should (mevedel-tool-ask-ui--multi-p state 0))
+    (should-not (mevedel-tool-ask-ui--multi-p state 1))
+    (should-not (mevedel-tool-ask-ui--multi-p state 2))))
+
+(mevedel-deftest mevedel-tool-ask-ui--normalize-answer ()
+  ,test
+  (test)
+  :doc "normalization trims, orders and preserves blank multi as no preference"
+  (let ((state (mevedel-tool-ask-ui--state-create
+                :questions '((:options ["A" "B"] :multiSelect t)
+                             (:options ["Yes"])))))
+    (should (equal '("A" "B" "Extra")
+                   (mevedel-tool-ask-ui--normalize-answer state 0 '("B" "Extra" "A"))))
+    (should-not (mevedel-tool-ask-ui--normalize-answer state 0 nil))
+    (should-not (mevedel-tool-ask-ui--normalize-answer state 0 '(" ")))
+    (should (equal "Yes" (mevedel-tool-ask-ui--normalize-answer state 1 " Yes ")))
+    (should-not (mevedel-tool-ask-ui--normalize-answer state 1 " "))))
+
+(mevedel-deftest mevedel-tool-ask-ui--remote-questions ()
+  ,test
+  (test)
+  :doc "wire flags and answer arrays survive actual JSON encoding including empty multi"
+  (let* ((state (mevedel-tool-ask-ui--state-create
+                 :questions '((:question "Multi" :multiSelect t :options ["A" "B"])
+                              (:question "Empty" :multiSelect t :options ["C"])
+                              (:question "Single" :options ["Yes"]))
+                 :answers [("A" "B") nil "Yes"]))
+         (decoded (json-parse-string
+                   (json-encode (vconcat (mevedel-tool-ask-ui--remote-questions state)))
+                   :object-type 'alist)))
+    (should (eq t (alist-get 'multiSelect (aref decoded 0))))
+    (should (equal ["A" "B"] (alist-get 'answer (aref decoded 0))))
+    (should (equal [] (alist-get 'answer (aref decoded 1))))
+    (should (equal "Yes" (alist-get 'answer (aref decoded 2))))))
+
 (mevedel-deftest mevedel-tool-ask-ui--dispatch ()
   ,test
   (test)
+  :doc "a single sampled option with whitespace keeps its sample after submission"
+  (test-mevedel-tool-ask-ui--with-form
+    (test-mevedel-tool-ask-ui--show
+     (lambda (value) (setq result value))
+     [(:question "Single?" :options [(:label " A " :sample "alpha")])])
+    (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+    (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
+    (should (string-match-p "A1: A\nSample shown for A1:\nalpha" result)))
+
+  :doc "trimmed single and multi labels retain selected samples and wire identities"
+  (test-mevedel-tool-ask-ui--with-form
+    (test-mevedel-tool-ask-ui--show
+     (lambda (value) (setq result value))
+     [(:question "Single?" :options [(:label " A " :sample "alpha")])
+      (:question "Multi?" :multiSelect t
+       :options [(:label " B " :sample "beta") (:label " C " :sample "gamma")])])
+    (dolist (key '("RET" "RET" "2" "RET"))
+      (call-interactively (lookup-key rendered-keymap (kbd key))))
+    (let* ((remote (overlay-get registered-overlay 'mevedel--remote))
+           (questions (funcall (plist-get remote :questions))))
+      (should (equal "A" (cdr (assoc "answer" (car questions)))))
+      (should (equal ["B" "C"] (cdr (assoc "answer" (cadr questions))))))
+    (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))
+    (should (string-match-p "A1: A\nSample shown for A1:\nalpha" result))
+    (should (string-match-p "A2:\n- B\n- C\n" result))
+    (should (string-match-p "beta" result))
+    (should (string-match-p "gamma" result)))
+
+  :doc "multi toggles stay open, keep geometry and drafts, and submit every selected sample"
+  (test-mevedel-tool-ask-ui--with-form
+    (with-current-buffer view-buffer
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
+    (test-mevedel-tool-ask-ui--show
+     (lambda (value) (setq result value))
+     [(:question "Which?" :multiSelect t
+       :options [(:label "A" :sample "alpha") (:label "B" :sample "beta")])
+      (:question "Single?" :options ["Yes" "No"])])
+    (with-current-buffer view-buffer
+      (let* ((state (car mevedel-tool-ask-ui--states))
+             (height (mevedel-tool-ask-ui--text-rows rendered-body 79)))
+        (dolist (key '("2" "RET" "1" "RET"))
+          (call-interactively (lookup-key rendered-keymap (kbd key))))
+        (should (equal '("A" "B") (aref (mevedel-tool-ask-ui--state-answers state) 0)))
+        (should (eql 0 (mevedel-tool-ask-ui--state-open state)))
+        (should (string-match-p "☑ 1  A" rendered-body))
+        (should (string-match-p "☑ 2  B" rendered-body))
+        (should (= height (mevedel-tool-ask-ui--text-rows rendered-body 79)))
+        (call-interactively (lookup-key rendered-keymap (kbd "TAB")))
+        (should (string-match-p "A, B" rendered-body))
+        (call-interactively (lookup-key rendered-keymap (kbd "<backtab>")))
+        (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+        (should (equal '("B") (aref (mevedel-tool-ask-ui--state-answers state) 0)))
+        (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+        (call-interactively (lookup-key rendered-keymap (kbd "C-c C-c")))))
+    (should (string-match-p "A1:\n- A\n- B\n" result))
+    (should (string-match-p "alpha" result))
+    (should (string-match-p "beta" result))
+    (should (string-match-p "A2: (no preference" result)))
+
+  :doc "multi custom edits replace or clear only custom text and preserve selected labels"
+  (test-mevedel-tool-ask-ui--with-form
+    (test-mevedel-tool-ask-ui--show #'ignore
+     [(:question "Which?" :multiSelect t :options ["A" "B"])])
+    (with-current-buffer view-buffer
+      (let ((state (car mevedel-tool-ask-ui--states)) (initial nil))
+        (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+        (dolist (text '("Extra" "Revised" "  "))
+          (cl-letf (((symbol-function 'read-string)
+                     (lambda (_prompt value &rest _)
+                       (should (equal initial value)) text)))
+            (call-interactively (lookup-key rendered-keymap (kbd "c"))))
+          (setq initial text)
+          (unless (string-blank-p text)
+            (should (string-match-p (concat "Custom input… " text) rendered-body)))
+          (should (equal (if (string-blank-p text) '("A") (list "A" text))
+                         (aref (mevedel-tool-ask-ui--state-answers state) 0))))
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "A")))
+          (call-interactively (lookup-key rendered-keymap (kbd "c"))))
+        (should (equal '("A") (aref (mevedel-tool-ask-ui--state-answers state) 0)))
+        (call-interactively (lookup-key rendered-keymap (kbd "1")))
+        (call-interactively (lookup-key rendered-keymap (kbd "RET")))
+        (should-not (aref (mevedel-tool-ask-ui--state-answers state) 0))
+        (should (string-match-p "0 of 1 answered" rendered-body)))))
+
+  :doc "remote multi shape is validated atomically and normalized before submission"
+  (test-mevedel-tool-ask-ui--with-form
+    (test-mevedel-tool-ask-ui--show (lambda (value) (setq result value))
+     [(:question "Single?" :options ["Yes"])
+      (:question "Multi?" :multiSelect t :options ["A" "B"])
+      (:question "Empty?" :multiSelect t :options ["C"])])
+    (let ((answer (plist-get (overlay-get registered-overlay 'mevedel--remote) :answer)))
+      (dolist (bad '(("Yes" "A" nil) (("Yes") ("A") nil)
+                     ("Yes" ("A" 2) nil) ("Yes" ("X" "Y") nil)
+                     ("Yes" ("A" "A") nil) ("Yes")))
+        (should-error (funcall answer bad) :type 'user-error)
+        (should-not result)
+        (with-current-buffer view-buffer
+          (should (equal [nil nil nil]
+                         (mevedel-tool-ask-ui--state-answers
+                          (car mevedel-tool-ask-ui--states))))))
+      (funcall answer '("Yes" (" B " "Custom" "A") nil)))
+    (should (string-match-p "A1: Yes\n" result))
+    (should (string-match-p "A2:\n- A\n- B\n- Custom\n" result))
+    (should (string-match-p "A3: (no preference" result)))
+
   :doc "TAB and S-TAB open the next or previous question; Submit is the last stop"
   (test-mevedel-tool-ask-ui--with-form
     (test-mevedel-tool-ask-ui--show
@@ -1348,8 +1506,10 @@ A panel row is a line whose text sits on the source block face."
             ;; Nothing answered yet.
             (should-not (assoc "answer" (car questions))))
           ;; A wrong-length answer set is refused.
-          (funcall (plist-get (overlay-get overlay 'mevedel--remote) :answer)
-                   '("only"))
+          (should-error
+           (funcall (plist-get (overlay-get overlay 'mevedel--remote) :answer)
+                    '("only"))
+           :type 'user-error)
           (should-not result)
           ;; The atomic guest answer submits through the same path.
           (funcall (plist-get (overlay-get overlay 'mevedel--remote) :answer)

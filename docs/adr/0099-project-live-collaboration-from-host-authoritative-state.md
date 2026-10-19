@@ -26,8 +26,9 @@ Link tiers grant progressively more typed actions:
   eligible interactions, invoke host-admitted commands or skills, and edit
   shared whiteboards and documents through the host.
 - **Owner:** additionally change permission mode, rename the session through
-  its native naming path, and create a same-workspace
-  isolated session directly. A full-link creation request instead requires
+  its native naming path, create a same-workspace isolated session directly,
+  or accept an offered Worktree plan with an explicit host-validated branch
+  name. A full-link creation request instead requires
   approval from Emacs or an owner-link guest. An artifact's own
   conversation is not such a session: a full link starts it on first use
   ([ADR 0124](0124-keep-artifacts-in-a-workspace-store.md)).
@@ -39,11 +40,32 @@ skills in one prompt; the typed names are checked independently of literal
 message arguments, and cannot accompany a slash command. Directive-scoped
 prompts select discussion only.
 Interaction answers share the per-string input bound used by prompts.
+An interaction callback's refusal uses the ordinary guest-frame error boundary:
+the answering owner sees its diagnostic and other writers see a redacted notice.
+The interaction adapter must not consume that error into host-only logging, and
+owner lookup must work on first use before any owner settings action has loaded
+its module. Numeric option IDs are nonnegative indices into the offered list.
 Attachments have allowlisted types and host-generated filenames. Browser input
 uses the ordinary pending-input path; guest attribution is visible to users but
 excluded from model context. Browser permissions are one-shot, not a way to
-install reusable rules. Save, Rewind, Fork, lease transfer, publication, and
-execution-target changes remain host operations.
+install reusable rules. Their cards preserve native warnings, including the
+concurrency risk of a side-conversation mutation while its parent is active.
+Patch approvals project the current selected and host-edited diff, not the
+original authored patch. A bounded plain-text notice carries staged comments,
+conflicts, rollback warnings and parent activity before the colored diff. Semantic
+review changes update the same request identity; unchanged native redraws do not
+republish it. The browser retains an in-progress feedback draft and focus across
+those updates, while editing and selection remain in Emacs.
+Plan cards disclose their full implementation instructions and settings as
+Markdown without inactive native key hints. The host enforces owner-only
+Worktree acceptance; full links retain Here acceptance and plan feedback. Branch
+input is typed data checked by the native validator, not a remote minibuffer.
+If full plan disclosure exceeds the card's wire budget, acceptance remains in
+Emacs and the browser offers feedback only with an explicit full-review notice.
+Truncation cannot become approval of instructions the browser did not disclose.
+Save, Rewind, arbitrary Fork, lease transfer, publication, and execution-target
+changes remain host operations. Accepting an offered Worktree plan is the narrow
+owner-authorized exception.
 
 The workspace lobby lets writable guests open listed sessions through the
 host's ordinary restore path. It may reclaim a provably stale same-host PID
