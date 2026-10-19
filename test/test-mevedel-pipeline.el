@@ -3058,7 +3058,51 @@ cover, so the permission step's warning about it is captured here."
 			      (string-match "Note: Repaired tool input"
 					    result (1+ first))))))
 		     (mevedel-tool-clear-registry)))
-			 :doc "records repaired main-session execution with actual backend and model"
+  :doc "valid raw calls settle and release tracking without appending a repair row"
+  (let* ((root (make-temp-file "mevedel-pipeline-noop-repair-" t))
+         (session (mevedel-session--create :name "main" :save-path root))
+         (mevedel-tool-repair-persist-log t)
+         handler-callback entry result
+         (tool (mevedel-tool--create
+                :name "NoopRepair" :category "mevedel"
+                :handler (lambda (callback _args) (setq handler-callback callback))
+                :args '((message string :required "Message"))
+                :read-only-p t :async-p t))
+         (delivered 0))
+    (unwind-protect
+        (progn
+          (mevedel-tool-register tool)
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (should-not
+             (mevedel-tool-repair-pre-tool-call
+              '(:name "NoopRepair" :args (:message "hello"))))
+            (setq entry (car mevedel-tool-repair--ledger))
+            (should (eq 'valid (plist-get entry :status)))
+            (mevedel-pipeline-run-tool
+             tool (lambda (value) (cl-incf delivered) (setq result value))
+             '(:message "hello"))
+            (should handler-callback)
+            (should (equal (list entry) mevedel-tool-repair--in-flight))
+            (should-not mevedel-tool-repair--ledger)
+            (should-not (plist-get entry :telemetry-recorded))
+            (funcall handler-callback '(:result "delivered" :status success))
+            (should (equal "delivered" (car (mevedel-tool-render-data-extract result))))
+            (should (= 1 delivered))
+            (should (plist-get entry :telemetry-recorded))
+            (should-not mevedel-tool-repair--in-flight)
+            (mevedel-tool-repair-post-tool-call
+             '(:name "NoopRepair" :args (:message "hello") :result "delivered"))
+            (should (= 1 delivered))
+            (should-not mevedel-tool-repair--ledger)
+            (should-not mevedel-tool-repair--in-flight)
+            (should-not (file-exists-p (mevedel-tool-repair-log-path session)))
+            (should-not (mevedel-session-repair-log session))
+            (should-not (mevedel-session-repair-log-pending session))))
+      (mevedel-tool-clear-registry)
+      (delete-directory root t)))
+
+				 :doc "records repaired main-session execution with actual backend and model"
 		 (let* ((session (mevedel-session--create :name "main"))
 			(tool (mevedel-tool--create
 			       :name "TelemetryEcho"
