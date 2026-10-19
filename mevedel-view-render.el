@@ -697,9 +697,6 @@ interaction zones instead of inside them.")
 (defvar mevedel-view-render--prepared-responses nil
   "Dynamically bound response cache owned by a scheduled full projection.")
 
-(defvar-local mevedel-view--render-cache-entries 0
-  "Approximate number of entries in view-local render caches.")
-
 (defvar-local mevedel-view--response-cache-entries 0
   "Approximate number of entries in `mevedel-view--response-fontify-cache'.")
 
@@ -775,7 +772,6 @@ expansion to a later turn starting at the same data position.")
               (make-hash-table :test #'equal))
   (setq-local mevedel-view--response-fontify-cache
               (make-hash-table :test #'equal))
-  (setq-local mevedel-view--render-cache-entries 0)
   (setq-local mevedel-view--response-cache-entries 0)
   (setq-local mevedel-view--user-pre-rendered nil)
   (setq-local mevedel-view--live-data-tail-start nil)
@@ -931,8 +927,7 @@ otherwise an advancing start marker could accept a replaced unit's suffix."
               (setcar (nthcdr 2 key) (+ (nth 2 key) delta))))
           (setq pos next))))
     (when (hash-table-p mevedel-view--tool-rendering-cache)
-      (clrhash mevedel-view--tool-rendering-cache)
-      (setq mevedel-view--render-cache-entries 0))))
+      (clrhash mevedel-view--tool-rendering-cache))))
 
 
 (defun mevedel-view--debug-buffer ()
@@ -1191,8 +1186,7 @@ session restarted."
               (clrhash mevedel-view--response-fontify-cache)
               (setq-local mevedel-view--response-cache-entries 0))
             (when (hash-table-p mevedel-view--tool-rendering-cache)
-              (clrhash mevedel-view--tool-rendering-cache)
-              (setq-local mevedel-view--render-cache-entries 0))
+              (clrhash mevedel-view--tool-rendering-cache))
             (when (buffer-live-p mevedel--data-buffer)
               (mevedel-view--full-rerender))))))))
 
@@ -2884,9 +2878,7 @@ Call after a successful complete projection, never for an incremental tail."
     (maphash (lambda (key _rendering)
                (unless (gethash key used)
                  (remhash key mevedel-view--tool-rendering-cache)))
-             mevedel-view--tool-rendering-cache)
-    (setq mevedel-view--render-cache-entries
-          (hash-table-count mevedel-view--tool-rendering-cache)))
+             mevedel-view--tool-rendering-cache))
   (let ((sources (make-hash-table :test #'eq)))
     (maphash (lambda (key _)
                (let* ((data (car key))
@@ -3203,9 +3195,7 @@ conversation, and patched agent handles otherwise retain every old body."
        (when (and (eq (car-safe key) data-buf)
                   (< (nth 1 key) end) (> (nth 2 key) start))
          (remhash key mevedel-view--tool-rendering-cache)))
-     mevedel-view--tool-rendering-cache)
-    (setq mevedel-view--render-cache-entries
-          (hash-table-count mevedel-view--tool-rendering-cache))))
+     mevedel-view--tool-rendering-cache)))
 
 (defun mevedel-view--segment-rendering (data-buf seg-start seg-end
                                                  &optional collapsed-only)
@@ -3224,8 +3214,7 @@ COLLAPSED-ONLY requests a cached summary without retaining large bodies."
                (rendering (or (plist-get prepared :pending)
                               (mevedel-view--render-prepared-tool prepared data-buf collapsed-only))))
           (when (and key rendering (plist-get prepared :cacheable))
-            (puthash key (plist-put (copy-sequence rendering) :group-child nil) cache)
-            (setq mevedel-view--render-cache-entries (hash-table-count cache)))
+            (puthash key (plist-put (copy-sequence rendering) :group-child nil) cache))
           rendering))))
 
 (defun mevedel-view--tool-row-region (data-buffer tool-use-id)
