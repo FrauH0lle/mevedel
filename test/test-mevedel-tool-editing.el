@@ -232,6 +232,43 @@
         (should (string-search "Unknown shared:// address"
                                (text (run "Read" (list :file_path (concat address "/nope")) 'error))))))))
 
+(mevedel-deftest mevedel-tool-editing-view-long-lines
+  (:doc "Read recovers long document text without physical line truncation" :quiet t)
+  (mevedel-tool-editing-test--with-session
+    (let* ((created (parse (run "SharedCreate" '(:kind "document" :title "Long text"))))
+           (id (plist-get created :id))
+           (address (concat "shared://" id))
+           (tail "TAIL-SENTINEL")
+           (written (concat (make-string 3000 ?x) tail)))
+      (run "SharedEdit" (list :id id :action "patch"
+                              :changes (vector (list :id "long" :after
+                                                     (list :type "paragraph"
+                                                           :content (vector (list :type "text" :text written)))))))
+      (let ((overview (text (run "Read" (list :file_path address))))
+            (full (text (run "Read" (list :file_path (concat address "/elements/long"))))))
+        (should (string-search (concat "Read " address "/elements/long") overview))
+        (should (string-search tail full))
+        (should-not (string-search "[line truncated" full))))))
+
+(mevedel-deftest mevedel-tool-editing-search-long-lines
+  (:doc "Grep searches full text beyond overview previews and rendering chunks" :quiet t)
+  (mevedel-tool-editing-test--with-session
+    (setf (mevedel-session-sandbox-mode session) 'off)
+    (setq-local mevedel--current-request (mevedel-request--create :session session))
+    (let* ((id (plist-get (parse (run "SharedCreate" '(:kind "document" :title "Search long text"))) :id))
+           (address (concat "shared://" id))
+           (needle "CROSSBOUNDARYMARKER"))
+      (run "SharedEdit" (list :id id :action "patch"
+                              :changes (vector (list :id "long" :after
+                                                     (list :type "paragraph" :content
+                                                           (vector (list :type "text" :text
+                                                                         (concat (make-string 3185 ?x) needle))))))))
+      (should-not (string-search needle (text (run "Read" (list :file_path address)))))
+      (dolist (path (list "shared://" address (concat address "/elements/long")))
+        (should (string-search
+                 path (text (run "Grep" (list :path path :pattern needle
+                                             :output_mode "files_with_matches")))))))))
+
 (defconst mevedel-tool-editing-test--png-base64
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
   "A valid 1x1 PNG.")

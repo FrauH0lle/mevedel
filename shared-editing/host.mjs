@@ -224,7 +224,8 @@ const MAX_DISCUSSIONS = 200, MAX_DISCUSSION_MESSAGES = 200, MAX_MESSAGE_CHARS = 
 function questionPrompt(state, before, snapshot) {
   const { kind } = before, id = state.id, noun = kind === 'whiteboard' ? 'ELEMENT' : 'BLOCK';
   const byId = new Map(nodesOf(kind, before.content).map((n) => [nodeId(kind, n), n]));
-  const lines = (nodes) => nodes.filter(Boolean).map((n) => line(id, kind, n));
+  // Questions carry reviewed content within their own budget, not Read summaries.
+  const lines = (nodes) => nodes.filter(Boolean).map((n) => line(id, kind, n, false));
   const scope = snapshot.scope === 'whole' ? `the whole ${kind}` : snapshot.region ? 'an area of it' : 'a selection';
   const head = [`${kind} ${JSON.stringify(before.title)} at ${address(id)}, revision ${state.revision}; the question is about ${scope}.`];
   if (snapshot.region) head.push(`Area: x ${snapshot.region[0]}, y ${snapshot.region[1]}, ${snapshot.region[2]} × ${snapshot.region[3]}`);
@@ -437,15 +438,15 @@ export async function handle(request) {
       };
     }
     if (action === 'view') {
-      const { part } = request;
+      const { part, search } = request;
       const nodes = nodesOf(before.kind, before.content);
-      if (part === 'overview') return { result: { text: overview(state.id, state, before, state.discussions || []) } };
-      if (part === 'discussions') return { result: { text: discussionsView(readDiscussions(doc, state.discussions)) } };
-      if (part === 'history') return { result: { text: historyView(state) } };
+      if (part === 'overview') return { result: { text: overview(state.id, state, before, state.discussions || [], search) } };
+      if (part === 'discussions') return { result: { text: discussionsView(readDiscussions(doc, state.discussions), search) } };
+      if (part === 'history') return { result: { text: historyView(state, search) } };
       if (part === 'element') {
         const node = nodes.find((n) => nodeId(before.kind, n) === request.element);
         check(node, `No ${before.kind === 'whiteboard' ? 'element' : 'block'} ${request.element}; Read ${address(state.id)} for current ids`);
-        return { result: { text: element(state.id, before.kind, node) } };
+        return { result: { text: element(state.id, before.kind, node, search) } };
       }
       if (part === 'png') {
         check(before.kind === 'whiteboard', `A document has no rendering; Read ${address(state.id)}`);

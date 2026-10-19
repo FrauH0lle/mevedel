@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { handle } from '../host.mjs';
-import { canonical, contentHash } from '../view.mjs';
+import { canonical, contentHash, readable, discussionsView, historyView } from '../view.mjs';
 import { captureContext } from '../context.mjs';
 import { restore } from '../model.mjs';
 
@@ -19,6 +19,70 @@ test('content hashes ignore key order and change with content', () => {
   assert.equal(contentHash({ a: 1, b: 2 }), contentHash({ b: 2, a: 1 }));
   assert.notEqual(contentHash({ a: 1 }), contentHash({ a: 2 }));
   assert.match(contentHash({}), /^[0-9a-f]{12}$/);
+});
+
+test('long document blocks and board text remain lossless within Read line limits', async () => {
+  const long = 'x'.repeat(3000) + 'TAIL-SENTINEL';
+  const examples = [
+    {kind: 'document', content: {type: 'doc', content: [
+      {type: 'paragraph', attrs: {id: 'long'}, content: [{type: 'text', text: long}]},
+    ]}},
+    {kind: 'whiteboard', content: [{id: 'long', type: 'text', x: 0, y: 0,
+      width: 100, height: 50, text: long}]},
+  ];
+  for (const {kind, content} of examples) {
+    const {state} = await handle({action: 'create', id: 'long-item', kind,
+      title: 'Long content', content, actor: 'Guest', opId: 'create'});
+    const overview = (await view(state, 'overview')).text;
+    assert.ok(overview.split('\n').every(line => line.length <= 2000), `${kind} overview fits Read`);
+    assert.match(overview, /Read shared:\/\/long-item\/elements\/long/);
+    const full = (await view(state, 'element', {element: 'long'})).text;
+    assert.ok(full.split('\n').every(line => line.length <= 2000), `${kind} full element fits Read`);
+    assert.match(full, /TAIL-SENTINEL/);
+  }
+});
+
+test('search views preserve full strings across display chunk boundaries', async () => {
+  const needle = 'CROSSBOUNDARYMARKER';
+  const long = 'x'.repeat(3185) + needle;
+  const {state} = await handle({action: 'create', id: 'search-item', kind: 'document',
+    content: {type: 'doc', content: [{type: 'paragraph', attrs: {id: 'long'},
+      content: [{type: 'text', text: long}]}]}, actor: 'Guest', opId: 'create'});
+  assert.ok(!(await view(state, 'overview')).text.includes(needle));
+  for (const part of ['overview', 'element']) {
+    const text = (await view(state, part, {element: 'long', search: true})).text;
+    assert.ok(text.includes(needle), `${part} search retains the whole literal`);
+    assert.ok(!text.includes('string-chunks('), 'search never introduces artificial boundaries');
+  }
+  const discussions = [{id: 'general', target: {kind: 'whole'}, messages: [{actor: 'Alice', text: long}]}];
+  assert.ok(discussionsView(discussions, true).includes(needle));
+  const history = {revision: 1, transactions: [{id: 'tx', revision: 1, actor: long, time: 1, changes: []}]};
+  assert.ok(historyView(history, true).includes(needle));
+});
+
+test('readable structures preserve escaped long strings, keys and nested arrays', () => {
+  const source = {['key'.repeat(1000)]: {nested: ['"\\\n😀'.repeat(1000), null, 7]}};
+  const text = readable(source);
+  assert.match(text, /^Output notation: string-chunks/);
+  assert.ok(text.split('\n').every(line => line.length <= 2000));
+  const json = text.replace(/^Output notation:.*\n/, '').replace(
+    /string-chunks\(\n([\s\S]*?)\n *\)/g,
+    (_, chunks) => JSON.stringify(chunks.split('\n').map(chunk => JSON.parse(chunk.trim())).join('')));
+  assert.deepEqual(JSON.parse(json), source, 'chunks reconstruct exactly before a patch');
+  assert.deepEqual(JSON.parse(readable({id: 'short', points: [[1, 2], [3, 4]]})),
+    {id: 'short', points: [[1, 2], [3, 4]]});
+});
+
+test('long discussion messages and contribution lists page without losing their tails', () => {
+  const message = 'm'.repeat(5000) + 'MESSAGE-TAIL';
+  const discussion = discussionsView([{id: 'general', target: {kind: 'whole'}, messages: [
+    {actor: 'Alice', text: message},
+  ]}]);
+  const history = historyView({revision: 1, transactions: [{id: 'tx', revision: 1,
+    actor: 'Alice', time: 1, changes: Array.from({length: 500}, (_, i) => ({id: `object-${i}`, after: {}}))}]});
+  for (const text of [discussion, history]) assert.ok(text.split('\n').every(line => line.length <= 2000));
+  assert.match(discussion, /MESSAGE-TAIL/);
+  assert.match(history, /object-499/);
 });
 
 test('a board reads as hashed lines; a long stroke pages at its own address', async () => {

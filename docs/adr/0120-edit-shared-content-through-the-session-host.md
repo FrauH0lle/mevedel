@@ -414,17 +414,31 @@ benefit without content rewrites; unbound endpoints keep their explicit points.
 ## Reading shared content as resources
 
 The model reads shared items with Read and Grep at `shared://` addresses. An
-item's overview is one `HASH JSON` line per element or block; long strokes,
-comments, history, renderings, embedded images and element libraries have
+item's overview is one `HASH JSON` line per element or block; oversized entries
+explicitly summarize and point to their full-element address. Discussions,
+history, renderings, embedded images and element libraries have
 addresses of their own. SharedEdit names each target by the hash it read and
 can merge fields with `set` and `unset`. Its result reports the revision and
 the stored lines of what changed, not the item.
 
 The resource family reuses Read's paging, output bound and continuation
-guidance, Grep's search, and ordinary media delivery, so no size mechanics
-are taught to callers. The editing host computes the views from committed
+guidance, Grep's search, and ordinary media delivery. The owning view formats
+nested structures across physical lines and marks long strings as ordered
+JSON-escaped `string-chunks(...)`: decode and join without separators before
+editing. This output-only notation describes its own reconstruction; stored
+content and canonical hashes remain unchanged. It also keeps long discussion
+and contribution lines lossless. The editing host computes the views from committed
 state; the resolver only validates the address and availability, and Read and
-Grep fetch the view asynchronously before paging or searching it.
+Grep fetch the view asynchronously before paging or searching it. Grep requests
+expanded text at the same address: complete values without overview previews
+or artificial string-chunk boundaries. Read stays concise and pageable without
+removing full-text search from the resource family.
+
+The first full-element formatter split stroke points only. A valid document
+paragraph of 3,000 characters still occupied one line, so Read's 2,000-character
+cap hid its suffix even at the full-element address; paging could not recover
+it. Structural formatting with explicit string chunks replaces that incomplete
+representation without adding a second address grammar or changing generic Read.
 
 ### Decision history: one read tool returning the whole item
 

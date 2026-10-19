@@ -164,11 +164,12 @@ versions it when the current request settles."
                                       :text (plist-get library :text)))
                               libraries)))))
 
-(defun mevedel-tool-editing-view (components callback)
+(defun mevedel-tool-editing-view (components callback &optional search)
   "Fetch the current workspace's `shared://' view named by COMPONENTS.
 COMPONENTS are the decoded address components after `shared://'.  Call
 CALLBACK once with (:text TEXT), (:data BASE64 :mime MIME) or
-\(:error MESSAGE)."
+\(:error MESSAGE).  SEARCH requests expanded text for Grep, without Read's
+overview summaries or output string chunks."
   (condition-case err
       (let ((args
              (pcase components
@@ -182,6 +183,7 @@ CALLBACK once with (:text TEXT), (:data BASE64 :mime MIME) or
                (`(,id "images" ,image)
                 (list :action "view" :id id :part "image" :image image))
                (_ (error "Unknown shared:// address")))))
+        (when search (setq args (plist-put args :search t)))
         (mevedel-shared-editing-call
          (mevedel-tool-editing--workspace) args
          (lambda (reply)
