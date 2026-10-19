@@ -2374,8 +2374,8 @@ SETTLED and FORCE are its settlement and forced-publication flags."
 (defun mevedel-session-artifacts-save-agent-registry (session buffer)
   "Persist SESSION's sidecar from BUFFER without touching the segment.
 
-Observational agent-state saves -- activity transitions, mailbox
-consumption -- need only the sidecar's agent registry: the transcript
+Observational agent-state saves -- activity transitions, explicit mailbox
+discards -- need only the sidecar's agent registry: the transcript
 segment is committed at request settlement anyway.  The full save
 transaction wrote the whole segment and scanned snapshots on every
 debounced tick, which dominated a profiled multi-agent session's

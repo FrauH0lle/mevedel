@@ -2293,6 +2293,31 @@
       (kill-buffer first-buffer)
       (kill-buffer second-buffer))))
 
+(mevedel-deftest mevedel-agent-control-acknowledge-mail ()
+  ,test
+  (test)
+  :doc "checkpoint failure restores captured mail without losing later arrivals"
+  (dolist (failure '(nil error))
+    (let* ((session (mevedel-agent-control-test--session))
+           (captured (list :type 'MAIL :payload "captured"))
+           (uncaptured (list :type 'MAIL :payload "uncaptured"))
+           (arrival (list :type 'MAIL :payload "arrived during checkpoint"))
+           checkpointed)
+      (setf (mevedel-session-save-path session) temporary-file-directory
+            (mevedel-session-messages session) (list uncaptured captured))
+      (cl-letf (((symbol-function 'mevedel-session-persistence-autosave-buffer)
+                 (lambda (_buffer)
+                   (setq checkpointed t)
+                   (should mevedel-session-artifacts-require-agent-commit-p)
+                   (should (equal (list uncaptured) (mevedel-session-messages session)))
+                   (push arrival (mevedel-session-messages session))
+                   (when failure (error "Injected checkpoint failure"))
+                   nil)))
+        (should-error (mevedel-agent-control-acknowledge-mail session (list captured))))
+      (should checkpointed)
+      (should (equal (list arrival uncaptured captured)
+                     (mevedel-session-messages session))))))
+
 (mevedel-deftest mevedel-agent-control-send-message ()
   ,test
   (test)

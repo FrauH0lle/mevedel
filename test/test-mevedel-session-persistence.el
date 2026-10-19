@@ -6004,12 +6004,101 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                 (should (equal "Retained answer\n"
                                (with-temp-buffer
                                  (insert-file-contents (plist-get entry :published))
-                                 (buffer-string)))))))
+                                 (buffer-string)))))
+              ;; Native delivery inserts its block, then checkpoints consumption.
+              ;; A crash immediately afterwards must retain the delivered text
+              ;; rather than losing it together with the removed mailbox record.
+              (let ((fsm (gptel-make-fsm
+                          :info (list :buffer restored :backend nil
+                                      :data (list :messages (vector))))))
+                (mevedel-tools--handle-message-inject fsm))
+              (should-not (mevedel-session-messages mevedel--session)))
+            (test-mevedel-session-persistence--release-and-kill
+             restored (buffer-local-value 'mevedel--session restored))
+            (setq restored (mevedel-session-persistence-restore directory))
+            (with-current-buffer restored
+              (should-not (mevedel-session-messages mevedel--session))
+              (should (string-match-p "See agents/answer.chat.org" (buffer-string)))
+              (should (string-match-p "<agent-message type=\"MAIL\"" (buffer-string)))))
         (test-mevedel-session-persistence--release-and-kill root session)
         (test-mevedel-session-persistence--release-and-kill
          restored (and restored (buffer-local-value 'mevedel--session restored)))
         (delete-directory tempdir t)
         (mevedel-workspace-clear-registry))))
+
+  :doc "agent mailbox delivery checkpoints one complete batch before crash restore"
+  (let* ((tempdir (file-name-as-directory (make-temp-file "mevedel-agent-mail-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace tempdir))
+         (session (mevedel-session-create "main" workspace))
+         (root (generate-new-buffer " *mail-root*"))
+         (buffer (generate-new-buffer " *mail-agent*"))
+         (agent (mevedel-agent--create :name "default" :description "Test agent"))
+         (configuration
+          (mevedel-agent-configuration--create
+           :agent agent
+           :request-locals
+           (mapcar (lambda (symbol)
+                     (cons symbol (pcase symbol
+                                    ('gptel-backend gptel-backend)
+                                    ('gptel-model gptel-model))))
+                   mevedel-agent-request-local-symbols)))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent agent :agent-id "mail-agent" :path "/root/worker"
+           :buffer buffer :parent-session session :parent-data-buffer root
+           :transcript-relative-path "agents/worker.chat.org"))
+         (record
+          (mevedel-agent-record--create
+           :id "mail-agent" :path "/root/worker" :parent-path "/root"
+           :role "default" :configuration configuration :activity 'idle
+           :invocation invocation :conversation-location "agents/worker.chat.org"))
+         restored directory (saves 0))
+    (unwind-protect
+        (progn
+          (with-current-buffer root
+            (mevedel-chat-prepare-transcript-buffer)
+            (setq-local mevedel--session session mevedel--workspace workspace)
+            (insert "Root prompt\n")
+            (mevedel-session-artifacts-save session root))
+          (mevedel-session-control-transfer-register-root-buffer session root)
+          (setq directory (mevedel-session-save-path session))
+          (setf (mevedel-session-agent-registry session) (list (cons "/root/worker" record)))
+          (with-current-buffer buffer
+            (mevedel-chat-prepare-transcript-buffer)
+            (setq-local mevedel--session session mevedel--agent-invocation invocation)
+            (set-visited-file-name (file-name-concat directory "agents/worker.chat.org") t t)
+            (insert "Agent prompt\n"))
+          (dolist (payload '("First delivery" "Second delivery"))
+            (mevedel-agent-control-send-message session "/root/worker" payload))
+          (cl-letf* ((save (symbol-function 'mevedel-agent-conversation-save))
+                     ((symbol-function 'mevedel-agent-conversation-save)
+                      (lambda (&rest args) (cl-incf saves) (apply save args))))
+            (mevedel-tools--handle-message-inject
+             (gptel-make-fsm :info (list :buffer buffer :backend nil
+                                        :data (list :messages (vector))
+                                        :mevedel-agent-invocation invocation))))
+          (should (= 1 saves))
+          (should-not (mevedel-agent-record-mailbox record))
+          (test-mevedel-session-persistence--release-and-kill root session)
+          (setq root nil restored (mevedel-session-persistence-restore directory))
+          (with-current-buffer restored
+            (let ((restored-record (cdr (assoc "/root/worker"
+                                              (mevedel-session-agent-registry mevedel--session))))
+                  (text (mevedel-session-artifacts-read-artifact
+                         mevedel--session "agents/worker.chat.org" t)))
+              (should restored-record)
+              (should-not (mevedel-agent-record-mailbox restored-record))
+              (should (string-search "First delivery" text))
+              (should (string-search "Second delivery" text)))))
+      (with-current-buffer buffer
+        (setq kill-buffer-hook nil)
+        (set-buffer-modified-p nil))
+      (kill-buffer buffer)
+      (test-mevedel-session-persistence--release-and-kill root session)
+      (test-mevedel-session-persistence--release-and-kill
+       restored (and restored (buffer-local-value 'mevedel--session restored)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
 
   :doc "keeps a committed full agent save successful when its save hook fails"
   (let* ((tempdir (file-name-as-directory

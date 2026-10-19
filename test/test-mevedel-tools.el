@@ -1561,6 +1561,40 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                             :content))))
       (kill-buffer buffer)))
 
+  :doc "failed transcript insertion leaves root and agent mail unread"
+  (dolist (agent-p '(nil t))
+    (let* ((session (mevedel-tools-test--make-session))
+           (buffer (generate-new-buffer " *mt-failed-mail*"))
+           (invocation (and agent-p
+                            (mevedel-agent-invocation--create
+                             :path "/root/worker" :parent-session session :buffer buffer)))
+           (record (and invocation
+                        (mevedel-agent-record--create
+                         :path "/root/worker" :invocation invocation)))
+           (context (or invocation session))
+           (mail (list :type 'MAIL :sender "/root" :recipient "/root/worker"
+                       :payload "must not disappear"))
+           (data (list :messages (vector)))
+           (fsm (gptel-make-fsm :info (list :buffer buffer :backend nil :data data
+                                          :mevedel-agent-invocation invocation)))
+           reached)
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (setq-local mevedel--session session mevedel--agent-invocation invocation))
+            (if record
+                (setf (mevedel-session-agent-registry session) (list (cons "/root/worker" record))
+                      (mevedel-agent-record-mailbox record) (list mail))
+              (setf (mevedel-session-messages session) (list mail)))
+            (cl-letf (((symbol-function 'mevedel--insert-user-role-block-at-marker)
+                       (lambda (&rest _) (setq reached t) (error "Injected insertion failure"))))
+              (mevedel-test--with-captured-diagnostics nil
+                (should-error (mevedel-tools--handle-message-inject fsm))))
+            (should reached)
+            (should (equal (list mail) (mevedel-agent-control-context-mailbox context)))
+            (should (= 0 (length (plist-get data :messages)))))
+        (kill-buffer buffer))))
+
   :doc "drains a root canonical MAIL exactly once and records it in transcript"
   (let* ((session (mevedel-tools-test--make-session))
          (buffer (generate-new-buffer " *mt-root-mail*"))
