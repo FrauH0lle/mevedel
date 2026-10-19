@@ -318,6 +318,9 @@ available only through live history.
 After authorization, preparation runs in cooperative steps: discovery, pinned
 batch reads, canonical bounds restoration and classification, then temporary
 file preparation. Ordinary search helpers operate on those client-local files.
+Continuations retain the requesting buffer and authorized handler context;
+local helpers use the requesting session's confinement preference without
+switching to that session's remote execution target.
 Read also uses an asynchronous handler. Cancellation settles once with a
 cancelled outcome; owner teardown suppresses delivery. Both release the iterator,
 temporary files and any search helper. Individual filesystem operations and

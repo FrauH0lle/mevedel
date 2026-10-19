@@ -19,6 +19,10 @@
                   "mevedel-execution" (owner-context))
 (autoload 'mevedel-execution--owner-admissible-p "mevedel-execution")
 
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-handler-resumable "mevedel-pipeline" (function))
+(autoload 'mevedel-pipeline-handler-resumable "mevedel-pipeline")
+
 ;; `mevedel-resource'
 (declare-function mevedel-resource-encode-component "mevedel-resource" (value))
 (declare-function mevedel-resource-error-message
@@ -198,7 +202,7 @@ handler result; owner teardown drops delivery and releases owned resources."
          (origin-buffer (current-buffer))
          (invocation mevedel--agent-invocation)
          (args (plist-put (copy-sequence args) :operation operation))
-         directory iterator timer helper finished stepping delivery skipped)
+         directory iterator timer helper finished stepping delivery skipped resume-step)
     (cl-labels
      ((cleanup ()
         ;; A producer may settle or be cancelled while its launch is still
@@ -275,7 +279,7 @@ handler result; owner teardown drops delivery and releases owned resources."
                     (not (mevedel-execution--owner-admissible-p invocation)))
                 (teardown))
                ((mevedel-transport-busy-p (mevedel-workspace-root workspace))
-                (setq timer (run-at-time 0.02 nil #'step)))
+                (setq timer (run-at-time 0.02 nil resume-step)))
                (t
                 (condition-case err
                     (progn
@@ -293,7 +297,7 @@ handler result; owner teardown drops delivery and releases owned resources."
                               (setq ready-p t)
                               (ready (plist-get value :ready) (plist-get value :skipped)))))
                         (unless (or finished ready-p)
-                          (setq timer (run-at-time 0.001 nil #'step)))))
+                          (setq timer (run-at-time 0.001 nil resume-step)))))
                   (error
                    (finish (list :result
                                  (concat "Error: "
@@ -304,7 +308,8 @@ handler result; owner teardown drops delivery and releases owned resources."
           (when finished (cleanup)))))
      (with-current-buffer origin-buffer (add-hook 'kill-buffer-hook #'teardown nil t))
      (mevedel-request-push-canceller request #'teardown)
-     (setq timer (run-at-time 0 nil #'step))
+     (setq resume-step (mevedel-pipeline-handler-resumable #'step)
+           timer (run-at-time 0 nil resume-step))
      #'cancel)))
 
 (provide 'mevedel-history-search)
