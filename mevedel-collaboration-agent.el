@@ -14,6 +14,8 @@
 (require 'json)
 
 ;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-record-model-metadata
+                  "mevedel-agent-control" (record))
 (declare-function mevedel-agent-record-conversation-buffer
                   "mevedel-agent-control" (record))
 (declare-function mevedel-agent-record-role "mevedel-agent-control" (record))
@@ -115,6 +117,7 @@ transcript stays reachable from the viewer's finished-agents list."
     (let (rows)
       (dolist (pair (mevedel-session-agent-registry session))
         (let* ((record (cdr pair))
+               (metadata (mevedel-agent-control-record-model-metadata record))
                (outcome (mevedel-agent-record-settled-outcome record))
                (status
                 (or (mevedel-view--agent-record-status record)
@@ -126,7 +129,11 @@ transcript stays reachable from the viewer's finished-agents list."
                    (list (cons "path" (car pair))
                          (cons "status" (symbol-name status)))
                    (when-let* ((role (mevedel-agent-record-role record)))
-                     (list (cons "role" (format "%s" role)))))
+                     (list (cons "role" (format "%s" role))))
+                   (cl-loop for key in '(:backend :model :effort)
+                            for value = (plist-get metadata key)
+                            when value collect
+                            (cons (substring (symbol-name key) 1) value)))
                   rows))))
       (sort rows (lambda (left right)
                    (string-lessp (cdr (assoc "path" left))

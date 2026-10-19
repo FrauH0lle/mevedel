@@ -21,6 +21,8 @@
           && typeof task.subject === 'string'
           && Object.hasOwn(GLYPH, task.status)
           && (task.owner === undefined || typeof task.owner === 'string')
+          && (task.activeForm === undefined || typeof task.activeForm === 'string')
+          && (task.note === undefined || typeof task.note === 'string')
           && (task.blockedBy === undefined
             || (Array.isArray(task.blockedBy)
               && task.blockedBy.every(Number.isInteger))));
@@ -51,13 +53,16 @@
         const item = el('li', `task ${status}`);
         const glyph = el('span', 'task-st', GLYPH[status]);
         glyph.setAttribute('aria-label', status);
-        item.append(glyph, el('span', 'task-subject', task.subject));
+        const subject = el('span', 'task-subject', task.activeForm || task.subject);
+        subject.title = task.subject;
+        item.append(glyph, el('span', 'task-id', `#${task.id}`), subject);
         const bits = [];
         if (typeof task.owner === 'string' && task.owner) bits.push(task.owner);
         if (Array.isArray(task.blockedBy) && task.blockedBy.length) {
           bits.push(`blocked by #${task.blockedBy.join(' #')}`);
         }
         if (bits.length) item.append(el('span', 'task-meta', bits.join(' · ')));
+        if (task.note) item.append(el('span', 'task-note', task.note));
         list.append(item);
       });
     }

@@ -6,17 +6,28 @@
   line-height: 1.5;
 }
 .task {
-  display: flex;
-  gap: .5rem;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 0 .5rem;
   align-items: baseline;
   min-width: 0;
 }
 .task-st { flex-shrink: 0; color: var(--muted); }
 .task.in-progress .task-st { color: var(--running); }
 .task.completed .task-st { color: var(--ok); }
-.task-subject { min-width: 0; overflow-wrap: break-word; }
+.task-subject { min-width: 0; overflow-wrap: anywhere; }
+.task-id { color: var(--muted); }
 .task.completed .task-subject {
   color: var(--muted);
   text-decoration: line-through;
 }
-.task-meta { color: var(--muted); white-space: nowrap; }
+.task-meta, .task-note {
+  grid-column: 3;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.task-note { font-style: italic; }
+
+.goal-chip { white-space: normal; text-align: left; }
+#goal-content { overflow-wrap: anywhere; }
+.goal-objective { white-space: pre-wrap; }

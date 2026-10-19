@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'json)
+(require 'mevedel-tool-task)
 
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--broadcast
@@ -37,6 +38,8 @@
          (cons "status" (symbol-name (mevedel-task-status task))))
    (when-let* ((owner (mevedel-task-owner task)))
      (list (cons "owner" owner)))
+   (when-let* ((activity (mevedel-tool-task--activity-summary task)))
+     (list (cons "activeForm" activity)))
    (when-let* ((blocked (mevedel-task-blocked-by task)))
      (list (cons "blockedBy" (vconcat blocked))))))
 
@@ -51,8 +54,8 @@ Prefer in-progress tasks, then pending tasks, then recent completions."
         ('in-progress (push task in-progress))
         ('completed (push task completed))
         (_ (push task pending))))
-    (setq in-progress (nreverse in-progress)
-          pending (nreverse pending)
+    (setq in-progress (mevedel-tool-task--sort-active-tasks in-progress)
+          pending (mevedel-tool-task--sort-active-tasks pending)
           completed
           (sort completed
                 (lambda (a b)
@@ -65,14 +68,18 @@ Prefer in-progress tasks, then pending tasks, then recent completions."
            (completed-count (length completed))
            (omitted total)
            (omitted-active (- total completed-count))
-           rows)
+           rows noted-owners)
       (catch 'full
         (dolist (task (append in-progress pending completed))
           (let* ((active (not (eq (mevedel-task-status task) 'completed)))
                  (next-omitted (1- omitted))
                  (next-omitted-active (- omitted-active (if active 1 0)))
+                 (owner (mevedel-task-owner task))
+                 (row (mevedel-collaboration--task-row task))
+                 (note (and active (not (member owner noted-owners))
+                            (mevedel-tool-task--status-note session owner)))
                  (next-rows
-                  (append rows (list (mevedel-collaboration--task-row task))))
+                  (append rows (list (if note (append row (list (cons "note" note))) row))))
                  (frame (list :t "tasks" :tasks (vconcat next-rows)
                               :total total :completed completed-count
                               :omitted next-omitted
@@ -81,7 +88,8 @@ Prefer in-progress tasks, then pending tasks, then recent completions."
             ;; if publication profiling makes this bounded O(n^2) loop visible.
             (if (<= (string-bytes (json-encode frame))
                     mevedel-collaboration--task-frame-max-bytes)
-                (setq rows next-rows
+                (setq noted-owners (if note (cons owner noted-owners) noted-owners)
+                      rows next-rows
                       omitted next-omitted
                       omitted-active next-omitted-active)
               (throw 'full nil)))))

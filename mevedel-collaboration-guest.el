@@ -126,6 +126,11 @@
 (autoload 'mevedel-collaboration--handle-set-mode
   "mevedel-collaboration-owner")
 
+;; `mevedel-collaboration-goal'
+(declare-function mevedel-collaboration--goal-frame
+                  "mevedel-collaboration-goal" (room))
+(autoload 'mevedel-collaboration--goal-frame "mevedel-collaboration-goal")
+
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
                   "mevedel-collaboration-projection" (data-buffer))
@@ -836,6 +841,9 @@ Authority comes only from the tokens FRAME proves it holds."
     (mevedel-collaboration--transport-send
      (plist-get room :transport) peer
      (mevedel-collaboration--tasks-frame room))
+    (mevedel-collaboration--transport-send
+     (plist-get room :transport) peer
+     (mevedel-collaboration--goal-frame room))
     ;; The store's artifacts attached to the session join the sidebar.  A
     ;; store fault costs the guest only this listing.
     (condition-case err

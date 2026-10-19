@@ -6,6 +6,18 @@
   background: var(--running);
 }
 .dock-chip.stuck .agent-dot { background: var(--failed); }
+#agents .dock-chip {
+  display: grid;
+  grid-template-columns: .5rem minmax(0, 1fr);
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+}
+#agents .dock-chip-name, #agents .dock-chip-meta {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .agent-ledger {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -18,7 +30,8 @@
   padding: 0 .5rem .5rem;
 }
 .done-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: .5rem minmax(0, 1fr);
   align-items: center;
   gap: .5rem;
   width: 100%;
@@ -36,14 +49,13 @@
 .done-row:hover { background: var(--surface-2); color: var(--ink); }
 .done-row .agent-dot { background: var(--line); }
 .done-row .done-path {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  grid-column: 2;
+  overflow-wrap: anywhere;
   min-width: 0;
 }
 .done-row:hover .done-path { color: var(--accent); }
 .done-row .done-meta {
-  margin-left: auto;
-  white-space: nowrap;
-  flex-shrink: 0;
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }

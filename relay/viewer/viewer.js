@@ -214,6 +214,7 @@
     summarize: summarizeSession, openExecution: openExecutionResult,
   });
   const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
+  const goal = window.mevedelGoalView.create({el, onChange: renderModeline});
   const editing = window.mevedelEditingView.create({state, send, el, flash: flashNotice, summarize: summarizeSession,
     onVisibility: () => presence.report(),
     onCatalog: refreshFilter});
@@ -587,6 +588,7 @@
     // visible afterwards -- otherwise the session silently behaves
     // differently than the transcript suggests.
     if (state.plan) add('plan', 'ml plan');
+    goal.renderChip(modeline);
     const tail = el('span', 'ml tail');
     const bits = [];
     if (state.pending) {
@@ -1234,6 +1236,7 @@
     artifacts.close();
     agents.show([]);
     tasks.show();
+    goal.show();
     showQueueState({pending: 0});
     showSkillChips([]);
     setComposerVisible(false);
@@ -1289,6 +1292,7 @@
       // stale chips.
       agents.show([]);
       tasks.show();
+      goal.show();
       setConnection('Loading…', 'connected');
       editing.welcome();
       nav.restore();
@@ -1325,6 +1329,8 @@
       agents.show(Array.isArray(frame.agents) ? frame.agents : []);
     } else if (frame.t === 'tasks') {
       tasks.show(frame);
+    } else if (frame.t === 'goal') {
+      goal.show(frame);
     } else if (frame.t === 'agent') {
       agents.handle(frame);
     } else if (frame.t === 'execution-result') {
