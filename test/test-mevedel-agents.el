@@ -413,7 +413,7 @@
   ,test
   (test)
   :doc "worker and explorer orchestrate while reviewer and verifier are leaves"
-  (let ((control '("Agent" "FollowupAgent" "WaitAgent" "InterruptAgent"))
+  (let ((control '("Agent" "WaitAgent" "InterruptAgent"))
         (observation '("SendMessage" "ListAgents")))
     (dolist (name '("worker" "explorer" "reviewer" "verifier"))
       (let ((tools (test-mevedel-agents--resolved-tool-names name)))
@@ -466,7 +466,7 @@
                    (mevedel-agent-get "explorer")))
                  :active))
     (unless (member (mevedel-tool-name tool)
-                    '("Agent" "FollowupAgent" "WaitAgent"
+                    '("Agent" "WaitAgent"
                       "InterruptAgent" "SendMessage" "ListAgents"))
       (should (mevedel-tool-read-only-p tool))))
 
@@ -483,7 +483,7 @@
         (let ((tools
                (test-mevedel-agents--resolved-tool-names
                 "delegator-test")))
-          (dolist (tool '("Agent" "FollowupAgent" "WaitAgent"
+          (dolist (tool '("Agent" "WaitAgent"
                           "InterruptAgent" "SendMessage" "ListAgents"))
             (should (member tool tools)))))
     (setq mevedel-agent--registry

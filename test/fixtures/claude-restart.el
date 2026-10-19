@@ -84,7 +84,7 @@
                 (setq child (mevedel-agent-control--record-at-path session "/root/reader"))
                 (should child)
                 (setq-local gptel-model 'haiku)
-                (mevedel-agent-control-followup session "/root/reader" "Read again after restart."))
+                (mevedel-agent-control-send-message session "/root/reader" "Read again after restart."))
               (with-timeout (10 (ert-fail "Restart child turn timed out"))
                 (while (mevedel-agent-control-active-turn-p session) (accept-process-output nil 0.01)))
               (should (equal (format "child-history phase %d complete" phase)

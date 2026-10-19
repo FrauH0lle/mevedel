@@ -84,7 +84,7 @@ Unrelated gptel requests pass ARGS to ORIG-FN unchanged."
   (if-let* ((buffer (mevedel-gptel-bridge--steering-buffer)))
       (with-current-buffer buffer
         (when (bound-and-true-p mevedel--agent-invocation)
-          (user-error "Use FollowupAgent or SendMessage to steer a retained agent"))
+          (user-error "Use SendMessage to steer a retained agent"))
         (unless (buffer-live-p mevedel--view-buffer)
           (user-error "Open the mevedel session view to steer"))
         (let ((request mevedel--current-request)

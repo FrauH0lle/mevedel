@@ -227,7 +227,7 @@ inside the agent can discover them."
 SendMessage is native because agents routinely report to their parent.")
 
 (defconst mevedel-agent--control-tool-specs
-  '((:discoverable (:tool "FollowupAgent")) (:discoverable (:tool "WaitAgent"))
+  '((:discoverable (:tool "WaitAgent"))
     (:discoverable (:tool "InterruptAgent")))
   "Tools added to every named role that possesses Agent.")
 

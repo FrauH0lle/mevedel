@@ -5,7 +5,7 @@ Status: accepted. Incorporates ADR 0044.
 ## Current decision
 
 WaitAgent suspends its ordinary asynchronous callback until queued or arriving
-mail, user input, active-agent follow-up steering, or timeout releases it. It
+mail, user input, or timeout releases it. It
 names no target, polls no provider, and spends no extra model turn while waiting.
 Its turn stays active and holds capacity. The result describes the wake-up;
 mail contents arrive through the separate conversation delivery path.

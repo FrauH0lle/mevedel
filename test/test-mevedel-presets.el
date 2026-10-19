@@ -425,7 +425,7 @@
            (active (mapcar #'mevedel-tool-name (plist-get resolved :active)))
            (deferred
             (mapcar #'mevedel-tool-name (plist-get resolved :discoverable))))
-      (dolist (name '("TaskWrite" "TaskList" "Agent" "FollowupAgent" "ListAgents"
+      (dolist (name '("TaskWrite" "TaskList" "Agent" "ListAgents"
                       "InterruptAgent" "SendMessage" "WaitAgent"
                       "SharedCreate" "SharedEdit"))
         (should (member name deferred))
@@ -447,7 +447,7 @@
            (tools (plist-get resolved :active))
            (names (mapcar #'mevedel-tool-name tools)))
       (should (cl-every #'mevedel-tool-read-only-p tools))
-      (dolist (name '("Agent" "FollowupAgent" "SendMessage"
+      (dolist (name '("Agent" "SendMessage"
                       "Bash" "Eval" "ApplyPatch"))
         (should-not (member name names)))
       ;; Goals stay available to read-only discussion.
@@ -457,7 +457,7 @@
                           :test #'equal))
       (should-not (plist-get metadata :agents))
       (let ((rules (mevedel-preset--read-only-rules)))
-        (dolist (name '("Agent" "FollowupAgent" "SendMessage"
+        (dolist (name '("Agent" "SendMessage"
                         "Bash" "Eval" "ApplyPatch"))
           (should (eq 'deny
                       (mevedel-permission-rules-action rules name))))

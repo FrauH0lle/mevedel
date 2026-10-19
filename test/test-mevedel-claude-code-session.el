@@ -856,7 +856,7 @@
                                           nil nil #'equal) :state)))
             (should-not (assoc "root" (mevedel-session-external-conversations session)))
             (setq-local gptel-model 'haiku gptel-system-prompt "CHANGED ROOT")
-            (mevedel-agent-control-followup session "/root/reader" "Inspect again.")
+            (mevedel-agent-control-send-message session "/root/reader" "Inspect again.")
             (setq invocation (mevedel-agent-record-invocation record))
             (mevedel-test--await 5 "Claude child follow-up did not settle"
               (mevedel-agent-invocation-runtime-settled-p invocation))
@@ -866,7 +866,7 @@
             (should (equal "fixture-session" (nth 2 (car launches))))
             (should-not (string-search "CHANGED ROOT" (caar launches)))
             (should (= 2 (length (mevedel-agent-control-context-mailbox session))))
-            (mevedel-agent-control-followup session "/root/reader" "wait")
+            (mevedel-agent-control-send-message session "/root/reader" "wait")
             (setq invocation (mevedel-agent-record-invocation record))
             (mevedel-test--await 5 "Claude child did not begin waiting"
               (with-current-buffer (mevedel-agent-invocation-buffer invocation)
@@ -882,14 +882,14 @@
             (should-not (mevedel-agent-control-active-turn-p session))
             (should (eq request mevedel--current-request))
             (should (= 0 (mevedel-session-turn-count session)))
-            (mevedel-agent-control-followup session "/root/reader" "crash")
+            (mevedel-agent-control-send-message session "/root/reader" "crash")
             (setq invocation (mevedel-agent-record-invocation record))
             (mevedel-test--await 5 "Child transport death did not settle"
               (mevedel-agent-invocation-runtime-settled-p invocation))
             (let ((mail (mevedel-agent-control-context-mailbox session)))
               (should (= 4 (length mail)))
               (should (eq 'errored (plist-get (car (last mail)) :outcome))))
-            (mevedel-agent-control-followup session "/root/reader" "Inspect after the crash.")
+            (mevedel-agent-control-send-message session "/root/reader" "Inspect after the crash.")
             (setq invocation (mevedel-agent-record-invocation record))
             (mevedel-test--await 5 "Child recovery did not settle"
               (mevedel-agent-invocation-runtime-settled-p invocation))
@@ -914,7 +914,7 @@
         (when (and record (buffer-live-p (mevedel-agent-record-conversation-buffer record)))
           (kill-buffer (mevedel-agent-record-conversation-buffer record)))))))
 
-(mevedel-deftest mevedel-agent-control-followup/claude-mail (:quiet t)
+(mevedel-deftest mevedel-agent-control-send-message/claude-mail (:quiet t)
   (dolist (acknowledge '(t nil "foreign" "mismatch" "error" "malformed" "oversized" "initial" "initial-large"))
     (mevedel-engine-test--with-claude-session
       (let ((file (file-name-concat root "mail-evidence.txt"))
@@ -956,7 +956,7 @@
                :on-invocation
                (lambda (_invocation)
                  (when initial
-                   (mevedel-agent-control-followup session "/root/reader" mail))))
+                   (mevedel-agent-control-send-message session "/root/reader" mail))))
               (should-not (plist-get outcome :error))
               (mevedel-test--await 5 "Mail delivery child did not settle"
                 (not (mevedel-agent-control-active-turn-p session)))

@@ -147,16 +147,13 @@ native ID, frozen configuration, current invocation and accumulated usage.
 The root session retains every child's storage identity, path, activity, and
 transcript location after the turn settles. `ListAgents` returns the full
 path-sorted retained roster without storage IDs or transcript content.
-`FollowupAgent` continues an idle retained conversation or steers a running
-invocation at its next safe request boundary; later terminal results still go
-to the original spawn parent. A successful follow-up renders a collapsed
-`FollowupAgent: PATH (follow-up sent)` disclosure containing the exact
-follow-up text.
-`SendMessage`
-queues interim plain-text mail for `/root` or any retained path. Agent mail to
-`/root` can start an idle Background event turn; root self-mail and mail to
-non-root recipients do not activate a turn. `WaitAgent` suspends its ordinary
-asynchronous tool callback until mail, user steering, follow-up steering, or its bounded successful
+`SendMessage` continues an idle retained conversation or delivers mail to a
+running invocation at its next safe request boundary; later terminal results
+still go to the original spawn parent. Its collapsed disclosure contains the
+exact message and reports whether it was queued, started, or is waiting for a
+slot. Agent mail to `/root` can start an idle Background event turn; self-mail
+does not activate a turn. `WaitAgent` suspends its ordinary
+asynchronous tool callback until mail, user steering, or its bounded successful
 timeout wakes it. A `MAIL` wake-up is not sender completion; only the canonical
 `RESULT` is terminal.
 `InterruptAgent` aborts one retained non-root agent's current turn by canonical
@@ -164,7 +161,8 @@ path, returns its previous activity, and leaves its identity, conversation,
 mailbox, descendants, and future follow-up capability intact.
 The user can do the same from the view's background-work panel or cockpit
 (`mevedel-agent-control-interrupt-user`); the interrupted turn records the
-reason `interrupted by user`, and an idle agent is left alone.
+reason `interrupted by user`. For an idle agent it cancels any pending mail wake
+without discarding the unread mail.
 
 Creation validates and freezes its inputs, privately reserves the canonical
 path and a tree-wide capacity slot, runs `SubagentStart` exactly once, then
@@ -184,7 +182,7 @@ removing the retained identity.
 Each invocation aggregates only its own direct operating-system children.
 After those children are stopped or settled, noteworthy confinement facts are
 patched into the exact `Agent` row that started a new conversation or the
-exact idle `FollowupAgent` row that activated the retained turn. Descendant
+exact idle `SendMessage` row that activated the retained turn immediately. Descendant
 agents, earlier turns, and steering messages sent to an already-running agent
 are excluded. The rollup uses hidden transcript render-data and is not added
 to agent sidecars or model-visible results.
@@ -213,9 +211,10 @@ checks remain in force. Role names do not impose extra hidden reminder policy.
 
 Every named role receives `SendMessage` and `ListAgents`. Possession of
 `Agent` grants transitive delegation authority and automatically supplies the
-complete `Agent`, `FollowupAgent`, `WaitAgent`, and `InterruptAgent` control
+complete `Agent`, `WaitAgent`, and `InterruptAgent` control
 bundle. Worker and explorer therefore orchestrate recursively; reviewer and
-verifier are communicating leaves without those control tools. The complete
+verifier are communicating leaves without those control tools; their messages
+can still wake retained agents. The complete
 root-session tree shares the session's active-turn capacity (ten non-root
 turns by default), regardless of path depth. The root does not consume a slot,
 allowing eleven active agents in total. Waiting and human-blocked turns remain
@@ -381,7 +380,9 @@ owning buffer still closes the connection immediately.
 
 Interruption never recurses. Descendant turns continue, and the target's path,
 conversation buffer, mailbox, and registry record remain retained. A later
-`FollowupAgent` therefore continues the same conversation. Interrupt-versus-
+`SendMessage` therefore continues the same conversation. An interrupt request
+clears existing wake marks without discarding unread mail; messages sent after
+the request can wake the agent again. Interrupt-versus-
 settlement races use the ordinary exactly-once settlement gate: whichever
 terminal event wins is the only RESULT. The tool result itself contains only
 the target's activity observed before the request and renders `Interrupted
@@ -390,13 +391,16 @@ PATH` from the canonical event.
 ## Inter-agent messaging (SendMessage)
 
 `SendMessage(target, message)` resolves canonical or relative retained paths
-tree-wide. It queues one canonical `MAIL` record containing type, sender path,
-recipient path, and payload. Agent-originated mail to `/root` can wake the idle
-root; root self-mail and mail to non-root recipients do not start turns.
-Successful sends return an empty result and render a collapsed
-`SendMessage: PATH (message queued)` disclosure whose path opens the retained transcript and whose body contains the
-sent message. Canonical `MAIL` payloads are retained in full without a mailbox
-body cap. Since this delivery is interim and may cross a root-turn boundary,
+tree-wide. An idle non-root recipient starts a turn with the message as its
+task. For an active recipient, or at capacity, it queues one canonical `MAIL`
+record containing type, sender path, recipient path, and payload. Agent mail to
+`/root` can wake the idle root; self-mail never starts a turn.
+Successful sends return an empty result, except when capacity delays activation:
+then the result says the agent starts when a slot frees. A collapsed
+`SendMessage: PATH` disclosure reports `message queued`, `started`, or
+`waiting for a slot`; its path opens the retained transcript and its body holds
+the sent message. Canonical `MAIL` payloads are retained in full without a
+mailbox body cap. Since delivery may cross a root-turn boundary,
 an agent should put its final verdict in its terminal response rather than
 treating `SendMessage` as its completion channel.
 
@@ -408,9 +412,25 @@ has committed. Idle-root wake eligibility likewise follows durable publication.
 Before a recipient's next model sample, its retained unread queue drains in
 FIFO order. Each record is injected as a separate user-role communication
 block and written to the retained conversation transcript before the unread
-record is removed. Mail queued for an idle non-root agent therefore waits for a
-later follow-up, while mail for an active agent is delivered at its next ordinary
-WAIT boundary. The tool result never duplicates the message body.
+record is removed. Mail for an active agent is delivered at its next ordinary
+WAIT boundary, without interrupting an in-flight response, tool call, or prompt.
+The tool result never duplicates the message body.
+
+After a non-root settlement ends, the harness offers idle recipients
+with waking mail a turn, oldest waking mail first while capacity allows. MAIL
+and ordinary RESULT from another sender wake non-root recipients, including
+results delivered to an idle spawn parent and mail arriving during a final
+response. Workflow-consumed results and EXECUTION records do not wake them.
+Preparation cancellation and failed-start rollback also reoffer capacity waits.
+While a settlement in the session runs, no retained agent starts, even with
+free capacity: the settling agent already reads idle, but its RESULT may still
+roll back. A send in that window reports `waiting for a slot`, and the offer
+that follows every settlement, committed or not, starts the agent. Releasing a
+finished invocation's request data never touches a newer turn in that buffer.
+New turns use current session permissions and sticky Plan state; unread MAIL
+from a Plan sender additionally stamps any turn that will read it as read-only,
+including one started by a later direct assignment. RESULT records do not carry
+the sender's Plan stamp.
 
 Agent-originated `MAIL` and ordinary terminal `RESULT` records addressed to
 `/root` use the same idle Background event scheduler as
@@ -426,12 +446,15 @@ read restored mail at the next ordinary turn, and recovery-generated results do
 not start background turns. Successful root turns reoffer eligible unread mail
 that arrived too late for their last sample. Failed or aborted root turns do
 not automatically retry that mail in a wake loop; it remains available for a
-later turn. `FollowupAgent` remains the explicit way to start an idle child.
+later turn. Non-root errored settlement clears that recipient's wake marks too;
+interruption clears marks when requested, so later MAIL or RESULT can start new
+work. In particular, a child's result arriving after its parent's interruption
+wakes that parent again.
 
 `WaitAgent(timeout_ms?)` is a wake primitive over the caller's mailbox, not a
 message transport. Its ordinary asynchronous callback stays pending without a
 model sample and without releasing the caller's active-turn slot. Existing or
-new mail releases it immediately, as does follow-up steering. New root user
+new mail releases it immediately. New root user
 input becomes a separate user-role
 steering message in the same resumed request, so no intermediate model sample
 can run before the input is visible. The default timeout is 30,000 ms.
@@ -572,7 +595,7 @@ own structural type. Follow-ups and agent compaction therefore absorb it
 naturally without replaying or regenerating it.
 
 Resume validates the registry, configuration and transcript locations without
-loading idle conversations. The first FollowupAgent, history resource read, or
+loading idle conversations. The first SendMessage activation, history resource read, or
 Emacs transcript inspection hydrates only the selected identity through the same
 verified artifact resolver. Unread mail and pending hook context remain in the
 registry until their ordinary delivery boundary. Active abandoned turns still
@@ -681,9 +704,10 @@ session-only proposals, to its requests and retained agents. `Eval` is
 unavailable in both.
 
 A caller with Plan authority cannot direct a turn that lacks it.
-FollowupAgent on an active agent and SendMessage require the target's current
+SendMessage to an active agent requires the target's current
 turn to be Plan read-only; SendMessage to `/root` is always accepted.
-FollowupAgent on an idle agent starts a stamped turn. See
+SendMessage to an idle agent starts a stamped turn, immediately or when capacity
+frees. Any activation reading unread Plan-sender mail retains its stamp. See
 [Plan mode](plan-mode.md#tool-boundary).
 
 Delegated invocation/request rules may narrow authority and may allow ordinary

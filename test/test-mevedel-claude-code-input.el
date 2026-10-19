@@ -259,7 +259,7 @@
 				   :agent (mevedel-agent--create :name "image" :description "Describe an image"
 								 :tools nil :max-turns 2 :system-prompt "Describe the image")
 				   :on-invocation (lambda (value) (setq invocation value)))
-				(mevedel-agent-control-followup session "/root/image" prompt)
+				(mevedel-agent-control-send-message session "/root/image" prompt)
 				(setq invocation (mevedel-agent-record-invocation record))))
 			    (mevedel-test--await 5 "Image child did not settle"
                               (mevedel-agent-invocation-runtime-settled-p invocation))

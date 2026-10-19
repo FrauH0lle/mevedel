@@ -150,10 +150,14 @@ ordinary turn. Skill preparation keeps the caller's stamp too, so a skill's
 `!` commands follow Plan's Bash classification.
 
 A Plan caller cannot steer an agent turn that runs outside Plan limits.
-FollowupAgent on a running agent and SendMessage are accepted only when the
-target's current turn is itself Plan read-only; SendMessage to `/root` is also
-accepted. Otherwise the call fails and suggests FollowupAgent once the agent
-is idle, which starts a Plan read-only turn. While sticky Plan is active this
+SendMessage to a running agent is accepted only when the target's current turn
+is itself Plan read-only; SendMessage to `/root` is also accepted. Otherwise
+the call fails and suggests sending once the agent is idle, which starts a
+Plan read-only turn. Unread Plan-sender mail stamps any non-root activation
+that will read it, including a later direct assignment or deferred activation
+after the last sample or a capacity wait. Terminal RESULT records are
+information and do not carry the sender's Plan stamp.
+While sticky Plan is active this
 also refuses agents started before Plan was entered. Interrupting, listing and
 waiting are unaffected. Mail and results remain advisory text: a recipient
 that reads them later acts under its own authority at that time.

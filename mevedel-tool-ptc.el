@@ -67,7 +67,7 @@
     "XrefReferences" "XrefDefinitions" "Imenu" "Treesitter"
     "WebSearch" "WebFetch" "ListSkills"
     "TaskWrite" "TaskList"
-    "Agent" "FollowupAgent" "ListAgents" "InterruptAgent" "SendMessage"
+    "Agent" "ListAgents" "InterruptAgent" "SendMessage"
     "WriteStdin" "ListExecutions" "StopExecution")
   "Tools allowed in composed expressions, subject to current capabilities.
 Other available tools support standalone invocation.  Instruction-producing

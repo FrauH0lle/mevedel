@@ -157,7 +157,7 @@
              :on-invocation (lambda (value) (setq invocation value)))
             (mevedel-test--await 5 "Child initial turn did not settle"
               (mevedel-agent-invocation-runtime-settled-p invocation))
-            (mevedel-agent-control-followup session "/root/reader" "Continue the task")
+            (mevedel-agent-control-send-message session "/root/reader" "Continue the task")
             (setq invocation (mevedel-agent-record-invocation record))
             (mevedel-test--await 5 "Missing child history did not settle"
               (mevedel-agent-invocation-runtime-settled-p invocation))
@@ -165,7 +165,7 @@
             (should (string-search "mevedel-claude-code-recover-history"
                                    (mevedel-agent-record-settled-result record)))
             (mevedel-claude-code-recover-history "/root/reader")
-            (mevedel-agent-control-followup session "/root/reader" "Use the retained evidence")
+            (mevedel-agent-control-send-message session "/root/reader" "Use the retained evidence")
             (setq invocation (mevedel-agent-record-invocation record))
             (mevedel-test--await 5 "Child excerpt recovery did not settle"
               (mevedel-agent-invocation-runtime-settled-p invocation))

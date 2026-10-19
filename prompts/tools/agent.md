@@ -8,7 +8,7 @@ agent with your effective instructions and capabilities.
 
 ### When NOT to use `Agent`
 
-- Continuing an existing agent's work; FollowupAgent reuses its conversation.
+- Continuing an existing agent's work; SendMessage reuses its conversation.
 - A quick direct call or work requiring continuous access to your changing context.
 
 ### How to use `Agent`
@@ -33,9 +33,8 @@ agent with your effective instructions and capabilities.
   requests. Later parent turns are not synchronized.
 - `model` selects a configured tier or exact `BACKEND:MODEL`; `effort` must be
   supported by that model. Use overrides when the assignment calls for them.
-- The child runs independently and sends its terminal RESULT to its spawn parent.
-  An ordinary RESULT to `/root` can wake the idle root in a Background event turn;
-  it does not start an idle non-root parent's turn. Use WaitAgent when you need
+- The child runs independently and sends its terminal RESULT to its spawn parent,
+  waking an idle parent. Use WaitAgent when you need
   to wait within your current turn. The child's path remains reserved for
   follow-ups. Roles with Agent can create children; the complete session tree
   shares one active-turn limit.
@@ -60,7 +59,7 @@ The child receives the recent discussion, but this message defines its task.
 <example>
 Agent(task_name="spec_review_2", message="Continue the review you started earlier.")
 <reasoning>
-This creates a fresh conversation. Use FollowupAgent(target="/root/spec_review",
+This creates a fresh conversation. Use SendMessage(target="/root/spec_review",
 message="...") with the concrete next task for the existing reviewer.
 </reasoning>
 </example>

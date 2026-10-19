@@ -7,7 +7,7 @@ Interrupt a retained agent's current turn while keeping its conversation.
 
 ### When NOT to use `InterruptAgent`
 
-- Redirecting useful work; FollowupAgent delivers a revised task at a safe boundary.
+- Redirecting useful work; SendMessage delivers a revised task at a safe boundary.
 - Stopping work merely because it exceeded an estimate; activity and results give
   evidence that elapsed time alone cannot supply.
 
@@ -15,7 +15,8 @@ Interrupt a retained agent's current turn while keeping its conversation.
 
 - Use a canonical target path or a relative descendant path. `/root`, the caller
   itself, malformed/unknown paths, and opaque internal IDs are rejected.
-- An idle target is a successful no-op. An active target keeps its path,
+- An idle target has no turn to abort; any pending mail wake is cancelled.
+  Later messages or child results can start it again. An active target keeps its path,
   conversation, mailbox, descendants, and follow-up capability. The spawn parent
   receives one RESULT with outcome `interrupted`, the reason, and partial work.
 - The tool result reports only activity immediately before the call. Interruption

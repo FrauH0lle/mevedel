@@ -1226,7 +1226,7 @@ Missing files are stored as nil; unreadable paths retain a diagnostic gap."
            (or (memq 'eval (mevedel-tool-groups tool))
                (and (memq 'edit (mevedel-tool-groups tool))
                     (not (mevedel-tool-snapshot-p tool)))))
-      (member (mevedel-tool-name tool) '("Agent" "FollowupAgent"))))
+      (member (mevedel-tool-name tool) '("Agent" "SendMessage"))))
 
 (defun mevedel-pipeline--step-capture-coverage (context next _fail)
   "Record untracked directive filesystem effects from CONTEXT, then call NEXT."
@@ -1238,7 +1238,7 @@ Missing files are stored as nil; unreadable paths retain a diagnostic gap."
       (mevedel-request-note-untracked-effect
        request
        (mevedel-tool-name tool)
-       (if (member (mevedel-tool-name tool) '("Agent" "FollowupAgent"))
+       (if (member (mevedel-tool-name tool) '("Agent" "SendMessage"))
            "Delegated work can modify files outside parent snapshots"
          "Tool execution can modify files outside exact path snapshots")))
     (funcall next context)))

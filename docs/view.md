@@ -110,7 +110,7 @@ If the observed agent settles while its transcript view is open, the view
 renders the final content immediately and updates its header in place. It
 keeps the retained data buffer rather than swapping source buffers mid-display.
 Closing the inspection view preserves data buffers owned by retained agent
-records so a later `FollowupAgent` can continue them; parent-session teardown
+records so a later `SendMessage` can continue them; parent-session teardown
 kills every retained conversation buffer from the session registry, whether
 or not it has an open inspection view. Reopening reuses a resident retained
 buffer and otherwise resolves the saved transcript.
@@ -2630,8 +2630,8 @@ pending entries through the Pending Inputs cockpit. These commands do not mark
 raw transcript regions for later submission. A scoped directive composer or
 side conversation cannot use this root steering route.
 
-Retained-agent buffers refuse native gptel steering: use `FollowupAgent` or
-`SendMessage` for their existing retained delivery path. Native gptel
+Retained-agent buffers refuse native gptel steering: use `SendMessage`
+for their existing retained delivery path. Native gptel
 reject-and-steer confirmation actions likewise direct managed sessions to
 mevedel's permission feedback or composer. This keeps raw native steering out
 of agent FSMs and assistant-output accumulation. Ordinary gptel buffers retain
@@ -2760,7 +2760,7 @@ rows and badges, and status/handle refresh. Transcript turn rendering remains
 in `mevedel-view-render.el`.
 
 Agent activity rows are projections of canonical tool and lifecycle events:
-`Started PATH`, `FollowupAgent: PATH`, `SendMessage: PATH`,
+`Started PATH`, `SendMessage: PATH`,
 `InterruptAgent: PATH`, and `Waiting for agents`. Settled waits render
 `WaitAgent: agents (OUTCOME)`; consecutive wait rows retain only the final outcome and show the
 combined count. The view does not infer a second activity state from internal
@@ -2774,8 +2774,9 @@ before the ordinary Agent Task turn.
 Agent handles use `TAB` to expand or collapse their details.  `RET` on the
 visible agent path, or a mouse click, opens the transcript.  Agent handles
 and activity-row paths are clickable when a transcript entry is available.
-`FollowupAgent: PATH` and `SendMessage: PATH` start collapsed and expand
-to the exact follow-up or sent message.
+`SendMessage: PATH` starts collapsed and expands to the exact sent message.
+Its header reports `message queued`, `started`, or `waiting for a slot` from
+the call's delivery render-data.
 Resident retained agents show status/activity in the main view and open a
 rendered read-only transcript view over their conversation buffer whether
 running or idle. An open idle view begins live projection when a follow-up

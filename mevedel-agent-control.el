@@ -196,9 +196,16 @@
 (autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
 
 ;; `mevedel-transport'
+(declare-function mevedel-transport-cancel-pending
+                  "mevedel-transport" (&optional key))
 (declare-function mevedel-transport-run-at-time
                   "mevedel-transport" (seconds function &rest args))
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport"
+                  (key path thunk &optional on-cancel delay))
+(autoload 'mevedel-transport-cancel-pending "mevedel-transport")
 (autoload 'mevedel-transport-run-at-time "mevedel-transport")
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clamped-integer
@@ -231,6 +238,13 @@
 
 (defvar mevedel-agent-control-suppress-persistence nil
   "Non-nil while a multi-step registry repair must be persisted atomically.")
+
+(defvar mevedel-agent-control-settling nil
+  "Agent invocations whose settlement is running, innermost first.
+The runtime binds this around each settlement.  A turn that started
+meanwhile could race the staged terminal state: its capacity release,
+rollback, publication, or release of the finished invocation.  Code nested
+inside a settlement, timers included, sees the binding.")
 
 (cl-defstruct (mevedel-agent-waiter
                (:constructor mevedel-agent-waiter--create))
@@ -299,22 +313,22 @@ See `mevedel-agent-control-record-model-metadata'."
   (mevedel-agent-control-active-activity-p
    (mevedel-agent-record-activity record)))
 
-(defun mevedel-agent-control--assert-plan-steering (session path record tool)
-  "Signal unless the caller may steer PATH's RECORD in SESSION with TOOL.
-A caller under Plan read-only authority may address /root or a turn that
-is itself Plan read-only.  Mail for any other agent would act under that
-agent's own authority, now or in its next turn."
+(defun mevedel-agent-control--assert-plan-steering (session path record)
+  "Signal unless the caller may message PATH's RECORD in SESSION.
+A caller under Plan read-only authority may address /root, an idle agent,
+whose next turn it stamps read-only, or a turn that is itself Plan
+read-only.  Mail for any other running agent would act under that agent's
+own authority."
   (when (and (mevedel-plan-read-only-p session)
-             (not (equal path "/root"))
-             (not (and (mevedel-agent-control--active-p record)
-                       (when-let* ((invocation
-                                    (mevedel-agent-record-invocation record)))
-                         (mevedel-agent-invocation-plan-read-only
-                          invocation)))))
+             record
+             (mevedel-agent-control--active-p record)
+             (not (when-let* ((invocation
+                               (mevedel-agent-record-invocation record)))
+                    (mevedel-agent-invocation-plan-read-only invocation))))
     (user-error
-     "%s cannot steer %s from Plan: its turn is not bound by Plan limits.  \
-Use FollowupAgent when it is idle to start a read-only turn"
-     tool path)))
+     "SendMessage cannot reach %s from Plan: its running turn is not bound \
+by Plan limits.  Message it once it is idle to start a read-only turn"
+     path)))
 
 (defun mevedel-agent-control-settled-result (record)
   "Return RECORD's settled result plist when it is idle, or nil.
@@ -424,6 +438,7 @@ blockers compose and stale releases cannot alter a later follow-up."
     ;; The caller owns final persistence; a debounced save firing into
     ;; killed buffers would only race it.
     (mevedel-session-persistence-cancel-deferred-agent-save session)
+    (mevedel-transport-cancel-pending (list 'agent-wake session))
     (mevedel-session--set-agent-reservations session nil)
     (mevedel-agent-control-cancel-wait session "/root")
     (dolist (entry (mevedel-session-agent-registry session))
@@ -657,22 +672,31 @@ Return the caller path when suspended, and nil after an immediate release."
 (defun mevedel-agent-control--deliver-mail
     (session recipient record &optional wake-reason)
   "Notify RECIPIENT of committed RECORD in SESSION.
-Agent MAIL and RESULT for the root may start an idle background-event turn.
+MAIL and RESULT from another sender are marked to wake their recipient: an
+idle root gets a background-event turn and an idle agent its next turn.
 Mark before releasing a waiter: its callback can synchronously consume mail.
 Recovery repairs neither mark records nor release waits."
   (unless mevedel-agent-control-suppress-persistence
-    (let ((root-report
-           (and (equal recipient "/root")
-                (memq (plist-get record :type) '(MAIL RESULT))
-                (not (equal (plist-get record :sender) "/root"))
-                (memq record (mevedel-session-messages session)))))
-      (when root-report
+    (let ((waking
+           (and (memq (plist-get record :type) '(MAIL RESULT))
+                (not (equal (plist-get record :sender) recipient))
+                (memq record (mevedel-agent-control--mailbox-queue
+                              session recipient)))))
+      (when waking
         (plist-put record :wake t))
       (mevedel-agent-control--wake
        session recipient (or wake-reason 'mailbox))
-      (when (and root-report
-                 (memq record (mevedel-session-messages session)))
-        (mevedel-pending-inputs-offer-root-event session)))))
+      (when (and waking
+                 (memq record (mevedel-agent-control--mailbox-queue
+                               session recipient)))
+        (cond
+         ((equal recipient "/root")
+          (mevedel-pending-inputs-offer-root-event session))
+         ;; An active recipient reads it at its next boundary, or its
+         ;; settlement offers the wake.
+         ((not (mevedel-agent-control--active-p
+                (mevedel-agent-control--record-at-path session recipient)))
+          (mevedel-agent-control--schedule-agent-wakes session)))))))
 
 (defun mevedel-agent-control--identify-record (record)
   "Assign RECORD a durable message identity once, at its producer boundary."
@@ -743,27 +767,42 @@ transcript payload and hook audits."
      'user)
     t))
 
-(defun mevedel-agent-control-send-message (session target message)
-  "Queue one canonical MAIL with MESSAGE for TARGET in SESSION.
-Return the resolved recipient path.  Agent mail can wake an idle root;
-non-root recipients still require an explicit follow-up to start a turn."
+(cl-defun mevedel-agent-control-send-message
+    (session target message &key parent-tool-use-id)
+  "Deliver MESSAGE to TARGET in SESSION and report how.
+An idle agent starts its turn with MESSAGE as the prompt when the tree has
+capacity.  Otherwise MESSAGE is queued as canonical MAIL: an active agent
+reads it at its next boundary, the root may wake for it, and an idle agent
+starts once a slot frees.  PARENT-TOOL-USE-ID identifies the calling tool
+row of a started turn.  Return (:path PATH :delivery DELIVERY), DELIVERY
+being `started', `queued', or `waiting' for a slot."
   (unless (and (stringp message) (not (string-empty-p message)))
     (user-error "SendMessage message must be non-empty plain text"))
   (let* ((sender (mevedel-agent-control-current-path session))
          (recipient
-          (mevedel-agent-control-resolve-path session sender target)))
-    (mevedel-agent-control--assert-plan-steering
-     session recipient
-     (cdr (assoc recipient (mevedel-session-agent-registry session)))
-     "SendMessage")
-    (mevedel-agent-control--enqueue
-     session recipient
-     (list :type 'MAIL
-           :sender sender
-           :recipient recipient
-           :payload message
-           :timestamp (current-time)))
-    recipient))
+          (mevedel-agent-control-resolve-path session sender target))
+         (record (cdr (assoc recipient (mevedel-session-agent-registry session))))
+         (idle (and record (not (mevedel-agent-control--active-p record)))))
+    (mevedel-agent-control--assert-plan-steering session recipient record)
+    (if (and idle
+             (mevedel-agent-control--startable-p session record)
+             (mevedel-agent-control--capacity-p session))
+        (progn
+          (mevedel-agent-control--activate
+           session record message parent-tool-use-id)
+          (list :path recipient :delivery 'started))
+      (mevedel-agent-control--enqueue
+       session recipient
+       (append (list :type 'MAIL
+                     :sender sender
+                     :recipient recipient
+                     :payload message
+                     :timestamp (current-time))
+               ;; An agent turn this mail wakes keeps the sender's Plan limits.
+               (and record
+                    (mevedel-plan-read-only-p session)
+                    (list :plan-read-only t))))
+      (list :path recipient :delivery (if idle 'waiting 'queued)))))
 
 (defun mevedel-agent-control-enqueue-execution-result
     (session owner body &optional execution-id wake meta)
@@ -1017,7 +1056,9 @@ positive decimal strings, or \"summary\"."
       (with-current-buffer buffer
         (set-buffer-modified-p nil))
       (kill-buffer buffer)))
-  (mevedel-agent-control--persist-session session))
+  (mevedel-agent-control--persist-session session)
+  ;; The freed slot may let an agent waiting for one start.
+  (mevedel-agent-control--schedule-agent-wakes session))
 
 (defun mevedel-agent-control--bounded-result (record response)
   "Return RECORD's bounded terminal payload for RESPONSE."
@@ -1173,7 +1214,7 @@ Return rollback and post-commit delivery closures for INVOCATION."
             (when-let* ((tokens (plist-get (mevedel-engine-info invocation) :tokens-full)))
               (+ (or (plist-get tokens :input) 0)
                  (or (plist-get tokens :output) 0))))
-           result staged-records)
+           result staged-records turn-closed)
       (cl-labels
           ((rollback ()
              (setf (mevedel-agent-record-activity record) previous-activity
@@ -1196,8 +1237,15 @@ Return rollback and post-commit delivery closures for INVOCATION."
                            own-queue)))
            (deliver ()
              (dolist (message staged-records) (cl-remf message :uncommitted))
-             (mevedel-agent-control-cancel-wait
-              session (mevedel-agent-record-path record))
+             ;; Close the finished turn once.  A delivery retry can run after
+             ;; the agent's next turn started; that turn's wait and wake
+             ;; marks are its own.
+             (unless turn-closed
+               (mevedel-agent-control-cancel-wait session own-path)
+               ;; A failed turn does not restart itself for mail it missed.
+               (when (eq outcome 'errored)
+                 (mevedel-agent-control-clear-agent-wakes session own-path))
+               (setq turn-closed t))
              (mevedel-agent-control--publish-result
               session record result t)
              (setf (mevedel-engine-info invocation)
@@ -1322,8 +1370,10 @@ Return rollback and post-commit delivery closures for INVOCATION."
         (copy-tree entries)))
 
 (defun mevedel-agent-control--dispatch-followup
-    (session record message &optional parent-tool-use-id)
-  "Dispatch MESSAGE as RECORD's next provider turn in SESSION."
+    (session record message &optional parent-tool-use-id plan-read-only)
+  "Dispatch MESSAGE as RECORD's next provider turn in SESSION.
+PARENT-TOOL-USE-ID and PLAN-READ-ONLY are as in
+`mevedel-agent-control--activate'."
   (let ((buffer (mevedel-agent-persistence-ensure-conversation
                  session record (mevedel-session-root-buffer session))))
     (let ((configuration (mevedel-agent-record-configuration record)))
@@ -1343,6 +1393,7 @@ Return rollback and post-commit delivery closures for INVOCATION."
            :pending-hook-context
            (mevedel-agent-record-hook-context-pending record)
            :parent-tool-use-id parent-tool-use-id
+           :plan-read-only plan-read-only
            :on-hook-context
            (apply-partially
             #'mevedel-agent-control--set-hook-context record)
@@ -1355,51 +1406,139 @@ Return rollback and post-commit delivery closures for INVOCATION."
         (error "Agent provider request did not start")))
     record))
 
-(cl-defun mevedel-agent-control-followup
-    (session target message &key parent-tool-use-id)
-  "Start or steer TARGET with MESSAGE in SESSION and return its record."
-  (unless (and (stringp message) (not (string-empty-p message)))
-    (user-error "FollowupAgent message must be non-empty plain text"))
-  (let* ((caller-path (mevedel-agent-control-current-path session))
-         (path (mevedel-agent-control-resolve-path
-                session caller-path target)))
-    (when (equal path "/root")
-      (user-error "FollowupAgent cannot activate /root"))
-    (let ((record (cdr (assoc path
-                              (mevedel-session-agent-registry session)))))
-      (if (mevedel-agent-control--active-p record)
-          (progn
-            (mevedel-agent-control--assert-plan-steering
-             session path record "FollowupAgent")
-            (mevedel-agent-control--enqueue
-             session path
-             (list :type 'MAIL
-                   :sender caller-path
-                   :recipient path
-                   :payload message
-                   :timestamp (current-time))
-             'steering))
-        (when (>=(mevedel-agent-control--active-count session)
-                  (mevedel-session-agent-turn-capacity session))
-          (user-error "Agent tree is at its active-turn capacity"))
-        (let ((previous-result (mevedel-agent-record-settled-result record))
-              (previous-outcome (mevedel-agent-record-settled-outcome record)))
-          ;; Provider startup can yield to another owner's mailbox save.
-          ;; Keep the published registry valid throughout that interval.
-          (setf (mevedel-agent-record-activity record) 'starting
-                (mevedel-agent-record-settled-result record) nil
-                (mevedel-agent-record-settled-outcome record) nil)
-          (condition-case err
-              (mevedel-agent-control--dispatch-followup
-               session record message parent-tool-use-id)
-            ((error quit)
-             (setf (mevedel-agent-record-activity record) 'idle
-                   (mevedel-agent-record-invocation record) nil
-                   (mevedel-agent-record-settled-result record) previous-result
-                   (mevedel-agent-record-settled-outcome record) previous-outcome)
-             (mevedel-agent-control--persist-session session)
-             (signal (car err) (cdr err))))))
-      record)))
+(defun mevedel-agent-control--capacity-p (session)
+  "Return non-nil when SESSION's tree can admit one more active turn."
+  (< (mevedel-agent-control--active-count session)
+     (mevedel-session-agent-turn-capacity session)))
+
+(defun mevedel-agent-control--startable-p (session record)
+  "Return non-nil when idle RECORD in SESSION may start its next turn.
+Settlement marks a record idle before its RESULT commits and before the
+runtime has released the finished invocation.  Meanwhile a rollback may
+restore that turn and its publication rejects nested commits, so no turn
+starts while a settlement in SESSION runs.  Another session's settlement
+re-offers only its own session, so it does not hold this one.
+Waiting mail gets the offer `mevedel-agent-control-settlement-finished'
+makes."
+  (and (eq (mevedel-agent-record-activity record) 'idle)
+       (not (cl-some (lambda (invocation)
+                       (eq session (mevedel-agent-invocation-parent-session
+                                    invocation)))
+                     mevedel-agent-control-settling))))
+
+(defun mevedel-agent-control-settlement-finished (session)
+  "Offer SESSION's idle agents turns now that a settlement call has ended.
+The runtime calls this whether the settlement committed, rolled back, or
+failed.  Mail that arrived during a final answer or while waiting for a
+slot gets its offer."
+  (mevedel-agent-control--schedule-agent-wakes session))
+
+(defun mevedel-agent-control--activate
+    (session record message &optional parent-tool-use-id plan-read-only)
+  "Start idle RECORD's next turn in SESSION with MESSAGE as its prompt.
+PARENT-TOOL-USE-ID identifies the calling tool row.  PLAN-READ-ONLY, or
+unread mail from a Plan read-only sender, stamps the turn read-only even
+without an ambient Plan caller: the turn reads that mail."
+  (let ((previous-result (mevedel-agent-record-settled-result record))
+        (previous-outcome (mevedel-agent-record-settled-outcome record))
+        (plan-read-only
+         (or plan-read-only
+             (cl-some (lambda (message) (plist-get message :plan-read-only))
+                      (mevedel-agent-record-mailbox record)))))
+    ;; Provider startup can yield to another owner's mailbox save.
+    ;; Keep the published registry valid throughout that interval.
+    (setf (mevedel-agent-record-activity record) 'starting
+          (mevedel-agent-record-settled-result record) nil
+          (mevedel-agent-record-settled-outcome record) nil)
+    (condition-case err
+        (mevedel-agent-control--dispatch-followup
+         session record message parent-tool-use-id plan-read-only)
+      ((error quit)
+       (setf (mevedel-agent-record-activity record) 'idle
+             (mevedel-agent-record-invocation record) nil
+             (mevedel-agent-record-settled-result record) previous-result
+             (mevedel-agent-record-settled-outcome record) previous-outcome)
+       (mevedel-agent-control--persist-session session)
+       ;; Another agent may have queued for the slot this start held.
+       (mevedel-agent-control--schedule-agent-wakes session)
+       (signal (car err) (cdr err))))))
+
+
+;;;; Waking idle agents
+
+(defconst mevedel-agent-control--wake-prompt
+  (concat "Messages arrived while you were idle; they follow. "
+          "They come from other agents, not from the user.")
+  "Fixed prompt of an agent turn started for queued mail.
+The mail itself reaches the model as mailbox records at the turn's first
+boundary, never as this prompt, so its text cannot pose as the user.")
+
+(defun mevedel-agent-control--waking-records (record)
+  "Return RECORD's committed unread records that should wake it."
+  (cl-remove-if-not
+   (lambda (message)
+     (and (plist-get message :wake)
+          (not (plist-get message :uncommitted))))
+   (mevedel-agent-record-mailbox record)))
+
+(defun mevedel-agent-control-clear-agent-wakes (session path)
+  "Stop PATH's unread mail in SESSION from starting another turn.
+The mail stays queued for the agent's next turn.  Mail sent later wakes it
+again, so stopping an agent does not make it deaf."
+  (when-let* ((record (cdr (assoc path (mevedel-session-agent-registry
+                                        session)))))
+    (dolist (message (mevedel-agent-record-mailbox record))
+      (when (plist-get message :wake)
+        (plist-put message :wake nil)))))
+
+(defun mevedel-agent-control--schedule-agent-wakes (session)
+  "Offer SESSION's idle agents turns for their waking mail.
+The offer runs from a timer once the transport is idle, after the current
+callback (often a settlement) has unwound.  Repeated offers coalesce."
+  (when-let* ((buffer (mevedel-session-root-buffer session))
+              ((buffer-live-p buffer)))
+    (mevedel-transport-run-when-idle
+     (list 'agent-wake session)
+     (buffer-local-value 'default-directory buffer)
+     (lambda () (mevedel-agent-control--offer-agent-wakes session))
+     nil 0)))
+
+(defun mevedel-agent-control--offer-agent-wakes (session)
+  "Start idle agents' turns in SESSION for their waking mail.
+Agents whose oldest waking mail is oldest go first, while the tree has
+capacity; the rest wait for a later settlement to free a slot.  A turn that
+cannot start leaves its mail unread for a later turn without retrying."
+  (when-let* ((buffer (mevedel-session-root-buffer session))
+              ((buffer-live-p buffer))
+              ((eq session (buffer-local-value 'mevedel--session buffer))))
+    (with-current-buffer buffer
+      (let (candidates)
+        (dolist (entry (mevedel-session-agent-registry session))
+          (let ((record (cdr entry)))
+            (when-let* (((eq (mevedel-agent-record-activity record) 'idle))
+                        (waking (mevedel-agent-control--waking-records record)))
+              ;; The queue is newest first, so its last waking record is oldest.
+              (push (list (plist-get (car (last waking)) :timestamp) record)
+                    candidates))))
+        (dolist (candidate (sort candidates
+                                 (lambda (a b) (time-less-p (car a) (car b)))))
+          (let ((record (cadr candidate)))
+            ;; An earlier start can yield: re-check this agent's state now.
+            (when (and (mevedel-agent-control--waking-records record)
+                       (mevedel-agent-control--startable-p session record)
+                       (mevedel-agent-control--capacity-p session))
+              (condition-case err
+                  (mevedel-agent-control--activate
+                   session record mevedel-agent-control--wake-prompt)
+                ((error quit)
+                 ;; Neither a failure nor a quit restarts the agent by itself.
+                 (mevedel-agent-control-clear-agent-wakes
+                  session (mevedel-agent-record-path record))
+                 (message "mevedel: could not start %s for its mail: %s"
+                          (mevedel-agent-record-path record)
+                          (if (eq (car err) 'quit)
+                              "quit"
+                            (error-message-string err))))))))))))
 
 (defun mevedel-agent-control-interrupt (session target)
   "Interrupt TARGET's current turn in SESSION and return its prior activity."
@@ -1412,6 +1551,8 @@ Return rollback and post-commit delivery closures for INVOCATION."
       (user-error "InterruptAgent cannot target the caller"))
     (let* ((record (mevedel-agent-control--record-at-path session path))
            (activity (mevedel-agent-record-activity record)))
+      ;; An idle agent waiting for a slot stops waiting too.
+      (mevedel-agent-control-clear-agent-wakes session path)
       (when (mevedel-agent-control--active-p record)
         (mevedel-agent-runtime-interrupt
          (mevedel-agent-record-invocation record)
@@ -1426,6 +1567,7 @@ alone.  The agent stays retained, as after `InterruptAgent'."
     (user-error "Use the session's own cancel command for /root"))
   (let ((record (or (cdr (assoc path (mevedel-session-agent-registry session)))
                     (user-error "Agent %s is no longer available" path))))
+    (mevedel-agent-control-clear-agent-wakes session path)
     (when (mevedel-agent-control--active-p record)
       (mevedel-agent-runtime-interrupt
        (mevedel-agent-record-invocation record) "interrupted by user")

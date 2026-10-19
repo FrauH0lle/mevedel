@@ -36,13 +36,20 @@
 (defvar gptel--request-alist)
 
 ;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-clear-agent-wakes
+                  "mevedel-agent-control" (session path))
 (declare-function mevedel-agent-control-commit-session
                   "mevedel-agent-control" (session))
 (declare-function mevedel-agent-control-enqueue-execution-result
                   "mevedel-agent-control"
                   (session owner body &optional execution-id wake meta))
+(declare-function mevedel-agent-control-settlement-finished
+                  "mevedel-agent-control" (session))
+(autoload 'mevedel-agent-control-clear-agent-wakes "mevedel-agent-control")
 (autoload 'mevedel-agent-control-commit-session "mevedel-agent-control")
 (autoload 'mevedel-agent-control-enqueue-execution-result "mevedel-agent-control")
+(autoload 'mevedel-agent-control-settlement-finished "mevedel-agent-control")
+(defvar mevedel-agent-control-settling)
 (defvar mevedel-agent-control-suppress-persistence)
 
 ;; `mevedel-agent-conversation'
@@ -469,120 +476,135 @@
 (defun mevedel-agent-runtime--settle (invocation response &optional event)
   "Finalize INVOCATION and deliver RESPONSE and EVENT exactly once."
   (unless (mevedel-agent-invocation-runtime-settled-p invocation)
-    (let* ((pending
-            (mevedel-agent-invocation-runtime-pending-response invocation))
-           (committed-p
-            (and (listp pending)
-                 (eq 'committed (plist-get pending :phase))))
-           status visible transaction terminal-publication-p)
-      (if committed-p
-          (setq status (plist-get pending :status)
-                visible (plist-get pending :visible)
-                transaction (plist-get pending :transaction))
-        (when (and (listp pending) (plist-member pending :response))
-          (setq response (plist-get pending :response)
-                event (plist-get pending :event)))
-        (setq pending (list :response response :event event))
+    (if (memq invocation mevedel-agent-control-settling)
+        ;; A nested terminal callback for the same turn; the outer call
+        ;; reports when settlement ends.
+        (mevedel-agent-runtime--settle-1 invocation response event)
+      (unwind-protect
+          (let ((mevedel-agent-control-settling
+                 (cons invocation mevedel-agent-control-settling)))
+            (mevedel-agent-runtime--settle-1 invocation response event))
+        (when-let* ((session (mevedel-agent-invocation-parent-session invocation)))
+          (mevedel-agent-control-settlement-finished session))))))
+
+(defun mevedel-agent-runtime--settle-1 (invocation response event)
+  "Finalize INVOCATION and deliver RESPONSE and EVENT; see the caller."
+  (let* ((pending
+          (mevedel-agent-invocation-runtime-pending-response invocation))
+         (committed-p
+          (and (listp pending)
+               (eq 'committed (plist-get pending :phase))))
+         status visible transaction terminal-publication-p)
+    (if committed-p
+        (setq status (plist-get pending :status)
+              visible (plist-get pending :visible)
+              transaction (plist-get pending :transaction))
+      (when (and (listp pending) (plist-member pending :response))
+        (setq response (plist-get pending :response)
+              event (plist-get pending :event)))
+      (setq pending (list :response response :event event))
+      (setf (mevedel-agent-invocation-runtime-pending-response invocation)
+            pending)
+      (let* ((event-status
+              (and (listp event)
+                   (plist-get event :mevedel-agent-terminal-status)))
+             (callback
+              (mevedel-agent-invocation-runtime-settle-callback invocation))
+             (session
+              (mevedel-agent-invocation-parent-session invocation))
+             (save-path (and session
+                             (mevedel-session-save-path session))))
+        (setq status (pcase event-status
+                       ('error 'error)
+                       ('aborted 'aborted)
+                       (_ 'completed))
+              visible
+              (pcase status
+                ('error
+                 (mevedel-agent-runtime--error-response invocation event))
+                ('aborted
+                 (mevedel-agent-runtime--interrupted-response
+                  invocation
+                  (or (mevedel-agent-invocation-terminal-reason invocation)
+                      "interrupted")))
+                (_ response))
+              terminal-publication-p
+              (and session
+                   save-path
+                   (mevedel-session-artifacts-artifact-present-p
+                    session "session.meta.el")
+                   (mevedel-agent-invocation-transcript-relative-path
+                    invocation)
+                   (buffer-live-p
+                    (mevedel-agent-invocation-buffer invocation))
+                   (buffer-live-p
+                    (mevedel-agent-invocation-parent-data-buffer invocation))
+                   (mevedel-session-execution-target session)
+                   ;; Portable authority resolves the transcript through
+                   ;; the publication, local target included: a direct
+                   ;; write would leave resume unable to see it.
+                   (mevedel-session-codec-portable-authority-p session)))
+        (when (eq status 'error)
+          (let ((detail (plist-get event :error-details)))
+            (mevedel-recovery-report
+             session (concat "agent:" (mevedel-agent-invocation-agent-id invocation))
+             (mevedel-recovery-category (and (stringp detail) detail))
+             (format "Agent %s failed; inspect its transcript before continuing"
+                     (mevedel-agent-invocation-require-path invocation)) nil)))
+        (let ((mevedel-agent-runtime--defer-terminal-publication-p
+               terminal-publication-p))
+          (mevedel-agent-runtime--finalize invocation status))
+        (when callback
+          (let ((mevedel-agent-control-suppress-persistence t))
+            (setq transaction
+                  (funcall callback invocation visible event))))
+        (condition-case err
+            (if terminal-publication-p
+                (mevedel-session-artifacts-publish-agent-terminal-state
+                 invocation)
+              (when (consp transaction)
+                (mevedel-agent-control-commit-session session)))
+          ;; A quit must not leave the staged idle record and its
+          ;; uncommitted RESULT behind either.
+          ((error quit)
+           (when (functionp (car-safe transaction))
+             (funcall (car transaction)))
+           (signal (car err) (cdr err))))
+        (setq pending
+              (list :phase 'committed :status status :visible visible
+                    :transaction transaction))
         (setf (mevedel-agent-invocation-runtime-pending-response invocation)
-              pending)
-        (let* ((event-status
-                (and (listp event)
-                     (plist-get event :mevedel-agent-terminal-status)))
-               (callback
-                (mevedel-agent-invocation-runtime-settle-callback invocation))
-               (session
-                (mevedel-agent-invocation-parent-session invocation))
-               (save-path (and session
-                               (mevedel-session-save-path session))))
-          (setq status (pcase event-status
-                         ('error 'error)
-                         ('aborted 'aborted)
-                         (_ 'completed))
-                visible
-                (pcase status
-                  ('error
-                   (mevedel-agent-runtime--error-response invocation event))
-                  ('aborted
-                   (mevedel-agent-runtime--interrupted-response
-                    invocation
-                    (or (mevedel-agent-invocation-terminal-reason invocation)
-                        "interrupted")))
-                  (_ response))
-                terminal-publication-p
-                (and session
-                     save-path
-                     (mevedel-session-artifacts-artifact-present-p
-                      session "session.meta.el")
-                     (mevedel-agent-invocation-transcript-relative-path
-                      invocation)
-                     (buffer-live-p
-                      (mevedel-agent-invocation-buffer invocation))
-                     (buffer-live-p
-                      (mevedel-agent-invocation-parent-data-buffer invocation))
-                     (mevedel-session-execution-target session)
-                     ;; Portable authority resolves the transcript through
-                     ;; the publication, local target included: a direct
-                     ;; write would leave resume unable to see it.
-                     (mevedel-session-codec-portable-authority-p session)))
-          (when (eq status 'error)
-            (let ((detail (plist-get event :error-details)))
-              (mevedel-recovery-report
-               session (concat "agent:" (mevedel-agent-invocation-agent-id invocation))
-               (mevedel-recovery-category (and (stringp detail) detail))
-               (format "Agent %s failed; inspect its transcript before continuing"
-                       (mevedel-agent-invocation-require-path invocation)) nil)))
-          (let ((mevedel-agent-runtime--defer-terminal-publication-p
-                 terminal-publication-p))
-            (mevedel-agent-runtime--finalize invocation status))
-          (when callback
-            (let ((mevedel-agent-control-suppress-persistence t))
-              (setq transaction
-                    (funcall callback invocation visible event))))
-          (condition-case err
-              (if terminal-publication-p
-                  (mevedel-session-artifacts-publish-agent-terminal-state
-                   invocation)
-                (when (consp transaction)
-                  (mevedel-agent-control-commit-session session)))
-            (error
-             (when (functionp (car-safe transaction))
-               (funcall (car transaction)))
-             (signal (car err) (cdr err))))
-          (setq pending
-                (list :phase 'committed :status status :visible visible
-                      :transaction transaction))
-          (setf (mevedel-agent-invocation-runtime-pending-response invocation)
-                pending)))
-      (when (functionp (cdr-safe transaction))
-        (funcall (cdr transaction)))
-      (setf (mevedel-agent-invocation-runtime-settled-p invocation) t
-            (mevedel-agent-invocation-runtime-fsm invocation) nil
-            (mevedel-agent-invocation-runtime-cancel invocation) nil
-            (mevedel-agent-invocation-runtime-pending-response invocation) nil)
-      (mevedel-agent-runtime--release-settled-state invocation)
-      (when-let* ((timer
-                   (mevedel-agent-invocation-runtime-budget-timer invocation)))
-        (cancel-timer timer)
-        (setf (mevedel-agent-invocation-runtime-budget-timer invocation) nil))
-      (when-let* ((session
-                   (mevedel-agent-invocation-parent-session invocation))
-                  ((fboundp 'mevedel-telemetry-record)))
-        (mevedel-telemetry-record
-         session 'agent-settled
-         :agent-id (mevedel-agent-invocation-agent-id invocation)
-         :agent-path (mevedel-agent-invocation-path invocation)
-         :agent-type
-         (and (mevedel-agent-invocation-agent invocation)
-              (mevedel-agent-name
-               (mevedel-agent-invocation-agent invocation)))
-         :outcome status
-         :duration-ms
-         (when-let* ((started-at
-                      (mevedel-agent-invocation-started-at invocation)))
-           (round
-            (* 1000.0
-               (float-time (time-subtract (current-time) started-at)))))))
-      visible)))
+              pending)))
+    (when (functionp (cdr-safe transaction))
+      (funcall (cdr transaction)))
+    (setf (mevedel-agent-invocation-runtime-settled-p invocation) t
+          (mevedel-agent-invocation-runtime-fsm invocation) nil
+          (mevedel-agent-invocation-runtime-cancel invocation) nil
+          (mevedel-agent-invocation-runtime-pending-response invocation) nil)
+    (mevedel-agent-runtime--release-settled-state invocation)
+    (when-let* ((timer
+                 (mevedel-agent-invocation-runtime-budget-timer invocation)))
+      (cancel-timer timer)
+      (setf (mevedel-agent-invocation-runtime-budget-timer invocation) nil))
+    (when-let* ((session
+                 (mevedel-agent-invocation-parent-session invocation))
+                ((fboundp 'mevedel-telemetry-record)))
+      (mevedel-telemetry-record
+       session 'agent-settled
+       :agent-id (mevedel-agent-invocation-agent-id invocation)
+       :agent-path (mevedel-agent-invocation-path invocation)
+       :agent-type
+       (and (mevedel-agent-invocation-agent invocation)
+            (mevedel-agent-name
+             (mevedel-agent-invocation-agent invocation)))
+       :outcome status
+       :duration-ms
+       (when-let* ((started-at
+                    (mevedel-agent-invocation-started-at invocation)))
+         (round
+          (* 1000.0
+             (float-time (time-subtract (current-time) started-at)))))))
+    visible))
 
 (defun mevedel-agent-runtime--release-settled-state (invocation)
   "Drop memory a settled INVOCATION's buffer no longer needs.
@@ -590,14 +612,17 @@ A retained agent can sit idle for hours.  Its last request's serialized
 payload serves only request inspection and a decoding memo is rebuilt on
 demand, yet together they kept as much Lisp data alive as the transcript
 itself, making every later garbage collection slower.  A continuation
-builds a fresh request."
+builds a fresh request.  A retried settlement can run after the agent's
+next turn started in the same buffer; that turn's state is left alone."
   (when-let* ((context (mevedel-agent-invocation-runtime-context invocation)))
     (when-let* ((start (plist-get context :mevedel-agent-prompt-start)))
       (set-marker start nil))
     (dolist (key '(:mevedel-agent-prompt :mevedel-agent-prompt-start))
       (when (plist-get context key) (plist-put context key nil))))
   (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
-              ((buffer-live-p buffer)))
+              ((buffer-live-p buffer))
+              ((eq invocation (buffer-local-value 'mevedel--agent-invocation
+                                                  buffer))))
     (with-current-buffer buffer
       (when-let* ((fsm (bound-and-true-p gptel--fsm-last)))
         (setf (gptel-fsm-info fsm) (plist-put (gptel-fsm-info fsm) :data nil)))
@@ -678,6 +703,11 @@ terminal acknowledgement and will settle the invocation itself."
     (error "Interrupt target has no live invocation"))
   (if (mevedel-agent-invocation-runtime-settled-p invocation)
       (mevedel-agent-runtime--interrupted-response invocation reason)
+    ;; Mail queued before the interrupt must not restart the stopped agent;
+    ;; mail sent afterwards still does.
+    (when-let* ((session (mevedel-agent-invocation-parent-session invocation))
+                (path (mevedel-agent-invocation-path invocation)))
+      (mevedel-agent-control-clear-agent-wakes session path))
     (let* ((buffer (mevedel-agent-invocation-buffer invocation))
            (fsm (mevedel-agent-invocation-runtime-fsm invocation))
            (response (mevedel-agent-runtime--interrupted-response
@@ -957,11 +987,14 @@ Return a marker at the start of the turn's Agent Task heading."
            prepared-turn start-hook-audits
            on-invocation on-settle path frozen-configuration
            retained-id retained-buffer retained-transcript
-           pending-hook-context on-hook-context parent-tool-use-id)
+           pending-hook-context on-hook-context parent-tool-use-id
+           plan-read-only)
   "Start one asynchronous retained agent turn and return its invocation.
 AGENT starts a new conversation; FROZEN-CONFIGURATION and the three retained
 identity values continue one.  PATH is the conversation's canonical address.
-ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
+ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once.  The turn is
+Plan read-only when PLAN-READ-ONLY is non-nil or its caller works under Plan
+read-only authority."
   (unless (and (stringp path) (string-match-p "\\`/root/" path))
     (error "Agent requires a canonical path below /root"))
   (when (and frozen-configuration
@@ -1006,7 +1039,7 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
           (mevedel-agent-invocation-goal-owner invocation)
           (mevedel-goal-accounting-owner parent-buffer)
           (mevedel-agent-invocation-plan-read-only invocation)
-          (mevedel-plan-read-only-p session)
+          (or plan-read-only (mevedel-plan-read-only-p session))
           (mevedel-agent-invocation-parent-tool-use-id invocation)
           parent-tool-use-id
           (mevedel-agent-invocation-sandbox-summary-cell invocation)

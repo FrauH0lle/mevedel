@@ -61,7 +61,7 @@ to the decision bearing that ID.
 | 0032 | Agent follow-ups retain conversation context | [ADR 0033 — history](0033-retain-settled-agents-for-the-session-lifetime.md#decision-history) |
 | 0033 | Retain settled agents for the session lifetime | [ADR 0033](0033-retain-settled-agents-for-the-session-lifetime.md) |
 | 0034 | Address agents by canonical task path | [ADR 0034](0034-address-agents-by-canonical-task-path.md) |
-| 0035 | Separate agent messages from follow-up work | [ADR 0035](0035-separate-agent-messages-from-follow-up-work.md) |
+| 0035 | Wake retained agents through messages | [ADR 0035](0035-separate-agent-messages-from-follow-up-work.md) |
 | 0036 | Wait for agents explicitly | [ADR 0036](0036-wait-for-agents-explicitly.md) |
 | 0037 | Allow tree-wide agent communication | [ADR 0037](0037-allow-tree-wide-agent-communication.md) |
 | 0038 | List the addressable agent roster | [ADR 0038](0038-list-the-addressable-agent-roster.md) |

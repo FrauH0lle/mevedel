@@ -748,7 +748,7 @@ their backend-specific meaning. Discovery no longer invokes this writer.
 ### Interaction tool ownership
 
 `mevedel-tool-ui.el` assembles the user-interaction tool surface and owns the
-Agent, FollowupAgent, InterruptAgent, ListAgents, ToolSearch, SendMessage, and
+Agent, InterruptAgent, ListAgents, ToolSearch, SendMessage, and
 WaitAgent adapters. Ask's questionnaire lives in `mevedel-tool-ask-ui.el`; its
 handler, renderer, and schema live in `mevedel-tool-ask.el`. Exact external-path
 authority is part of the normal permission pipeline, not a model-visible tool.
@@ -1000,12 +1000,12 @@ Agent tool calls and direct asynchronous workflows use `:kind
 collaboration-event` render-data. A `started` event renders the retained
 transcript handle; the registry-backed aggregate status uses distinct
 `Running`, `Waiting`, and `Blocked` rows. Canonical tool and lifecycle events
-are the only sources for `Started PATH`, `FollowupAgent: PATH`,
+are the only sources for `Started PATH`,
 `SendMessage: PATH`, `InterruptAgent: PATH`, and `Waiting for agents`.
 Settled `WaitAgent` calls render `WaitAgent: agents (OUTCOME)`; consecutive
-waits coalesce into the final row with a count. `FollowupAgent: PATH` and
-`SendMessage: PATH` start collapsed and expand to their exact follow-up or
-mail text.
+waits coalesce into the final row with a count. `SendMessage: PATH` starts
+collapsed and expands to its exact message. Its `:delivery` render-data field
+selects `message queued`, `started`, or `waiting for a slot` in the header.
 Render-data lookup/patching searches opening delimiters and decodes the complete
 payload rather than stopping at the first closing marker or matching the whole
 hidden block with one regexp; live agent metadata

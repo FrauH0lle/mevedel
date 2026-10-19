@@ -737,7 +737,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                          (buffer-local-value 'mevedel--agent-invocation
                                              captured-buffer))
                         t)))
-                  (mevedel-agent-control-followup
+                  (mevedel-agent-control-send-message
                    restored-session "/root/idle" "Continue after resume.")))
               (setq idle-buffer (mevedel-agent-record-conversation-buffer idle))
               (should (buffer-live-p idle-buffer))

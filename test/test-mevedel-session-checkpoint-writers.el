@@ -88,7 +88,12 @@
               (set-visited-file-name (file-name-concat session-directory logical) t t)
               (insert "Agent task\n\n" (propertize "Agent answer\n" 'gptel 'response)))
             (should (mevedel-agent-conversation-save invocation)))
-          (mevedel-agent-control-send-message session path payload)
+          ;; Queue without starting the idle agent: this case delivers the
+          ;; mail at a simulated WAIT boundary.
+          (cl-letf (((symbol-function 'mevedel-agent-control--capacity-p) #'ignore)
+                    ((symbol-function 'mevedel-agent-control--schedule-agent-wakes)
+                     #'ignore))
+            (mevedel-agent-control-send-message session path payload))
           (with-current-buffer receiver
             (goto-char (point-max))
             (insert (propertize "Partial tail before freeze\n" 'gptel 'response)))

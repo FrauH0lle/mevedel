@@ -1,21 +1,22 @@
-# Separate agent messages from follow-up work
+# Wake retained agents through messages
 
 Status: accepted. Incorporates ADRs 0046, 0047, 0048, 0049, 0050, 0051, and 0052.
 
 ## Current decision
 
-SendMessage queues nonempty plain-text information. Agent-originated MAIL to
-`/root` can start an idle Background event turn through the Monitor scheduler;
-root self-mail and mail to non-root recipients do not start turns.
-FollowupAgent gives an addressable non-root agent work: it starts an idle
-conversation or steers an active one at its next safe boundary. The same text
-shape applies to Agent's initial task. Shared files can carry larger referenced
+SendMessage is the single communication tool for retained agents. It delivers
+nonempty plain text to an active recipient at its next safe boundary and starts
+an idle recipient's turn. Agent-originated MAIL to `/root` uses the Monitor
+Background event scheduler. Self-mail never starts a turn. The same text shape
+applies to Agent's initial task. Shared files can carry larger referenced
 material; there is no structured attachment or dual text/item protocol.
 
-Successful Agent returns the canonical child path. SendMessage and FollowupAgent
-have empty successful model results; the original calls already retain target
-and text. Invalid targets, exhausted capacity, and dispatch/delivery failures
-remain tool errors. Observation/control tools retain their own result shapes.
+Successful Agent returns the canonical child path. SendMessage has an empty
+successful model result when queued for an active recipient or started at once;
+at capacity it queues the message and reports that the agent starts when a slot
+frees. The original call retains target and text. Invalid targets and
+dispatch/delivery failures remain tool errors. Observation/control tools retain
+their own result shapes.
 
 Unread mail is durable root-session state and is delivered FIFO before the
 recipient's next sample, independently of WaitAgent. A communication record
@@ -24,13 +25,13 @@ conversation history rather than the unread queue. There are no model-facing
 message IDs, replay controls, or acknowledgements.
 
 Every settled child turn stages one terminal RESULT for its original spawn
-parent, including later turns initiated by a peer. An ordinary RESULT to `/root`
-can wake the idle root; it does not activate a non-root parent or broadcast.
+parent, including later turns initiated by a peer. An ordinary RESULT wakes an
+idle spawn parent, root or non-root, but does not broadcast.
 Outcomes are completed, errored, or interrupted; payloads
 carry the final response, concise failure, or interruption reason with useful
 partial text. A workflow awaiting its child may consume that exact committed
-record through its result handler without waking the root. Handler failure
-leaves it for ordinary mail, including idle-root wake eligibility.
+record through its result handler without waking the parent. Handler failure
+leaves it for ordinary waking mail.
 A yielded Bash completion that arrives while the child still works reaches the
 child itself, as `EXECUTION` mail read at its next provider request, like the
 root's own completions. Completions the child can no longer read, because they
@@ -39,13 +40,31 @@ alongside that result as separate `EXECUTION` records to the spawn parent, with
 the child as sender. They do not alter the final-response payload or the
 workflow result handler's input.
 
-Idle-root wakes share Monitor's scheduling order, holds, and current root
-permissions; they are not user instructions or new authority. An active
-WaitAgent still resumes through its existing callback rather than starting
-another turn. Wake marks are runtime-only: restart and recovery do not turn
-saved mail or recovery-generated results into background work. Successful root
-turns reoffer eligible unread mail that arrived after their last sample; failed
-or aborted turns do not automatically retry it in a wake loop.
+Idle-root wakes share Monitor's scheduling order and holds. Non-root wakes are
+offered once a settlement ends, oldest waking mail first while capacity
+allows. Releasing a preparation reservation or rolling back a failed startup
+also reoffers waiting work. This includes mail arriving after the recipient's
+last sample and queued work waiting for a slot. No retained agent in a session
+starts while one of its settlements is running: settlement marks its agent idle
+before the RESULT commits, so a new turn could race its rollback or publication.
+Mail meanwhile waits for the offer that follows every settlement, whether it
+committed, rolled back, or failed. A delivery retry that runs after the agent's
+next turn started leaves that turn's buffer state alone. An active WaitAgent
+resumes through its existing callback rather than starting another turn.
+
+Wakes use current session permissions and sticky Plan state, not authority from
+mail. MAIL sent under Plan additionally retains a runtime read-only stamp for
+any non-root activation that will read it, including a later direct assignment.
+RESULT records are information and do not carry the sender's Plan stamp.
+Wake and Plan marks are runtime-only: restart and
+recovery do not turn saved mail or recovery-generated results into background
+work. An interrupt request clears existing wake marks on the target, including
+an idle target waiting for capacity; later MAIL or RESULT can wake it. A child
+result arriving after its parent's interruption therefore restarts that parent.
+Errored settlement
+clears its marks to prevent automatic retries.
+Successful root turns likewise reoffer late mail; failed or aborted root turns
+do not automatically retry it. EXECUTION records never trigger agent wakes.
 
 Inline terminal previews use a 32,768-character head-and-tail budget and point
 to the persisted transcript when truncated. Complete settled results and
@@ -56,13 +75,14 @@ opaque turn IDs.
 
 ## Rationale and consequences
 
-Explicit follow-up owns child activation, mail owns information, and
-[WaitAgent](0036-wait-for-agents-explicitly.md) owns waiting. Separating wake-up
-summaries from content avoids duplicate mail in tool output and history.
-The idle-root exception lets the coordinator receive late reports without a
-user nudge; it reuses the Background event wake path (its prompt and heading are
-hidden in the view; the turn starts with the report notices) rather than granting
-senders a general ability to start or steer idle children.
+The harness owns delivery and activation; callers need not distinguish an idle
+recipient from one about to finish its final response.
+[WaitAgent](0036-wait-for-agents-explicitly.md) owns waiting within a turn.
+Separating wake-up summaries from content avoids duplicate mail in tool output
+and history. Root notification reuses the Background event wake path (its prompt
+and heading are hidden in the view; the turn starts with report notices).
+Every SendMessage holder can wake retained agents, including communicating leaf
+roles. Capacity bounds concurrent turns; there is no separate message-loop guard.
 A stable spawn parent owns automatic results even when another peer starts work;
 that peer needs an explicit SendMessage for a direct reply.
 
@@ -73,6 +93,15 @@ turning the model into a delivery-protocol participant.
 
 ## Decision history
 
+- **Merge follow-up work into SendMessage (2026-10-19).** Inspection found 44
+  unread MAIL/RESULT records at idle agents across 30 sessions. Ten MAIL records
+  arrived during final responses, and the late-mail race reproduced during the
+  investigation itself. Separating information from activation required callers
+  to predict recipient state and stranded nested results. The user chose Claude
+  Code's idle-recipient wake behavior: remove FollowupAgent, wake for MAIL and
+  ordinary RESULT, and retain queued work until capacity frees. Runtime Plan
+  stamps preserve read-only limits when activation is deferred; interruption
+  clears old wake marks without discarding mail or blocking a later assignment.
 - **Wake the idle root for agent reports (2026-10).** Previously all SendMessage
   mail and terminal results were queue-only: even reports addressed to `/root`
   could remain stranded until the user's next turn. Agent-originated MAIL and

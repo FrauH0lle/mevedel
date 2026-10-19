@@ -42,7 +42,7 @@
                                                   :tools '(Read) :max-turns limit
                                                   :system-prompt "Read evidence")
                      :on-invocation (lambda (value) (setq invocation value)))
-                  (mevedel-agent-control-followup session "/root/limited" "Continue the investigation.")
+                  (mevedel-agent-control-send-message session "/root/limited" "Continue the investigation.")
                   (setq invocation (mevedel-agent-record-invocation record)))
                 (mevedel-test--await 10 "Limited child did not settle"
                   (mevedel-agent-invocation-runtime-settled-p invocation))
@@ -64,7 +64,7 @@
           (when (and record (buffer-live-p (mevedel-agent-record-conversation-buffer record)))
             (kill-buffer (mevedel-agent-record-conversation-buffer record))))))))
 
-(mevedel-deftest mevedel-agent-control-followup/claude-edited-history (:quiet t)
+(mevedel-deftest mevedel-agent-control-send-message/claude-edited-history (:quiet t)
   (dolist (phase '(completed compacted active reopened))
     (mevedel-engine-test--with-claude-session
       (mevedel-request-end)
@@ -141,11 +141,11 @@
                   (not (mevedel-agent-control-active-turn-p session))))
               (should (eq 'diverged (plist-get (alist-get "/root/editor" (mevedel-session-external-conversations session) nil nil #'equal) :state)))
               (with-current-buffer (or restored buffer)
-                (should-error (mevedel-agent-control-followup session "/root/editor" "Continue using my edited evidence.") :type 'user-error))
+                (should-error (mevedel-agent-control-send-message session "/root/editor" "Continue using my edited evidence.") :type 'user-error))
               (should (= 1 launches))
               (with-current-buffer (or restored buffer)
                 (mevedel-claude-code-recover-history "/root/editor")
-                (mevedel-agent-control-followup session "/root/editor" "Continue using my edited evidence."))
+                (mevedel-agent-control-send-message session "/root/editor" "Continue using my edited evidence."))
               (mevedel-test--await 5 "Recovered child did not settle"
                 (not (mevedel-agent-control-active-turn-p session)))
               (should (= 2 launches))

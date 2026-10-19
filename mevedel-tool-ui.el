@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Assembles the user-interaction tool surface and owns the small adapters for
-;; Agent, FollowupAgent, InterruptAgent, ListAgents, ToolSearch, SendMessage, and
+;; Agent, InterruptAgent, ListAgents, ToolSearch, SendMessage, and
 ;; WaitAgent.
 ;; Ask lives in a focused tool module; generic, Bash, and Eval prompts live in
 ;; the permission-prompt module.
@@ -102,22 +102,6 @@
                  mevedel--current-request)
         (mevedel-request-push-canceller mevedel--current-request cancel)))))
 
-(defun mevedel-tool-ui--followup-agent (args)
-  "Continue or steer the retained agent described by ARGS."
-  (let* ((record
-          (mevedel-agent-control-followup
-           mevedel--session
-           (plist-get args :target)
-           (plist-get args :message)
-           :parent-tool-use-id
-           (mevedel-pipeline-active-tool-use-id)))
-         (path (mevedel-agent-record-path record)))
-    (list :result ""
-          :render-data
-          (list :kind 'collaboration-event
-                :event 'interacted
-                :path path))))
-
 (defun mevedel-tool-ui--list-agents (args)
   "Return the retained agent roster described by ARGS."
   (let ((path-prefix (plist-get args :path_prefix)))
@@ -150,23 +134,28 @@
    (plist-get args :query)))
 
 (defun mevedel-tool-ui--send-message (args)
-  "Queue the SendMessage described by ARGS."
-  (let ((path
-         (mevedel-agent-control-send-message
-          mevedel--session
-          (plist-get args :target)
-          (plist-get args :message))))
-    (list :result ""
+  "Deliver the SendMessage described by ARGS."
+  (let* ((outcome
+          (mevedel-agent-control-send-message
+           mevedel--session
+           (plist-get args :target)
+           (plist-get args :message)
+           :parent-tool-use-id
+           (mevedel-pipeline-active-tool-use-id)))
+         (delivery (plist-get outcome :delivery)))
+    (list :result (if (eq delivery 'waiting)
+                      "Agent starts when a slot frees."
+                    "")
           :render-data
           (list :kind 'collaboration-event
                 :event 'interacted
-                :path path))))
+                :path (plist-get outcome :path)
+                :delivery delivery))))
 
 (defun mevedel-tool-ui--wait-summary (reason)
   "Return the model-visible WaitAgent summary for REASON."
   (pcase reason
     ('mailbox "Mailbox activity")
-    ('steering "Follow-up steering received")
     ('user "User steering received")
     ('timeout "Timeout elapsed")
     (_ "Wait finished")))
@@ -248,9 +237,10 @@
     (let ((path (plist-get render-data :path)))
       (list :header (format "%s: %s (%s)"
                             (or name "SendMessage") path
-                            (if (equal name "SendMessage")
-                                "message queued"
-                              "follow-up sent"))
+                            (pcase (plist-get render-data :delivery)
+                              ('started "started")
+                              ('waiting "waiting for a slot")
+                              (_ "message queued")))
             :body (or (plist-get args :message) "")
             :body-mode nil
             :agent-path path
@@ -361,19 +351,6 @@
     :read-only-p t
     :renderer #'mevedel-tool-ui--render-agent)
   (mevedel-define-tool
-    :name "FollowupAgent"
-    :description "Continue or steer one retained non-root agent."
-    :prompt-file "prompts/tools/followupagent.md"
-    :handler #'mevedel-tool-ui--followup-agent
-    :args ((target string :required
-                   "Canonical path or relative descendant path.")
-           (message string :required
-                    "Complete non-empty follow-up task."))
-    :groups (agents)
-    :get-name (lambda (args) (plist-get args :target))
-    :read-only-p t
-    :renderer '((success . mevedel-tool-ui--render-agent-interaction)))
-  (mevedel-define-tool
     :name "ListAgents"
     :description "List retained agent paths, roles, and activity."
     :prompt-file "prompts/tools/listagents.md"
@@ -406,7 +383,7 @@
     :renderer '((success . mevedel-tool-ui--render-tool-search)))
   (mevedel-define-tool
     :name "SendMessage"
-    :description "Queue an interim, non-duplicative message for a retained agent; agent mail can wake an idle root, but not idle children."
+    :description "Send a message to a retained agent, starting its turn if idle."
     :prompt-file "prompts/tools/sendmessage.md"
     :handler #'mevedel-tool-ui--send-message
     :args ((target string :required

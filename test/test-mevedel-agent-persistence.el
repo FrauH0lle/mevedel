@@ -972,7 +972,7 @@
                                      (string-search "Retained decision." (buffer-string))))
                            (should (eq configuration (plist-get options :frozen-configuration)))
                            t)))
-                (mevedel-agent-control-followup session "/root/lazy" "Continue"))))
+                (mevedel-agent-control-send-message session "/root/lazy" "Continue"))))
           (should dispatched)
           (should-not (eq inspected resident))
           (should (eq resident (mevedel-agent-persistence-ensure-conversation

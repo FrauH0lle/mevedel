@@ -371,6 +371,43 @@
       (kill-buffer agent-buffer)
       (kill-buffer parent)))
 
+  :doc "an explicit Plan stamp applies without a Plan caller"
+  (let* ((parent (generate-new-buffer " *agent-runtime-plan-parent*"))
+         (agent-buffer (generate-new-buffer " *agent-runtime-plan-child*"))
+         (agent (mevedel-agent-runtime-test--agent))
+         (configuration (mevedel-agent-runtime-test--configuration agent)))
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local mevedel--session (mevedel-session--create :name "main"))
+          (cl-letf (((symbol-function 'mevedel-agent-exec-freeze-configuration)
+                     (lambda (&rest _) configuration))
+                    ((symbol-function 'mevedel-agent-conversation-open)
+                     (lambda (&rest _) agent-buffer))
+                    ((symbol-function 'mevedel-agent-runtime--setup-transcript)
+                     (lambda (invocation _buffer)
+                       (setf (mevedel-agent-invocation-transcript-relative-path
+                              invocation)
+                             "agents/explorer.chat.org")))
+                    ((symbol-function 'mevedel-agent-conversation-configure)
+                     #'ignore)
+                    ((symbol-function 'mevedel-agent-conversation-save)
+                     (lambda (&rest _) t))
+                    ((symbol-function 'mevedel-agent-exec-run)
+                     (lambda (&rest _) 'provider-fsm))
+                    ((symbol-function 'mevedel-view-agent-live-transcript-start)
+                     #'ignore))
+            (dolist (stamp '(nil t))
+              (should
+               (eq stamp
+                   (mevedel-agent-invocation-plan-read-only
+                    (mevedel-agent-runtime-dispatch
+                     agent "Explore" "Look."
+                     :path "/root/explore"
+                     :prepared-turn '(:prompt "Look.")
+                     :plan-read-only stamp)))))))
+      (kill-buffer agent-buffer)
+      (kill-buffer parent)))
+
   :doc "public dispatch shares root authority and routes child prompts to it"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-agent-authority-" t)))
@@ -1373,6 +1410,34 @@ ARTIFACT-P selects whether its sidecar counts as committed."
           (kill-buffer buffer)))
       (delete-directory save-path t))))
 
+(mevedel-deftest mevedel-agent-runtime--release-settled-state ()
+  ,test
+  (test)
+  :doc "drops the finished request payload but spares a newer turn's buffer state"
+  (let ((buffer (generate-new-buffer " *agent-runtime-release*"))
+        (old (mevedel-agent-runtime-test--invocation))
+        (new (mevedel-agent-runtime-test--invocation)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-agent-invocation-buffer old) buffer
+                (mevedel-agent-invocation-buffer new) buffer)
+          (with-current-buffer buffer
+            (setq-local mevedel--agent-invocation old)
+            (setq-local gptel--fsm-last
+                        (gptel-make-fsm :info (list :data 'old-payload))))
+          (mevedel-agent-runtime--release-settled-state old)
+          (with-current-buffer buffer
+            (should-not (plist-get (gptel-fsm-info gptel--fsm-last) :data))
+            ;; A retried settlement of OLD after NEW started there.
+            (setq-local mevedel--agent-invocation new)
+            (setq-local gptel--fsm-last
+                        (gptel-make-fsm :info (list :data 'new-payload))))
+          (mevedel-agent-runtime--release-settled-state old)
+          (with-current-buffer buffer
+            (should (eq 'new-payload
+                        (plist-get (gptel-fsm-info gptel--fsm-last) :data)))))
+      (kill-buffer buffer))))
+
 (mevedel-deftest mevedel-agent-runtime--settle (:quiet t)
   ,test
   (test)
@@ -1385,6 +1450,38 @@ ARTIFACT-P selects whether its sidecar counts as committed."
    (equal '((presence "session.meta.el")
             (finalize nil) (callback t) commit delivery)
           (test-mevedel-agent-runtime--terminal-settlement-events nil)))
+
+  :doc "a quit during portable publication rolls staged control state back"
+  (let* ((session (mevedel-session--create
+                   :name "main" :save-path temporary-file-directory
+                   :execution-target 'local :authority-mode 'portable))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         events)
+    (setf (mevedel-agent-invocation-parent-session invocation) session
+          (mevedel-agent-invocation-parent-data-buffer invocation)
+          (current-buffer)
+          (mevedel-agent-invocation-buffer invocation) (current-buffer)
+          (mevedel-agent-invocation-transcript-relative-path invocation)
+          "agents/test.chat.org"
+          (mevedel-agent-invocation-runtime-settle-callback invocation)
+          (lambda (&rest _)
+            (cons (lambda () (push 'rollback events))
+                  (lambda () (push 'delivery events)))))
+    (cl-letf (((symbol-function
+                'mevedel-session-artifacts-artifact-present-p)
+               (lambda (&rest _) t))
+              ((symbol-function 'mevedel-agent-runtime--finalize) #'ignore)
+              ((symbol-function
+                'mevedel-session-artifacts-publish-agent-terminal-state)
+               (lambda (&rest _) (signal 'quit nil)))
+              ((symbol-function 'mevedel-agent-control-settlement-finished)
+               (lambda (&rest _) (push 'finished events))))
+      (should (equal '(quit)
+                     (condition-case err
+                         (progn (mevedel-agent-runtime--settle invocation "done")
+                                nil)
+                       (quit err))))
+      (should (equal '(rollback finished) (nreverse events)))))
 
   :doc "portable publication failure rolls staged control state back"
   (let* ((session (mevedel-session--create
@@ -1412,15 +1509,43 @@ ARTIFACT-P selects whether its sidecar counts as committed."
                 'mevedel-session-artifacts-publish-agent-terminal-state)
                (lambda (&rest _)
                  (push 'publication events)
-                 (error "Commit unavailable"))))
+                 (error "Commit unavailable")))
+              ((symbol-function 'mevedel-agent-control-settlement-finished)
+               (lambda (seen-session)
+                 (should (eq session seen-session))
+                 (push 'finished events))))
       (should-error
        (mevedel-agent-runtime--settle invocation "finished"))
-      (should (equal '(finalize callback publication rollback)
+      ;; Even a failed settlement stops blocking new turns in the tree.
+      (should (equal '(finalize callback publication rollback finished)
                      (nreverse events)))
       (should-not
        (mevedel-agent-invocation-runtime-settled-p invocation))
       (should
        (mevedel-agent-invocation-runtime-pending-response invocation))))
+
+  :doc "a nested settlement of the same turn leaves the report to the outer call"
+  (let* ((session (mevedel-session--create :name "main"))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         (finished nil)
+         (nested nil))
+    (setf (mevedel-agent-invocation-parent-session invocation) session
+          (mevedel-agent-invocation-runtime-settle-callback invocation)
+          (lambda (&rest _)
+            (unless nested
+              (setq nested t)
+              ;; A terminal timer fires while the outer call is staging.
+              (should (memq invocation mevedel-agent-control-settling))
+              (mevedel-agent-runtime--settle invocation "again")
+              (should-not finished))
+            nil))
+    (cl-letf (((symbol-function 'mevedel-agent-runtime--finalize) #'ignore)
+              ((symbol-function 'mevedel-agent-control-settlement-finished)
+               (lambda (_session) (push t finished))))
+      (mevedel-agent-runtime--settle invocation "finished"))
+    (should nested)
+    (should-not mevedel-agent-control-settling)
+    (should (equal '(t) finished)))
 
   :doc "portable delivery retries without repeating its committed publication"
   (let* ((session (mevedel-session--create
@@ -1489,6 +1614,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
             (current-buffer)
             (mevedel-agent-invocation-runtime-settle-callback invocation)
             (lambda (&rest _) nil))
+      (setq-local mevedel--agent-invocation invocation)
       (cl-letf (((symbol-function 'mevedel-agent-runtime--finalize) #'ignore))
         (should (equal "finished"
                        (mevedel-agent-runtime--settle invocation "finished"))))
@@ -1738,6 +1864,31 @@ ARTIFACT-P selects whether its sidecar counts as committed."
             (should (= 2 cancel-count))
             (should-not settled)
             (should-not (mevedel-agent-invocation-runtime-settled-p invocation))))
+      (kill-buffer buffer)))
+
+  :doc "mail queued before the interrupt no longer wakes; later mail does"
+  (let* ((buffer (generate-new-buffer " *agent-runtime-interrupt-wakes*"))
+         (invocation (mevedel-agent-runtime-test--invocation buffer))
+         (session (mevedel-session--create :name "main"))
+         (before (list :type 'MAIL :sender "/root" :payload "before" :wake t))
+         (record (mevedel-agent-record--create
+                  :path "/root/explore" :activity 'running
+                  :invocation invocation :mailbox (list before))))
+    (setf (mevedel-agent-invocation-parent-session invocation) session
+          (mevedel-session-agent-registry session)
+          (list (cons "/root/explore" record))
+          (mevedel-agent-invocation-runtime-cancel invocation)
+          (lambda () 'deferred))
+    (unwind-protect
+        (progn
+          (mevedel-agent-runtime-interrupt invocation "stop")
+          (should-not (plist-get before :wake))
+          (let ((after (list :type 'MAIL :sender "/root" :payload "after"
+                             :wake t)))
+            (push after (mevedel-agent-record-mailbox record))
+            ;; The cancellation acknowledgement settles later; mail sent
+            ;; after the interrupt keeps its mark until then.
+            (should (plist-get after :wake))))
       (kill-buffer buffer)))
 
   :doc "leaves a turn unsettled when provider abort fails"

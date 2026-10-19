@@ -734,10 +734,9 @@ fragment; use `mevedel-toggle-tasks` or `TAB`/`RET` on the fragment to show or
 hide completed tasks
 
 **Sub-agents:** `Agent` (start a retained asynchronous child, optionally with
-task-focused generated background), `FollowupAgent`
-(continue or steer a retained child), `ListAgents` (inspect retained paths),
-`SendMessage` (queue mail without starting a turn), `WaitAgent` (wait for mail,
-steering, or timeout), `InterruptAgent` (abort one current turn without removing
+task-focused generated background), `ListAgents` (inspect retained paths),
+`SendMessage` (send mail or continue a retained agent, starting it if idle),
+`WaitAgent` (wait for mail, steering, or timeout), `InterruptAgent` (abort one current turn without removing
 the agent), and `ToolSearch` (retrieve a specialist's full contract)
 
 **Execution:** `Bash` (with permission system, see below), `Eval` (Emacs Lisp

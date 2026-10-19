@@ -32,7 +32,7 @@
   ,test
   (test)
   :doc "SendMessage and other UI tools align body text with their parent label"
-  (dolist (name '("SendMessage" "FollowupAgent" "ToolSearch"))
+  (dolist (name '("SendMessage" "ToolSearch"))
     (dolist (indent '("" "  " "    " "┌ "))
       (mevedel-view-test--with-buffers
         (mevedel-tool-ui--register)

@@ -528,7 +528,7 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
    (lambda (name) (list name :action 'deny))
    (delete-dups
     (append
-     '("Agent" "FollowupAgent" "SendMessage")
+     '("Agent" "SendMessage")
      (mapcar
       #'mevedel-tool-name
       (cl-remove-if #'mevedel-tool-read-only-p (mevedel-tool-all)))))))

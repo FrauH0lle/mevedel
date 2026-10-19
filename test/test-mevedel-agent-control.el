@@ -63,6 +63,7 @@
        (funcall (car transaction))
        (signal (car err) (cdr err))))
     (funcall (cdr transaction))
+    (mevedel-agent-control-settlement-finished session)
     transaction))
 
 (mevedel-deftest mevedel-agent-control-active-activity-p ()
@@ -639,7 +640,12 @@
           (list (cons "/root/retry" record)))
     (setf (mevedel-session-agent-transcripts session)
           '(("default--rollback" :path "agents/retry.chat.org")))
-    (mevedel-agent-control--rollback session record)
+    (let (offered)
+      (cl-letf (((symbol-function 'mevedel-agent-control--schedule-agent-wakes)
+                 (lambda (_) (setq offered t))))
+        (mevedel-agent-control--rollback session record))
+      ;; The released slot may let a waiting agent start.
+      (should offered))
     (should-not (mevedel-session-agent-registry session))
     (should-not (mevedel-session-agent-reservations session))
     (should-not (mevedel-session-agent-transcripts session))
@@ -678,7 +684,31 @@
                    (lambda (&rest _) (setq offered t))))
           (mevedel-agent-control--deliver-mail session "/root" result)))
       (should-not (plist-get result :wake))
-      (should-not offered))))
+      (should-not offered)))
+
+  :doc "marks agent mail and offers a wake only to an idle agent"
+  (let* ((session (mevedel-agent-control-test--session))
+         (record (mevedel-agent-record--create
+                  :path "/root/worker" :activity 'running))
+         scheduled)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/worker" record)))
+    (cl-letf (((symbol-function 'mevedel-agent-control--schedule-agent-wakes)
+               (lambda (value)
+                 (should (eq session value))
+                 (setq scheduled (1+ (or scheduled 0))))))
+      (dolist (activity '(running idle))
+        (setf (mevedel-agent-record-activity record) activity)
+        (let ((mail (mevedel-agent-control-test--mail
+                     "/root" "/root/worker" (symbol-name activity)))
+              (own (list :type 'EXECUTION :sender "/root/worker"
+                         :recipient "/root/worker" :payload "done")))
+          (setf (mevedel-agent-record-mailbox record) (list own mail))
+          (mevedel-agent-control--deliver-mail session "/root/worker" mail)
+          (mevedel-agent-control--deliver-mail session "/root/worker" own)
+          (should (plist-get mail :wake))
+          (should-not (plist-get own :wake)))))
+    (should (eql 1 scheduled))))
 
 (mevedel-deftest mevedel-agent-control--publish-result ()
   ,test
@@ -929,6 +959,68 @@
                   (mevedel-agent-record-settled-outcome record)))
       (should-not (plist-member result :usage))))
 
+  :doc "offers a wake for mail missed during the final answer unless the turn failed"
+  (dolist (status '(completed error))
+    (let* ((session (mevedel-agent-control-test--session))
+           (invocation (mevedel-agent-invocation-create
+                        (mevedel-agent-default)))
+           (late (mevedel-agent-control-test--mail
+                  "/root" "/root/work" "late" :wake t))
+           (record (mevedel-agent-record--create
+                    :path "/root/work" :parent-path "/root/parent"
+                    :activity 'running :invocation invocation
+                    :mailbox (list late)))
+           (parent (mevedel-agent-record--create
+                    :path "/root/parent" :parent-path "/root"
+                    :activity 'idle))
+           scheduled)
+      (setf (mevedel-agent-invocation-transcript-status invocation) status
+            (mevedel-session-agent-registry session)
+            (list (cons "/root/work" record) (cons "/root/parent" parent)))
+      (cl-letf (((symbol-function 'mevedel-agent-control--schedule-agent-wakes)
+                 (lambda (_) (setq scheduled t))))
+        (mevedel-agent-control-test--settle
+         session record invocation "done"))
+      (should scheduled)
+      (should (eq (eq status 'completed) (plist-get late :wake)))
+      ;; The RESULT wakes the idle parent.
+      (let ((result (car (mevedel-agent-record-mailbox parent))))
+        (should (eq 'RESULT (plist-get result :type)))
+        (should (plist-get result :wake)))))
+
+  :doc "rolling back settlement restores the retained provider snapshot"
+  :doc "a delivery retry leaves the agent's next turn its wait and wake marks"
+  (let* ((session (mevedel-agent-control-test--session))
+         (invocation (mevedel-agent-invocation-create (mevedel-agent-default)))
+         (record (mevedel-agent-record--create
+                  :path "/root/work" :parent-path "/root"
+                  :activity 'running :invocation invocation))
+         (failures 1)
+         transaction)
+    (setf (mevedel-agent-invocation-transcript-status invocation) 'error
+          (mevedel-session-agent-registry session)
+          (list (cons "/root/work" record)))
+    (setq transaction (mevedel-agent-control--settle
+                       session record invocation "failed"))
+    (cl-letf* ((publish (symbol-function 'mevedel-agent-control--publish-result))
+               ((symbol-function 'mevedel-agent-control--publish-result)
+                (lambda (&rest args)
+                  (if (> failures 0)
+                      (progn (cl-decf failures) (error "Parent waiter failed"))
+                    (apply publish args)))))
+      (should-error (funcall (cdr transaction)))
+      ;; The agent's next turn waits and receives new mail meanwhile.
+      (let ((waiter (mevedel-agent-waiter--create :callback #'ignore))
+            (mail (mevedel-agent-control-test--mail
+                   "/root" "/root/work" "for the next turn" :wake t)))
+        (setf (mevedel-agent-record-waiter record) waiter)
+        (push mail (mevedel-agent-record-mailbox record))
+        (funcall (cdr transaction))
+        (should (eq waiter (mevedel-agent-record-waiter record)))
+        (should (plist-get mail :wake))))
+    (should (eq 'RESULT (plist-get (car (mevedel-session-messages session))
+                                   :type))))
+
   :doc "rolling back settlement restores the retained provider snapshot"
   (let* ((session (mevedel-agent-control-test--session))
          (old '(:backend "Old" :model "old" :effort nil))
@@ -958,6 +1050,9 @@
          (record (mevedel-agent-record--create
                   :path "/root/work" :parent-path "/root"
                   :activity 'running :invocation invocation))
+         ;; The runtime binds this around the whole settlement, so an
+         ;; arrival for the already-idle record waits instead of starting it.
+         (mevedel-agent-control-settling (list invocation))
          transaction execution-id)
     (setf (mevedel-session-agent-registry session) (list (cons "/root/work" record)))
     (mevedel-agent-control-enqueue-execution-result session "/root/work" "unread execution")
@@ -993,7 +1088,7 @@
     (funcall (cdr transaction))
     (should-not (plist-get (mevedel-engine-info invocation) :mevedel-settlement-mail-ids))
     ;; Even reusing the same invocation and completion entry cannot retain
-    ;; the previous turn's IDs.  Ordinary FollowupAgent allocates a fresh one.
+    ;; the previous turn's IDs.  An ordinary new turn allocates fresh ones.
     (setf (mevedel-session-messages session) nil
           (mevedel-agent-record-activity record) 'running
           (mevedel-agent-record-invocation record) invocation)
@@ -1187,7 +1282,9 @@
                 :activity 'running :invocation invocation))
          (idle (mevedel-agent-record--create
                 :id "idle-id" :path "/root/idle" :parent-path "/root"
-                :activity 'idle))
+                :activity 'idle
+                :mailbox (list (list :type 'MAIL :sender "/root"
+                                     :payload "waiting for a slot" :wake t))))
          interrupted)
     (setf (mevedel-session-agent-registry session)
           (list (cons "/root/busy" busy) (cons "/root/idle" idle)))
@@ -1196,7 +1293,9 @@
       (should (mevedel-agent-control-interrupt-user session "/root/busy"))
       (should (equal (list (list invocation "interrupted by user")) interrupted))
       (should-not (mevedel-agent-control-interrupt-user session "/root/idle"))
-      (should (= 1 (length interrupted)))))
+      (should (= 1 (length interrupted)))
+      ;; An idle agent waiting for a slot stops waiting.
+      (should-not (plist-get (car (mevedel-agent-record-mailbox idle)) :wake))))
   :doc "refuses root and agents that are gone"
   (let ((session (mevedel-agent-control-test--session)))
     (should-error (mevedel-agent-control-interrupt-user session "/root")
@@ -1327,7 +1426,7 @@
                           (plist-get keys :frozen-configuration))
                     (funcall (plist-get keys :on-invocation) next)
                     t))))
-            (mevedel-agent-control-followup
+            (mevedel-agent-control-send-message
              session "/root/parent" "continue"))
           (should (eq 'running (mevedel-agent-record-activity record))))
       (when (buffer-live-p buffer)
@@ -1494,80 +1593,9 @@
      (equal '((:source "hook" :body "context"))
             (mevedel-agent-record-hook-context-pending record)))))
 
-(mevedel-deftest mevedel-agent-control-followup ()
+(mevedel-deftest mevedel-agent-control--activate ()
   ,test
   (test)
-  :doc "rejects root and idle activation at capacity but permits live steering"
-  (let* ((session (mevedel-agent-control-test--session))
-         (target (mevedel-agent-record--create
-                  :path "/root/target" :activity 'idle))
-         (busy (mevedel-agent-record--create
-                :path "/root/busy" :activity 'running))
-         steered)
-    (setf (mevedel-session-agent-turn-capacity session) 1)
-    (setf (mevedel-session-agent-registry session)
-          (list (cons "/root/target" target)
-                (cons "/root/busy" busy)))
-    (should-error
-     (mevedel-agent-control-followup session "/root" "Do not run root."))
-    (should-error
-     (mevedel-agent-control-followup session "target" "Start now."))
-    (should (eq 'idle (mevedel-agent-record-activity target)))
-    (setf (mevedel-agent-record-activity target) 'running)
-    (should (eq target
-                (mevedel-agent-control-followup
-                 session "target" "Steer safely.")))
-    (setq steered (car (mevedel-agent-record-mailbox target)))
-    (should (eq 'MAIL (plist-get steered :type)))
-    (should (equal "/root" (plist-get steered :sender)))
-    (should (equal "Steer safely." (plist-get steered :payload))))
-
-  :doc "a Plan read-only caller steers only Plan read-only turns"
-  (let* ((session (mevedel-agent-control-test--session))
-         (plain (mevedel-agent-record--create
-                 :path "/root/plain" :activity 'running
-                 :invocation (mevedel-agent-invocation--create)))
-         (planning (mevedel-agent-record--create
-                    :path "/root/planning" :activity 'running
-                    :invocation (mevedel-agent-invocation--create
-                                 :plan-read-only t)))
-         (starting (mevedel-agent-record--create
-                    :path "/root/starting" :activity 'starting))
-         (mevedel--current-request
-          (mevedel-request--create :plan-read-only t)))
-    (setf (mevedel-session-agent-registry session)
-          (list (cons "/root/plain" plain)
-                (cons "/root/planning" planning)
-                (cons "/root/starting" starting)))
-    (should-error
-     (mevedel-agent-control-followup session "plain" "Edit the parser.")
-     :type 'user-error)
-    (should-error
-     (mevedel-agent-control-followup session "starting" "Edit the parser.")
-     :type 'user-error)
-    (should-not (mevedel-agent-record-mailbox plain))
-    (should (eq planning
-                (mevedel-agent-control-followup
-                 session "planning" "Also inspect the tests.")))
-    (should (= 1 (length (mevedel-agent-record-mailbox planning))))
-    ;; The same steering is ordinary outside Plan.
-    (setq mevedel--current-request (mevedel-request--create))
-    (should (eq plain
-                (mevedel-agent-control-followup
-                 session "plain" "Edit the parser."))))
-
-  :doc "a sticky Plan session refuses to steer an unstamped running turn"
-  (let* ((session (mevedel-agent-control-test--session))
-         (plain (mevedel-agent-record--create
-                 :path "/root/plain" :activity 'running
-                 :invocation (mevedel-agent-invocation--create))))
-    (setf (mevedel-session-plan-mode session) t
-          (mevedel-session-agent-registry session)
-          (list (cons "/root/plain" plain)))
-    (should-error
-     (mevedel-agent-control-followup session "plain" "Edit the parser.")
-     :type 'user-error))
-
   :doc "failed retained dispatch preserves the prior settled result"
   (let* ((session (mevedel-agent-control-test--session))
          (buffer (generate-new-buffer " *agent-control-failed-followup*"))
@@ -1583,26 +1611,44 @@
            :settled-result "previous result"
            :settled-outcome 'completed
            :conversation-location "agents/worker.chat.org"))
-         (persisted 0))
+         (persisted 0)
+         offered)
     (setf (mevedel-session-agent-registry session)
           (list (cons "/root/worker" record)))
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-agent-runtime-dispatch)
                    (lambda (&rest _) (error "Provider did not start")))
                   ((symbol-function 'mevedel-agent-control--persist-session)
-                   (lambda (_session) (cl-incf persisted))))
+                   (lambda (_session) (cl-incf persisted)))
+                  ((symbol-function 'mevedel-agent-control--schedule-agent-wakes)
+                   (lambda (_) (setq offered t))))
           (should-error
-           (mevedel-agent-control-followup
-            session "/root/worker" "Try the next turn."))
+           (mevedel-agent-control--activate
+            session record "Try the next turn."))
           (should (eq 'idle (mevedel-agent-record-activity record)))
           (should-not (mevedel-agent-record-invocation record))
           (should
            (equal '(:outcome completed :payload "previous result")
                   (mevedel-agent-control-settled-result record)))
-          (should (= 1 persisted)))
+          (should (= 1 persisted))
+          ;; The slot this start held may let a waiting agent start.
+          (should offered))
       (kill-buffer buffer)))
 
-  :doc "clears the previous result before a retained followup becomes active"
+  :doc "unread mail from a Plan sender stamps the started turn read-only"
+  (let* ((session (mevedel-agent-control-test--session))
+         (record (mevedel-agent-record--create
+                  :path "/root/worker" :activity 'idle
+                  :mailbox (list (list :type 'MAIL :sender "/root"
+                                       :payload "inspect" :plan-read-only t))))
+         stamp)
+    (cl-letf (((symbol-function 'mevedel-agent-control--dispatch-followup)
+               (lambda (_session _record _message _tool-id plan-read-only)
+                 (setq stamp plan-read-only))))
+      (mevedel-agent-control--activate session record "Edit it."))
+    (should (eq t stamp)))
+
+  :doc "clears the previous result before a retained turn becomes active"
   (let* ((session (mevedel-agent-control-test--session))
          (buffer (generate-new-buffer " *agent-control-clears-result*"))
          (record
@@ -1635,13 +1681,13 @@
                         (plist-get keys :frozen-configuration))
                   (funcall (plist-get keys :on-invocation) invocation)
                   t))))
-          (mevedel-agent-control-followup
-           session "/root/worker" "Start a fresh turn."))
+          (mevedel-agent-control--activate
+           session record "Start a fresh turn."))
       (kill-buffer buffer))
     (should (eq 'running (mevedel-agent-record-activity record)))
     (should-not (mevedel-agent-control-settled-result record)))
 
-  :doc "execution mail persists during followup startup and survives rollback"
+  :doc "execution mail persists during activation and survives rollback"
   (dolist (outcome '(success error quit))
     (let* ((gptel--known-backends nil)
            (backend (gptel-make-openai "Followup Persistence Test"
@@ -1673,7 +1719,7 @@
             (lambda (owner)
               (mevedel-agent-persistence-serialize-registry owner)))
            ((symbol-function 'mevedel-agent-control--dispatch-followup)
-            (lambda (owner current _message _tool-id)
+            (lambda (owner current _message _tool-id _plan-read-only)
               ;; Reproduce a process sentinel delivering another command's
               ;; result while provider startup yields to Emacs.
               (mevedel-agent-control-enqueue-execution-result
@@ -1693,8 +1739,8 @@
         (let ((caught
                (condition-case err
                    (progn
-                     (mevedel-agent-control-followup
-                      session "/root/worker" "Continue")
+                     (mevedel-agent-control--activate
+                      session record "Continue")
                      nil)
                  ((error quit) err))))
           (should (equal caught (and (not (eq outcome 'success))
@@ -1708,47 +1754,234 @@
             (should (eq 'idle (mevedel-agent-record-activity record)))
             (should-not (mevedel-agent-record-invocation record))
             (should (equal '(:outcome completed :payload "previous result")
-                           (mevedel-agent-control-settled-result record))))))))
+                           (mevedel-agent-control-settled-result record)))))))))
 
-  :doc "attributes peer steering while returning results to the spawn parent"
+;; Waking idle agents
+
+(defun mevedel-agent-control-test--mail (sender recipient payload &rest props)
+  "Return a committed MAIL record from SENDER to RECIPIENT with PAYLOAD."
+  (append (list :id (md5 payload) :type 'MAIL :sender sender
+                :recipient recipient :payload payload
+                :timestamp (current-time))
+          props))
+
+(mevedel-deftest mevedel-agent-control--startable-p ()
+  ,test
+  (test)
+  :doc "no turn starts while a settlement in its session runs"
   (let* ((session (mevedel-agent-control-test--session))
-         (peer-invocation (mevedel-agent-invocation-create
-                           (mevedel-agent-default)))
-         (target-invocation (mevedel-agent-invocation-create
-                             (mevedel-agent-default)))
-         (peer (mevedel-agent-record--create
-                :id "default--peer" :path "/root/peer"
-                :parent-path "/root" :activity 'running
-                :invocation peer-invocation))
-         (target (mevedel-agent-record--create
-                  :id "default--target" :path "/root/target"
-                  :parent-path "/root" :activity 'running
-                  :invocation target-invocation))
-         (buffer (generate-new-buffer " *agent-control-peer-followup*")))
-    (setf (mevedel-agent-invocation-agent-id peer-invocation)
-          "default--peer")
-    (setf (mevedel-agent-invocation-path peer-invocation) "/root/peer")
-    (setf (mevedel-agent-invocation-path target-invocation) "/root/target")
-    (setf (mevedel-agent-invocation-transcript-status target-invocation)
-          'completed)
+         (other-session (mevedel-agent-control-test--session))
+         (idle (mevedel-agent-record--create :path "/root/idle" :activity 'idle)))
+    (should (mevedel-agent-control--startable-p session idle))
+    (let ((mevedel-agent-control-settling
+           (list (mevedel-agent-invocation--create :parent-session session))))
+      (should-not (mevedel-agent-control--startable-p session idle)))
+    ;; Another session's settlement offers only its own agents afterwards,
+    ;; so it must not hold this session's start.
+    (let ((mevedel-agent-control-settling
+           (list (mevedel-agent-invocation--create
+                  :parent-session other-session))))
+      (should (mevedel-agent-control--startable-p session idle)))
+    (setf (mevedel-agent-record-activity idle) 'running)
+    (should-not (mevedel-agent-control--startable-p session idle))))
+
+(mevedel-deftest mevedel-agent-control-settlement-finished ()
+  ,test
+  (test)
+  :doc "offers the session's waiting agents a turn"
+  (let ((session (mevedel-agent-control-test--session))
+        offered)
+    (cl-letf (((symbol-function 'mevedel-agent-control--schedule-agent-wakes)
+               (lambda (value) (push value offered))))
+      (mevedel-agent-control-settlement-finished session))
+    (should (equal (list session) offered))))
+
+(mevedel-deftest mevedel-agent-control--capacity-p ()
+  ,test
+  (test)
+  :doc "admits a turn only below the tree's active-turn capacity"
+  (let ((session (mevedel-agent-control-test--session)))
+    (setf (mevedel-session-agent-turn-capacity session) 1
+          (mevedel-session-agent-registry session)
+          (list (cons "/root/idle" (mevedel-agent-record--create
+                                    :path "/root/idle" :activity 'idle))))
+    (should (mevedel-agent-control--capacity-p session))
+    (setf (mevedel-agent-record-activity
+           (cdar (mevedel-session-agent-registry session)))
+          'waiting)
+    (should-not (mevedel-agent-control--capacity-p session))))
+
+(mevedel-deftest mevedel-agent-control-clear-agent-wakes ()
+  ,test
+  (test)
+  :doc "keeps the mail queued but stops it from waking; unknown paths are ignored"
+  (let* ((session (mevedel-agent-control-test--session))
+         (mail (mevedel-agent-control-test--mail
+                "/root" "/root/worker" "later" :wake t))
+         (record (mevedel-agent-record--create
+                  :path "/root/worker" :activity 'idle :mailbox (list mail))))
     (setf (mevedel-session-agent-registry session)
-          (list (cons "/root/peer" peer)
-                (cons "/root/target" target)))
+          (list (cons "/root/worker" record)))
+    (mevedel-agent-control-clear-agent-wakes session "/root/worker")
+    (mevedel-agent-control-clear-agent-wakes session "/root/missing")
+    (should (equal (list mail) (mevedel-agent-record-mailbox record)))
+    (should-not (plist-get mail :wake))))
+
+(mevedel-deftest mevedel-agent-control--schedule-agent-wakes ()
+  ,test
+  (test)
+  :doc "coalesces offers into one deferred run and does nothing without a root"
+  (let ((session (mevedel-agent-control-test--session))
+        (buffer (generate-new-buffer " *agent-control-wake-root*"))
+        scheduled)
     (unwind-protect
-        (with-current-buffer buffer
-          (setq-local mevedel--agent-invocation peer-invocation)
-          (mevedel-agent-control-followup
-           session "/root/target" "Review the peer's update.")
-          (let ((mail (car (mevedel-agent-record-mailbox target))))
-            (should (equal "/root/peer" (plist-get mail :sender)))
-            (should (equal "Review the peer's update."
-                           (plist-get mail :payload))))
-          (mevedel-agent-control-test--settle
-           session target target-invocation "Peer review complete."))
-      (kill-buffer buffer))
-    (let ((result (car (mevedel-session-messages session))))
-      (should (equal "/root/target" (plist-get result :sender)))
-      (should (equal "/root" (plist-get result :recipient))))))
+        (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
+                   (lambda (key _path thunk _on-cancel delay)
+                     (push (list key delay) scheduled)
+                     (should (functionp thunk))
+                     t)))
+          (mevedel-agent-control--schedule-agent-wakes session)
+          (should-not scheduled)
+          (setf (mevedel-session-root-buffer session) buffer)
+          (mevedel-agent-control--schedule-agent-wakes session)
+          (should (equal (list (list (list 'agent-wake session) 0))
+                         scheduled)))
+      (kill-buffer buffer))))
+
+(mevedel-deftest mevedel-agent-control--offer-agent-wakes ()
+  ,test
+  (test)
+  :doc "starts idle agents oldest mail first while capacity allows"
+  (let* ((session (mevedel-agent-control-test--session))
+         (root (generate-new-buffer " *agent-control-offer-root*"))
+         (old (mevedel-agent-control-test--mail "/root" "/root/b" "old" :wake t))
+         (new (mevedel-agent-control-test--mail "/root" "/root/a" "new" :wake t))
+         (a (mevedel-agent-record--create :path "/root/a" :activity 'idle
+                                          :mailbox (list new)))
+         (b (mevedel-agent-record--create :path "/root/b" :activity 'idle
+                                          :mailbox (list old)))
+         (quiet (mevedel-agent-record--create
+                 :path "/root/quiet" :activity 'idle
+                 :mailbox (list (mevedel-agent-control-test--mail
+                                 "/root" "/root/quiet" "read later"))))
+         started)
+    (setf (plist-get new :timestamp) (time-add (plist-get old :timestamp) 1))
+    (setf (mevedel-session-root-buffer session) root
+          (mevedel-session-agent-turn-capacity session) 1
+          (mevedel-session-agent-registry session)
+          (list (cons "/root/a" a) (cons "/root/b" b)
+                (cons "/root/quiet" quiet)))
+    (with-current-buffer root (setq-local mevedel--session session))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-agent-control--dispatch-followup)
+                   (lambda (_session record message _tool-id plan-read-only)
+                     (push (list (mevedel-agent-record-path record) message
+                                 plan-read-only)
+                           started)
+                     (setf (mevedel-agent-record-activity record) 'running))))
+          (mevedel-agent-control--offer-agent-wakes session)
+          (should (equal `(("/root/b" ,mevedel-agent-control--wake-prompt nil))
+                         started))
+          ;; The slot frees; the agent still waiting starts next.
+          (setf (mevedel-agent-record-activity b) 'idle
+                (mevedel-agent-record-mailbox b) nil)
+          (mevedel-agent-control--offer-agent-wakes session)
+          (should (equal "/root/a" (car (car started))))
+          (should (= 2 (length started))))
+      (kill-buffer root))
+    (should (eq 'idle (mevedel-agent-record-activity quiet))))
+
+  :doc "a Plan sender's mail stamps the woken turn read-only"
+  (let* ((session (mevedel-agent-control-test--session))
+         (root (generate-new-buffer " *agent-control-offer-plan*"))
+         (record (mevedel-agent-record--create
+                  :path "/root/a" :activity 'idle
+                  :mailbox (list (mevedel-agent-control-test--mail
+                                  "/root" "/root/a" "look" :wake t
+                                  :plan-read-only t))))
+         stamp)
+    (setf (mevedel-session-root-buffer session) root
+          (mevedel-session-agent-registry session) (list (cons "/root/a" record)))
+    (with-current-buffer root (setq-local mevedel--session session))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-agent-control--dispatch-followup)
+                   (lambda (_session _record _message _tool-id plan-read-only)
+                     (setq stamp plan-read-only))))
+          (mevedel-agent-control--offer-agent-wakes session))
+      (kill-buffer root))
+    (should (eq t stamp)))
+
+  :doc "re-checks each agent after an earlier start yielded"
+  (let* ((session (mevedel-agent-control-test--session))
+         (root (generate-new-buffer " *agent-control-offer-recheck*"))
+         (first (mevedel-agent-control-test--mail "/root" "/root/a" "1" :wake t))
+         (second (mevedel-agent-control-test--mail "/root" "/root/b" "2" :wake t))
+         (a (mevedel-agent-record--create :path "/root/a" :activity 'idle
+                                          :mailbox (list first)))
+         (b (mevedel-agent-record--create :path "/root/b" :activity 'idle
+                                          :mailbox (list second)))
+         started)
+    (setf (plist-get second :timestamp) (time-add (plist-get first :timestamp) 1)
+          (mevedel-session-root-buffer session) root
+          (mevedel-session-agent-registry session)
+          (list (cons "/root/a" a) (cons "/root/b" b)))
+    (with-current-buffer root (setq-local mevedel--session session))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-agent-control--dispatch-followup)
+                   (lambda (_session record &rest _)
+                     (push (mevedel-agent-record-path record) started)
+                     ;; While A starts, the user interrupts B's slot wait.
+                     (mevedel-agent-control-interrupt-user session "/root/b"))))
+          (mevedel-agent-control--offer-agent-wakes session))
+      (kill-buffer root))
+    (should (equal '("/root/a") started)))
+
+  :doc "a quit during startup does not restart the agent"
+  (let* ((session (mevedel-agent-control-test--session))
+         (root (generate-new-buffer " *agent-control-offer-quit*"))
+         (mail (mevedel-agent-control-test--mail "/root" "/root/a" "q" :wake t))
+         (record (mevedel-agent-record--create
+                  :path "/root/a" :activity 'idle :mailbox (list mail)))
+         messages)
+    (setf (mevedel-session-root-buffer session) root
+          (mevedel-session-agent-registry session) (list (cons "/root/a" record)))
+    (with-current-buffer root (setq-local mevedel--session session))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-agent-control--dispatch-followup)
+                   (lambda (&rest _) (signal 'quit nil)))
+                  ((symbol-function 'mevedel-agent-control--persist-session)
+                   #'ignore)
+                  ((symbol-function 'mevedel-agent-control--schedule-agent-wakes)
+                   #'ignore))
+          (mevedel-test--with-captured-messages messages
+            (mevedel-agent-control--offer-agent-wakes session)))
+      (kill-buffer root))
+    (should (string-match-p "could not start /root/a for its mail: quit" messages))
+    (should (equal (list mail) (mevedel-agent-record-mailbox record)))
+    (should-not (plist-get mail :wake)))
+
+  :doc "a turn that cannot start leaves its mail unread without retrying"
+  (let* ((session (mevedel-agent-control-test--session))
+         (root (generate-new-buffer " *agent-control-offer-fail*"))
+         (mail (mevedel-agent-control-test--mail "/root" "/root/a" "x" :wake t))
+         (record (mevedel-agent-record--create
+                  :path "/root/a" :activity 'idle :mailbox (list mail)))
+         messages)
+    (setf (mevedel-session-root-buffer session) root
+          (mevedel-session-agent-registry session) (list (cons "/root/a" record)))
+    (with-current-buffer root (setq-local mevedel--session session))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-agent-control--dispatch-followup)
+                   (lambda (&rest _) (error "Hook stopped the task")))
+                  ((symbol-function 'mevedel-agent-control--persist-session)
+                   #'ignore))
+          (mevedel-test--with-captured-messages messages
+            (mevedel-agent-control--offer-agent-wakes session)))
+      (kill-buffer root))
+    (should (string-match-p "could not start /root/a" messages))
+    (should (eq 'idle (mevedel-agent-record-activity record)))
+    (should (equal (list mail) (mevedel-agent-record-mailbox record)))
+    (should-not (plist-get mail :wake))))
 
 (mevedel-deftest mevedel-agent-control--dispatch-followup
   ()
@@ -2262,8 +2495,10 @@
                              (mevedel-agent-record-model-metadata record)))
               (setq followup
                     (mevedel-agent-record-invocation
-                     (mevedel-agent-control-followup
-                      session "/root/parent/summarized" "Follow-up task")))
+                     (progn
+                       (mevedel-agent-control-send-message
+                        session "/root/parent/summarized" "Follow-up task")
+                       record)))
               (with-current-buffer child-buffer
                 (should (= 1 (how-many "<task-background>"
                                        (point-min) (point-max))))
@@ -2530,7 +2765,7 @@
          (sender (mevedel-agent-record--create
                   :path "/root/sender" :activity 'running))
          (child (mevedel-agent-record--create
-                 :path "/root/child" :activity 'idle))
+                 :path "/root/child" :activity 'running))
          (invocation (mevedel-agent-invocation--create
                       :path "/root/sender" :parent-session session))
          committed offered)
@@ -2551,7 +2786,7 @@
         (mevedel-agent-control-send-message session "/root/child" "child mail"))
       (mevedel-agent-control-send-message session "/root" "self mail")
       (should-not (mevedel-agent-control-wake-pending-p session))
-      (should (eq 'idle (mevedel-agent-record-activity child)))
+      (should (plist-get (car (mevedel-agent-record-mailbox child)) :wake))
       (should (= 1 (length offered)))))
 
   :doc "marks before releasing WaitAgent and does not reoffer consumed mail"
@@ -2596,7 +2831,7 @@
     (should-not (mevedel-agent-control-context-mailbox session))
     (should-not offered))
 
-  :doc "queues canonical MAIL records in FIFO order without activating recipients"
+  :doc "queues FIFO MAIL that wakes idle agents waiting for a slot"
   (let* ((session (mevedel-agent-control-test--session))
          (idle (mevedel-agent-record--create
                 :id "idle-id" :path "/root/idle" :activity 'idle))
@@ -2606,19 +2841,23 @@
     (setf (mevedel-session-agent-registry session)
           (list (cons "/root/idle" idle)
                 (cons "/root/running" running)))
-    (should (equal "/root/idle"
+    ;; The running agent fills the only slot.
+    (setf (mevedel-session-agent-turn-capacity session) 1)
+    (should (equal '(:path "/root/idle" :delivery waiting)
                    (mevedel-agent-control-send-message
                     session "/root/idle" "first")))
     (mevedel-agent-control-send-message session "/root/idle" "second")
-    (mevedel-agent-control-send-message session "/root/running" "active")
+    (should (equal '(:path "/root/running" :delivery queued)
+                   (mevedel-agent-control-send-message
+                    session "/root/running" "active")))
     (should (eq 'idle (mevedel-agent-record-activity idle)))
     (should (eq 'running (mevedel-agent-record-activity running)))
     (should
      (equal
       '((:type MAIL :sender "/root" :recipient "/root/idle"
-         :payload "first")
+         :payload "first" :wake t)
         (:type MAIL :sender "/root" :recipient "/root/idle"
-         :payload "second"))
+         :payload "second" :wake t))
       (mapcar
        (lambda (record)
          (should (stringp (plist-get record :id)))
@@ -2630,7 +2869,7 @@
                   (mevedel-agent-control--mailbox
                    session "/root/running")))))
 
-  :doc "a Plan read-only caller messages only /root or Plan read-only turns"
+  :doc "a Plan read-only caller cannot reach an unstamped running turn"
   (let* ((session (mevedel-agent-control-test--session))
          (idle (mevedel-agent-record--create
                 :id "idle-id" :path "/root/idle" :activity 'idle))
@@ -2653,17 +2892,23 @@
                 (cons "/root/plain" plain)
                 (cons "/root/planning" planning)
                 (cons "/root/sender" sender)))
-    (dolist (target '("/root/idle" "/root/plain"))
-      (should-error
-       (mevedel-agent-control-send-message session target "Edit it.")
-       :type 'user-error)
-      (should-not (mevedel-agent-control--mailbox session target)))
-    (should (equal "/root/planning"
+    (setf (mevedel-session-agent-turn-capacity session) 3)
+    (should-error
+     (mevedel-agent-control-send-message session "/root/plain" "Edit it.")
+     :type 'user-error)
+    (should-not (mevedel-agent-control--mailbox session "/root/plain"))
+    (should (equal '(:path "/root/planning" :delivery queued)
                    (mevedel-agent-control-send-message
                     session "/root/planning" "Check the tests too.")))
-    (should (equal "/root"
+    (should (equal '(:path "/root" :delivery queued)
                    (mevedel-agent-control-send-message
                     session "/root" "Found the entry point.")))
+    ;; An idle agent waiting for a slot keeps the sender's Plan limits.
+    (should (equal '(:path "/root/idle" :delivery waiting)
+                   (mevedel-agent-control-send-message
+                    session "/root/idle" "Inspect it.")))
+    (should (plist-get (car (mevedel-agent-record-mailbox idle))
+                       :plan-read-only))
     (should (= 1 (length (mevedel-agent-control--mailbox session "/root")))))
 
   :doc "accepts tree-wide peer paths and rejects empty or unknown targets"
@@ -2671,7 +2916,7 @@
          (sender (mevedel-agent-record--create
                   :id "sender-id" :path "/root/sender" :activity 'running))
          (peer (mevedel-agent-record--create
-                :id "peer-id" :path "/root/peer" :activity 'idle))
+                :id "peer-id" :path "/root/peer" :activity 'running))
          (mevedel--agent-invocation
           (mevedel-agent-invocation--create
            :agent-id "sender-id" :path "/root/sender")))
@@ -2691,7 +2936,7 @@
   :doc "commit failure restores the queue and does not wake its consumer"
   (let* ((session (mevedel-agent-control-test--session))
          (record (mevedel-agent-record--create
-                  :id "worker" :path "/root/worker" :activity 'idle))
+                  :id "worker" :path "/root/worker" :activity 'running))
          reasons)
     (setf (mevedel-session-agent-registry session)
           (list (cons "/root/worker" record))
@@ -2710,7 +2955,94 @@
           session "/root/worker" "must persist")))
       (should-not (mevedel-agent-record-mailbox record))
       (should-not reasons)
-      (should (mevedel-agent-record-waiter record)))))
+      (should (mevedel-agent-record-waiter record))))
+
+  :doc "starts an idle agent's turn with the message as its prompt"
+  (let* ((session (mevedel-agent-control-test--session))
+         (buffer (generate-new-buffer " *agent-control-send-start*"))
+         (record
+          (mevedel-agent-record--create
+           :id "worker--retained" :path "/root/worker" :parent-path "/root"
+           :role "worker" :configuration (mevedel-agent-control-test--configuration)
+           :activity 'idle :conversation-buffer buffer
+           :conversation-location "agents/worker.chat.org"))
+         seen)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/worker" record)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-agent-runtime-dispatch)
+                   (lambda (_agent _description prompt &rest keys)
+                     (setq seen (list prompt (plist-get keys :parent-tool-use-id)
+                                      (plist-get keys :plan-read-only)))
+                     (funcall (plist-get keys :on-invocation)
+                              (mevedel-agent-invocation--create
+                               :agent-id "worker--retained" :path "/root/worker"
+                               :frozen-configuration
+                               (plist-get keys :frozen-configuration)))
+                     t)))
+          (should (equal '(:path "/root/worker" :delivery started)
+                         (mevedel-agent-control-send-message
+                          session "worker" "Review the diff."
+                          :parent-tool-use-id "call_send"))))
+      (kill-buffer buffer))
+    (should (equal '("Review the diff." "call_send" nil) seen))
+    (should (eq 'running (mevedel-agent-record-activity record)))
+    (should-not (mevedel-agent-record-mailbox record)))
+
+  :doc "mail sent while a settlement runs waits for the offer after it"
+  (let* ((session (mevedel-agent-control-test--session))
+         (record (mevedel-agent-record--create
+                  :path "/root/work" :parent-path "/root" :activity 'idle))
+         ;; The settling agent already reads idle.
+         (mevedel-agent-control-settling
+          (list (mevedel-agent-invocation--create :parent-session session))))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/work" record)))
+    (should (equal '(:path "/root/work" :delivery waiting)
+                   (mevedel-agent-control-send-message
+                    session "/root/work" "next")))
+    (should (eq 'idle (mevedel-agent-record-activity record)))
+    (should (plist-get (car (mevedel-agent-record-mailbox record)) :wake)))
+
+  :doc "attributes peer mail while returning results to the spawn parent"
+  (let* ((session (mevedel-agent-control-test--session))
+         (peer-invocation (mevedel-agent-invocation-create
+                           (mevedel-agent-default)))
+         (target-invocation (mevedel-agent-invocation-create
+                             (mevedel-agent-default)))
+         (peer (mevedel-agent-record--create
+                :id "default--peer" :path "/root/peer"
+                :parent-path "/root" :activity 'running
+                :invocation peer-invocation))
+         (target (mevedel-agent-record--create
+                  :id "default--target" :path "/root/target"
+                  :parent-path "/root" :activity 'running
+                  :invocation target-invocation))
+         (buffer (generate-new-buffer " *agent-control-peer-mail*")))
+    (setf (mevedel-agent-invocation-agent-id peer-invocation)
+          "default--peer")
+    (setf (mevedel-agent-invocation-path peer-invocation) "/root/peer")
+    (setf (mevedel-agent-invocation-path target-invocation) "/root/target")
+    (setf (mevedel-agent-invocation-transcript-status target-invocation)
+          'completed)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/peer" peer)
+                (cons "/root/target" target)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel--agent-invocation peer-invocation)
+          (mevedel-agent-control-send-message
+           session "/root/target" "Review the peer's update.")
+          (let ((mail (car (mevedel-agent-record-mailbox target))))
+            (should (equal "/root/peer" (plist-get mail :sender)))
+            (should (equal "Review the peer's update."
+                           (plist-get mail :payload))))
+          (mevedel-agent-control-test--settle
+           session target target-invocation "Peer review complete."))
+      (kill-buffer buffer))
+    (let ((result (car (mevedel-session-messages session))))
+      (should (equal "/root/target" (plist-get result :sender)))
+      (should (equal "/root" (plist-get result :recipient))))))
 
 (mevedel-deftest mevedel-agent-control-wait ()
   ,test
@@ -2857,30 +3189,7 @@
       (mevedel-agent-control-send-message session "/root/worker" "wake")
       (should (eq 'mailbox reason))
       (should (eq 'running (mevedel-agent-record-activity record)))
-      (should (= 1 (mevedel-agent-control--active-count session)))))
-
-  :doc "follow-up steering wakes a non-root wait without an FSM wait state"
-  (let* ((session (mevedel-agent-control-test--session))
-         (invocation
-          (mevedel-agent-invocation--create
-           :agent-id "steered-id" :path "/root/steered"
-           :parent-session session))
-         (record
-          (mevedel-agent-record--create
-           :id "steered-id" :path "/root/steered" :activity 'running
-           :invocation invocation))
-         reason)
-    (setf (mevedel-session-agent-registry session)
-          (list (cons "/root/steered" record)))
-    (cl-letf (((symbol-function 'run-at-time)
-               (lambda (&rest _) 'fake-timer)))
-      (let ((mevedel--agent-invocation invocation))
-        (mevedel-agent-control-wait
-         session (lambda (seen) (setq reason seen)) 10000))
-      (mevedel-agent-control-followup
-       session "/root/steered" "new direction")
-      (should (eq 'steering reason))
-      (should (eq 'running (mevedel-agent-record-activity record))))))
+      (should (= 1 (mevedel-agent-control--active-count session))))))
 
 (mevedel-deftest mevedel-agent-control-enqueue-execution-result ()
   ,test

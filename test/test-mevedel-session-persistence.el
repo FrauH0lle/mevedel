@@ -6181,8 +6181,13 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
               (set-visited-file-name (file-name-concat directory "agents/worker.chat.org") t t)
               (insert "Agent prompt\n"))
             (should (mevedel-agent-conversation-save invocation))
-            (dolist (payload '("First delivery" "Second delivery"))
-              (mevedel-agent-control-send-message session "/root/worker" payload))
+            ;; Queue without starting the idle agent: this case delivers
+            ;; the mail at a simulated WAIT boundary.
+            (cl-letf (((symbol-function 'mevedel-agent-control--capacity-p) #'ignore)
+                      ((symbol-function 'mevedel-agent-control--schedule-agent-wakes)
+                       #'ignore))
+              (dolist (payload '("First delivery" "Second delivery"))
+                (mevedel-agent-control-send-message session "/root/worker" payload)))
             (when nested-failure
               (with-current-buffer buffer
 		(setq-local before-save-hook

@@ -76,7 +76,7 @@
   :doc "assembles the user-interaction tool surface"
   (progn
     (mevedel-tool-ui--register)
-    (dolist (name '("Ask" "Agent" "FollowupAgent" "ListAgents"
+    (dolist (name '("Ask" "Agent" "ListAgents"
                     "InterruptAgent" "ToolSearch" "SendMessage" "WaitAgent"))
       (should (mevedel-tool-get name)))
     (should (equal '((success . mevedel-tool-ui--render-list-agents))
@@ -84,7 +84,7 @@
                     (mevedel-tool-get "ListAgents"))))
     (should (mevedel-tool-async-p (mevedel-tool-get "WaitAgent")))
     (should (string-match-p
-             "interim"
+             "starting its turn if idle"
              (mevedel-tool-description (mevedel-tool-get "SendMessage"))))
     (should (string-match-p
              "Only.*RESULT.*terminal"
@@ -537,7 +537,7 @@
                      :description "Mutated role"
                      :tools '((:tool "Eval"))
                      :system-prompt "Mutated instructions."))
-              (mevedel-tool-ui--followup-agent
+              (mevedel-tool-ui--send-message
                '(:target "/root/frozen" :message "Follow-up child task."))
               (let* ((followup (car invocations))
                      (frozen-agent
@@ -756,7 +756,7 @@
             (should-not (string-match-p "/root/zeta" result))))
       (kill-buffer buffer))))
 
-(mevedel-deftest mevedel-tool-ui--followup-agent
+(mevedel-deftest mevedel-tool-ui--send-message-activation
   (:after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
@@ -797,7 +797,7 @@
               (funcall (plist-get initial :callback) "Feature one reviewed.")
               (setf (mevedel-session-messages session) nil)
               (let ((result
-                     (mevedel-tool-ui--followup-agent
+                     (mevedel-tool-ui--send-message
                       '(:target "worker"
                         :message "Now review feature two."))))
                 (should (equal "" (plist-get result :result)))
@@ -836,7 +836,7 @@
                        'mevedel-agent-conversation-save)
                       (lambda (_invocation) nil)))
                   (should-error
-                   (mevedel-tool-ui--followup-agent
+                   (mevedel-tool-ui--send-message
                     '(:target "worker"
                       :message "This task must roll back."))))
                 (should (= 2 (length launches)))
@@ -856,7 +856,7 @@
                       :status)))
                 (setq fail-launch t)
                 (should-error
-                 (mevedel-tool-ui--followup-agent
+                 (mevedel-tool-ui--send-message
                   '(:target "worker"
                     :message "Record a failed launch.")))
                 (should (= 2 (length launches)))
@@ -901,7 +901,7 @@
                #'ignore (list :task_name name :message "Initial task.")))
             (should (= 3 (mevedel-agent-control--active-count session)))
             (let ((result
-                   (mevedel-tool-ui--followup-agent
+                   (mevedel-tool-ui--send-message
                     '(:target "/root/one"
                       :message "Incorporate this steering."))))
               (should (equal "" (plist-get result :result))))
@@ -1071,18 +1071,18 @@
   (:doc "Renders retained-agent interaction events")
   ,test
   (test)
-  :doc "renders a follow-up header without changing a leading-> draft"
+  :doc "renders a started header without changing a leading-> draft"
   (mevedel-view-test--with-buffers
     (let ((draft "> quoted\nsecond line")
           (rendering
            (mevedel-tool-ui--render-agent-interaction
-            "FollowupAgent"
+            "SendMessage"
             '(:target "/root/spec_review" :message "Verify documentation")
             ""
             '(:kind collaboration-event
               :event interacted
-              :path "/root/spec_review"))))
-      (should (equal "FollowupAgent: /root/spec_review (follow-up sent)"
+              :path "/root/spec_review" :delivery started))))
+      (should (equal "SendMessage: /root/spec_review (started)"
                      (plist-get rendering :header)))
       (should (equal "/root/spec_review"
                      (plist-get rendering :agent-path)))
@@ -1091,23 +1091,35 @@
       (should (plist-get rendering :initially-collapsed-p))
       (should-not
        (mevedel-tool-ui--render-agent-interaction
-        "FollowupAgent" '(:target "/root/missing")
+        "SendMessage" '(:target "/root/missing")
         "Error: Unknown agent target" nil))
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4)
         (mevedel-tool-ui-test--insert-rendering rendering)
         (should (string= draft (mevedel-view--input-text))))))
 
+  :doc "renders every delivery disposition from render data"
+  (dolist (case '((queued . "message queued")
+                  (started . "started")
+                  (waiting . "waiting for a slot")))
+    (let ((rendering
+           (mevedel-tool-ui--render-agent-interaction
+            "SendMessage" '(:message "Continue") ""
+            (list :kind 'collaboration-event :event 'interacted
+                  :path "/root/peer" :delivery (car case)))))
+      (should (equal (format "SendMessage: /root/peer (%s)" (cdr case))
+                     (plist-get rendering :header)))))
+
   :doc "interaction paths activate transcripts; follow-ups and sent messages expand"
   (mevedel-view-test--with-buffers
     (let* ((followup
             (mevedel-tool-ui--render-agent-interaction
-             "FollowupAgent"
+             "SendMessage"
              '(:target "/root/spec_review" :message "Verify documentation")
              ""
              '(:kind collaboration-event
                :event interacted
-               :path "/root/spec_review")))
+               :path "/root/spec_review" :delivery started)))
            (message
             (mevedel-tool-ui--render-agent-interaction
              "SendMessage"
@@ -1129,7 +1141,7 @@
           (mevedel-view--insert-rendered-tool followup (cons 1 1))
           (mevedel-view--insert-rendered-tool message (cons 2 2)))
         (goto-char (point-min))
-        (search-forward "FollowupAgent: /root/spec_review (follow-up sent)")
+        (search-forward "SendMessage: /root/spec_review (started)")
         (goto-char (match-beginning 0))
         (search-forward "/root/spec_review")
         (goto-char (match-beginning 0))
@@ -1138,7 +1150,7 @@
           (mevedel-view-activate-at-point))
         (should (equal "/root/spec_review" opened))
         (goto-char (point-min))
-        (search-forward "FollowupAgent: /root/spec_review (follow-up sent)")
+        (search-forward "SendMessage: /root/spec_review (started)")
         (goto-char (match-beginning 0))
         (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
                    (lambda (&rest _) followup)))
@@ -1252,7 +1264,7 @@
   :doc "returns empty success with canonical interaction render data"
   (let* ((session (mevedel-tool-ui-test--session))
          (record (mevedel-agent-record--create
-                  :id "peer-id" :path "/root/peer" :activity 'idle))
+                  :id "peer-id" :path "/root/peer" :activity 'running))
          result)
     (setf (mevedel-session-agent-registry session)
           (list (cons "/root/peer" record)))
@@ -1262,7 +1274,31 @@
              '(:target "/root/peer" :message "hello"))))
     (should (equal "" (plist-get result :result)))
     (should (equal "/root/peer"
-                   (plist-get (plist-get result :render-data) :path)))))
+                   (plist-get (plist-get result :render-data) :path)))
+    (should (eq 'queued
+                (plist-get (plist-get result :render-data) :delivery))))
+
+  :doc "preserves the initiating tool ID and reports capacity waits only"
+  (dolist (delivery '(queued started waiting))
+    (let ((mevedel--session (mevedel-tool-ui-test--session))
+          captured)
+      (cl-letf (((symbol-function 'mevedel-pipeline-active-tool-use-id)
+                 (lambda () "send/1"))
+                ((symbol-function 'mevedel-agent-control-send-message)
+                 (lambda (session target message &rest keys)
+                   (setq captured (list session target message keys))
+                   (list :path "/root/peer" :delivery delivery))))
+        (let ((result (mevedel-tool-ui--send-message
+                       '(:target "peer" :message "Continue"))))
+          (should (equal (list mevedel--session "peer" "Continue"
+                               '(:parent-tool-use-id "send/1"))
+                         captured))
+          (should (equal (if (eq delivery 'waiting)
+                             "Agent starts when a slot frees." "")
+                         (plist-get result :result)))
+          (should (eq delivery
+                      (plist-get (plist-get result :render-data)
+                                 :delivery))))))))
 
 (mevedel-deftest mevedel-tool-ui--wait-agent ()
   ,test

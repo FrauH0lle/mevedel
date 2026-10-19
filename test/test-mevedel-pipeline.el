@@ -913,6 +913,9 @@ cover, so the permission step's warning about it is captured here."
     (mevedel-tool--create :name "Agent" :groups '(agents) :read-only-p t)))
   (should
    (mevedel-pipeline--untracked-filesystem-effects-p
+    (mevedel-tool--create :name "SendMessage" :groups '(agents) :read-only-p t)))
+  (should
+   (mevedel-pipeline--untracked-filesystem-effects-p
     (mevedel-tool--create :name "MkDir" :groups '(edit))))
   (should-not
    (mevedel-pipeline--untracked-filesystem-effects-p
@@ -936,7 +939,15 @@ cover, so the permission step's warning about it is captured here."
     (should next-context)
     (should (equal '("Eval")
                    (mapcar #'car
-                           (mevedel-request-untracked-effects request))))))
+                           (mevedel-request-untracked-effects request)))))
+
+  :doc "messages mark delegated effects even though the tool is directly read-only"
+  (let* ((request (mevedel-request--create :directive-uuid "directive"))
+         (tool (mevedel-tool--create :name "SendMessage" :read-only-p t)))
+    (mevedel-pipeline--step-capture-coverage
+     (list :tool tool :request request) #'ignore #'ignore)
+    (should (equal '(("SendMessage" . "Delegated work can modify files outside parent snapshots"))
+                   (mevedel-request-untracked-effects request)))))
 
 (mevedel-deftest mevedel-pipeline--step-snapshot ()
   ,test

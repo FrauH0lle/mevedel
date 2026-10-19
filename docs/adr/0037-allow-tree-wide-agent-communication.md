@@ -7,8 +7,8 @@ Status: accepted
 Agents may address any retained agent in the same root session tree by canonical
 path. `SendMessage` may target the root or any agent. Agent-originated mail to
 `/root` can wake the idle root through the Monitor Background event scheduler;
-root self-mail and mail to non-root recipients do not start turns.
-`FollowupAgent` may trigger any non-root agent but may not target the root session.
+self-mail never starts a turn. Mail to idle non-root recipients starts their
+turn when capacity allows.
 `WaitAgent` wakes for mailbox activity from any source. The spawn tree defines
 identity, capacity ownership, and automatic child-completion delivery, but does
 not restrict explicit communication to parent-child edges.
@@ -18,12 +18,15 @@ not restrict explicit communication to parent-child edges.
 Direct peer communication avoids parent relay turns while retaining one session
 authority boundary. Idle-root notification follows the session's existing
 background-wake holds and current permissions, not sender-controlled dispatch.
-Automatic results still go to the spawn parent and can wake it only if it is
-`/root`, so a peer that requests work
-needs an explicit reply when it needs the result. See [Agents](../agents.md).
+Automatic results still go to the spawn parent and can wake it, so a peer that
+requests work needs an explicit reply when it needs the result. See
+[Agents](../agents.md).
 
 ## Decision history
 
+- **Idle-recipient wake (2026-10-19).** SendMessage absorbed FollowupAgent and
+  ordinary results now wake non-root parents too. ADR 0035 records the evidence
+  and delivery contract; tree-wide addressing is unchanged.
 - **Idle-root notification (2026-10).** Root-directed messages and results
   previously stayed queued until another root turn, stranding late reports
   until the user spoke again. The root-only background-wake exception replaces

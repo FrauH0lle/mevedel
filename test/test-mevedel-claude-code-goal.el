@@ -252,7 +252,7 @@
                    :agent (mevedel-agent--create :name "reader" :description "Read evidence"
                                                 :tools '(Read) :system-prompt "Read evidence")
                    :on-invocation (lambda (value) (setq invocation value)))
-                (mevedel-agent-control-followup session "/root/reader" "Read again.")
+                (mevedel-agent-control-send-message session "/root/reader" "Read again.")
                 (setq invocation (mevedel-agent-record-invocation record)))
               (ert-info ((format "Child admission: %s" mevedel-test--captured))
                 (should (mevedel-agent-invocation-p invocation)))
