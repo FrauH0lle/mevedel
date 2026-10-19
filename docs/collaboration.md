@@ -902,11 +902,16 @@ conspicuous. The transport's larger wire bound remains the final safety check.
 Every link tier also receives a change-latched `goal` frame on joining and as
 the durable Goal changes, including an explicit absent value when cleared.
 The status strip has a separate read-only Goal chip with status, settled turns,
-and token usage/budget. Tapping it opens the objective, status reason, and
+and token usage/budget. Tapping it opens the objective, public status reason, and
 accounted time/usage details. An unbounded budget and incomplete usage are explicit;
 incomplete usage is a lower bound, never a fabricated total. Unaccounted current
-request usage is not added to the durable counters. Objective and reason text
-are each capped at 4 KiB with an explicit truncation notice, keeping the frame
+request usage is not added to the durable counters. Raw Goal reasons can contain
+provider errors and private runtime diagnostics. Their producers mark these
+reasons as diagnostic; every link tier then receives only a safe recovery-category
+message. The native Goal retains the full diagnostic, which never enters the
+shared Goal frame. Model-reported blockers, user pauses and budget explanations
+remain public session content and retain their text. Objective and public reason
+text are each capped at 4 KiB with an explicit truncation notice, keeping the frame
 below 64 KiB even with JSON escaping. Goal changes stay in Emacs:
 the browser adds no Goal editing, pause, resume, or completion authority.
 

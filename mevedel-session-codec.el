@@ -86,6 +86,7 @@
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-plan-reference "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-reason "mevedel-structs" (cl-x))
+(declare-function mevedel-goal-reason-diagnostic "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-time-used-seconds "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x))
@@ -417,7 +418,8 @@ are mapped below the opened workspace root before containment is checked."
 
 (defun mevedel-session-codec--goal-to-plist (goal)
   "Serialize GOAL to a sidecar plist."
-  (list :id (mevedel-goal-id goal)
+  (append (when (mevedel-goal-reason-diagnostic goal) '(:reason-diagnostic t))
+          (list :id (mevedel-goal-id goal)
         :objective (mevedel-goal-objective goal)
         :status (mevedel-goal-status goal)
         :reason (mevedel-goal-reason goal)
@@ -432,7 +434,7 @@ are mapped below the opened workspace root before containment is checked."
         :turns-run (mevedel-goal-turns-run goal)
         :plan-reference (mevedel-goal-plan-reference goal)
         :created-at (mevedel-goal-created-at goal)
-        :updated-at (mevedel-goal-updated-at goal)))
+        :updated-at (mevedel-goal-updated-at goal))))
 
 (defun mevedel-session-codec--goal-from-plist (plist)
   "Reconstruct a `mevedel-goal' from PLIST, or nil."
@@ -444,10 +446,11 @@ are mapped below the opened workspace root before containment is checked."
       (unless
           (and (proper-list-p plist)
                (cl-evenp (length plist))
-               (= (length plist) (* 2 (length keys)))
+               (= (length plist) (+ (* 2 (length keys))
+                                    (if (plist-member plist :reason-diagnostic) 2 0)))
                (cl-every (lambda (key) (plist-member plist key)) keys)
                (cl-loop for (key _) on plist by #'cddr
-                        always (memq key keys))
+                        always (or (memq key keys) (eq key :reason-diagnostic)))
                (stringp (plist-get plist :id))
                (string-match-p "\\`[[:alnum:]_.-]+\\'"
                                (plist-get plist :id))
@@ -456,6 +459,8 @@ are mapped below the opened workspace root before containment is checked."
                (not (string-blank-p (plist-get plist :objective)))
                (memq (plist-get plist :status)
                      '(active paused blocked budget-limited complete))
+               (or (not (plist-member plist :reason-diagnostic))
+                   (eq t (plist-get plist :reason-diagnostic)))
                (let ((reason (plist-get plist :reason))
                      (status (plist-get plist :status)))
                  (if (memq status '(paused blocked budget-limited))
@@ -488,6 +493,7 @@ are mapped below the opened workspace root before containment is checked."
      :objective (plist-get plist :objective)
      :status (plist-get plist :status)
      :reason (plist-get plist :reason)
+     :reason-diagnostic (plist-get plist :reason-diagnostic)
      :implementation-policy (copy-tree (plist-get plist :implementation-policy))
      :token-budget (plist-get plist :token-budget)
      :tokens-used (plist-get plist :tokens-used)
@@ -1029,6 +1035,7 @@ their hygiene filters."
                 ((eq (mevedel-goal-status goal) 'active)))
       (setf (mevedel-goal-status goal) 'paused
             (mevedel-goal-reason goal) "session resumed"
+            (mevedel-goal-reason-diagnostic goal) nil
             (mevedel-goal-updated-at goal)
             (format-time-string "%FT%T%z")))
     (list :session             session

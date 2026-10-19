@@ -282,7 +282,8 @@ inherits the effective default; explicit nil means unlimited."
         (error "Reserved Goal %s has terminal status %s"
                id (mevedel-goal-status current)))
       (setf (mevedel-goal-status current) 'active
-            (mevedel-goal-reason current) nil)
+            (mevedel-goal-reason current) nil
+            (mevedel-goal-reason-diagnostic current) nil)
       (mevedel-goal--touch current)
       (mevedel-goal--persist session (current-buffer))
       current)
@@ -322,7 +323,8 @@ inherits the effective default; explicit nil means unlimited."
 (defun mevedel-goal--pause-for-integrity (goal session reason)
   "Persistently pause GOAL in SESSION for integrity REASON, then error."
   (setf (mevedel-goal-status goal) 'paused
-        (mevedel-goal-reason goal) reason)
+        (mevedel-goal-reason goal) reason
+        (mevedel-goal-reason-diagnostic goal) t)
   (mevedel-goal--touch goal)
   (mevedel-goal--persist session (current-buffer))
   (error "%s" reason))
@@ -559,7 +561,8 @@ Running tools finish and the turn settles; it is not aborted."
     (unless (eq (mevedel-goal-status goal) 'active)
       (user-error "Goal is not active"))
     (setf (mevedel-goal-status goal) 'paused
-          (mevedel-goal-reason goal) "paused by user")
+          (mevedel-goal-reason goal) "paused by user"
+          (mevedel-goal-reason-diagnostic goal) nil)
     (mevedel-goal--touch goal)
     (mevedel-goal--persist mevedel--session (current-buffer))
     (mevedel-goal--end-running-turn
@@ -581,7 +584,8 @@ Running tools finish and the turn settles; it is not aborted."
                           "Raise or remove the Goal budget before resuming")))
     (setq mevedel-goal--transient-retries 0)
     (setf (mevedel-goal-status goal) 'active
-          (mevedel-goal-reason goal) nil)
+          (mevedel-goal-reason goal) nil
+          (mevedel-goal-reason-diagnostic goal) nil)
     (mevedel-goal--touch goal)
     (when (and (stringp steering) (not (string-blank-p steering)))
       (mevedel-session-enqueue-pending-input
@@ -617,6 +621,7 @@ The string `none' removes the limit."
      ((and (mevedel-goal--budget-exhausted-p goal)
            (not (memq (mevedel-goal-status goal) '(blocked complete))))
       (setf (mevedel-goal-status goal) 'budget-limited
+            (mevedel-goal-reason-diagnostic goal) nil
             (mevedel-goal-reason goal)
             (if (mevedel-goal-tokens-incomplete-p goal)
                 "Native token usage is incomplete; remove the budget or start a new Goal to continue"
@@ -629,7 +634,8 @@ The string `none' removes the limit."
            (not (mevedel-goal--budget-exhausted-p goal)))
       (setq reactivated t)
       (setf (mevedel-goal-status goal) 'active
-            (mevedel-goal-reason goal) nil)))
+            (mevedel-goal-reason goal) nil
+            (mevedel-goal-reason-diagnostic goal) nil)))
     (mevedel-goal--touch goal)
     (mevedel-session-enqueue-pending-reminder
      mevedel--session
@@ -700,7 +706,8 @@ A hook that stops the turn pauses the Goal through here as well."
                   (goal (mevedel-session-goal session))
                   ((eq (mevedel-goal-status goal) 'active)))
         (setf (mevedel-goal-status goal) 'paused
-              (mevedel-goal-reason goal) reason)
+              (mevedel-goal-reason goal) reason
+              (mevedel-goal-reason-diagnostic goal) t)
         (mevedel-goal--touch goal)
         (mevedel-goal--persist session buffer)
         goal))))
@@ -838,6 +845,7 @@ next root request."
   (when (and (eq (mevedel-goal-status goal) 'active)
              (mevedel-goal--budget-exhausted-p goal))
     (setf (mevedel-goal-status goal) 'budget-limited
+          (mevedel-goal-reason-diagnostic goal) nil
           (mevedel-goal-reason goal)
           (if (mevedel-goal-tokens-incomplete-p goal)
               "Native token usage is incomplete; remove the budget or start a new Goal to continue"
@@ -1084,7 +1092,8 @@ another turn retry, regardless of the provider's failure message."
                               (cons 0 mevedel-goal--transient-retry-delays))
                          reason)
               (setf (mevedel-goal-status goal) 'paused
-                    (mevedel-goal-reason goal) reason)
+                    (mevedel-goal-reason goal) reason
+                    (mevedel-goal-reason-diagnostic goal) t)
               (mevedel-goal--touch goal)))))
       (mevedel-goal--settle-budget fsm session goal before))))
 

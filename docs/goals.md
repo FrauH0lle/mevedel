@@ -25,7 +25,10 @@ own status-strip chip. The read-only sheet shows the objective, status/reason,
 budget and durable token/time/turn accounting, with incomplete usage marked as a
 lower bound. Unlike `GetGoal`, this projection does not add the current request's
 unaccounted usage; already-accounted child charges are included. Goal
-changes remain in Emacs; opening the sheet never resumes work.
+changes remain in Emacs; opening the sheet never resumes work. Diagnostic reasons
+from request, runtime, hook, or integrity failures are shown only as a safe public
+category to every browser tier. Public model blockers, user pauses and budget
+explanations retain their text; native inspection retains concrete diagnostics.
 
 ## Durable state
 
@@ -41,6 +44,10 @@ The session sidecar stores a strict Goal record containing:
 An invalid persisted Goal record loads as no Goal. An active Goal loaded from a
 saved session is demoted to `paused` with a session-resumed reason so recovery
 cannot dispatch work without an explicit `/goal resume`.
+
+Diagnostic reason producers set the optional `:reason-diagnostic t` marker.
+Public reason updates clear it, and serialization omits it for public content.
+Its absence means public text; existing unmarked reasons are not reclassified.
 
 The required `:implementation-policy` field is `nil` for a Goal without an
 accepted implementation override. A present policy is the strict serializable

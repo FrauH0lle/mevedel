@@ -168,6 +168,23 @@
 (mevedel-deftest mevedel-session-codec--goal-from-plist ()
   ,test
   (test)
+  :doc "round-trips the optional diagnostic marker without changing public reasons"
+  (let* ((goal (mevedel-goal--create
+                :id "g" :objective "Ship" :status 'paused :reason "Private diagnostic"
+                :reason-diagnostic t :tokens-used 0 :time-used-seconds 0 :turns-run 0
+                :created-at "created" :updated-at "updated"))
+         (plist (mevedel-session-codec--goal-to-plist goal)))
+    (should (eq t (plist-get plist :reason-diagnostic)))
+    (should (mevedel-goal-reason-diagnostic
+             (mevedel-session-codec--goal-from-plist plist)))
+    (dolist (invalid '(nil "true" public))
+      (should-error (mevedel-session-codec--goal-from-plist
+                     (plist-put (copy-sequence plist) :reason-diagnostic invalid))))
+    (setf (mevedel-goal-reason-diagnostic goal) nil)
+    (setq plist (mevedel-session-codec--goal-to-plist goal))
+    (should-not (plist-member plist :reason-diagnostic))
+    (should-not (mevedel-goal-reason-diagnostic
+                 (mevedel-session-codec--goal-from-plist plist))))
   :doc "rebuilds the current strict Goal schema"
   (let ((goal (mevedel-session-codec--goal-from-plist
                '(:id "g1" :objective "Ship" :status active :reason nil
