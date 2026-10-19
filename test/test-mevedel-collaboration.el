@@ -1544,6 +1544,32 @@ Remove the global hooks a started room installs afterwards."
       (kill-buffer source)
       (kill-buffer target)))
 
+  :doc "names an unnamed successor by nothing rather than its ID"
+  (let ((source (generate-new-buffer " *collab-handoff-source*"))
+        (target (generate-new-buffer " *collab-handoff-target*"))
+        (mevedel-collaboration-relay-url "ws://127.0.0.1:1")
+        (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+        sent)
+    (unwind-protect
+        (mevedel-test--with-stub-relay sent
+          (with-current-buffer target
+            ;; A fork is named by its ID until its first prompt titles it.
+            (setq-local mevedel--session
+                        (mevedel-session--create :name "20261019T0800-fork"
+                                                 :session-id "20261019T0800-fork"
+                                                 :naming-state 'pending)))
+          (let ((room (mevedel-collaboration--start
+                       (mevedel-session--create :name "plan") source)))
+            (puthash 2 (list :name "writer" :writable t)
+                     (plist-get room :guests))
+            (should (mevedel-collaboration-hand-off source target))
+            (let ((frame (cdr (assq 2 sent))))
+              (should (equal "handoff" (plist-get frame :reason)))
+              (should-not (plist-get frame :name))
+              (should (stringp (plist-get frame :link))))))
+      (kill-buffer source)
+      (kill-buffer target)))
+
   :doc "does nothing for a session that is not shared"
   (let ((source (generate-new-buffer " *collab-handoff-source*"))
         (target (generate-new-buffer " *collab-handoff-target*"))

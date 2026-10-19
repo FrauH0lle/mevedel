@@ -933,8 +933,8 @@ request or prompt transaction."
 (defun mevedel-collaboration--farewell (room reason)
   "Tell ROOM's guests that it ends for REASON.
 A room handed off to a successor tells each guest where the work went,
-with a link at the tier that guest already holds; otherwise one
-broadcast says why the room ended."
+with the successor's name when it has one and a link at the tier that
+guest already holds; otherwise one broadcast says why the room ended."
   (let ((transport (plist-get room :transport))
         (guests (plist-get room :guests))
         (successor (plist-get room :successor)))
@@ -953,10 +953,12 @@ broadcast says why the room ended."
                    guests))))))
 
 (defun mevedel-collaboration--room-name (room)
-  "Return the name ROOM's guests know its session by."
-  (or (when-let* ((session (plist-get room :session)))
-        (mevedel-session-name session))
-      (plist-get room :session-label)))
+  "Return the name ROOM's session goes by, or nil while it has none.
+An unnamed session is known by its ID, which tells a guest nothing."
+  (when-let* ((session (plist-get room :session))
+              (name (mevedel-session-name session))
+              ((not (equal name (mevedel-session-session-id session)))))
+    name))
 
 (defun mevedel-collaboration-hand-off (source target)
   "Move the guests of SOURCE's room to a room for TARGET.

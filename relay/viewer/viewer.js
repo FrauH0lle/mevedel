@@ -1445,12 +1445,16 @@
                && typeof frame.link === 'string') {
       // The work moved on, such as a plan accepted into a Worktree fork;
       // the host hands every guest the new room at the tier it holds.
-      const name = typeof frame.name === 'string' && frame.name
-        ? frame.name : 'a new session';
-      sessions.offerRoom({name, link: frame.link});
-      showTerminal(`Continued in ${name}`, 'The host moved this work to a '
-                   + 'new session. Open it to follow along.',
-                   {label: `Open ${name}`, href: frame.link});
+      // An unnamed successor is known only by its ID, which says nothing.
+      const name = typeof frame.name === 'string' && frame.name ? frame.name : null;
+      // This page offers the room itself; a dock notice would repeat it.
+      sessions.offerRoom({name: name || 'New session', link: frame.link},
+                         {notice: false});
+      showTerminal(name ? `Continued in ${name}` : 'Continued in a new session',
+                   'The host moved this work to a new session. Open it to '
+                   + 'follow along.',
+                   {label: name ? `Open ${name}` : 'Open the new session',
+                    href: frame.link});
     } else if (frame.t === 'bye' && frame.reason === 'handoff-failed') {
       showTerminal('Continued in Emacs', 'The host moved this work to a new '
                    + 'session but could not share it. Ask the host for an '

@@ -246,10 +246,13 @@
     // A room handed over rather than asked for: someone else's request
     // that an owner approved, which this owner may also join, or the room
     // that continues this one's work after a handoff.
-    function offerRoom({name, link}) {
+    // NOTICE false keeps the room without announcing it, for a page that
+    // presents the room itself.
+    function offerRoom({name, link}, {notice = true} = {}) {
       const parts = splitLink(link);
       if (!name || !parts) return;
       rememberRoom(name, parts);
+      if (!notice) return;
       // The same room reached this tab twice -- an offer after its own
       // reply, or a reconnect replaying one -- is one room, not a second
       // announcement of it.

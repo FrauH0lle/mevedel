@@ -154,6 +154,8 @@ test('a room handed off leads its guests to the room that continues it', async (
       assert.equal(await page.locator('#terminal-title').textContent(),
                    'Continued in Implement plan');
       assert.equal(await action.textContent(), 'Open Implement plan');
+      // The page offers the room itself; no dock notice repeats it.
+      assert.equal(await visible(page, '#invites'), false);
       const box = await action.boundingBox();
       assert.ok(box.x >= 0 && box.x + box.width <= viewport.width,
                 `the Open action fits ${viewport.width}px`);
@@ -163,12 +165,22 @@ test('a room handed off leads its guests to the room that continues it', async (
       assert.equal(await visible(page, '#terminal-state'), false);
       assert.ok(page.joined.includes(forkRoom.id));
 
-      // A successor the host could not share leaves nowhere to go.
-      await page.push[forkRoom.id]({t: 'bye', reason: 'handoff-failed'});
-      await page.locator('#terminal-state').waitFor();
-      assert.equal(await page.locator('#terminal-title').textContent(),
-                   'Continued in Emacs');
-      assert.equal(await visible(page, '#terminal-action'), false);
+      if (viewport.width < 600) {
+        // An unnamed successor is known only by its ID, so it goes unnamed.
+        await page.push[forkRoom.id]({t: 'bye', reason: 'handoff', name: null,
+                                      link: sessionRoom.link});
+        await page.locator('#terminal-state').waitFor();
+        assert.equal(await page.locator('#terminal-title').textContent(),
+                     'Continued in a new session');
+        assert.equal(await action.textContent(), 'Open the new session');
+      } else {
+        // A successor the host could not share leaves nowhere to go.
+        await page.push[forkRoom.id]({t: 'bye', reason: 'handoff-failed'});
+        await page.locator('#terminal-state').waitFor();
+        assert.equal(await page.locator('#terminal-title').textContent(),
+                     'Continued in Emacs');
+        assert.equal(await visible(page, '#terminal-action'), false);
+      }
       await page.context().close();
     }
   } finally {
