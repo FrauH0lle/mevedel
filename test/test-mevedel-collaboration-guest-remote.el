@@ -413,4 +413,16 @@
           (should (eq (gethash 41 requests) overlay)))))))
 
 (provide 'test-mevedel-collaboration-guest-remote)
+(mevedel-deftest mevedel-collaboration--ui-request-frame
+  (:doc "projects current patch warnings alongside its selected diff")
+  (with-temp-buffer
+    (let ((overlay (make-overlay (point-min) (point-min))))
+      (overlay-put overlay 'mevedel--remote
+                   '(:body "+selected change" :body-kind "diff"
+                     :notice "Conflict: file changed."))
+      (let ((frame (mevedel-collaboration--ui-request-frame 42 overlay)))
+        (should (equal (plist-get frame :notice) "Conflict: file changed."))
+        (should (equal (plist-get frame :body) "+selected change"))
+        (should (equal (plist-get frame :bodyKind) "diff"))))))
+
 ;;; test-mevedel-collaboration-guest-remote.el ends here

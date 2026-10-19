@@ -563,6 +563,8 @@ guest, the ordinary case."
                      collect `(("id" . ,index) ("label" . ,label))))
            :allowFeedback
            (if (plist-get remote :feedback) t :json-false))
+     (when-let* ((notice (plist-get remote :notice)))
+       (list :notice notice))
      ;; A cancel handler settles just this interaction -- for the Ask
      ;; questionnaire, the run continues -- so the guest gets a Dismiss.
      (when (plist-get remote :cancel)

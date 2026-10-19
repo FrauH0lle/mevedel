@@ -48,6 +48,12 @@ uses the ordinary pending-input path; guest attribution is visible to users but
 excluded from model context. Browser permissions are one-shot, not a way to
 install reusable rules. Their cards preserve native warnings, including the
 concurrency risk of a side-conversation mutation while its parent is active.
+Patch approvals project the current selected and host-edited diff, not the
+original authored patch. A bounded plain-text notice carries staged comments,
+conflicts, rollback warnings and parent activity before the colored diff. Semantic
+review changes update the same request identity; unchanged native redraws do not
+republish it. The browser retains an in-progress feedback draft and focus across
+those updates, while editing and selection remain in Emacs.
 Save, Rewind, Fork, lease transfer, publication, and
 execution-target changes remain host operations.
 

@@ -85,6 +85,59 @@ test('changed pending cards keep their original arrival order', async () => {
   } finally { await browser.close(); }
 });
 
+test('changed pending cards preserve feedback text, disclosure and focused selection', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await room(browser);
+    await requestRenderer(page);
+    await page.evaluate(() => requestView.render({reqId: 1, body: 'Original', allowFeedback: true}));
+    await page.getByText('Suggest a change', {exact: true}).click();
+    const input = page.locator('.request-feedback');
+    await input.fill('> keep this draft');
+    await input.evaluate(node => node.setSelectionRange(2, 6));
+    await page.evaluate(() => requestView.render({reqId: 1, body: 'Updated', allowFeedback: true}));
+    assert.equal(await input.inputValue(), '> keep this draft');
+    assert.equal(await input.isVisible(), true);
+    assert.deepEqual(await input.evaluate(node => [document.activeElement === node,
+      node.selectionStart, node.selectionEnd]), [true, 2, 6]);
+    await page.locator('#composer-input').focus();
+    await page.evaluate(() => requestView.render({reqId: 1, body: 'Updated again', allowFeedback: true}));
+    assert.equal(await page.locator('#composer-input').evaluate(node => document.activeElement === node), true);
+    await page.getByRole('button', {name: 'Send feedback', exact: true}).click();
+    assert.deepEqual(await page.evaluate(() => requestSent.at(-1)),
+      {t: 'ui-response', reqId: 1, feedback: '> keep this draft'});
+  } finally { await browser.close(); }
+});
+
+test('pending patch notices precede the diff and update safely in place', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 1200]) {
+      const page = await room(browser);
+      await page.setViewportSize({width, height: 812});
+      await page.addScriptTag({content: await readFile(
+        resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
+      await requestRenderer(page);
+      await page.evaluate(() => {
+        requestView.render({reqId: 1, bodyKind: 'diff', body: '+selected change',
+          notice: 'Current host selection. Warning: parent request is still active.', options: []});
+        requestView.render({reqId: 2, body: 'Later request', options: []});
+      });
+      const notice = page.locator('[data-req-id="1"] .request-notice');
+      assert.match(await notice.innerText(), /parent request is still active/);
+      assert.ok((await notice.boundingBox()).y < (await page.locator('.diff').boundingBox()).y);
+      await page.evaluate(() => requestView.render({reqId: 1, bodyKind: 'diff',
+        body: '+selected change', notice: '<img src=x onerror="alert(1)"> Conflict: file changed.', options: []}));
+      assert.match(await notice.innerText(), /<img src=x.*Conflict: file changed/);
+      assert.equal(await notice.locator('img').count(), 0);
+      assert.deepEqual(await page.locator('.request-card').evaluateAll(
+        cards => cards.map(card => card.dataset.reqId)), ['1', '2']);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
 test('Ask focuses one question with inspectable samples and stable phone geometry', async () => {
   const browser = await chromium.launch();
   try {

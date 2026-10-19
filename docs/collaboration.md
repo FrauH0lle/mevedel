@@ -921,7 +921,9 @@ samples scrolling. The whole form reserves the tallest question at that width;
 changing questions, answers or samples does not move its footer or the composer.
 Resizing recomputes that reservation. Repeated unchanged host frames preserve
 drafts, focus and scroll. Changed cards replace their existing slot rather than
-moving behind later requests. Browser requests read oldest first, so the
+moving behind later requests. When feedback remains available, a changed card
+also retains its open feedback disclosure, text and focused selection without
+stealing focus from the composer. Browser requests read oldest first, so the
 scrolling stack initially exposes the decision that has waited longest.
 
 A refused interaction action is reported to the answering browser through the
@@ -934,6 +936,13 @@ Permission cards include the same warnings as Emacs, including a
 side-conversation mutation's still-active parent. Their full operation and
 authority details remain available regardless of whether the host folded its
 native card. Remote permission outcomes remain one-shot only.
+
+Patch cards show the current host-selected, host-edited changes rather than the
+original authored patch. A plain-text notice before the diff explains the
+selection, staged feedback, parent activity and any conflict or incomplete
+rollback. The primary action follows the current selection (apply changes,
+request revision, or reject). Selection/editing stay in Emacs; semantic changes
+refresh the same pending card. Explicit truncation marks oversized review text.
 
 ## Commands, skills, and tool display
 

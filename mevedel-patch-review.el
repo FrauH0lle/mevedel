@@ -96,6 +96,8 @@
                   "mevedel-tool-patch" (value))
 (declare-function mevedel-tool-patch-result
                   "mevedel-tool-patch" (proposal changes &optional reviewed))
+(declare-function mevedel-tool-patch-revised-count
+                  "mevedel-tool-patch" (proposal))
 (declare-function mevedel-tool-patch-sanitize-error
                   "mevedel-tool-patch" (message proposal))
 (declare-function mevedel-tool-patch-status
@@ -604,6 +606,64 @@ The whole patch, each operation, and each Update hunk."
           (plist-put target :feedback-editing nil)
           (plist-put target :feedback-draft nil))))))
 
+(defun mevedel-patch-review--refresh-remote (proposal &optional quiet)
+  "Refresh PROPOSAL's browser presentation from its staged selection.
+Announce only semantic changes, unless QUIET is non-nil during setup.
+Foreign view redraws and feedback keystrokes do not call this function."
+  (when (and (plist-get proposal :remote)
+             (not (memq (plist-get proposal :state) '(submitting settled))))
+    (cl-labels
+        ((bounded (text budget)
+           ;; Budget encoded strings, including JSON escaping and UTF-8.
+           (if (<= (string-bytes (json-serialize (vector text))) budget)
+               text
+             (let ((lo 0) (hi (length text))
+                   (marker "\n[truncated; inspect the full review in Emacs]"))
+               (while (> (- hi lo) 1)
+                 (let* ((mid (/ (+ lo hi) 2))
+                        (candidate (concat (substring text 0 mid) marker)))
+                   (if (<= (string-bytes (json-serialize (vector candidate)))
+                           budget)
+                       (setq lo mid)
+                     (setq hi mid))))
+               (concat (substring text 0 lo) marker)))))
+      (let* ((overlay (plist-get proposal :overlay))
+             (old (overlay-get overlay 'mevedel--remote))
+             (remote (copy-sequence (plist-get proposal :remote)))
+             (render-data (plist-get (mevedel-tool-patch-result proposal nil)
+                                     :render-data))
+             (body (mapconcat
+                    (lambda (file)
+                      (format "%s %s%s\n%s"
+                              (upcase (symbol-name (plist-get file :kind)))
+                              (plist-get file :path)
+                              (if-let* ((to (plist-get file :move-path)))
+                                  (concat " -> " to) "")
+                              (plist-get file :diff)))
+                    (plist-get render-data :files) "\n\n"))
+             (notice
+              (concat
+               (mevedel-side-conversation-mutation-warning
+                proposal "applying this patch")
+               (when-let* ((conflict (plist-get proposal :conflict)))
+                 (concat "Conflict: " conflict "\n"
+                         (if (plist-get proposal :rollback-incomplete)
+                             "Rollback was incomplete. Inspect the listed paths before retrying.\n"
+                           "Change the selection in Emacs, or request revision so the model re-reads the stale files.\n")))
+               "Current host selection; unselected changes are not applied. Selection and editing stay in Emacs.\n"
+               (when (> (mevedel-tool-patch-revised-count proposal) 0)
+                 "Includes changes edited by the host during review.\n")
+               (string-join (plist-get render-data :notes) "\n"))))
+        (plist-put remote :body (bounded body 45000))
+        (plist-put remote :notice (bounded notice 12000))
+        (plist-put remote :options
+                   (list (cons (caar (plist-get remote :options))
+                               (mevedel-patch-review--primary-label proposal))))
+        (plist-put proposal :remote remote)
+        (overlay-put overlay 'mevedel--remote remote)
+        (unless (or quiet (equal old remote))
+          (mevedel--prompt-announce overlay))))))
+
 (defun mevedel-patch-review--render (proposal)
   "Render or redraw PROPOSAL in its view buffer.
 The interaction body is a function so every zone render -- including
@@ -612,23 +672,25 @@ review state instead of a stale snapshot that would destroy an active
 feedback draft.  Marker upkeep rides the `:after-render' hook for the
 same reason."
   (with-current-buffer (plist-get proposal :view-buffer)
-    (mevedel-view--interaction-register
-     (list :kind 'preview
-           :id (plist-get proposal :id)
-           :count 1
-           :body
-           (lambda ()
-             (mevedel-patch-review--sync-drafts proposal)
-             (if (eq (plist-get proposal :state) 'submitting)
-                 (propertize
-                  "\nApplyPatch · Applying patch and refreshing diagnostics...\n"
-                  'font-lock-face 'shadow)
-               (mevedel-patch-review--body proposal)))
-           :after-render
-           (lambda ()
-             (mevedel-patch-review--refresh-feedback-markers proposal))
-           :read-only (eq (plist-get proposal :state) 'submitting)
-           :body-properties-owned t))))
+    (prog1
+        (mevedel-view--interaction-register
+         (list :kind 'preview
+               :id (plist-get proposal :id)
+               :count 1
+               :body
+               (lambda ()
+                 (mevedel-patch-review--sync-drafts proposal)
+                 (if (eq (plist-get proposal :state) 'submitting)
+                     (propertize
+                      "\nApplyPatch · Applying patch and refreshing diagnostics...\n"
+                      'font-lock-face 'shadow)
+                   (mevedel-patch-review--body proposal)))
+               :after-render
+               (lambda ()
+                 (mevedel-patch-review--refresh-feedback-markers proposal))
+               :read-only (eq (plist-get proposal :state) 'submitting)
+               :body-properties-owned t))
+      (mevedel-patch-review--refresh-remote proposal))))
 
 (defun mevedel-patch-review--settle (proposal outcome)
   "Settle PROPOSAL exactly once with OUTCOME."
@@ -661,12 +723,7 @@ DATA-BUFFER is the tool-calling buffer whose view owns the interaction."
       ;; feedback.  Side-by-side editing and per-hunk feedback stay in
       ;; Emacs.
       (let ((remote
-             (list :body
-                   (let ((patch (or (plist-get proposal :patch) "")))
-                     (if (> (length patch) 60000)
-                         (concat (substring patch 0 60000) "\n[truncated]")
-                       patch))
-                   :body-kind "diff"
+             (list :body-kind "diff"
                    :options
                    (list (cons (lambda ()
                                  (mevedel-patch-review--submit proposal))
@@ -682,6 +739,7 @@ DATA-BUFFER is the tool-calling buffer whose view owns the interaction."
         (overlay-put overlay 'mevedel--remote remote))
       (cl-pushnew overlay mevedel--prompt-overlays :test #'eq)
       (mevedel--prompt--register-canceller data-buffer overlay)
+      (mevedel-patch-review--refresh-remote proposal t)
       (mevedel--prompt-announce overlay)))
   nil)
 
@@ -1272,8 +1330,7 @@ the edit moved the region it matches."
                    (error-message-string err) proposal))
        (plist-put proposal :rollback-incomplete
                   (eq (car err) 'mevedel-tool-patch-partial-rollback))
-       (let ((overlay (mevedel-patch-review--render proposal)))
-         (mevedel--prompt-announce overlay)))))))
+       (mevedel-patch-review--render proposal))))))
 
 (defun mevedel-patch-review-submit ()
   "Apply the selected patch changes in the review at point."

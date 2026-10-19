@@ -169,15 +169,20 @@
     }
 
     function render(frame) {
-      const key = JSON.stringify([frame.body, frame.bodyKind, frame.options,
+      const key = JSON.stringify([frame.body, frame.bodyKind, frame.notice, frame.options,
         frame.questions, frame.allowFeedback, frame.allowCancel]);
       const existing = [...requests.children].find(c => c.dataset.reqId === String(frame.reqId));
       if (existing && existing.frameKey === key) return;
       const scrolled = existing && existing.bodyEl ? existing.bodyEl.scrollTop : 0;
+      const previousFeedback = existing && existing.feedbackEl;
+      const feedbackFocused = previousFeedback && document.activeElement === previousFeedback;
       const card = el('section', 'request-card');
       card.frameKey = key;
       card.dataset.reqId = String(frame.reqId);
       card.append(el('span', 'rhead', 'Needs your decision'));
+      if (typeof frame.notice === 'string' && frame.notice) {
+        card.append(el('div', 'request-body request-notice', frame.notice));
+      }
       if (frame.bodyKind === 'diff') {
         card.bodyEl = window.mevedelTranscriptRenderer.renderDiff(frame.body || '');
         card.append(card.bodyEl);
@@ -204,6 +209,8 @@
           feedback.autocomplete = 'off';
           feedback.placeholder = 'Feedback…';
           feedback.setAttribute('aria-label', 'Feedback');
+          if (previousFeedback) feedback.value = previousFeedback.value;
+          card.feedbackEl = feedback;
           const button = el('button', 'btn quiet', 'Send feedback');
           button.type = 'button';
           button.title = 'Answer with a comment instead of choosing an option';
@@ -212,6 +219,8 @@
           });
           row.append(feedback, button);
           const disclosure = el('details', 'decision-feedback');
+          if (existing && existing.feedbackDisclosure) disclosure.open = existing.feedbackDisclosure.open;
+          card.feedbackDisclosure = disclosure;
           disclosure.append(el('summary', '', 'Suggest a change'), row);
           card.append(disclosure);
         }
@@ -221,6 +230,11 @@
         existing.replaceWith(card);
       } else requests.append(card);
       if (scrolled && card.bodyEl) card.bodyEl.scrollTop = scrolled;
+      if (feedbackFocused && card.feedbackEl) {
+        card.feedbackEl.focus({preventScroll: true});
+        card.feedbackEl.setSelectionRange(previousFeedback.selectionStart,
+          previousFeedback.selectionEnd, previousFeedback.selectionDirection);
+      }
     }
 
     function clear() {

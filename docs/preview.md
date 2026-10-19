@@ -119,6 +119,17 @@ Once submission starts, the review becomes an inert progress row on both the
 Emacs and collaboration surfaces until diagnostics finish.  Review teardown
 may still abort it, and whichever terminal result wins settles the tool once.
 
+The collaboration card shows the current host-selected diff, including adopted
+edits, rather than the original model payload. Its action label uses the same
+selected-change and comment counts as the native review. A separate plain-text
+notice explains that selection and editing stay in Emacs and shows parent-active,
+conflict and incomplete-rollback warnings before staged feedback and rejection
+notes. Explicit review changes refresh the existing request; fold-only redraws
+with unchanged remote content do not republish it. Diff and notice strings have
+separate encoded-byte budgets, with explicit truncation directing the reader to
+the complete review in Emacs. Browser feedback still requests a whole-patch
+revision, deselecting every change; it does not edit individual hunks.
+
 No file changes before final submission. Application is one rollback-backed
 transaction across the selected changes, creates parent directories for added
 files, and refreshes visited unmodified buffers after success. If restoration
