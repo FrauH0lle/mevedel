@@ -14,6 +14,7 @@
 (require 'mevedel-view-composer)
 (require 'mevedel-view-disclosure)
 (require 'mevedel-view-render)
+(require 'mevedel-view-stream)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -1053,22 +1054,61 @@
               (should (> expanded collapsed)))))
       (kill-buffer buffer)))
 
-  :doc "a window too short to widen still gains a line when expanded"
+  :doc "a frame too short to widen still gains a line when expanded"
   (let ((buffer (generate-new-buffer " *task-budget-test*")))
     (unwind-protect
         (save-window-excursion
           (set-window-buffer (selected-window) buffer)
           (with-current-buffer buffer
-            (cl-letf (((symbol-function 'window-body-height)
+            (cl-letf (((symbol-function 'frame-height)
                        (lambda (&rest _) 8)))
               (should (= (1+ (mevedel-tool-task--status-line-budget))
                          (mevedel-tool-task--status-line-budget t))))))
+      (kill-buffer buffer)))
+
+  :doc "a popup split does not change the budget"
+  (let ((buffer (generate-new-buffer " *task-budget-test*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (set-window-buffer (selected-window) buffer)
+          (with-current-buffer buffer
+            (let ((before (list (mevedel-tool-task--status-line-budget)
+                                (mevedel-tool-task--status-line-budget t))))
+              (split-window-below (- (/ (window-body-height) 2)))
+              (should (equal before (list (mevedel-tool-task--status-line-budget)
+                                          (mevedel-tool-task--status-line-budget t)))))))
       (kill-buffer buffer)))
 
   :doc "returns nil when no window shows the buffer"
   (with-temp-buffer
     (should-not (mevedel-tool-task--status-line-budget))
     (should-not (mevedel-tool-task--status-line-budget t))))
+
+(mevedel-deftest mevedel-tool-task-display-string
+  (:doc "every task line fits one screen row of the narrowest window showing the view")
+  (test-mevedel-tool-task--with-session session
+    (setf (mevedel-session-turn-count session) 10)
+    (setf (mevedel-session-tasks session)
+          (list (mevedel-task--create
+                 :id 1 :status 'in-progress :owner "a_long_owner_name"
+                 :subject (concat "Rewrite the status zone so every row fits "
+                                  "exactly one screen row of the narrowest window"))
+                (mevedel-task--create :id 2 :subject "short" :status 'pending
+                                      :owner "a_long_owner_name")))
+    (let ((buffer (generate-new-buffer " *task-width-test*")))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (set-window-buffer (selected-window) buffer)
+            (set-window-buffer (split-window-right 40) buffer)
+            (with-current-buffer buffer
+              (let ((text (mevedel-tool-task-display-string session nil)))
+                (should (< (mevedel-view-zone-width) 40))
+                (should (string-search "#2" text))
+                (dolist (line (split-string text "\n"))
+                  (should (< (string-width line) (mevedel-view-zone-width)))))))
+        (kill-buffer buffer)))))
 
 (mevedel-deftest mevedel-tool-task--render-rows
   (:doc "`mevedel-tool-task--render-rows' caps rows without dangling chrome")

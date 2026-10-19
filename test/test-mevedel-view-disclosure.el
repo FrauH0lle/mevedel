@@ -1144,7 +1144,49 @@ the preceding header."
                              'mevedel-view-force-expanded t))
         (should-not (mevedel-view-disclosure-restore-state
                      (point-min) mevedel-view--input-marker states))
-        (should (string-search "Second detail line" (buffer-string)))))))
+        (should (string-search "Second detail line" (buffer-string))))))
+
+  :doc "remembers chosen states but not sections shown in their default state"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf "(:name \"Read\" :args (:file_path \"/tmp/f.el\"))\n\ncontent\n"
+     '(tool . "call_1"))
+    (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (mevedel-view-disclosure-reset-state)
+      (goto-char (point-min))
+      (search-forward "Read:")
+      (let ((tool (get-text-property (point) 'mevedel-view-source))
+            (response (save-excursion
+                        (search-forward "Done.")
+                        (get-text-property (point) 'mevedel-view-source))))
+        (mevedel-view-disclosure-capture-state
+         (point-min) mevedel-view--input-marker)
+        ;; A collapsed tool row and an expanded response are defaults.
+        (should-not (mevedel-view-disclosure-state-entry tool 'tool-summary))
+        (should-not (mevedel-view-disclosure-state-entry response 'response))
+        ;; An expansion is a choice, and so is folding it again afterwards.
+        (mevedel-view-toggle-section)
+        (mevedel-view-disclosure-capture-state
+         (point-min) mevedel-view--input-marker)
+        (should (equal '(nil) (list (cdr (mevedel-view-disclosure-state-entry
+                                          tool 'tool-summary)))))
+        (mevedel-view-toggle-section)
+        (mevedel-view-disclosure-capture-state
+         (point-min) mevedel-view--input-marker)
+        (should (eq t (cdr (mevedel-view-disclosure-state-entry
+                            tool 'tool-summary))))))))
+
+(mevedel-deftest mevedel-view-disclosure--default-collapsed-p ()
+  ,test
+  (test)
+  :doc "responses and turns render open; other sections render folded"
+  (should-not (mevedel-view-disclosure--default-collapsed-p 'response))
+  (should-not (mevedel-view-disclosure--default-collapsed-p 'turn-summary))
+  (dolist (type '(tool-summary tool-group thinking-summary tool-child))
+    (should (mevedel-view-disclosure--default-collapsed-p type))))
 
 (mevedel-deftest mevedel-view-disclosure-restore-state ()
   ,test

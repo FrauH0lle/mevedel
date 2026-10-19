@@ -643,6 +643,54 @@
             (should (= (point-min) (mevedel-view-zone-anchor-position anchor)))
             (should-not (mevedel-view-zone-anchor-position anchor t))))))))
 
+(mevedel-deftest mevedel-view-zone-width
+  (:doc "is the narrowest body width of the windows showing the buffer")
+  (save-window-excursion
+    (with-temp-buffer
+      (should (= (window-body-width) (mevedel-view-zone-width)))
+      (delete-other-windows)
+      (switch-to-buffer (current-buffer))
+      (let ((other (split-window-right 30)))
+        (set-window-buffer other (current-buffer))
+        (should (= (min (window-body-width) (window-body-width other))
+                   (mevedel-view-zone-width)))
+        (should (< (mevedel-view-zone-width)
+                   (max (window-body-width) (window-body-width other))))))))
+
+(mevedel-deftest mevedel-view-zone--on-window-change
+  (:doc "runs the width-change hook once per actual width change, in the view buffer")
+  (save-window-excursion
+    (with-temp-buffer
+      (delete-other-windows)
+      (switch-to-buffer (current-buffer))
+      (let* ((buffer (current-buffer))
+             (calls 0)
+             (mevedel-view-zone-width-change-functions
+              (list (lambda () (should (eq buffer (current-buffer))) (cl-incf calls)))))
+        (mevedel-view-zone--watch-width)
+        (mevedel-view-zone--on-window-change (selected-window))
+        (should (= 0 calls))
+        (split-window-right 30)
+        (mevedel-view-zone--on-window-change (selected-window))
+        (should (= 1 calls))
+        (mevedel-view-zone--on-window-change (selected-window))
+        (should (= 1 calls))
+        (delete-other-windows)
+        (mevedel-view-zone--on-window-change (selected-window))
+        (should (= 2 calls))))))
+
+(mevedel-deftest mevedel-view-zone--watch-width
+  (:doc "the first managed zone in a buffer starts watching its windows' width")
+  (with-temp-buffer
+    (mevedel-view-zone-test--setup-markers)
+    (should-not (memq #'mevedel-view-zone--on-window-change window-size-change-functions))
+    (mevedel-view-zone-reconcile 'status (point-min) (point-min)
+                                 '((:namespace status :id tasks :body "Tasks")))
+    (should (memq #'mevedel-view-zone--on-window-change window-size-change-functions))
+    (should (memq #'mevedel-view-zone--on-window-change window-buffer-change-functions))
+    (should (local-variable-p 'window-size-change-functions))
+    (should (= (mevedel-view-zone-width) mevedel-view-zone--width))))
+
 (mevedel-deftest mevedel-view-zone-collapse-state-set-p
   (:doc "reports whether collapse state was explicitly stored")
   (with-temp-buffer

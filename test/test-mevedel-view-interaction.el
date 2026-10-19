@@ -189,6 +189,20 @@
       (should (= (window-point other) (+ (mevedel-view--input-start) 1)))
       (should-not mevedel-view--interaction-focus-return)))
 
+  :doc "the first visit takes the card nearest the composer, then cycles outward"
+  (mevedel-view-test--with-buffers
+    (switch-to-buffer view-buf)
+    (mevedel-view-test--insert-composer-draft "draft" 2)
+    (test-mevedel-view-interaction--card 'oldest 'permission 1)
+    (test-mevedel-view-interaction--card 'middle 'plan 1)
+    (test-mevedel-view-interaction--card 'newest 'ask 1)
+    (test-mevedel-view-interaction--card 'queued 'pending-input 1)
+    (let (visits)
+      (dotimes (_ 4)
+        (mevedel-view-jump-to-interaction)
+        (push (get-text-property (point) 'mevedel-view-interaction-id) visits))
+      (should (equal '(oldest middle newest oldest) (nreverse visits)))))
+
   :doc "settlement does not pull back a window that left the visited card"
   (mevedel-view-test--with-buffers
     (switch-to-buffer view-buf)
@@ -572,7 +586,7 @@
         (should (eq 'running (mevedel-agent-record-activity record)))
         (should-not (mevedel-agent-record-blockers record))))))
 
-(mevedel-deftest mevedel-view--interaction-telemetry-close
+(mevedel-deftest mevedel-view--interaction-lifecycle-close
   (:doc "records base and effective permission modes at open and close")
   (mevedel-view-test--with-buffers
     (let ((session (mevedel-session--create
@@ -624,6 +638,99 @@
       (should-not (overlay-buffer overlay))
       (should-not
        (overlay-get overlay 'mevedel-agent-activity-release)))))
+
+(defun test-mevedel-view-interaction--card (id kind lines)
+  "Register a navigatable KIND card ID of LINES lines; return its body text."
+  (let ((body (mapconcat (lambda (n) (format "%s line %d" id n))
+                         (number-sequence 1 lines) "\n")))
+    (mevedel-view--interaction-register
+     (list :kind kind :id id :count 1 :keymap (make-sparse-keymap)
+           :body (concat body "\n")))
+    body))
+
+(defun test-mevedel-view-interaction--card-start (id)
+  "Return the buffer start of interaction card ID."
+  (plist-get (mevedel-view-zone-fragment-bounds 'interaction id) :start))
+
+(mevedel-deftest mevedel-view--interaction-width-changed ()
+  ,test
+  (test)
+  :doc "a narrower window re-fits the separator rule to one row"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (mevedel-view-test--insert-composer-draft "> draft\nnext" 3)
+      ;; A direct card; queue-backed ones return from their session on rebuild.
+      (test-mevedel-view-interaction--card 'card 'ask 1)
+      (cl-flet ((separator-rows ()
+                  (let ((start (plist-get (mevedel-view-zone-fragment-bounds
+                                           'interaction :separator)
+                                          :start)))
+                    (save-excursion
+                      (goto-char start)
+                      (count-screen-lines start (line-end-position))))))
+        (should (= 1 (separator-rows)))
+        (split-window-right 30)
+        (mevedel-view-zone--on-window-change nil)
+        (should (= 1 (separator-rows))))
+      (should (equal "> draft\nnext" (mevedel-view--input-text)))
+      (should (= (point) (+ (mevedel-view--input-start) 3))))))
+
+(mevedel-deftest mevedel-view--interaction-rank ()
+  ,test
+  (test)
+
+  :doc "cards stack newest farthest from the composer; pending input stays pinned"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view-test--insert-composer-draft "> draft\nnext" 3)
+      (test-mevedel-view-interaction--card 'queued 'pending-input 1)
+      (test-mevedel-view-interaction--card 'old 'plan 1)
+      (test-mevedel-view-interaction--card 'mid 'ask 1)
+      (test-mevedel-view-interaction--card 'new 'permission 1)
+      (cl-flet ((order ()
+                  (sort (list 'queued 'old 'mid 'new)
+                        :key #'test-mevedel-view-interaction--card-start)))
+        (should (equal '(new mid old queued) (order)))
+        ;; Re-registration under the same id, as rebuilds do, keeps its place.
+        (test-mevedel-view-interaction--card 'old 'plan 2)
+        (should (equal '(new mid old queued) (order)))
+        ;; A card that closed and returns arrives anew.
+        (mevedel-view--interaction-unregister 'old)
+        (test-mevedel-view-interaction--card 'old 'plan 1)
+        (should (equal '(old new mid queued) (order))))
+      (should (equal "> draft\nnext" (mevedel-view--input-text)))
+      (should (= (point) (+ (mevedel-view--input-start) 3)))))
+
+  :doc "an arriving card leaves a visited card on its screen row"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (forward-line 1)
+        (dotimes (n 200) (insert (format "transcript %d\n" n))))
+      (mevedel-view-test--insert-composer-draft "> draft\nnext" 3)
+      (test-mevedel-view-interaction--card 'visited 'ask 3)
+      (recenter -1)
+      (mevedel-view-jump-to-interaction)
+      (let ((row (count-screen-lines
+                  (window-start)
+                  (test-mevedel-view-interaction--card-start 'visited)))
+            (offset (- (point) (test-mevedel-view-interaction--card-start
+                                'visited))))
+        ;; A lower-ranked kind under the former per-kind ordering.
+        (test-mevedel-view-interaction--card 'arrived 'permission 5)
+        (should (< (test-mevedel-view-interaction--card-start 'arrived)
+                   (test-mevedel-view-interaction--card-start 'visited)))
+        (should (= row (count-screen-lines
+                        (window-start)
+                        (test-mevedel-view-interaction--card-start 'visited))))
+        (should (= offset (- (point) (test-mevedel-view-interaction--card-start
+                                      'visited))))
+        (should (equal "> draft\nnext" (mevedel-view--input-text)))))))
 
 (mevedel-deftest mevedel-view--interaction-target-buffer
   (:doc "resolves the live parent view for queued interactions")
@@ -1556,12 +1663,13 @@
           (when (buffer-live-p agent-view) (kill-buffer agent-view))
           (when (buffer-live-p agent-buf) (kill-buffer agent-buf))))
 
-  :doc "all interaction kinds keep priority, callbacks, and a leading-> draft across redraws"
+  :doc "all interaction kinds keep arrival order, callbacks, and a leading-> draft across redraws"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let* ((draft "> first line\nsecond line")
              (point-offset (length "> first"))
-             (kinds '(pending-input permission ask request plan preview))
+             ;; Arrival order differs from any per-kind ranking.
+             (kinds '(plan permission pending-input ask preview request))
              (bodies '((pending-input . "follow-up body")
                        (permission . "permission body")
                        (ask . "question body")
@@ -1598,9 +1706,8 @@
                (ask (string-search "question body" text))
                (permission (string-search "permission body" text))
                (queued (string-search "follow-up body" text)))
-          (should (< preview plan))
-          (should (< plan request permission queued))
-          (should (< plan ask permission)))
+          ;; Newest farthest from the composer; pending input pinned to it.
+          (should (< request preview ask permission plan queued)))
         (should (equal
                  "1 preview · 1 plan · 1 request · 1 question · 1 permission · 1 input pending"
                  (mevedel-view--interaction-count-label)))

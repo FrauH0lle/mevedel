@@ -180,6 +180,7 @@
 (declare-function mevedel-view--permission-mode-display
                   "mevedel-view-composer" (mode))
 (declare-function mevedel-view--plan-mode-p "mevedel-view-composer" ())
+(declare-function mevedel-view--refit-input-prompt "mevedel-view-composer" ())
 (declare-function mevedel-view--position-in-input-region-p
                   "mevedel-view-composer" (position))
 (declare-function mevedel-view--sanitize-undo "mevedel-view-composer" ())
@@ -772,11 +773,11 @@ the editable composer body.
   (add-hook 'window-buffer-change-functions
             #'mevedel-view--resume-on-window-change nil t)
   (add-hook 'window-scroll-functions
-            #'mevedel-view--resume-on-window-layout nil t)
+            #'mevedel-view--resume-on-window-scroll nil t)
   ;; Resizing (`delete-other-windows', a taller frame) can bring a span
-  ;; into view without scrolling.
+  ;; into view without scrolling, and changes the rail's width.
   (add-hook 'window-size-change-functions
-            #'mevedel-view--resume-on-window-layout nil t))
+            #'mevedel-view--resume-on-window-resize nil t))
 
 
 ;;
@@ -1639,16 +1640,28 @@ redisplay hooks reschedule it once someone can see the result."
           (mevedel-view-render-resume-batch))
         (mevedel-view-prepare-resume)))))
 
-(defun mevedel-view--resume-on-window-layout (window &optional _start)
-  "Update animation scheduling after WINDOW scrolled or changed size.
-Both hooks run before redisplay, while `window-end' still describes the
-old range, so the decision waits for the completed redisplay."
-  (when (eq (window-buffer window) (current-buffer))
-    (mevedel-view--render-request-progress))
+(defun mevedel-view--resume-on-window-scroll (window &optional _start)
+  "Update animation scheduling after WINDOW scrolled.
+The hook runs before redisplay, while `window-end' still describes the
+old range, so the decision waits for the completed redisplay.
+
+Never change buffer text here: `window-scroll-functions' run inside the
+window's redisplay, which afterwards restores point to its earlier
+numeric position.  Text inserted or deleted above the composer would
+then move the cursor within the draft, or out of it."
   (when (and (eq (window-buffer window) (current-buffer))
              (fboundp 'mevedel-view--recheck-spinner-after-redisplay)
              (mevedel-view--spinner-active-p))
     (mevedel-view--recheck-spinner-after-redisplay)))
+
+(defun mevedel-view--resume-on-window-resize (window)
+  "Refit the rail and prompt, and update animation, after WINDOW resized.
+Size changes run before windows are redisplayed, so their text can
+change here with the usual composer point preservation."
+  (when (eq (window-buffer window) (current-buffer))
+    (mevedel-view--refit-input-prompt)
+    (mevedel-view--render-request-progress))
+  (mevedel-view--resume-on-window-scroll window))
 
 (defun mevedel-view--resume-attended-views (&rest _)
   "Resume the pending render of every view that became attended.
@@ -1668,6 +1681,7 @@ still release animation and power observers when it becomes invisible."
       (mevedel-view--resume-render-if-attended (current-buffer))
     (when (fboundp 'mevedel-view--start-spinner-timer)
       (mevedel-view--start-spinner-timer t)))
+  (mevedel-view--refit-input-prompt)
   (mevedel-view--render-request-progress))
 
 (defun mevedel-view--schedule-render (kind data-buffer delay)
@@ -1914,9 +1928,11 @@ idle status redraws remain immediate."
 (defun mevedel-view--zone-separator (label)
   "Return a propertized zone separator line for LABEL.
 Format: ` ─── LABEL ─── ' followed by enough box-drawing dashes
-to reach four columns less than the widest window displaying this
-buffer, then a trailing newline.  The minimum width is ten columns;
-labels are truncated when necessary so all rules use the same width.
+to reach four columns less than `mevedel-view-zone-width', the narrowest
+window displaying this buffer, then a trailing newline.  A rule sized
+for a wider window wrapped onto two or three rows in a narrower one.
+The minimum width is ten columns; labels are truncated when necessary
+so all rules use the same width.
 
 LABEL is a single string like \"tasks\", \"1 permission pending\",
 \"2 previews · 1 plan pending\".  Caller is responsible for
@@ -1925,17 +1941,7 @@ constructing composite count labels via concatenation.
 The returned string carries `mevedel-view-zone-separator' face on
 the dash runs and inherits the same face on the label text so
 tweaks via `customize-face' apply uniformly."
-  (let* ((win-widths
-          ;; Use the widest window currently displaying this buffer
-          ;; if any; fall back to the selected window.  Bare
-          ;; (window-width) returned the selected window's width
-          ;; even when the call originated from an unrelated
-          ;; context (e.g. a sub-agent FSM hook), producing a
-          ;; mis-sized rule for split-window setups.
-          (or (mapcar #'window-width
-                      (get-buffer-window-list (current-buffer) nil t))
-              (list (window-width))))
-         (target-width (max 10 (- (apply #'max win-widths) 4)))
+  (let* ((target-width (max 10 (- (mevedel-view-zone-width) 4)))
          (pre " ─── ")
          (post " ")
          (label-budget (- target-width (string-width pre) (string-width post) 3))
@@ -1951,6 +1957,10 @@ tweaks via `customize-face' apply uniformly."
      (propertize (concat pre decorated-label post tail "\n")
                  'face 'mevedel-view-zone-separator
                  'font-lock-face 'mevedel-view-zone-separator))))
+
+;; Status rules and rows are laid out for the narrowest window showing the
+;; view; redraw them when that width changes.
+(add-hook 'mevedel-view-zone-width-change-functions #'mevedel-view--render-status)
 
 (defun mevedel-view--header-end-position ()
   "Return the position after the current view header, when recognized."

@@ -22,6 +22,7 @@
     (skip-unless (and (member "DejaVu Sans" (font-family-list))
                       (member "DejaVu Sans Mono" (font-family-list))))
     (let ((original-font (frame-parameter nil 'font))
+          (frame-resize-pixelwise t)
           (source (concat "| Name | Description |\n|---|---|\n"
                           "| α界 🙂 | target and [link](https://example.org) with repeated words for wrapping |\n"
                           "| WWW iii | monospaced |\n| small | |\n")))
@@ -32,7 +33,7 @@
                           ("DejaVu Sans-11" ((default (:height 1.3))))
                           ("DejaVu Sans-11" ((mevedel-view-table-header (:height 1.3))
                                              (mevedel-view-table-zebra (:height 1.2))))))
-            (set-frame-font (car case) nil t)
+            (set-frame-font (car case) t nil t)
             (mevedel-test--with-displayed-buffer
               (setq-local face-remapping-alist (cadr case))
               (insert source)
@@ -70,7 +71,7 @@
                                (substring-no-properties
                                 (get-text-property (point-min) 'mevedel-view-table-source))))
                 (should (text-property-not-all (point-min) (point-max) 'mevedel-view-url nil)))))
-        (set-frame-font original-font nil t)))))
+        (set-frame-font original-font t nil t)))))
 
 (mevedel-deftest mevedel-view-table--visible-stale ()
   (progn

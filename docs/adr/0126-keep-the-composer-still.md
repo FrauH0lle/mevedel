@@ -6,7 +6,7 @@ Status: accepted
 
 The view keeps the user's active surface at its screen position. Zone reconciliation
 and its enclosing full-render transaction
-chooses one viewport anchor per window: point inside a surviving visited
+choose one viewport anchor per window: point inside a surviving visited
 interaction card takes priority; otherwise a previously visible composer keeps
 its position regardless of point. Logical positions are restored before applying
 that anchor. A visited card retains its screen position unless its shrink creates
@@ -46,6 +46,14 @@ Anchors measure body-relative pixels through Emacs's native visibility query,
 not a row loop. Native backward display traversal restores the window start and
 partial vertical scroll, accounting for remapped faces, wrapping and images.
 Measurements are valid before redisplay, when the cached window end is stale.
+Header, tab and mode-line heights are measured freshly with a zero text-height limit:
+the visibility query uses fresh chrome internally, then restores cached heights,
+so subtracting the public cached heights could introduce a pixel error before
+redisplay. The chrome measurement subtracts an otherwise identical text-only
+baseline because pixel scrolling can make that bounded text height negative.
+One shared geometry seam derives both the body's top and usable height, excluding
+the horizontal scrollbar and bottom divider too. These extra measurements do not
+traverse buffer text and run only on paths already measuring geometry.
 Terminal geometry uses the same API in character-cell units. Batch policy tests
 model only the visibility seam; native graphical tests establish pixel geometry.
 
@@ -66,6 +74,18 @@ restore. Backward traversal runs only when blank pixels actually increased. View
 buffers set `scroll-conservatively` to 101 and `scroll-margin` to 0 so a draft
 growing past the bottom scrolls one line.
 
+Command scope is explicit: a view's pre-command hook arms the transaction, and
+post-command clears it before repairing the originating buffer, even if the
+command switched buffers. `this-command` alone is not evidence that a command
+is executing; it retains its last value between commands. A timer or process
+mutation outside the armed scope repairs immediately rather than leaving a stale
+capture for the user's next unrelated command.
+
+Table splices preserve point, mark and window starts by cell identity and offset.
+Their viewport transaction must not replace that exact mapping with a source-run
+character offset or mistake the changed offset for a lost start. They therefore
+reuse the same viewport policy while retaining the splice's position mapping.
+
 Height-only window growth repairs newly exposed blank space using the height
 delta, provided the same buffer and width were displayed previously. This
 inference covers popup closure with an unchanged start, not arbitrary simultaneous
@@ -77,20 +97,54 @@ repairs preserve deliberate pre-existing blank space.
 
 The line next to the composer never appears or disappears: one permanent rail
 carries the mode badge, an actionable pending count with `C-c C-j`, and the
-turn's activity, replacing the separate progress row and the badge line.
+turn's activity, replacing the separate progress row and the badge line. The
+blank separator above the rail depends on how the text before it ends, so it is
+checked again whenever a transcript writer finishes and redrawn only when it no
+longer fits.
 
 Arriving permission prompts and questions do not move point. They render, the
 rail shows them as pending, and `C-c C-j` visits the next one from the invoking
 window, which returns to its draft position on settlement only if it is still
 visiting that prompt.
 
+Interaction cards stack in arrival order, the newest farthest from the
+composer; only the pending-input card, which the composer itself queues, stays
+pinned next to it. No other producer, patch review included, carries a type
+priority; arrival alone orders them. A card arriving while another is pending
+therefore moves only the transcript above it, never a card the user may be
+reading or answering. `C-c C-j` starts at the card nearest the composer, the
+one that has waited longest, and repeated presses cycle outward. In a window
+not yet full, where free space is used first, an arrival pushes the cards
+below it down like any other growth above the composer.
+
+Closing an agent inspection's side window rewraps the parent's text without
+any zone change. A parent window gets the composer's screen row from before
+the inspection opened back only if, just before the close, it still shows the
+composer with point in it. A window the user moved into history is left alone,
+and a same-window inspection always returns to the parent at that row. Reflow
+caused by the close itself does not make a window eligible.
+
 Background-work rows are in stable start order, newest farthest from the
-composer; state changes, including blocking, update rows in place. While point
-or the mouse is on the panel, it keeps exactly the rows it showed: finished rows
-stay as inert dimmed lines and new work is only counted, until both leave.
+composer. Agent trees form units, with members in path order. Equal unit starts
+put agents before executions, then sort lexicographically by agent root path or
+execution owner path and ID, ascending; live, held and retained rows use the
+same identity tiebreaks. State changes, including blocking, update rows in place.
+While point or the mouse is on the panel, it keeps exactly the rows it showed:
+finished rows stay as inert dimmed lines and new work is only counted, until
+both leave.
 A finished row also lingers for ten seconds after the pointer is away, and
 leaving the panel restarts that period, so removals happen when nobody is
 aiming at the panel.
+
+Panel heights depend only on which rows exist, not on their text. Every row,
+finished line, preview line and rule fits one screen row of the narrowest
+window showing the view, and re-renders when that width changes. An open
+execution preview is always three lines. Expanded controls pack whole buttons
+into explicit fitted rows, using short labels only when a button cannot fit
+alone. The live layout sets the completion budget: an execution reserves its
+Stop slot as inert space, and a held finished agent replaces its actions with
+a padded finished notice. Model details are fitted in both states. Thus a
+finished expansion keeps its displayed height, not just its logical line count.
 
 ## Rationale and consequences
 
@@ -178,6 +232,14 @@ focus is explicit.
   geometry at its own event. A folded 20-line submission previously consumed
   three deliberate blank rows because deletion captured the end after the folded
   echo was inserted. Submission now repairs net shrink from before that insertion.
+  A later native table-shrink check exposed a two-pixel drift: the visibility
+  query used an 18-pixel tab line while the cached accessor still returned 20.
+  Fresh bounded chrome measurements now keep both coordinate calculations in
+  the same frame before redisplay; exact header/tab change tests reject the
+  previous cached subtraction. The same correction applies to usable body
+  height: a larger tab line changed a cached 640-pixel body to 624 pixels, so
+  mixing fresh EOF coordinates with cached body height overstated the blank
+  area by 16 pixels until redisplay.
 
 - **One viewport anchor per window (2026-10-18).** Logical window-start
   restoration previously overrode the composer's row inside growing cards,
@@ -185,6 +247,74 @@ focus is explicit.
   arrived or disappeared. A graphical replay kept a visited Ask control at row
   3 through arrivals above and below it and removal after choosing the visited
   row first. Only visiting windows pay for the additional bounded row capture.
+- **Equal-start ordering (2026-10).** Sorting only by start time let completion
+  reorder tied rows as they moved between the live, held and retained lists.
+  A held finished agent could shift a retained execution's action despite the
+  unchanged panel height. Kind and stable unit identity now break start-time
+  ties, independently of collection order and lifecycle state.
+
+- **Narrow expanded controls (2026-10).** A 47-column display wrapped live
+  execution controls onto two rows but finished controls onto one; expanded
+  agents had the same gap, and their model metadata was unbounded. Holding
+  row identities alone did not protect mouse targets. Explicit control-row
+  layout now keeps every action and reserves the live height on completion;
+  truncation applies to metadata, never to the set of actions. Packing whole
+  buttons can use an extra row in a narrow window instead of allowing a
+  button's label to wrap. A compiled hot status-render fixture with expanded
+  agent and execution controls remained around 0.40 ms before and after the
+  change, at both normal and narrow widths; differences were within run noise.
+
+- **One-row panel lines and constant-height expansions (2026-10).** Holding
+  the row set did not hold the height. Measured in a 100-column graphical
+  window with the composer fixed at row 40:
+  - An open inspector grew from 11 to 15 rows as output arrived, moving its own
+    row from row 32 to 28.
+  - A two-row agent row became a one-row finished line, so the panel went from
+    8 to 7 rows.
+  - An expanded agent that finished lost its four detail rows under a pointer
+    on `[Interrupt]`.
+  - Separator rules sized for the widest window took three rows in a 48-column
+    split, then shrank at the next unrelated status redraw (6 to 4 rows).
+
+  Fitting every line to the narrowest window and fixing the preview and agent
+  expansion heights keeps all four constant (12, 7, 10 and 4 rows). The extra
+  layout work costs about 21 µs per panel render.
+
+- **Arrival order for interaction cards (2026-10).** Cards were ordered by
+  kind: patch preview, Plan, Ask and requests, permissions, pending input,
+  then notices. With the composer anchored, every card ranked below an
+  existing one was inserted between it and the composer and pushed it up.
+  Measured in a graphical 42-row view, a 10-line permission card arriving
+  while the user was in an Ask moved the form and the cursor up 9 rows; a
+  sub-agent permission, a control-transfer request, or the permission
+  expiry notice can arrive this way at any moment. No kind needed a fixed
+  place: each card is answered on its own, and only pending input belongs
+  to the composer. Arrival order applies the principle the background panel
+  already follows, new rows at the far edge, at no rendering cost.
+  `C-c C-j` used to start at the top card; it now starts at the one nearest
+  the composer, which in arrival order has waited longest and needs the
+  least scrolling from the draft.
+
+- **Rail refresh outside redisplay (2026-10).** The rail was refitted from one
+  handler on both `window-size-change-functions` and `window-scroll-functions`.
+  The scroll hook runs inside the window's redisplay, which restores point to its
+  earlier buffer position afterwards, so a rail text change there shifted the
+  draft cursor. A GUI reproduction crossed the elapsed label from `9s` to `10s`
+  before the once-a-second tick and typed RET then `x` at the window bottom.
+  The redisplay scroll rendered `10s`, point fell back one character, and `x`
+  joined the previous line. Only the size hook now refits the rail; it runs
+  before windows redisplay. Scrolling still reschedules animation. A compiled
+  probe put the scroll hook at 0.21 µs per call, down from 5.8 µs for the
+  unchanged-rail check alone.
+
+- **Rail separator after transcript writes (2026-10).** The separator was
+  chosen only when the rail itself redrew. A batched history refresh published
+  placeholders ending in a single newline, so the rail took an extra blank
+  line; replacing the last placeholder did not redraw the rail, and the next
+  unrelated rail update removed the line again. A 43-row window measured
+  266, then 267, then 266 buffer lines, moving the transcript a row each time.
+  The writer queue now rechecks the separator when it drains; an unchanged
+  separator costs 0.38 µs (compiled).
 
 - **Preserve intentional blank space, repair draft shrink (2026-10-18).** A
   recentered transcript with a visible composer jumped 24 rows in a 41-row
@@ -254,20 +384,40 @@ The revised first-mutation transaction was measured compiled in Emacs 31.1,
 using real keyboard commands and post-command hooks (60 observations per command
 and layout). Plain / wrapped transcript-history medians, in microseconds:
 
-| Command | TTY, 41 rows | GUI, 30 rows | GUI draft hooks disabled |
-| --- | ---: | ---: | ---: |
-| Self-insert | 45 / 46 | 55 / 57 | 51 / 50 |
-| Short-line Backspace | 56 / 57 | 63 / 65 | 46 / 46 |
-| C-k joining lines | 981 / 1780 | 1058 / 1810 | 302 / 420 |
-| Yank | 699 / 1014 | 819 / 1096 | 58 / 59 |
-| Transpose lines | 696 / 1020 | 752 / 1046 | 73 / 73 |
+| Command | TTY, 41 rows | TTY draft hooks disabled | GUI, 30 rows | GUI draft hooks disabled |
+| --- | ---: | ---: | ---: | ---: |
+| Self-insert | 42.2 / 43.4 | 41.1 / 41.0 | 47.9 / 48.3 | 45.8 / 46.0 |
+| Short-line Backspace | 51.5 / 53.2 | 37.9 / 37.7 | 58.2 / 58.5 | 42.6 / 43.2 |
+| C-k joining lines | 1282 / 2315 | 285 / 500 | 1469 / 2778 | 299 / 416 |
+| Yank | 1010 / 1589 | 46 / 44 | 1251 / 2101 | 54 / 55 |
+| Transpose lines | 1012 / 1589 | 66 / 65 | 1164 / 2025 | 69 / 68 |
 
 The GUI body geometry matches its control (636 pixels, 90 columns). Typing stays
 near baseline; the cheap deletion gate replaces the initial 440--767 microsecond
 TTY Backspace capture. Backspace in a *wrapped draft*, where deleting one character
-can remove a row, still takes the exact path: about 1.58 milliseconds in both
-environments (GUI hooks-off control 150 microseconds). These command timings
+can remove a row, still takes the exact path: about 2.03 milliseconds in both
+environments (TTY/GUI hooks-off controls 266/153 microseconds). These command timings
 include dispatch and garbage collection, not the following explicit redisplay.
 Every candidate preserves the expected draft text and blank-space budget;
 hooks-off controls fail the shrink cases. Correct wrapped and multiline edits
 remain more expensive than edits without viewport repair.
+
+The final GUI typing difference is 2.1 / 2.3 microseconds. A separate interleaved
+probe measured roughly 2--3 microseconds and no geometry calls during plain
+self-insertion. An earlier 42-row fixture measured a 27--31 microsecond difference;
+its cause remains unestablished, and the changed fixture does not explain it.
+Several exact-repair costs also increased between successive builds, so those
+cross-run differences are not attributed to one geometry change.
+
+The same final compiled build measured zone reconciliation separately (medians
+of three 300-call batches, microseconds per call):
+
+| Path | TTY plain / wrapped history | GUI plain / wrapped history |
+| --- | ---: | ---: |
+| Genuinely unchanged zone | 4.81 / 4.83 | 4.87 / 4.86 |
+| Changed equal-height zone | 346 / 754 | 424 / 911 |
+
+Both paths preserve draft, point and viewport through redisplay; only the changed
+path advances the character tick. These fixtures use a 634-pixel GUI body and
+41-row terminal body. They measure the reconcile seam, not a complete session
+redraw or provider response.

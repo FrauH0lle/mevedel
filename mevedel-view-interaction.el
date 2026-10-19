@@ -127,6 +127,7 @@
 		  (namespace start end fragments))
 (declare-function mevedel-view-zone-region "mevedel-view-zone"
 		  (namespace))
+(defvar mevedel-view-zone-width-change-functions)
 (autoload 'mevedel-view-zone-fragment-bounds "mevedel-view-zone")
 (autoload 'mevedel-view-zone-reconcile "mevedel-view-zone")
 (autoload 'mevedel-view-zone-region "mevedel-view-zone")
@@ -140,8 +141,14 @@
 (defvar-local mevedel-view--interaction-overlays nil
   "Hash table of live interaction-zone overlays keyed by descriptor id.")
 
-(defvar-local mevedel-view--interaction-telemetry-opened nil
-  "Hash table of interaction lifecycle metadata retained across redraws.")
+(defvar-local mevedel-view--interaction-lifecycle nil
+  "Hash table of interaction lifecycle metadata retained across redraws.
+Keyed by descriptor id from first registration until the interaction
+closes.  Each value is a plist with `:opened-at', `:kind', `:origin', and
+`:arrival', the sequence number that orders the zone.")
+
+(defvar-local mevedel-view--interaction-arrivals 0
+  "Number of interactions that have arrived in this view.")
 
 (defvar mevedel-view--interaction-render-suppressed nil
   "Non-nil while a rebuild batches interaction re-registrations.
@@ -165,7 +172,7 @@ is reading or typing in.")
               (make-hash-table :test #'equal))
   (setq-local mevedel-view--interaction-overlays
               (make-hash-table :test #'equal))
-  (setq-local mevedel-view--interaction-telemetry-opened
+  (setq-local mevedel-view--interaction-lifecycle
               (make-hash-table :test #'equal))
   (let ((view (current-buffer)))
     (mevedel-view-control-transfer-initialize
@@ -173,11 +180,11 @@ is reading or typing in.")
      (lambda ()
        (mevedel-view-interaction-transfer-drain-p view)))))
 
-(defun mevedel-view--interaction-telemetry-close (id)
-  "Record and forget telemetry lifetime ID."
+(defun mevedel-view--interaction-lifecycle-close (id)
+  "Record the closing of interaction ID and forget its lifecycle."
   (when-let* ((metadata
-               (and (hash-table-p mevedel-view--interaction-telemetry-opened)
-                    (gethash id mevedel-view--interaction-telemetry-opened))))
+               (and (hash-table-p mevedel-view--interaction-lifecycle)
+                    (gethash id mevedel-view--interaction-lifecycle))))
     (when-let* ((session (mevedel-view--session))
                 ((fboundp 'mevedel-telemetry-record)))
       (mevedel-telemetry-record
@@ -192,7 +199,7 @@ is reading or typing in.")
        :duration-ms
        (round (* 1000.0
                  (- (float-time) (plist-get metadata :opened-at))))))
-    (remhash id mevedel-view--interaction-telemetry-opened)))
+    (remhash id mevedel-view--interaction-lifecycle)))
 
 (defun mevedel-view-interaction-pending-p (&optional view-buffer)
   "Return non-nil when VIEW-BUFFER has a pending user interaction.
@@ -388,15 +395,19 @@ With ACTIONABLE, omit queued inputs and the trailing pending label."
     (when parts
       (concat (string-join parts " · ") (unless actionable " pending")))))
 
-(defun mevedel-view--interaction-kind-priority (kind)
-  "Return the stable interaction overlay priority for KIND."
-  (pcase kind
-    ('preview 300)
-    ('plan 200)
-    ((or 'request 'ask) 150)
-    ('permission 100)
-    ('pending-input 80)
-    (_ 50)))
+(defun mevedel-view--interaction-rank (id descriptor)
+  "Return the display rank of interaction ID with DESCRIPTOR.
+Higher ranks render farther from the composer.  Cards rank by arrival,
+newest farthest, so with the composer anchored on its screen row an
+arriving card moves only the transcript above it, never a card the
+user may be reading.  Pending input belongs to the composer that queued
+it and stays pinned next to it."
+  (if (eq (plist-get descriptor :kind) 'pending-input)
+      0
+    (or (plist-get (and (hash-table-p mevedel-view--interaction-lifecycle)
+                        (gethash id mevedel-view--interaction-lifecycle))
+                   :arrival)
+        0)))
 
 (defun mevedel-view--interaction-preserve-on-rebuild-p (descriptor)
   "Return non-nil when DESCRIPTOR owns direct prompt state.
@@ -453,7 +464,9 @@ snapshot taken at registration."
         (point-max))))
 
 (defun mevedel-view--interaction-descriptor-pairs ()
-  "Return live interaction descriptor pairs sorted by display priority."
+  "Return live interaction descriptor pairs in display order.
+The first pair renders farthest from the composer; see
+`mevedel-view--interaction-rank'."
   (let (pairs)
     (when (hash-table-p mevedel-view--interaction-descriptors)
       (maphash
@@ -461,13 +474,8 @@ snapshot taken at registration."
          (push (cons id descriptor) pairs))
        mevedel-view--interaction-descriptors))
     (sort pairs
-          (lambda (a b)
-            (> (or (plist-get (cdr a) :priority)
-                   (mevedel-view--interaction-kind-priority
-                    (plist-get (cdr a) :kind)))
-               (or (plist-get (cdr b) :priority)
-                   (mevedel-view--interaction-kind-priority
-                    (plist-get (cdr b) :kind))))))))
+          :key (lambda (pair) (mevedel-view--interaction-rank (car pair) (cdr pair)))
+          :lessp #'> :in-place t)))
 
 (defun mevedel-view--interaction-apply-overlay-properties
     (overlay descriptor)
@@ -479,9 +487,6 @@ snapshot taken at registration."
     (overlay-put overlay 'mevedel-view-interaction-kind kind)
     (overlay-put overlay 'mevedel-view-interaction-id id)
     (overlay-put overlay 'mevedel-view-interaction-origin origin)
-    (overlay-put overlay 'priority
-                 (or (plist-get descriptor :priority)
-                     (mevedel-view--interaction-kind-priority kind)))
     (overlay-put overlay 'read-only
                  (if (plist-member descriptor :read-only)
                      (plist-get descriptor :read-only)
@@ -541,7 +546,7 @@ snapshot taken at registration."
        body))
     (list :namespace 'interaction
           :id :separator
-          :priority 1000
+          :priority most-positive-fixnum
           :body body
           :navigatable nil)))
 
@@ -551,9 +556,7 @@ snapshot taken at registration."
          (body (mevedel-view--interaction-body descriptor overlay))
          (fragment (list :namespace 'interaction
                          :id id
-                         :priority (or (plist-get descriptor :priority)
-                                       (mevedel-view--interaction-kind-priority
-                                        (plist-get descriptor :kind)))
+                         :priority (mevedel-view--interaction-rank id descriptor)
                          :body body
                          :keymap (mevedel-view--display-fragment-keymap
                                   (plist-get descriptor :keymap))
@@ -618,10 +621,13 @@ snapshot taken at registration."
 Arrival never moves point.  Only a visit made from the composer is saved.")
 
 (defun mevedel-view-jump-to-interaction ()
-  "Visit the first pending question or approval without changing other windows.
+  "Visit the pending question or approval nearest the composer.
+That card has waited longest, since cards arrive farthest from the
+composer.  Repeating the command cycles outward through the pending
+cards and wraps.  Other windows do not move.
 Remember this window's draft position and return there on settlement only
 if the window is still visiting that interaction.  Reveal hidden Plan
-approvals as needed.  Repeating the command cycles the pending cards."
+approvals as needed."
   (interactive)
   (when-let* ((session (mevedel-view--session))
               (entry (mevedel-session-pending-plan-approval session))
@@ -630,11 +636,12 @@ approvals as needed.  Repeating the command cycles the pending cards."
     (mevedel-plan-approval-render session))
   (let* ((window (selected-window))
          (current (get-text-property (point) 'mevedel-view-interaction-id))
-         (pairs (seq-filter
-                 (lambda (pair)
-                   (memq (plist-get (cdr pair) :kind)
-                         '(preview plan request ask permission)))
-                 (mevedel-view--interaction-descriptor-pairs)))
+         (pairs (nreverse
+                 (seq-filter
+                  (lambda (pair)
+                    (memq (plist-get (cdr pair) :kind)
+                          '(preview plan request ask permission)))
+                  (mevedel-view--interaction-descriptor-pairs))))
          (pair (or (cadr (member (assoc current pairs) pairs)) (car pairs)))
          (bounds (and pair (mevedel-view-zone-fragment-bounds
                             'interaction (car pair)))))
@@ -783,7 +790,7 @@ queued idle work free to proceed."
                         (mevedel-session-pending-follow-ups session)
                         (mevedel-session-pending-input-failure-paused session))
                 (mevedel-view--pending-inputs-render session)))
-            (when (hash-table-p mevedel-view--interaction-telemetry-opened)
+            (when (hash-table-p mevedel-view--interaction-lifecycle)
               (maphash
                (lambda (id _metadata)
                  (unless
@@ -791,14 +798,24 @@ queued idle work free to proceed."
                            mevedel-view--interaction-descriptors)
                           (gethash id mevedel-view--interaction-descriptors))
                    (push id closed)))
-               mevedel-view--interaction-telemetry-opened)
+               mevedel-view--interaction-lifecycle)
               (dolist (id closed)
-                (mevedel-view--interaction-telemetry-close id))))
+                (mevedel-view--interaction-lifecycle-close id))))
         (unwind-protect
             (mevedel-view--interaction-render)
           (mevedel-view--interaction-sync-active-work-pause)))
       (when closed
         (mevedel-view--interaction-offer-idle-work)))))
+
+(defun mevedel-view--interaction-width-changed ()
+  "Lay out the current view's interaction zone again for its new width.
+The separator rule and width-fitted cards are sized when rendered."
+  (when (and (derived-mode-p 'mevedel-view-mode)
+             (mevedel-view-zone-region 'interaction))
+    (mevedel-view--interaction-rebuild)))
+
+(add-hook 'mevedel-view-zone-width-change-functions
+          #'mevedel-view--interaction-width-changed)
 
 (defun mevedel-view--interaction-register (descriptor)
   "Register DESCRIPTOR in the interaction zone and return its overlay."
@@ -820,15 +837,16 @@ queued idle work free to proceed."
      :interaction-id id
      :kind (plist-get descriptor :kind)
      :state (mevedel-view--debug-state mevedel--data-buffer))
-    (unless (hash-table-p mevedel-view--interaction-telemetry-opened)
-      (setq mevedel-view--interaction-telemetry-opened
+    (unless (hash-table-p mevedel-view--interaction-lifecycle)
+      (setq mevedel-view--interaction-lifecycle
             (make-hash-table :test #'equal)))
-    (unless (gethash id mevedel-view--interaction-telemetry-opened)
+    (unless (gethash id mevedel-view--interaction-lifecycle)
       (puthash id
                (list :opened-at (float-time)
                      :kind (plist-get descriptor :kind)
-                     :origin (plist-get descriptor :origin))
-               mevedel-view--interaction-telemetry-opened)
+                     :origin (plist-get descriptor :origin)
+                     :arrival (cl-incf mevedel-view--interaction-arrivals))
+               mevedel-view--interaction-lifecycle)
       (when-let* ((session (mevedel-view--session))
                   ((fboundp 'mevedel-telemetry-record)))
         (mevedel-telemetry-record
@@ -874,7 +892,7 @@ queued idle work free to proceed."
   "Remove interaction-zone descriptor ID and its overlay.
 Removal settles or hides an interaction, so queued idle work is offered
 again once no other interaction remains pending."
-  (mevedel-view--interaction-telemetry-close id)
+  (mevedel-view--interaction-lifecycle-close id)
   (when (hash-table-p mevedel-view--interaction-descriptors)
     (remhash id mevedel-view--interaction-descriptors))
   (mevedel-view--interaction-sync-active-work-pause)

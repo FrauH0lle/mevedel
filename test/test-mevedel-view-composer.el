@@ -344,6 +344,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                         (point))))
           (set-window-start window start t)
           (let ((this-command 'yank))
+            (run-hooks 'pre-command-hook)
             (delete-region (mevedel-view--input-start) (point-max))
             ;; The deletion half of a replacement is not a viewport state.
             (should (= start (window-start window)))
@@ -397,6 +398,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                 (set-window-start window start t)
                 (should (= blank (mevedel-view-composer-test--blank-rows window)))
                 (let ((this-command 'indent-region))
+                  (run-hooks 'pre-command-hook)
                   (goto-char (mevedel-view--input-start))
                   ;; Reindent each real line independently, not as a single
                   ;; replacement.  Removing 1620 characters has no net row loss.
@@ -453,6 +455,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
             (should (= blank initial-blanks))
             ;; This arbitrary command must work without a command whitelist.
             (let ((this-command 'mevedel-test-draft-edit))
+              (run-hooks 'pre-command-hook)
               (goto-char (mevedel-view--input-start))
               (if (eq operation 'transpose)
                   (progn
@@ -517,7 +520,10 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (cl-letf (((symbol-function 'mevedel-view--viewport-at-y)
                  (lambda (&rest _) (ert-fail "Insertion traversed viewport"))))
         (goto-char (point-max))
-        (insert "ordinary typing")
+        (let ((this-command 'self-insert-command))
+          (run-hooks 'pre-command-hook)
+          (insert "ordinary typing")
+          (run-hooks 'post-command-hook))
         (should-not mevedel-view--draft-window-state)))))
 
 (mevedel-deftest mevedel-view--draft-capture-command-gate ()
@@ -534,6 +540,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (let ((this-command command)
               (overwrite-mode overwrite)
               (auto-fill-function auto-fill))
+          (run-hooks 'pre-command-hook)
           (when delete-first
             ;; Delete-selection runs before self-insert.  Its snapshot must
             ;; survive the cheap insertion path until post-command repair.
@@ -570,6 +577,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (cl-letf (((symbol-function 'mevedel-view--viewport-at-y)
                  (lambda (&rest _) (ert-fail "Short deletion traversed viewport"))))
         (let ((this-command 'backward-delete-char-untabify))
+          (run-hooks 'pre-command-hook)
           (delete-char -1)
           (run-hooks 'post-command-hook))
         (should (equal "plain draf" (mevedel-view--input-text)))
@@ -1109,6 +1117,59 @@ Policy tests use terminal rows, not production's pixel measurement helper."
      (string-match-p
       "◆ Discuss ·"
       (mevedel-view--input-prompt-string 'ask)))))
+
+(defun mevedel-view-test--prompt-rows ()
+  "Return the directive prompt's rows above the draft."
+  (split-string (buffer-substring-no-properties
+                 (mevedel-view--input-marker-position)
+                 (mevedel-view--input-start))
+                "\n"))
+
+(mevedel-deftest mevedel-view--refit-input-prompt
+  (:doc "directive prompt rows fit the narrowest window, keeping the draft")
+  ;; The banner (request up to 80 columns) and the hint row (about 85
+  ;; columns with the frame keys) wrapped in narrow directive windows, so
+  ;; the prompt's height depended on window width.
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer view-buf)
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert "> quoted\nsecond line")
+        (goto-char (+ (mevedel-view--input-start) 4))
+        ;; The frame's keys join the hint row only while its mode is on.
+        (setq-local mevedel-directive-frame-mode t)
+        (let ((other (split-window-right 30)))
+          (setq mevedel-view--composer-scope
+                (list :directive-id "abcdef123456" :action 'request-changes
+                      :record (mevedel-directive--create
+                               :request (make-string 50 ?r))))
+          (mevedel-view-refresh-input-prompt)
+          (let ((rows (mevedel-view-test--prompt-rows))
+                (limit (1- (min (window-body-width (selected-window) 'remap)
+                                (window-body-width other 'remap)))))
+            (should (< limit 30))
+            (should (= 4 (length rows)))
+            (dolist (row rows)
+              (should (<= (string-width row) limit)))
+            (should (string-suffix-p "…" (nth 1 rows)))
+            (should (string-suffix-p "…" (nth 2 rows))))
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ 4 (mevedel-view--input-start))))
+          ;; Widening refits through the view's own size hook.
+          (delete-window other)
+          (run-hook-with-args 'window-size-change-functions (selected-window))
+          (let ((rows (mevedel-view-test--prompt-rows)))
+            (should (= 4 (length rows)))
+            (should (string-match-p "C-c C-z Close\\'" (nth 2 rows)))
+            (should (string-suffix-p (make-string 50 ?r) (nth 1 rows))))
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ 4 (mevedel-view--input-start))))
+          ;; An unchanged width does not rewrite the prompt.
+          (let ((tick (buffer-modified-tick)))
+            (mevedel-view--refit-input-prompt)
+            (should (= tick (buffer-modified-tick)))))))))
 
 (mevedel-deftest mevedel-view--switch-composer-scope (:quiet t)
   ,test
@@ -2629,7 +2690,35 @@ Policy tests use terminal rows, not production's pixel measurement helper."
             (should (= (window-point other) (+ (mevedel-view--input-start) 4)))
             (should (= (mark) (+ (mevedel-view--input-start) 8)))
             (should mark-active)
-            (should (equal draft (mevedel-view--input-text)))))))))
+            (should (equal draft (mevedel-view--input-text))))))))
+
+  :doc "a vanished transcript position never lands in the composer"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf "A long response that is replaced by something much shorter.\n"
+     'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4)
+      (save-window-excursion
+        (set-window-buffer (selected-window) view-buf)
+        (goto-char (point-min))
+        (search-forward "something much shorter")
+        (set-window-point (selected-window) (point))
+        (let ((end (marker-position mevedel-view--status-marker)))
+          (mevedel-view--call-preserving-window-state
+           (lambda ()
+             (let ((inhibit-read-only t))
+               (goto-char (point-min))
+               (search-forward "A long response")
+               (delete-region (match-beginning 0) end)
+               (goto-char (match-beginning 0))
+               (insert "Short.\n")))))
+        (should-not (mevedel-view--position-in-input-region-p (point)))
+        (should-not (mevedel-view--position-in-input-region-p
+                     (window-point (selected-window))))
+        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))))))
 
 (mevedel-deftest mevedel-view--render-anchor-identity ()
   ,test
@@ -2731,6 +2820,41 @@ Policy tests use terminal rows, not production's pixel measurement helper."
     (should-not (mevedel-view--position-render-anchor (point-min)))
     (should-not (mevedel-view--position-render-anchor (point-max)))))
 
+(mevedel-deftest mevedel-view--render-anchor-container ()
+  ,test
+  (test)
+  :doc "returns the narrowest run whose source contains the position"
+  (with-temp-buffer
+    (insert (propertize "turn\n" 'mevedel-view-source '(10 . 100)))
+    (let ((inner (point)))
+      (insert (propertize "group\n" 'mevedel-view-source '(20 . 60)))
+      (insert "plain\n")
+      (should (= inner (mevedel-view--render-anchor-container 30 (point-max))))
+      (should (= (point-min) (mevedel-view--render-anchor-container 70 (point-max))))
+      (should-not (mevedel-view--render-anchor-container 200 (point-max)))))
+  :doc "ignores runs at or after the limit"
+  (with-temp-buffer
+    (insert "plain\n")
+    (let ((limit (point)))
+      (insert (propertize "group\n" 'mevedel-view-source '(20 . 60)))
+      (should-not (mevedel-view--render-anchor-container 30 limit)))))
+
+(mevedel-deftest mevedel-view--transcript-position-backstop ()
+  ,test
+  (test)
+  :doc "moves a position out of the composer onto the last transcript character"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Response.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((inside (1+ (mevedel-view--input-start)))
+            (outside (point-min)))
+        (should (= outside (mevedel-view--transcript-position-backstop outside)))
+        (let ((moved (mevedel-view--transcript-position-backstop inside)))
+          (should-not (mevedel-view--position-in-input-region-p moved))
+          (should (< moved (marker-position mevedel-view--status-marker))))))))
+
 (mevedel-deftest mevedel-view--render-anchor-position ()
   ,test
   (test)
@@ -2751,6 +2875,13 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (should (= (+ (point-min) 2)
                  (mevedel-view--render-anchor-position anchor)))
       (should-not (mevedel-view--render-anchor-position anchor t))))
+
+  :doc "strict pending anchors reject a truncated row offset"
+  (with-temp-buffer
+    (insert (propertize "pending\n" 'mevedel-view-pending-key 'test))
+    (should (= 4 (mevedel-view--render-anchor-position '(pending test nil 3) t)))
+    (should (= 8 (mevedel-view--render-anchor-position '(pending test nil 99))))
+    (should-not (mevedel-view--render-anchor-position '(pending test nil 99) t)))
 
   :doc "full render restoration keeps a tagged row when text before it grows"
   (with-temp-buffer
@@ -2810,6 +2941,16 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                  '(fragment (status :id tasks :offset 0))))
     (should-not (mevedel-view--render-anchor-position nil)))
 
+  :doc "a section folded into an enclosing one resolves to that run"
+  (with-temp-buffer
+    (insert (propertize "Assistant\n" 'mevedel-view-source '(10 . 100)))
+    (let ((group (point)))
+      (insert (propertize "  ✓ Read 4 files\n" 'mevedel-view-source '(20 . 60)
+                          'mevedel-view-type 'tool-group))
+      (insert (propertize "Prose.\n" 'mevedel-view-source '(60 . 100)))
+      (should (= group (mevedel-view--render-anchor-position
+                        '(source (30 tool-summary nil) 0 5))))))
+
   :doc "section identities survive separator changes and compound child reordering"
   (with-temp-buffer
     (let ((source '(40 . 90))
@@ -2840,7 +2981,9 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (should (= (+ child-start 1)
                    (mevedel-view--render-anchor-position child-anchor)))
         (delete-region child-start (point-max))
-        (should-not (mevedel-view--render-anchor-position child-anchor))))))
+        ;; A vanished child goes to its enclosing group row, not a sibling.
+        (should (= (point-min)
+                   (mevedel-view--render-anchor-position child-anchor)))))))
 
 (mevedel-deftest mevedel-view--input-text ()
   ,test
@@ -3210,17 +3353,45 @@ Policy tests use terminal rows, not production's pixel measurement helper."
             (should-not (mevedel-view-test--skill-hint-string))))
       (delete-directory root t)))
 
-  :doc "history-region refresh skips prompt scan"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (goto-char (point-min))
-      (cl-letf (((symbol-function 'mevedel-view--input-start)
-                 (lambda ()
-                   (error "Prompt scan should be skipped"))))
-        (mevedel-view--refresh-skill-argument-hint)
-        (should-not mevedel-view--skill-argument-hint-overlay))))
+  :doc "motion neither moves nor hides the hint, and does no prompt scan"
+  ;; The hint used to follow point: moving into the draft reflowed the line
+  ;; around it, and leaving the composer removed it.
+  (let* ((root (make-temp-file "mevedel-view-motion-hint-" t))
+         (ws (mevedel-workspace--create
+              :type 'file :id root :root root :name "view-motion-hint"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "deploy-api"
+                 :argument-names '("service" "environment"))))
+    (setf (mevedel-session-skills session) (list skill))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "$deploy-api billing")
+            (run-hooks 'post-command-hook)
+            (let ((hint (mevedel-view-test--skill-hint-string)))
+              (should (string-match-p "\\[environment\\]" hint))
+              (should (= (point-max) (overlay-start
+                                      mevedel-view--skill-argument-hint-overlay)))
+              (cl-letf (((symbol-function 'mevedel-view--input-start)
+                         (lambda () (error "Motion must not scan the prompt"))))
+                (dolist (position (list (- (point-max) 9) (point-min)))
+                  (goto-char position)
+                  (run-hooks 'post-command-hook)
+                  (should (equal hint (mevedel-view-test--skill-hint-string)))
+                  (should (= (point-max)
+                             (overlay-start
+                              mevedel-view--skill-argument-hint-overlay))))))
+            (should (equal "$deploy-api billing" (mevedel-view--input-text)))))
+      (delete-directory root t)))
 
-  :doc "refresh repairs drifted input marker"
+  :doc "a draft edit repairs a drifted input marker"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let ((prompt-start (mevedel-view--prompt-start-position))
@@ -3228,8 +3399,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (goto-char input-start)
         (insert "draft")
         (set-marker mevedel-view--input-marker (point-max))
-        (goto-char input-start)
-        (mevedel-view--refresh-skill-argument-hint)
+        (goto-char (point-max))
+        (insert "s")
         (should (= prompt-start
                    (marker-position mevedel-view--input-marker)))))))
 

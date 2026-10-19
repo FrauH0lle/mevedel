@@ -251,6 +251,7 @@
 (declare-function mevedel-view--render-status
                   "mevedel-view" (&optional data-buf))
 (declare-function mevedel-view--unattended-p "mevedel-view" (&optional buffer))
+(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (defvar mevedel-view--display-map)
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-marker)
@@ -280,8 +281,12 @@
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start
                   "mevedel-view-composer" ())
+(declare-function mevedel-view--position-render-anchor
+                  "mevedel-view-composer" (pos))
 (declare-function mevedel-view--prompt-start-position
                   "mevedel-view-composer" ())
+(declare-function mevedel-view--render-anchor-position
+                  "mevedel-view-composer" (anchor))
 (declare-function mevedel-view-enter-directive-scope
                   "mevedel-view-composer"
                   (directive action &optional attempt-index workspace))
@@ -384,6 +389,8 @@
 (declare-function mevedel-view--ensure-request-progress
                   "mevedel-view-stream" (&optional data-buf status))
 (declare-function mevedel-view--forget-request-progress-region
+                  "mevedel-view-stream" ())
+(declare-function mevedel-view--repair-request-progress-separator
                   "mevedel-view-stream" ())
 (declare-function mevedel-view--retire-pending-tool-rows
                   "mevedel-view-stream" ())
@@ -720,6 +727,18 @@ turns rendered as usual.")
 
 (defvar-local mevedel-view--live-source-change-hook nil
   "Change hook that invalidates this view's retained live prefix.")
+
+(defvar mevedel-view-render--reader-members nil
+  "Tool rows under a reader when the current projection writer started.
+Each element is a row's data source start, or an in-flight call's key.")
+
+(defvar-local mevedel-view-render--pending-reader-group nil
+  "Running-only group opened beneath the reader, as (TURN-MARKER START).
+START is the data end where its first result will arrive; the canonical
+tool segment includes gptel's separator and Org wrapper.  Once a result
+lands, transfer expansion to the source-backed group's disclosure state.
+TURN-MARKER is compared by identity so an aborted turn cannot lend its
+expansion to a later turn starting at the same data position.")
 
 (defvar-local mevedel-view-render--batch nil
   "Pending full-history projection, owned by this view.")
@@ -2128,8 +2147,11 @@ Execution outcome remains independent of lifecycle and disclosure state."
 
 (defun mevedel-view--rendering-header-line (rendering)
   "Return the propertized collapsed header line for RENDERING."
-  (let* ((header (or (plist-get rendering :header) "Tool"))
-         (vtype (or (plist-get rendering :vtype) 'tool-summary))
+  (let* ((vtype (or (plist-get rendering :vtype) 'tool-summary))
+         (header (if (eq vtype 'tool-group)
+                     (mevedel-view--fit-group-header
+                      (or (plist-get rendering :header) "Tool") rendering)
+                   (or (plist-get rendering :header) "Tool")))
          (status (plist-get rendering :agent-status))
          (tool-status (mevedel-view--rendering-status rendering))
          (agent-p (eq vtype 'agent-handle))
@@ -2196,12 +2218,43 @@ Execution outcome remains independent of lifecycle and disclosure state."
         (when-let* ((hint (mevedel-view--permission-approval-hint
                           (plist-get rendering :permission-approval-reason))))
           (setq line (concat line "  " hint)))
-        (let ((count (plist-get rendering :pending-count))
-              (failed (plist-get rendering :pending-failed)))
-          (if (or count failed)
-              (mevedel-view--running-header
-               line count (plist-get rendering :pending-virtual) failed)
-            line))))))
+        (let* ((count (plist-get rendering :pending-count))
+               (pending-failed (plist-get rendering :pending-failed))
+               (settled-failed (plist-get rendering :failed-count))
+               (failed (and (or pending-failed settled-failed)
+                            (+ (or pending-failed 0) (or settled-failed 0)))))
+          (cond
+           ((or count pending-failed)
+            (mevedel-view--running-header
+             line count (plist-get rendering :pending-virtual) failed
+             (plist-get rendering :failed-names)))
+           ;; A settled group keeps the count its running form showed, so
+           ;; settling neither unfolds nor reshapes it.
+           (settled-failed
+            (concat line
+                    (propertize " · " 'font-lock-face 'mevedel-view-tool-metadata)
+                    (propertize (mevedel-view--failed-label
+                                 settled-failed
+                                 (plist-get rendering :failed-names))
+                                'font-lock-face 'error)))
+           (t line)))))))
+
+(defconst mevedel-view--failed-names-width 30
+  "Most columns a folded group spends naming its failed tools.")
+
+(defun mevedel-view--failed-label (count names)
+  "Return `N failed' for COUNT failures, naming the failed tools in NAMES.
+NAMES are shown once each, in order, and end in `…' past
+`mevedel-view--failed-names-width' columns, so the folded row can still
+say which call failed without growing past one line."
+  (let ((label (format "%d failed" count))
+        (names (delete-dups (copy-sequence (delq nil names)))))
+    (if (not names)
+        label
+      (concat label ": "
+              (truncate-string-to-width
+               (string-join names ", ") mevedel-view--failed-names-width
+               nil nil "…")))))
 
 (defun mevedel-view--sandbox-summary-line (summary)
   "Return the durable disclosure line for material sandbox SUMMARY.
@@ -3825,11 +3878,11 @@ once its call settles."
                               (selected-frame))))
     text))
 
-(defun mevedel-view--running-header (line count &optional virtual failed)
+(defun mevedel-view--running-header (line count &optional virtual failed names)
   "Return group header LINE marked running with COUNT calls in flight.
 The settled marker gives way to the running one, and `· N running'
-follows the summary; FAILED finished-but-unwritten calls add `· N failed',
-since a folded running group cannot show their rows.  With no call left
+follows the summary; FAILED failed calls add `· N failed' naming the tools
+in NAMES, since a folded group cannot show their rows.  With no call left
 running, a failure takes the `×' marker.  Unless VIRTUAL, the replaced
 marker is kept on the new one so a stopped turn can restore it in place."
   (let ((marker (if count
@@ -3850,7 +3903,7 @@ marker is kept on the new one so a stopped turn can restore it in place."
                                      'font-lock-face 'mevedel-view-tool-metadata)
                          'pending-run)))
               (when failed
-                (concat sep (propertize (format "%d failed" failed)
+                (concat sep (propertize (mevedel-view--failed-label failed names)
                                         'font-lock-face 'error))))
       'mevedel-view-pending-tool-live t))))
 
@@ -3882,6 +3935,14 @@ then, shown finished instead of running."
                 entries)))
     (and (> count 0) count)))
 
+(defun mevedel-view--pending-failed-names (entries)
+  "Return the tool names of in-flight ENTRIES that finished failed."
+  (delq nil (mapcar (lambda (entry)
+                      (and (memq (mevedel-view--pending-entry-settled-p entry)
+                                 '(error failed denied blocked))
+                           (or (nth 1 entry) "Tool")))
+                    entries)))
+
 (defun mevedel-view--insert-pending-tool-row (entry)
   "Insert the row for in-flight tool ENTRY.
 ENTRY is (KEY NAME DETAIL METADATA).  The row uses the settled tool row's
@@ -3909,18 +3970,35 @@ finished before its result landed takes the settled marker and is still."
       (insert "  " hint))
     (insert "\n")
     (add-text-properties start (point)
-                         '(mevedel-view-type tool-pending
+                         `(mevedel-view-type tool-pending
+                           mevedel-view-pending-key ,key
+                           mevedel-view-pending-tool-use-id
+                           ,(plist-get (nth 3 entry) :tool-use-id)
                            mevedel-view-pending-tool-live t))
     (mevedel-view--apply-rendering-indent start (point))))
 
 (defun mevedel-view--insert-pending-run (entries)
   "Insert in-flight tool ENTRIES that no settled activity run absorbed.
 Above the grouping threshold they form one running group row, as they
-will once settled; otherwise each call gets its own running row."
+will once settled; otherwise each call gets its own running row.  When a
+reader is on one of their rows, the group is drawn open beneath its
+header, so that row stays on screen."
   (mevedel-view--insert-activity-rule-after-response)
   (if (and (> mevedel-view-tool-group-collapse-threshold 0)
            (> (length entries) mevedel-view-tool-group-collapse-threshold))
-      (let ((start (point)))
+      (let* ((start (point))
+             (data-buf (mevedel-view-segments-display-buffer))
+             (data-end (and (buffer-live-p data-buf)
+                            (with-current-buffer data-buf (point-max))))
+             (open (or (mevedel-view-render--reader-on-member-p nil entries)
+                       (and data-end
+                            (eq (car mevedel-view-render--pending-reader-group)
+                                mevedel-view--data-turn-start)
+                            (eql (cadr mevedel-view-render--pending-reader-group)
+                                 data-end)))))
+        (when (and open data-end)
+          (setq mevedel-view-render--pending-reader-group
+                (list mevedel-view--data-turn-start data-end)))
         (mevedel-view--insert-summary-region
          (mevedel-view--rendering-header-line
           (list :header (mevedel-view--tool-group-header
@@ -3928,10 +4006,13 @@ will once settled; otherwise each call gets its own running row."
                 :vtype 'tool-group
                 :pending-count (mevedel-view--pending-running-count entries)
                 :pending-failed (mevedel-view--pending-failed-count entries)
+                :failed-names (mevedel-view--pending-failed-names entries)
                 :pending-virtual t))
          '(mevedel-view-type tool-pending
            mevedel-view-pending-tool-live t))
-        (mevedel-view--apply-rendering-indent start (point)))
+        (mevedel-view--apply-rendering-indent start (point))
+        (when open
+          (mapc #'mevedel-view--insert-pending-tool-row entries)))
     (mapc #'mevedel-view--insert-pending-tool-row entries)))
 
 (defun mevedel-view--retire-pending-decorations (start end)
@@ -4431,7 +4512,11 @@ operations call their owned implementations rather than entering here again."
                              (mevedel-view-render-cancel-batch)
                              (unless (eq work-key 'full)
                                (mevedel-view-render--full-now)))
-                           (funcall thunk))
+                           ;; Rows a reader is on when the writer deletes
+                           ;; them must not fold out from under them.
+                           (let ((mevedel-view-render--reader-members
+                                  (mevedel-view-render--reader-members)))
+                             (funcall thunk)))
                        ((error quit) (unless failure (setq failure err)) nil))
                    (when release
                      (condition-case err
@@ -4445,7 +4530,13 @@ operations call their owned implementations rather than entering here again."
                   ;; or replacement behind it.  Report the first error only
                   ;; after every still-current intention has been drained.
                   (while mevedel-view-render--pending
-                    (run (pop mevedel-view-render--pending))))
+                    (run (pop mevedel-view-render--pending)))
+                  ;; Writers change how the transcript ends without
+                  ;; redrawing the rail below it.
+                  (unless failure
+                    (condition-case err
+                        (mevedel-view--repair-request-progress-separator)
+                      (error (setq failure err)))))
                 (if failure (signal (car failure) (cdr failure)) result))
             (setq mevedel-view-render--owner nil
                   mevedel-view-render--pending nil)))))))
@@ -6634,9 +6725,16 @@ COMPLETIONS are the distinct execution completions among them."
 INDEX discriminates the row's disclosure key from its siblings.  A
 segment whose own rendering is hidden yields nil so grouping does not
 resurrect rows the renderer suppressed.  SUMMARY-ONLY permits a cached
-tool name instead of reparsing arguments and results for a collapsed group."
+tool name instead of reparsing arguments and results for a collapsed group.
+A large result still being prepared off the main thread is never parsed
+here; its row shows the call as running until the result is published."
   (when-let* ((child
-               (or (and summary-only
+               (or (and (eq (plist-get (plist-get entry :rendering) :vtype)
+                            'tool-preparing)
+                        (list :tool (plist-get (plist-get entry :rendering)
+                                               :group-tool)
+                              :status 'running))
+                   (and summary-only
                         (when-let* ((name (plist-get (plist-get entry :rendering)
                                                     :group-tool)))
                           (list :tool name)))
@@ -6679,7 +6777,8 @@ and follow the settled children."
               (cl-incf index))))
          (children (append settled (mevedel-view--pending-children pending))))
     (when children
-      (let ((completions (mevedel-view--group-completions children)))
+      (let ((completions (mevedel-view--group-completions children))
+            (reader-p (mevedel-view-render--reader-on-member-p settled pending)))
       (list :header (mevedel-view--tool-group-header children completions)
             :execution-completions completions
             :vtype 'tool-group
@@ -6687,24 +6786,126 @@ and follow the settled children."
             :child-calls children
             :pending-count (mevedel-view--pending-running-count pending)
             :pending-failed (mevedel-view--pending-failed-count pending)
-            :status (and (cl-some
-                          (lambda (entry)
-                            (eq (mevedel-view--rendering-status
-                                 (plist-get entry :rendering))
-                                'warning))
-                          entries)
-                         'warning)
-            ;; A new group must not hide a row the reader already opened.
-            ;; An explicit fold of the group itself still takes precedence.
+            :failed-count (mevedel-view--group-failed-count entries)
+            :failed-names (append (mevedel-view--group-failed-names entries)
+                                  (mevedel-view--pending-failed-names pending))
+            :status (let ((statuses
+                           (mapcar (lambda (entry)
+                                     (mevedel-view--rendering-status
+                                      (plist-get entry :rendering)))
+                                   entries)))
+                      (cond ((memq 'error statuses) 'error)
+                            ((memq 'warning statuses) 'warning)))
+            :reader-open reader-p
+            ;; A new group must not hide a row the reader already opened or
+            ;; is on.  An explicit fold of the group itself still takes
+            ;; precedence.
             :initially-collapsed-p
-            (not (cl-some
-                  (lambda (child)
-                    (when-let* ((state
-                                 (mevedel-view-disclosure-state-for-key
-                                  (mevedel-view--child-call-state-key
-                                   child (plist-get child :source)))))
-                      (not (cdr state))))
-                  settled)))))))
+            (not (or reader-p
+                     (cl-some
+                      (lambda (child)
+                        (when-let* ((state
+                                     (mevedel-view-disclosure-state-for-key
+                                      (mevedel-view--child-call-state-key
+                                       child (plist-get child :source)))))
+                          (not (cdr state))))
+                      settled))))))))
+
+(defun mevedel-view--fit-group-header (header rendering)
+  "Return HEADER shortened so RENDERING's folded group row is one screen line.
+The summary grows with every kind of tool a run uses, and its running and
+failed counts come and go; a summary that wrapped would add or drop a row
+as they did.  Room is kept for those counts, measured against the
+narrowest window showing the view."
+  (let* ((windows (get-buffer-window-list (current-buffer) nil t))
+         (width (if windows
+                    (apply #'min (mapcar #'window-body-width windows))
+                  (window-body-width)))
+         (count (plist-get rendering :pending-count))
+         (failed (+ (or (plist-get rendering :pending-failed) 0)
+                    (or (plist-get rendering :failed-count) 0)))
+         (suffix (concat (and count (format " · %d running" count))
+                         (and (> failed 0)
+                              (concat " · " (mevedel-view--failed-label
+                                            failed
+                                            (plist-get rendering :failed-names))))))
+         ;; The marker column, a line prefix for nested rows, and the
+         ;; last column, which would wrap the line in a terminal.
+         (available (max 10 (- width 4 2 1 (string-width suffix)))))
+    (if (> (string-width header) available)
+        (truncate-string-to-width header available nil nil "…")
+      header)))
+
+(defun mevedel-view--group-failed-count (entries)
+  "Return how many settled activity ENTRIES failed, or nil for none."
+  (let ((count (cl-count-if
+                (lambda (entry)
+                  (and (eq (plist-get entry :kind) 'tool)
+                       (eq (mevedel-view--rendering-status
+                            (plist-get entry :rendering))
+                           'error)))
+                entries)))
+    (and (> count 0) count)))
+
+(defun mevedel-view--group-failed-names (entries)
+  "Return the tool names of settled activity ENTRIES that failed.
+Use the name each rendering carries for grouping, never reparsing a call."
+  (delq nil (mapcar (lambda (entry)
+                      (let ((rendering (plist-get entry :rendering)))
+                        (and (eq (plist-get entry :kind) 'tool)
+                             (eq (mevedel-view--rendering-status rendering) 'error)
+                             (or (plist-get rendering :group-tool) "Tool"))))
+                    entries)))
+
+(defun mevedel-view-render--reader-members ()
+  "Return the tool rows under this view's point and its window points."
+  (let (members)
+    (dolist (pos (cons (point)
+                       (mapcar #'window-point
+                               (get-buffer-window-list nil nil t))))
+      (when (and (< pos (point-max))
+                 (memq (get-text-property pos 'mevedel-view-type)
+                       '(tool-summary tool-pending)))
+        (if-let* ((key (get-text-property pos 'mevedel-view-pending-key)))
+            (progn
+              (push key members)
+              ;; Its settled row is found by the call's transcript id.
+              (when-let* ((id (get-text-property
+                               pos 'mevedel-view-pending-tool-use-id)))
+                (push (list :tool-use-id id) members)))
+          (when-let* ((start (mevedel-view-disclosure-source-start
+                              (get-text-property pos 'mevedel-view-source))))
+            (push start members)))))
+    members))
+
+(defun mevedel-view-render--reader-on-member-p (children pending)
+  "Return non-nil when a reader is on one of CHILDREN or PENDING calls.
+CHILDREN are settled group children; PENDING are in-flight entries.  A
+reader on a running row still holds that call once it settles: the row's
+bound tool-use id is the id its result carries in the transcript."
+  (when-let* ((members mevedel-view-render--reader-members))
+    (let ((ids (delq nil (mapcar (lambda (member)
+                                   (plist-get (and (consp member)
+                                                   (keywordp (car member))
+                                                   member)
+                                              :tool-use-id))
+                                 members))))
+      (or (cl-some (lambda (child)
+                     (let ((source (plist-get child :source)))
+                       (or (member (mevedel-view-disclosure-source-start source)
+                                   members)
+                           (and ids (consp source) (markerp (car source))
+                                (member (with-current-buffer
+                                            (marker-buffer (car source))
+                                          (mevedel-transcript--tool-id-in-range
+                                           (car source) (cdr source)))
+                                        ids)))))
+                   children)
+          (cl-some (lambda (entry)
+                     (or (member (car entry) members)
+                         (and ids (member (plist-get (nth 3 entry) :tool-use-id)
+                                          ids))))
+                   pending)))))
 
 (defun mevedel-view--tool-group-rendering-from-source
     (data-buf start end)
@@ -6726,17 +6927,19 @@ reasoning occurrence."
 
 (defun mevedel-view--tool-group-entry-p (entry)
   "Return non-nil when ENTRY may fold into a grouped activity row.
-Rows that demand individual presentation stay out: failed calls, agent
-handles and other non-tool vtypes, compound tools with their own nested
+Rows that demand individual presentation stay out: agent handles and other
+non-tool vtypes, compound tools with their own nested
 rows, rows carrying hook audits, rows their renderer wants expanded or compact,
 coalesced rows, and renderer fallbacks.  Warning and note disclosures
-stay with their nested row inside the group."
+stay with their nested row inside the group.  Failed calls and results still
+being prepared stay too: a run's grouping must not change when a call fails
+or its result is published."
   (let ((rendering (plist-get entry :rendering)))
     (or (eq (plist-get entry :kind) 'completion)
     (and rendering
          (= (plist-get entry :count) 1)
-         (not (eq (mevedel-view--rendering-status rendering) 'error))
-         (eq (or (plist-get rendering :vtype) 'tool-summary) 'tool-summary)
+         (memq (or (plist-get rendering :vtype) 'tool-summary)
+               '(tool-summary tool-preparing))
          (null (plist-get rendering :child-calls))
          (null (plist-get rendering :hook-audits))
          (not (plist-get rendering :force-expanded-p))
@@ -6764,9 +6967,20 @@ Return non-nil when the group row was inserted."
                       (mevedel-view-disclosure-source-range
                        data-buf group-start group-end))))
     (when rendering
+      (when (and (eq (car mevedel-view-render--pending-reader-group)
+                     mevedel-view--data-turn-start)
+                 (eql (cadr mevedel-view-render--pending-reader-group) group-start))
+        (unless (mevedel-view-disclosure-state-entry source 'tool-group)
+          (mevedel-view-disclosure-record-state source 'tool-group nil))
+        (setq mevedel-view-render--pending-reader-group nil))
       (unless (plist-get
                (mevedel-view-disclosure-apply-rendering-state rendering source)
                :initially-collapsed-p)
+        ;; A group that formed open under the reader stays open after the
+        ;; reader moves on: folding later would move what they just read.
+        (when (and (plist-get rendering :reader-open)
+                   (not (mevedel-view-disclosure-state-entry source 'tool-group)))
+          (mevedel-view-disclosure-record-state source 'tool-group nil))
         (setq rendering (mevedel-view--tool-group-rendering
                          entries data-buf nil pending)))
       (mevedel-view--insert-rendered-tool rendering source)
@@ -7674,17 +7888,23 @@ returns to just before it."
     (nreverse starts)))
 
 (defun mevedel-view-render-capture-segment-state ()
-  "Capture point, window, and disclosure state for the displayed segment."
+  "Capture point, window, and disclosure state for the displayed segment.
+Point and the window start are kept as semantic render anchors as well:
+the segment is projected again on return, and deferred formatting such as
+table layout makes that projection differ in length from this one."
   (let* ((input-start (mevedel-view--input-marker-position))
          (turn-starts (mevedel-view--rendered-turn-starts))
          (window (get-buffer-window (current-buffer) t)))
     (list
      :point (point)
+     :point-anchor (mevedel-view--position-render-anchor (point))
      :input-offset
      (and input-start
           (>= (point) input-start)
           (- (point) (mevedel-view--input-start)))
      :window-start (and window (window-start window))
+     :window-start-anchor
+     (and window (mevedel-view--position-render-anchor (window-start window)))
      :collapsed-turns
      (cl-loop
       for pos in turn-starts
@@ -7722,7 +7942,9 @@ returns to just before it."
    ((plist-get state :point)
     (goto-char
      (max (point-min)
-          (min (plist-get state :point)
+          (min (or (mevedel-view--render-anchor-position
+                    (plist-get state :point-anchor))
+                   (plist-get state :point))
                (mevedel-view--input-marker-position)))))
    ((eq direction 'backward)
     (let ((pos (point-min))
@@ -7741,7 +7963,9 @@ returns to just before it."
     (goto-char (point-min))
     (mevedel-view-next-turn)))
   (when-let* ((window (get-buffer-window (current-buffer) t))
-              (start (plist-get state :window-start)))
+              (start (or (mevedel-view--render-anchor-position
+                          (plist-get state :window-start-anchor))
+                         (plist-get state :window-start))))
     (set-window-start window (min start (point-max)) t)))
 
 (defun mevedel-view-render-project-segment (data-buffer state direction)
@@ -8469,6 +8693,39 @@ turns may follow in callbacks."
       (set-marker-insertion-type start t)
       (set-marker-insertion-type end nil))))
 
+(defun mevedel-view-render--replace-turn (data plan turn pos)
+  "Re-render TURN from DATA under PLAN in place of the rendered turn at POS.
+PLAN supplies the source restriction, session and variants, as a turn
+context does.  Preserve reader, composer and disclosure state.  Return
+non-nil on success; nil leaves the old rendering in place."
+  (let* ((bounds (save-excursion
+                   (goto-char pos)
+                   (mevedel-view-disclosure-section-bounds
+                    'mevedel-view-turn-id)))
+         (from (copy-marker (car bounds)))
+         (to (copy-marker (cdr bounds)))
+         (copy (copy-sequence turn))
+         (job (list :data data :plan plan
+                    :index (make-hash-table :test #'eq)
+                    :audits (make-hash-table :test #'equal)
+                    :states (mevedel-view-disclosure-capture-state from to))))
+    (setf (plist-get copy :render-id)
+          (get-text-property pos 'mevedel-view-turn-id))
+    (unwind-protect
+        (condition-case err
+            (progn
+              (mevedel-view--call-preserving-user-view-state
+               (lambda ()
+                 (atomic-change-group
+                   (mevedel-view-render--batch-turn
+                    job (list copy from to)))))
+              t)
+          (error
+           (mevedel-view--debug-log 'local-render-recovery :error err)
+           nil))
+      (set-marker from nil)
+      (set-marker to nil))))
+
 (defun mevedel-view-render--refresh-source (data start end)
   "Refresh the rendered turn containing DATA's START..END, if still current.
 Return non-nil on success.  The caller already owns view mutation.  A source
@@ -8486,36 +8743,75 @@ change or missing context leaves the existing full-history fallback in charge."
                        (eql tick (plist-get context :tick))
                        (<= (plist-get turn :start) start end
                            (plist-get turn :end)))
-              (let* ((bounds (save-excursion
-                               (goto-char pos)
-                               (mevedel-view-disclosure-section-bounds
-                                'mevedel-view-turn-id)))
-                     (from (copy-marker (car bounds)))
-                     (to (copy-marker (cdr bounds)))
-                     (copy (copy-sequence turn))
-                     (job (list :data data :plan context
-                                :index (make-hash-table :test #'eq)
-                                :audits (make-hash-table :test #'equal)
-                                :states (mevedel-view-disclosure-capture-state from to))))
-                (setf (plist-get copy :render-id)
-                      (get-text-property pos 'mevedel-view-turn-id))
-                (unwind-protect
-                    (throw 'refreshed
-                           (condition-case err
-                               (progn
-                                 (mevedel-view--call-preserving-user-view-state
-                                  (lambda ()
-                                    (atomic-change-group
-                                      (mevedel-view-render--batch-turn
-                                       job (list copy from to)))))
-                                 t)
-                             (error
-                              (mevedel-view--debug-log 'local-render-recovery :error err)
-                              nil)))
-                  (set-marker from nil)
-                  (set-marker to nil))))
+              (throw 'refreshed
+                     (mevedel-view-render--replace-turn data context turn pos)))
             (setq pos (next-single-property-change
                        pos 'mevedel-view-turn-context nil limit))))))))
+
+(defun mevedel-view-render--last-turn-position ()
+  "Return the start of the last rendered turn before the composer, or nil."
+  (let ((pos (mevedel-view--input-marker-position))
+        found)
+    (while (and (not found) pos (> pos (point-min)))
+      (setq pos (previous-single-property-change
+                 pos 'mevedel-view-turn-context nil (point-min)))
+      (when (get-text-property pos 'mevedel-view-turn-context)
+        (setq found pos)))
+    found))
+
+(defun mevedel-view-render--refresh-latest-turn-now (data)
+  "Re-render DATA's newest assistant turn through DATA's end.
+Return non-nil when the view is current afterwards; nil asks for a full
+projection.  The caller owns view mutation."
+  (cond
+   ((not (buffer-live-p data)) t)
+   ;; An archived segment is on display: the live turn is not rendered.
+   ((not (eq data (mevedel-view-segments-display-buffer))) t)
+   ((mevedel-view-stream-in-flight-turn-start-position) nil)
+   (t
+    (when-let* ((pos (mevedel-view-render--last-turn-position))
+                (context (get-text-property pos 'mevedel-view-turn-context))
+                ((eq data (plist-get context :data)))
+                (turn (plist-get context :turn))
+                ((eq (plist-get turn :role) 'assistant))
+                (end (with-current-buffer data (point-max)))
+                ((<= (plist-get turn :end) end))
+                (turns
+                 (with-current-buffer data
+                   (save-restriction
+                     (narrow-to-region (plist-get context :start) end)
+                     (mevedel-view--group-transcript-turns
+                      (mevedel-transcript-segments (plist-get turn :start) end)
+                      data))))
+                (fresh (car turns))
+                ((null (cdr turns)))
+                ((eq (plist-get fresh :role) 'assistant))
+                ((eql (plist-get fresh :start) (plist-get turn :start)))
+                ((equal (plist-get fresh :directive) (plist-get turn :directive))))
+      (let ((plan (copy-sequence context)))
+        (setf (plist-get plan :end) end
+              (plist-get plan :variants)
+              (and (not mevedel-view--agent-transcript-p)
+                   (plist-get (mevedel-view-render--plan-finish
+                               nil nil data mevedel--data-buffer nil)
+                              :variants)))
+        (mevedel-view-render--replace-turn data plan fresh pos))))))
+
+(defun mevedel-view-render-refresh-latest-turn (data)
+  "Re-render the newest assistant turn after settlement appended to DATA.
+Saving a settled turn appends its durable fork-point record after the
+response, outside the coordinates that turn was rendered with.  Only that
+turn needs new source coordinates, so it is rendered again alone instead
+of rebuilding history.  When the newest rendered turn cannot be matched
+to DATA's tail, schedule a full projection instead."
+  ;; A pending history job revalidates the source tick and restarts by
+  ;; itself.  Entering the writer queue would force it to finish now.
+  (unless mevedel-view-render--batch
+    (mevedel-view-render-mutate
+     'latest-turn
+     (lambda ()
+       (unless (mevedel-view-render--refresh-latest-turn-now data)
+         (mevedel-view-rerender (current-buffer)))))))
 
 (defun mevedel-view-render--batch-step (view job)
   "Advance one preparation stage or project one turn of JOB in VIEW."
@@ -8623,8 +8919,12 @@ Until the complete plan is ready, keep the previous view in place."
          (mevedel-view-render--prepared-responses (plist-get job :fontified))
          (mevedel-transcript--tool-block-index (plist-get job :index))
          (mevedel-transcript-audit--decode-cache (plist-get job :audits))
-         (priority (mevedel-view-render--priority-turns (plist-get plan :turns)))
-           (immediate (mevedel-view-render--priority-turns (plist-get plan :turns) t))
+         ;; Everything a reader can see renders now.  A visible placeholder
+         ;; would be drawn and then replaced, moving text the reader is on.
+         (immediate (append (mevedel-view-render--priority-turns
+                             (plist-get plan :turns))
+                            (mevedel-view-render--priority-turns
+                             (plist-get plan :turns) t)))
            (states (mevedel-view-disclosure-capture-state
                     (point-min) (mevedel-view--input-marker-position)))
            installed)
@@ -8678,11 +8978,6 @@ Until the complete plan is ready, keep the previous view in place."
                    (setf (plist-get job :pending)
                          (cl-remove-if (lambda (entry) (memq (car entry) immediate))
                                        (plist-get job :pending)))
-                   (let ((pending (plist-get job :pending)))
-                     (setf (plist-get job :pending)
-                           (append
-                            (cl-remove-if-not (lambda (entry) (memq (car entry) priority)) pending)
-                            (cl-remove-if (lambda (entry) (memq (car entry) priority)) pending))))
                    (mevedel-view--full-rerender-finish
                     data live-data (list :view-buffer view) historical
                     started)))))

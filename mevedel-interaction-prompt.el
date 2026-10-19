@@ -324,7 +324,6 @@ only owner-link guests."
                    :origin origin
                    :count 0
                    :body body
-                   :priority 150
                    :keymap keymap
                    :help-echo
                    (or help-echo-text

@@ -344,6 +344,13 @@ Expressions longer than this are truncated with a toggle to expand."
   :type 'integer
   :group 'mevedel)
 
+(defun mevedel-permission--anchor (text section)
+  "Return TEXT tagged as the card's SECTION, a symbol.
+The view finds point and window starts again by this tag when the card
+redraws, so expanding details or toggling a choice above the Keys row
+keeps point on the row it was on instead of an offset into other text."
+  (propertize text 'mevedel-view-zone-anchor (list 'permission section)))
+
 (defun mevedel-permission--elide (text entry &optional line-limit char-limit)
   "Return TEXT for prompt display, elided unless ENTRY is expanded.
 LINE-LIMIT caps the collapsed line count and CHAR-LIMIT the collapsed
@@ -353,7 +360,8 @@ prompt without one is returned whole."
   (let* ((lines (and line-limit (split-string text "\n")))
          (long-p (or (and line-limit (> (length lines) line-limit))
                      (and char-limit (> (length text) char-limit)))))
-    (cond
+    (mevedel-permission--anchor
+     (cond
      ((or (null entry) (not long-p)) text)
      ((mevedel-queue--entry-metadata-get entry :expanded)
       (concat text "\n"
@@ -373,7 +381,8 @@ prompt without one is returned whole."
                                     (- (length text) (length head)))
                             'font-lock-face 'shadow)
                 (mevedel--prompt-key "TAB")
-                (propertize " to expand" 'font-lock-face 'shadow)))))))
+                (propertize " to expand" 'font-lock-face 'shadow)))))
+     'command)))
 
 (defun mevedel-permission--prompt-toggle-expand ()
   "Toggle full display of the elided command or expression at point."
@@ -396,23 +405,26 @@ session allow.  ONCE-ONLY hides every session-scoped choice.  TOGGLE is
   (mevedel--prompt-framed-body
    (concat
     content
-    (propertize "Keys: " 'font-lock-face 'help-key-binding)
-    (mevedel--prompt-key "RET")
-    " allow once  "
-    (unless (or suppress-allow-session once-only)
-      (concat (mevedel--prompt-key "s") " remember for session  "))
-    (when (and include-always (not once-only))
-      (concat (mevedel--prompt-key "A") " remember in workspace  "))
-    (mevedel--prompt-key "d")
-    " deny  "
-    (unless once-only
-      (concat (mevedel--prompt-key "D") " deny session  "))
-    (mevedel--prompt-key "f")
-    " feedback"
-    (pcase toggle
-      ('collapsed (concat "  " (mevedel--prompt-key "TAB") " details"))
-      ('expanded (concat "  " (mevedel--prompt-key "TAB") " fewer details")))
-    "\n")
+    (mevedel-permission--anchor
+     (concat
+      (propertize "Keys: " 'font-lock-face 'help-key-binding)
+      (mevedel--prompt-key "RET")
+      " allow once  "
+      (unless (or suppress-allow-session once-only)
+        (concat (mevedel--prompt-key "s") " remember for session  "))
+      (when (and include-always (not once-only))
+        (concat (mevedel--prompt-key "A") " remember in workspace  "))
+      (mevedel--prompt-key "d")
+      " deny  "
+      (unless once-only
+        (concat (mevedel--prompt-key "D") " deny session  "))
+      (mevedel--prompt-key "f")
+      " feedback"
+      (pcase toggle
+        ('collapsed (concat "  " (mevedel--prompt-key "TAB") " details"))
+        ('expanded (concat "  " (mevedel--prompt-key "TAB") " fewer details")))
+      "\n")
+     'keys))
    'warning))
 
 (defun mevedel-permission--expanded-p (entry)
@@ -567,7 +579,8 @@ workspace approval would store."
                                              (substring-no-properties content)))))
                         'collapsed))))
          (content (concat content expiry-line
-                          (and (or (null entry) expanded-p) details)))
+                          (and (or (null entry) expanded-p)
+                               (mevedel-permission--anchor details 'details))))
          ;; The entry's session decides where its card goes.  A prompt can be
          ;; admitted from an unrelated buffer, such as the permission
          ;; reviewer's request buffer when it leaves the decision to a human.
@@ -642,7 +655,6 @@ workspace approval would store."
                             include-always
                             suppress-allow-session once-only
                             toggle)
-                     :priority 100
                      :keymap map
                      :help-echo (if once-only
                                     "One-time permission prompt"
@@ -804,7 +816,8 @@ REMOTE-P requests them regardless of the local fold state."
     (let ((details (concat
                     (mevedel-permission--format-authority-capabilities entry)
                     (mevedel-permission--format-remember-authority entry))))
-      (unless (string-empty-p details) (concat "\n" details)))))
+      (unless (string-empty-p details)
+        (mevedel-permission--anchor (concat "\n" details) 'authority)))))
 
 (defun mevedel-permission--prompt-async-attributed
     (tool-name path include-always origin cont &optional count entry)

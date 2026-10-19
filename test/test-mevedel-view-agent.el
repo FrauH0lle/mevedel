@@ -227,6 +227,172 @@
             (dolist (buffer (list first-view second-view first second))
               (when (buffer-live-p buffer) (kill-buffer buffer)))))))))
 
+(mevedel-deftest mevedel-view--kill-agent-transcript-view
+  (:doc "returning from a side window restores the parent composer's row")
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let* ((session (mevedel-view-agent-test--session))
+             (mevedel-agent-view-display-action
+              '(display-buffer-in-side-window (side . right) (window-width . 0.4)))
+             (agent (generate-new-buffer " *agent-return*"))
+             agent-view)
+        (unwind-protect
+            (progn
+              (with-current-buffer data-buf (setq-local mevedel--session session))
+              (let ((record (mevedel-view-agent-test--record "/root/agent" 'running)))
+                (setf (mevedel-agent-record-conversation-buffer record) agent)
+                (push (cons "/root/agent" record)
+                      (mevedel-session-agent-registry session)))
+              (with-current-buffer agent
+                (org-mode)
+                (setq-local mevedel--session session mevedel--view-buffer view-buf)
+                (insert (propertize "Agent response\n" 'gptel 'response)))
+              ;; Paragraphs that fit the full width but wrap beside the side window.
+              (mevedel-view-test--insert-data
+               data-buf
+               (apply #'concat
+                      (make-list 60 (concat (make-string 30 ?a) " "
+                                            (make-string 30 ?b) "\n\n")))
+               'response)
+              (switch-to-buffer view-buf)
+              (delete-other-windows)
+              (mevedel-view--full-rerender)
+              (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 3)
+              (recenter -1)
+              (let ((parent-window (selected-window))
+                    (y (mevedel-view-test--composer-screen-y (selected-window))))
+                (should y)
+                (mevedel-view-open-agent-transcript "/root/agent")
+                (setq agent-view (window-buffer (selected-window)))
+                (should-not (eq parent-window (selected-window)))
+                ;; Redisplay keeps the parent's point, in the composer, on screen.
+                (with-selected-window parent-window
+                  (goto-char (+ (mevedel-view--input-start) 3))
+                  (recenter -1))
+                (with-current-buffer agent-view
+                  (mevedel-view-close-agent-transcript))
+                (should (eq parent-window (selected-window)))
+                (should (= (window-total-width parent-window) (frame-width)))
+                (with-current-buffer view-buf
+                  (should (= y (mevedel-view-test--composer-screen-y parent-window)))
+                  (should (= (point) (+ (mevedel-view--input-start) 3)))
+                  (should (equal "> keep\nsecond line"
+                                 (mevedel-view--input-text))))))
+          (dolist (buffer (list agent-view agent))
+            (when (buffer-live-p buffer) (kill-buffer buffer))))))))
+
+(mevedel-deftest mevedel-view--kill-agent-transcript-view/history-navigation
+  (:doc "closing keeps a parent window the user moved into history")
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let* ((session (mevedel-view-agent-test--session))
+             (mevedel-agent-view-display-action
+              '(display-buffer-in-side-window (side . right) (window-width . 0.4)))
+             (agent (generate-new-buffer " *agent-history*"))
+             agent-view)
+        (unwind-protect
+            (progn
+              (with-current-buffer data-buf (setq-local mevedel--session session))
+              (let ((record (mevedel-view-agent-test--record "/root/agent" 'running)))
+                (setf (mevedel-agent-record-conversation-buffer record) agent)
+                (push (cons "/root/agent" record)
+                      (mevedel-session-agent-registry session)))
+              (with-current-buffer agent
+                (org-mode)
+                (setq-local mevedel--session session mevedel--view-buffer view-buf)
+                (insert (propertize "Agent response\n" 'gptel 'response)))
+              (mevedel-view-test--insert-data
+               data-buf
+               (apply #'concat (make-list 100 "Parent response\n"))
+               'response)
+              (switch-to-buffer view-buf)
+              (delete-other-windows)
+              (mevedel-view--full-rerender)
+              (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 3)
+              (recenter -1)
+              (should (mevedel-view-test--composer-screen-y (selected-window)))
+              (let ((parent-window (selected-window)))
+                (mevedel-view-open-agent-transcript "/root/agent")
+                (setq agent-view (window-buffer (selected-window)))
+                (should-not (eq parent-window (selected-window)))
+                ;; Read earlier history in the parent with real commands.
+                (with-selected-window parent-window
+                  (call-interactively #'beginning-of-buffer)
+                  (call-interactively #'forward-line)
+                  (call-interactively #'scroll-up-command)
+                  (call-interactively #'scroll-down-command)
+                  (redisplay t))
+                (let ((start (window-start parent-window))
+                      (point (window-point parent-window)))
+                  (should (< point (with-current-buffer view-buf
+                                     (mevedel-view--input-start))))
+                  (with-current-buffer agent-view
+                    (mevedel-view-close-agent-transcript))
+                  (should (eq parent-window (selected-window)))
+                  (with-current-buffer view-buf
+                    (should (= start (window-start parent-window)))
+                    (should (= point (window-point parent-window)))
+                    (should (equal "> keep\nsecond line"
+                                   (mevedel-view--input-text)))))))
+          (dolist (buffer (list agent-view agent))
+            (when (buffer-live-p buffer) (kill-buffer buffer))))))))
+
+(mevedel-deftest mevedel-view--kill-agent-transcript-view/offscreen-composer
+  (:doc "eligibility is decided before closing, not from post-close reflow")
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let* ((session (mevedel-view-agent-test--session))
+             (mevedel-agent-view-display-action
+              '(display-buffer-in-side-window (side . right) (window-width . 0.4)))
+             (agent (generate-new-buffer " *agent-offscreen*"))
+             agent-view inspector)
+        (unwind-protect
+            (progn
+              (with-current-buffer data-buf (setq-local mevedel--session session))
+              (let ((record (mevedel-view-agent-test--record "/root/agent" 'running)))
+                (setf (mevedel-agent-record-conversation-buffer record) agent)
+                (push (cons "/root/agent" record)
+                      (mevedel-session-agent-registry session)))
+              (with-current-buffer agent
+                (org-mode)
+                (setq-local mevedel--session session mevedel--view-buffer view-buf)
+                (insert (propertize "Agent response\n" 'gptel 'response)))
+              (mevedel-view-test--insert-data
+               data-buf
+               (apply #'concat (make-list 100 "Parent response\n"))
+               'response)
+              (switch-to-buffer view-buf)
+              (delete-other-windows)
+              (mevedel-view--full-rerender)
+              (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 3)
+              (recenter -1)
+              (let ((parent-window (selected-window)))
+                (mevedel-view-open-agent-transcript "/root/agent")
+                (setq inspector (selected-window)
+                      agent-view (window-buffer inspector))
+                ;; Point stays in the composer, but the window start is far
+                ;; above it: the composer is off screen before the close.
+                (with-selected-window parent-window
+                  (goto-char (+ (mevedel-view--input-start) 3))
+                  (set-window-start parent-window (point-min)))
+                (should-not (with-current-buffer view-buf
+                              (mevedel-view-test--composer-screen-y parent-window)))
+                (cl-letf (((symbol-function 'mevedel-view--position-screen-y)
+                           ;; Pretend the close's reflow brings the composer
+                           ;; on screen: only the pre-close answer is real.
+                           (lambda (_position window &optional _fully)
+                             (and (not (window-live-p inspector))
+                                  (not (window-minibuffer-p window))
+                                  0))))
+                  (with-current-buffer agent-view
+                    (mevedel-view-close-agent-transcript)))
+                (with-current-buffer view-buf
+                  (should (= (point-min) (window-start parent-window)))
+                  (should (equal "> keep\nsecond line"
+                                 (mevedel-view--input-text))))))
+          (dolist (buffer (list agent-view agent))
+            (when (buffer-live-p buffer) (kill-buffer buffer))))))))
+
 (mevedel-deftest mevedel-view-agent-model-label
   (:doc "formats only known model metadata without inventing effort")
   (progn

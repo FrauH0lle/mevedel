@@ -46,11 +46,21 @@ whole form and the transcript above it.
 
 - A closed question and its answer are flattened and cut to one line, the
   answer keeping at least half of it; the full text is in the help echo and
-  appears when the question opens. The cut is computed at repaint, so after a
-  resize it may be too long or too short until the next repaint. Below about 25
-  columns each part keeps a 10-column minimum and the line wraps.
+  appears when the question opens. The cut fits the narrowest window showing
+  the view, and the form lays itself out again when that width changes. It
+  used to wait for the next repaint, so the first keystroke after a resize
+  changed the form's height: after a split from 150 to 70 terminal columns,
+  the form went from 32 to 31 rows on the next `n`. Below about 25 columns
+  each part keeps a 10-column minimum and the line wraps.
 - Digits and `c` act only in the open question.
 - A short open question leaves blank space above Submit, up to the height of
   the tallest open question.
 - Reserved rows are computed by following `word-wrap` over the rendered
-  questions at the window width, once per width.
+  questions at the width a wrapped row holds, once per width. Without a right
+  fringe, as on a terminal, the last column carries the continuation glyph, so
+  that width is one less than the window's. Counting the full width let a row
+  that exactly filled a 100-column terminal count as one row while it wrapped
+  to two: with two such option descriptions in one question, opening it made
+  the form 2 rows taller than any other question, measured as 19 against 17
+  rows. Across realistic descriptions at widths 50-160, about 4% of wrapped
+  lines change their row count between the two widths.

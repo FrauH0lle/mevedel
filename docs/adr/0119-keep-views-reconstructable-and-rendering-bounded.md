@@ -66,8 +66,9 @@ without reparsing hidden results or changing execution identity. Live/composed
 programs and invalid/failed envelopes retain the outer presentation.
 Nested compound rows retain their own metadata and
 depth, so disclosure replacement removes descendants without consuming siblings.
-Failed tool calls split activity groups and start
-collapsed with a red `×`; warning rows remain groupable and mark their group
+Failed tool calls stay in their activity group, which takes a red `×` and
+counts and names them as `· N failed: Grep`; their own rows start
+collapsed with a red `×`. Warning rows remain groupable and mark their group
 with `!`. Only markers receive severity highlighting, and an accompanying
 sandbox warning cannot downgrade an error. Full rerender is the correctness
 fallback. One scheduler coalesces redraws;
@@ -99,7 +100,10 @@ directive-request setup rollback, an interrupted side answer, and Source's
 refresh after a Session Fork use this scheduler: they only change what is displayed, and nothing after them reads
 view positions. In-flight reconciliation, explicit immediate refreshes, callers
 that read rendered positions, and other writers' correctness fallbacks remain
-synchronous. A large
+synchronous. Saving a settled turn appends its fork-point record after the
+newest response and changes nothing else in the transcript, so the save
+re-renders only that newest assistant turn, regrouped through the new end, and
+falls back to the scheduler when the tail no longer matches it. A large
 individual line, final scanner repair, prompt-first publication, grouped tool
 insertion, and GC can still make a callback exceed its cooperative target. Large
 collapsed tool parsing also has its separate staged preparation lifecycle.
@@ -129,8 +133,9 @@ running tool rows offer shimmer, braille, ascii, dots, or static indicators.
 Color animations prepare bounded, theme-derived frame banks; each live view
 reserves enough banks for its registered running rows and main label,
 with a four-bank minimum, in addition to a six-bank shared reuse cache. The
-tool grouping threshold bounds this working set: beyond it, running calls share
-one group row. All eligible banks are prepared
+tool grouping threshold bounds the default working set: beyond it, running calls
+share one group row unless grouping would hide the reader's current member.
+That group stays expanded after the reader leaves. All eligible banks are prepared
 at semantic boundaries, preventing other views from evicting an active sample.
 A mixed set of color and portable glyph tool rows keeps both cadences. A frozen
 row retains its phase while adopting changed text or a destination display. Theme changes and edits to the
@@ -369,6 +374,34 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### October 2026: failures and prepared results keep a run's grouping
+
+September's change made failed calls split their group so a failure was not
+hidden inside a folded row. That made a run's shape depend on its calls'
+outcomes: a four-call running group, one row, became four rows when its last
+result was an error, moving the transcript three rows while the reader watched.
+A large result being prepared off the main thread split its run the same way
+and refolded it when published. Failed calls now stay in the group, which
+shows the failure where the reader looks: the folded row takes `×` and ends
+with `· N failed: Grep`, the text the running row already showed for an early
+failure, and the failed child keeps its collapsed `×` row. Naming the failed
+tools answers September's objection that a folded row hid which call failed;
+the names are deduplicated and end in `…` past 30 columns, and the summary
+before them shortens first, so the row stays one line. A preparing result is a
+running member of its group.
+
+### October 2026: refresh only the newest turn after a settled save
+
+July's fork-metadata fix scheduled a full history refresh after every saved
+turn, so a settled reply's source bounds would cover the fork-point record the
+save appends. The save changes nothing else; the old transcript text is an exact
+prefix of the new one. That full refresh ran batched at every turn end: when the
+window showed more than the last reply, one frame showed the previous reply and a
+"Loading conversation turn..." placeholder where the finished reply had been, and
+the rail kept an extra separator line. Re-rendering only the newest turn
+costs 2.0 ms against 153.7 ms for the complete projection of a 40-exchange history
+(compiled, medians of seven), and does not grow with history.
 
 ### October 2026: defer battery initialization out of cold browser restore
 
@@ -793,6 +826,17 @@ continues to take precedence. Full redraws retain source-keyed child states
 hidden by folded groups; capturing only visible rows lost these states.
 Explicit transcript-source changes still clear the table, and source anchors
 prevent stale keys from applying to rewritten content.
+
+An October 2026 regression exposed the same failure before any result arrived:
+a running-only group kept no source-backed child anchor, so grouping could move
+point onto its header or another call. Running rows now anchor by their unique
+pending key, then by the pipeline's transcript tool id when their result arrives.
+A running-only group opened under the reader remembers its future source start
+within that exact turn, and transfers expansion to the ordinary disclosure state
+once results form a source-backed group. This also covers debounced settlement
+that removes all pending entries before the next redraw; it does not depend on
+the reader remaining on the row. A stopped turn cannot lend expansion to a new
+turn reusing its data position.
 
 Managed overlays previously included history inserted at their leading edge.
 Their leading boundary now advances past that history, and progress spacing

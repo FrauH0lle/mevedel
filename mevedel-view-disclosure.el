@@ -433,7 +433,13 @@ only (not the full source cons) plus that anchor and any owner discriminator.
 Thus thinking-summary and tool-summary segments keep their saved state when
 streaming extends the segment's end position, but rewritten data at the same
 numeric start does not inherit stale state.  Locally decorated mailbox cards
-use their rendered kind, agent id, body hash, and ordinal."
+use their rendered kind, agent id, body hash, and ordinal.
+
+Source-backed states are also remembered beyond this span, so children of a
+later-folded row keep them, but only states somebody chose: one already
+remembered, or one that differs from its section type's default.  A section
+shown in its default state is not a choice; remembering it would later
+override a better default, such as a new group staying open over an open row."
   (let ((mailbox-counts (make-hash-table :test 'equal))
         (seen (make-hash-table :test 'equal))
         (states nil)
@@ -452,11 +458,18 @@ use their rendered kind, agent id, body hash, and ordinal."
           (let ((state (and collapsed t)))
             (puthash key t seen)
             (push (cons key state) states)
-            (when (eq (car key) 'source)
+            (when (and (eq (car key) 'source)
+                       (or (mevedel-view-disclosure-state-for-key key)
+                           (not (eq state (mevedel-view-disclosure--default-collapsed-p
+                                           (nth 1 key))))))
               (puthash key state
                        (mevedel-view-disclosure--ensure-states)))))
         (setq pos next)))
     states))
+
+(defun mevedel-view-disclosure--default-collapsed-p (state-type)
+  "Return non-nil when sections of STATE-TYPE render collapsed by default."
+  (not (memq state-type '(response turn-summary))))
 
 (defun mevedel-view-disclosure-restore-state (from to states)
   "Toggle sections in FROM..TO so collapse state matches STATES.

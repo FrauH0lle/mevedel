@@ -4,7 +4,7 @@
 
 ;; The status zone's background-work panel: one rule with counts and a
 ;; collapse toggle, then one row per active agent and per live yielded
-;; execution (Bash or Monitor), needs-attention first.  Rows expand in place
+;; execution (Bash or Monitor), newest unit first.  Rows expand in place
 ;; to show the item's actions; a last row offers overflow and the
 ;; background-work cockpit.  Finished items leave the panel; their transcript
 ;; notices take over.
@@ -68,6 +68,7 @@
 (declare-function mevedel-view-zone-fragment-bounds "mevedel-view-zone" (zone id))
 (declare-function mevedel-view-zone-set-collapse-state
                   "mevedel-view-zone" (key collapsed))
+(declare-function mevedel-view-zone-width "mevedel-view-zone" ())
 
 (defconst mevedel-view-execution--collapse-key '(status background)
   "Fragment collapse key of the background-work panel.")
@@ -239,6 +240,8 @@ New work then appears at the panel edge farthest from the composer, so
 rows already shown keep their screen position: with the composer
 anchored, only text above a change moves.  An agent and its descendants
 form one unit, ordered by their top-level agent, in path order inside.
+Equal starts put agent units first, then sort by agent root path or by
+execution owner path and ID, all lexicographically ascending.
 STARTS, a hash table, remembers each unit's start across calls and is
 pruned to the units present."
   (let (units groups)
@@ -269,11 +272,12 @@ pruned to the units present."
                                                       members))))))
                (when starts (puthash (car unit) start starts))
                (cons start
-                     (sort members
-                           (lambda (left right)
-                             (and (eq (nth 1 left) 'agent) (eq (nth 1 right) 'agent)
-                                  (string-lessp (plist-get (nth 2 left) :path)
-                                                (plist-get (nth 2 right) :path))))))))
+                     (cons (car unit)
+                           (sort members
+                                 (lambda (left right)
+                                   (and (eq (nth 1 left) 'agent) (eq (nth 1 right) 'agent)
+                                        (string-lessp (plist-get (nth 2 left) :path)
+                                                      (plist-get (nth 2 right) :path)))))))))
            (nreverse units)))
     (when starts
       (let (stale)
@@ -282,7 +286,22 @@ pruned to the units present."
                  starts)
         (dolist (group stale) (remhash group starts))))
     (apply #'append
-           (mapcar #'cdr (sort units (lambda (left right) (> (car left) (car right))))))))
+           (mapcar #'cddr
+                   (sort units
+                         (lambda (left right)
+                           (let ((left-key (cadr left))
+                                 (right-key (cadr right)))
+                             (cond
+                              ((/= (car left) (car right)) (> (car left) (car right)))
+                              ;; Agent unit keys are root paths; execution keys
+                              ;; contain the owner path and execution ID.
+                              ((stringp left-key)
+                               (or (not (stringp right-key))
+                                   (string-lessp left-key right-key)))
+                              ((stringp right-key) nil)
+                              ((equal (nth 1 left-key) (nth 1 right-key))
+                               (string-lessp (nth 2 left-key) (nth 2 right-key)))
+                              (t (string-lessp (nth 1 left-key) (nth 1 right-key)))))))))))
 
 (defun mevedel-view-execution--pointer-on-panel-p ()
   "Return non-nil when point or the mouse is on the background-work panel.
@@ -374,32 +393,51 @@ being on the panel, holds they never leave; leaving restarts the period."
       (mevedel-view-execution--cancel-release))
     mevedel-view-execution--held))
 
+(defvar mevedel-view-execution--layout-width nil
+  "Zone width bound while one panel renders, or nil to query it.")
+
+(defun mevedel-view-execution--width ()
+  "Return the zone width the panel lays out its rows for."
+  (or mevedel-view-execution--layout-width (mevedel-view-zone-width)))
+
+(defun mevedel-view-execution--fit (text)
+  "Return TEXT, one line without its newline, cut to one screen row.
+Panel rows sit above the anchored composer, so a row that wrapped would
+change the panel's height whenever its text changed length.  The
+continuation column of a window without fringes is left free."
+  (let ((limit (max 1 (1- (mevedel-view-execution--width)))))
+    (if (<= (string-width text) limit)
+        text
+      (truncate-string-to-width text limit nil nil "…"))))
+
 (defun mevedel-view-execution--held-line (kind data)
   "Return the inert dimmed line of a finished KIND row showing DATA."
   (let ((face 'mevedel-view-tool-metadata))
     (concat
-     "  "
-     (make-string (* 2 (or (plist-get data :depth) 0)) ?\s)
-     (mevedel-view-execution--face
-      (concat "✓ "
-              (string-pad (if (eq kind 'agent) "Finished" "Completed") 9)
-              " "
-              (string-pad (cond ((eq kind 'agent) "agent")
-                                ((eq (plist-get data :kind) 'monitor) "monitor")
-                                (t "bash"))
-                          8)
-              " "
-              (truncate-string-to-width
-               (replace-regexp-in-string
-                "[\n\r\t]+" " "
-                (or (if (eq kind 'agent) (plist-get data :path)
-                      (or (plist-get data :description) (plist-get data :command)))
-                    ""))
-               60 nil nil "…")
-              (when-let* ((exit (and (eq (plist-get data :termination) 'exited)
-                                     (plist-get data :exit-code))))
-                (format " · exit %s" exit)))
-      face)
+     (mevedel-view-execution--fit
+      (concat
+       "  "
+       (make-string (* 2 (or (plist-get data :depth) 0)) ?\s)
+       (mevedel-view-execution--face
+        (concat "✓ "
+                (string-pad (if (eq kind 'agent) "Finished" "Completed") 9)
+                " "
+                (string-pad (cond ((eq kind 'agent) "agent")
+                                  ((eq (plist-get data :kind) 'monitor) "monitor")
+                                  (t "bash"))
+                            8)
+                " "
+                (truncate-string-to-width
+                 (replace-regexp-in-string
+                  "[\n\r\t]+" " "
+                  (or (if (eq kind 'agent) (plist-get data :path)
+                        (or (plist-get data :description) (plist-get data :command)))
+                      ""))
+                 60 nil nil "…")
+                (when-let* ((exit (and (eq (plist-get data :termination) 'exited)
+                                       (plist-get data :exit-code))))
+                  (format " · exit %s" exit)))
+        face)))
      "\n")))
 
 (defun mevedel-view-execution--mouse-press (event)
@@ -513,26 +551,36 @@ Agent actions receive the agent's canonical path as OWNER and no ID."
   "Return one whole clickable panel row described by plist SPEC.
 SPEC holds :selected, :state, :state-face, :kind, :label, :facts (a list of
 strings), :depth and :callback.  Every kind shares this grammar:
-chevron, padded state, padded kind, label, then metadata."
-  (mevedel-view-execution--action
-   (concat "  "
-           (make-string (* 2 (or (plist-get spec :depth) 0)) ?\s)
-           (mevedel-view-execution--face
-            (if (plist-get spec :selected) "▾ " "▸ ") 'mevedel-view-tool-metadata)
-           (mevedel-view-execution--face
-            (string-pad (plist-get spec :state) 9) (plist-get spec :state-face))
-           " "
-           (mevedel-view-execution--face
-            (string-pad (plist-get spec :kind) 8) 'mevedel-view-tool-metadata)
-           " "
-           (truncate-string-to-width
-            (replace-regexp-in-string "[\n\r\t]+" " " (plist-get spec :label))
-            60 nil nil "…")
-           (mevedel-view-execution--face
-            (mapconcat (lambda (fact) (concat " · " fact)) (plist-get spec :facts) "")
-            'mevedel-view-tool-metadata)
-           "\n")
-   (plist-get spec :callback)))
+chevron, padded state, padded kind, label, then metadata.  The row is
+one screen row: the label gives way first, down to twenty columns, then
+the metadata is cut."
+  (let* ((depth (or (plist-get spec :depth) 0))
+         (state (string-pad (plist-get spec :state) 9))
+         (facts (mapconcat (lambda (fact) (concat " · " fact)) (plist-get spec :facts) ""))
+         (limit (1- (mevedel-view-execution--width)))
+         ;; Indent, chevron, state, kind and their separators.
+         (head-width (+ 2 (* 2 depth) 2 (string-width state) 1 8 1))
+         (facts-width (string-width facts))
+         (label (truncate-string-to-width
+                 (replace-regexp-in-string "[\n\r\t]+" " " (plist-get spec :label))
+                 (min 60 (max 20 (- limit head-width facts-width))) nil nil "…"))
+         (line (concat "  "
+                       (make-string (* 2 depth) ?\s)
+                       (mevedel-view-execution--face
+                        (if (plist-get spec :selected) "▾ " "▸ ") 'mevedel-view-tool-metadata)
+                       (mevedel-view-execution--face state (plist-get spec :state-face))
+                       " "
+                       (mevedel-view-execution--face
+                        (string-pad (plist-get spec :kind) 8) 'mevedel-view-tool-metadata)
+                       " "
+                       label
+                       (mevedel-view-execution--face facts 'mevedel-view-tool-metadata))))
+    (mevedel-view-execution--action
+     (concat (if (> (+ head-width (string-width label) facts-width) limit)
+                 (truncate-string-to-width line limit nil nil "…")
+               line)
+             "\n")
+     (plist-get spec :callback))))
 
 (defun mevedel-view-execution--line (snapshot)
   "Return a whole clickable status row for execution SNAPSHOT."
@@ -579,8 +627,40 @@ chevron, padded state, padded kind, label, then metadata."
                                     (plist-get row :model-metadata))))))
            :callback (mevedel-view-execution--callback 'agent-toggle session path)))))
 
-(defun mevedel-view-execution--agent-details (session row)
-  "Return expanded model details and controls for SESSION's agent ROW."
+(defun mevedel-view-execution--control-lines (controls &optional finished)
+  "Lay out CONTROLS as explicit one-screen-row lines.
+Each control is (LABEL SHORT-LABEL CALLBACK HELP).  Use SHORT-LABEL only
+when LABEL cannot fit by itself.  A nil CALLBACK reserves inert space.
+FINISHED replaces the layout with an inert notice of exactly the same
+height, so completion cannot pull a wrapped row from under the pointer."
+  (let* ((limit (max 6 (1- (mevedel-view-execution--width))))
+         (indent (make-string (min 4 (- limit 6)) ?\s))
+         (line indent)
+         rows)
+    (dolist (control controls)
+      (pcase-let* ((`(,label ,short ,callback ,help) control)
+                   (label (if (> (+ (length indent) (string-width label)) limit)
+                              short label))
+                   (button (if callback
+                               (mevedel-view-execution--button label callback help)
+                             (make-string (string-width label) ?\s)))
+                   (separator (if (equal line indent) "" "  ")))
+        (when (> (+ (string-width line) (length separator) (string-width button)) limit)
+          (push line rows)
+          (setq line indent separator ""))
+        (setq line (concat line separator button))))
+    (push line rows)
+    (setq rows (nreverse rows))
+    (when finished
+      (setq rows (cons (mevedel-view-execution--fit
+                        (concat indent (mevedel-view-execution--face
+                                        "Agent finished." 'mevedel-view-tool-metadata)))
+                       (make-list (1- (length rows)) ""))))
+    (concat (string-join rows "\n") "\n")))
+
+(defun mevedel-view-execution--agent-details (session row &optional finished)
+  "Return expanded model details and controls for SESSION's agent ROW.
+FINISHED keeps the live layout as inert metadata and notice rows."
   (let* ((path (plist-get row :path))
          (key (mevedel-view-execution--key 'agent row)))
     (concat
@@ -588,68 +668,80 @@ chevron, padded state, padded kind, label, then metadata."
                            (plist-get row :model-metadata))))
        (mevedel-view-execution--anchor
         (mevedel-view-execution--face
-         (concat (replace-regexp-in-string "^" "    " details) "\n")
+         (concat (mapconcat (lambda (line)
+                              (mevedel-view-execution--fit (concat "    " line)))
+                            (split-string details "\n") "\n") "\n")
          'mevedel-view-tool-metadata)
         (list key 'details)))
      (mevedel-view-execution--anchor
-      (concat
-       "    "
-       (mevedel-view-execution--button
-        "[Open transcript]" (mevedel-view-execution--callback 'transcript session path)
-        "RET: open this agent's conversation")
-       (when (plist-get row :tool-use-id)
-         (concat "  " (mevedel-view-execution--button
-                       "[Show in conversation]"
-                       (mevedel-view-execution--callback 'agent-conversation session path)
-                       "RET: show the Agent call that started this agent")))
-       "  "
-       (mevedel-view-execution--button
-        "[Interrupt]" (mevedel-view-execution--callback 'interrupt session path)
-        "RET: interrupt this agent's current turn")
-       "\n")
+      (mevedel-view-execution--control-lines
+       (append
+        (list (list "[Open transcript]" "[View]"
+                    (mevedel-view-execution--callback 'transcript session path)
+                    "RET: open this agent's conversation"))
+        (when (plist-get row :tool-use-id)
+          (list (list "[Show in conversation]" "[Call]"
+                      (mevedel-view-execution--callback 'agent-conversation session path)
+                      "RET: show the Agent call that started this agent")))
+        (list (list "[Interrupt]" "[Stop]"
+                    (mevedel-view-execution--callback 'interrupt session path)
+                    "RET: interrupt this agent's current turn")))
+       finished)
       (list key 'actions)))))
 
+(defun mevedel-view-execution--agent-held-details (row)
+  "Return the inert details of finished agent ROW, as tall as its live details.
+The expansion stays while the row is held, so finishing does not pull
+rows out from under the pointer."
+  (mevedel-view-execution--agent-details nil row t))
+
 (defun mevedel-view-execution--preview (snapshot)
-  "Return at most three width-bounded preview lines for SNAPSHOT."
+  "Return SNAPSHOT's preview: a header and exactly three output rows.
+Each line is cut to one screen row and missing lines are blank, so an
+open inspector keeps one height while output arrives and after the
+execution finishes; it sits above the anchored composer, where any
+growth moves the rows the user is reading.  An output-limit warning
+joins the header instead of adding a line."
   (let* ((terminal (plist-get snapshot :terminal-p))
          (output (if terminal (plist-get snapshot :whole-output)
                    (plist-get snapshot :output-tail)))
          (lines (and (stringp output) (split-string (string-trim-right output) "\n")))
+         (room (- (mevedel-view-execution--width) 5))
+         (limited (or (eq (plist-get snapshot :termination) 'output-limit)
+                      (> (or (plist-get snapshot :omitted-output-bytes) 0) 0)))
          (truncated (or (plist-get snapshot :output-preview-truncated-p)
                         (plist-get snapshot :whole-output-truncated-p)
                         (> (length lines) 3)
-                        (cl-some (lambda (line) (> (string-width line) 100)) lines)))
+                        (cl-some (lambda (line) (> (string-width line) room)) lines)))
          (quiet (lambda (text)
-                  (concat "    " (mevedel-view-execution--face
-                                   text '(mevedel-view-muted italic))
-                          "\n"))))
+                  (list (concat "    " (mevedel-view-execution--face
+                                         text '(mevedel-view-muted italic))))))
+         (rows (cond
+                ((or (not (stringp output))
+                     (and (string-empty-p output)
+                          (or (eq (plist-get snapshot :state) 'lost)
+                              (> (or (plist-get snapshot :output-bytes) 0) 0))))
+                 (funcall quiet "Output unavailable."))
+                ((string-empty-p output)
+                 (funcall quiet (if terminal "No output." "No output yet.")))
+                (t (mapcar (lambda (line)
+                             (concat "    " (replace-regexp-in-string "[\r\t]" " " line)))
+                           (last lines 3))))))
     (concat
-     "    "
-     (mevedel-view-execution--face
-      (concat "Preview (not full output)" (when truncated " — truncated") ":")
-      'mevedel-view-tool-metadata)
+     (mevedel-view-execution--fit
+      (concat "    "
+              (mevedel-view-execution--face
+               (concat "Preview (not full output)" (when (and truncated (not limited)) " — truncated"))
+               'mevedel-view-tool-metadata)
+              (when limited
+                (mevedel-view-execution--face
+                 " — output was truncated; retained output may omit content"
+                 'mevedel-view-tool-warning))
+              (mevedel-view-execution--face ":" 'mevedel-view-tool-metadata)))
      "\n"
-     (cond
-      ((or (not (stringp output))
-           (and (string-empty-p output)
-                (or (eq (plist-get snapshot :state) 'lost)
-                    (> (or (plist-get snapshot :output-bytes) 0) 0))))
-       (funcall quiet "Output unavailable."))
-      ((string-empty-p output)
-       (funcall quiet (if terminal "No output." "No output yet.")))
-      (t (concat
-          (mapconcat (lambda (line)
-                       (concat "    " (truncate-string-to-width
-                                        (replace-regexp-in-string "[\r\t]" " " line)
-                                        100 nil nil "…")))
-                     (last lines (min 3 (length lines))) "\n") "\n")))
-     (when (or (eq (plist-get snapshot :termination) 'output-limit)
-               (> (or (plist-get snapshot :omitted-output-bytes) 0) 0))
-       (concat "    "
-               (mevedel-view-execution--face
-                "Warning: output was truncated; retained output may omit content."
-                'mevedel-view-tool-warning)
-               "\n")))))
+     (mapconcat (lambda (row) (concat (mevedel-view-execution--fit row) "\n"))
+                (append rows (make-list (- 3 (length rows)) ""))
+                ""))))
 
 (defun mevedel-view-execution--full-output (session snapshot)
   "Inspect full output for SESSION's SNAPSHOT without visiting its spool."
@@ -713,30 +805,21 @@ LIVE indicates current public live membership, not retained selection state."
      (mevedel-view-execution--anchor (mevedel-view-execution--preview snapshot)
                                      (list key 'preview))
      (mevedel-view-execution--anchor
-      (concat
-       "    "
-       (mevedel-view-execution--button
-        "[Full output]" (mevedel-view-execution--callback
-                         'output session (plist-get snapshot :owner)
-                         (plist-get snapshot :execution-id))
-        "RET: open the full retained output")
-       "  "
-       (mevedel-view-execution--button
-        "[Show in conversation]"
-        (mevedel-view-execution--callback
-         'conversation session (plist-get snapshot :owner)
-         (plist-get snapshot :execution-id))
-        "RET: show the tool call that started this execution")
-       (when live
-         (concat
-          "  "
-          (mevedel-view-execution--button
-           "[Stop]"
-           (mevedel-view-execution--callback
-            'stop session (plist-get snapshot :owner)
-            (plist-get snapshot :execution-id))
-           "RET: stop this execution")))
-       "\n")
+      (mevedel-view-execution--control-lines
+       (list
+        (list "[Full output]" "[View]"
+              (mevedel-view-execution--callback
+               'output session (plist-get snapshot :owner) (plist-get snapshot :execution-id))
+              "RET: open the full retained output")
+        (list "[Show in conversation]" "[Call]"
+              (mevedel-view-execution--callback
+               'conversation session (plist-get snapshot :owner) (plist-get snapshot :execution-id))
+              "RET: show the tool call that started this execution")
+        (list "[Stop]" "[Stop]"
+              (when live
+                (mevedel-view-execution--callback
+                 'stop session (plist-get snapshot :owner) (plist-get snapshot :execution-id)))
+              "RET: stop this execution")))
       (list key 'actions)))))
 
 (defun mevedel-view-execution--header (session agents live collapsed)
@@ -808,12 +891,19 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
   "Return SESSION's background-work panel fragment, or nil when idle."
   (unless (eq session (plist-get mevedel-view-execution--selected :session))
     (setq mevedel-view-execution--selected nil))
-  (let* ((agents (mevedel-view--agent-status-collect))
+  (let* ((mevedel-view-execution--layout-width (mevedel-view-zone-width))
+         (agents (mevedel-view--agent-status-collect))
          (live (cl-remove-if-not (lambda (item) (plist-get item :yielded))
                                 (mevedel-view-execution--live session)))
          (selected-live (cl-find-if
                          (lambda (item) (mevedel-view-execution--same-p
                                         item mevedel-view-execution--selected)) live))
+         ;; State notification precedes terminal publication.  Keep the
+         ;; selection through that gap, but do not offer live controls on
+         ;; stale facts.
+         (retained (when (and mevedel-view-execution--selected (not selected-live))
+                     (setq mevedel-view-execution--selected
+                           (plist-put mevedel-view-execution--selected :unavailable-p t))))
          (entries (append
                    (mapcar (lambda (row)
                              (list (mevedel-view-execution--key 'agent row) 'agent row))
@@ -827,7 +917,11 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
          (held (mevedel-view-execution--update-held entries hover))
          (items (mapcar (lambda (entry) (cons (nth 1 entry) (nth 2 entry)))
                         (mevedel-view-execution--ordered
-                         (append entries held)
+                         ;; A retained finished inspector keeps its place.
+                         (append entries held
+                                 (when retained
+                                   (list (list (mevedel-view-execution--key 'execution retained)
+                                               'execution retained))))
                          (or mevedel-view-execution--unit-starts
                              (setq mevedel-view-execution--unit-starts
                                    (make-hash-table :test #'equal))))))
@@ -860,17 +954,14 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
                     items)))))
          (collapsed (mevedel-view-zone-collapse-state
                      mevedel-view-execution--collapse-key nil)))
-    (unless (cl-find mevedel-view-execution--selected-agent agents
-                     :key (lambda (row) (plist-get row :path)) :test #'equal)
+    ;; A finished expanded agent keeps its details while its row is held.
+    (unless (or (cl-find mevedel-view-execution--selected-agent agents
+                         :key (lambda (row) (plist-get row :path)) :test #'equal)
+                (assoc (list 'agent mevedel-view-execution--selected-agent) held))
       (setq mevedel-view-execution--selected-agent nil))
     (when selected-live
       (setq mevedel-view-execution--selected
             (plist-put (copy-sequence selected-live) :session session)))
-    (when (and mevedel-view-execution--selected (not selected-live))
-      ;; State notification precedes terminal publication.  Keep the selection
-      ;; through that gap, but do not offer live controls on stale facts.
-      (setq mevedel-view-execution--selected
-            (plist-put mevedel-view-execution--selected :unavailable-p t)))
     (when (and selected-item (not (memq selected-item rows)))
       (let ((limited (seq-take
                       (cl-remove-if (lambda (item) (plist-get (cdr item) :held-p)) rows)
@@ -880,8 +971,10 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
                       (or (memq item limited) (eq item selected-item)
                           (plist-get (cdr item) :held-p)))
                     items))))
-    (when (and mevedel-view-execution--selected (not selected-live))
-      (setq rows (append rows (list (cons 'execution mevedel-view-execution--selected)))))
+    (when retained
+      (setq rows (cl-remove-if-not
+                  (lambda (item) (or (memq item rows) (eq (cdr item) retained)))
+                  items)))
     ;; Only live rows actually shown can finish under the pointer; hidden
     ;; overflow, a collapsed panel and a retained finished inspector hold
     ;; nothing.
@@ -902,9 +995,14 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
                    (row
                     (cond
                      ((plist-get data :held-p)
-                      (mevedel-view-execution--anchor
-                       (mevedel-view-execution--held-line (car item) data)
-                       (mevedel-view-execution--key (car item) data)))
+                      (concat
+                       (mevedel-view-execution--anchor
+                        (mevedel-view-execution--held-line (car item) data)
+                        (mevedel-view-execution--key (car item) data))
+                       (when (and (eq (car item) 'agent)
+                                  (equal (plist-get data :path)
+                                         mevedel-view-execution--selected-agent))
+                         (mevedel-view-execution--agent-held-details data))))
                      ((eq (car item) 'agent)
                       (concat (mevedel-view-execution--anchor
                                (mevedel-view-execution--agent-line session data)

@@ -452,7 +452,9 @@
             (should (eq (lookup-key keymap (kbd "m"))
                         (lookup-key keymap (kbd "<tab>"))))
             (should-not (lookup-key keymap (kbd "b")))
-            (should-not (string-match-p "Budget" body))
+            ;; The Budget row is held, inert, so cycling `e' keeps the height.
+            (should (string-match-p "^   Budget      Goal execution only$" body))
+            (should-not (string-match-p "b  Budget" body))
             (call-interactively (lookup-key keymap (kbd "M")))
             (should (equal '("Implementation model" "OpenAI:gpt-5" low)
                            model-opened))
@@ -467,6 +469,12 @@
             (call-interactively (lookup-key keymap (kbd "e")))
             (should (eq 'goal (plist-get selection :execution)))
             (should rerendered)
+            (let ((lines (length (split-string body "\n"))))
+              (mevedel-plan-mode--render-approval entry)
+              (should (string-match-p "^b  Budget      Unlimited$"
+                                      (plist-get descriptor :body)))
+              (should (= lines (length (split-string (plist-get descriptor :body)
+                                                     "\n")))))
             (setq rerendered nil)
             (call-interactively (lookup-key keymap (kbd "c")))
             (should (eq 'fresh (plist-get selection :context)))
@@ -761,18 +769,29 @@
                    (lambda (&optional _) '(:dirty-p nil))))
           ;; Nothing blocks yet: the card carries no notice.
           (mevedel-plan-mode--render-approval entry)
-          (should-not (string-search notice (plist-get descriptor :body)))
+          (should-not (string-search (substring notice 0 30)
+                                     (plist-get descriptor :body)))
           ;; Queue mutation rebuilds the interaction zone, which re-renders
           ;; the approval with the blocker named.
-          (mevedel-session-enqueue-pending-input
-           session 'follow-up (list :input "Also update the docs"))
-          (mevedel-plan-mode--render-approval entry)
-          (let* ((body (plist-get descriptor :body))
-                 (position (string-search notice body)))
-            (should position)
-            (should (memq 'warning
-                          (flatten-tree
-                           (get-text-property position 'font-lock-face body)))))
+          (let ((lines (length (split-string (plist-get descriptor :body) "\n"))))
+            (mevedel-session-enqueue-pending-input
+             session 'follow-up (list :input "Also update the docs"))
+            (mevedel-plan-mode--render-approval entry)
+            (let* ((body (plist-get descriptor :body))
+                   (position (string-search (substring notice 0 30) body)))
+              (should position)
+              (should (memq 'warning
+                            (flatten-tree
+                             (get-text-property position 'font-lock-face body))))
+              ;; The notice takes the blank row above the actions, cut to
+              ;; one screen row with its full text on hover.
+              (should (= lines (length (split-string body "\n"))))
+              (should (string-prefix-p notice (get-text-property position 'help-echo body)))
+              (let ((width (with-current-buffer view-buffer
+                             (1- (mevedel-view-zone-width)))))
+                (dolist (line (split-string body "\n"))
+                  (unless (string-prefix-p "#" line)
+                    (should (<= (string-width line) width)))))))
           (should
            (equal notice
                   (condition-case err
@@ -782,6 +801,61 @@
           (should-not outcome)
           ;; The queued input survives the refusal.
           (should (mevedel-session-pending-follow-ups session)))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
+  :doc "a narrow host split cuts only the local card; the remote payload keeps every setting and notice whole"
+  (let* ((session (mevedel-session--create
+                   :authority-mode 'pid-lock
+                   :name "test" :working-directory default-directory))
+         (data-buffer (generate-new-buffer " *plan-remote-data*"))
+         (view-buffer (generate-new-buffer " *plan-remote-view*"))
+         (model "ReviewProvider-With-A-Long-Name:review-model-20251001")
+         (skills '("alpha-long-skill-name" "beta-long-skill-name"
+                   "gamma-long-skill-name"))
+         (selection (list :location 'here :context 'current
+                          :execution 'direct :mode 'ask
+                          :model-provider model
+                          :skills (mapcar (lambda (name) (list :name name))
+                                          skills)))
+         (entry (mevedel-plan-mode--approval-entry
+                 "# Plan" data-buffer session selection))
+         (notice "A long worktree notice that cannot fit one narrow screen row")
+         (context (mevedel-plan-mode--context-description 'current))
+         (execution (mevedel-plan-mode--execution-description 'direct))
+         (fontifier (symbol-function 'mevedel-view--fontify-as))
+         (fontifications 0)
+         descriptor overlay)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                   (lambda (_buffer) view-buffer))
+                  ((symbol-function 'mevedel-view-zone-width) (lambda () 30))
+                  ((symbol-function 'mevedel-view--fontify-as)
+                   (lambda (&rest args)
+                     (cl-incf fontifications)
+                     (apply fontifier args)))
+                  ((symbol-function 'mevedel-plan-mode--worktree-warning)
+                   (lambda (_entry) notice))
+                  ((symbol-function 'mevedel-view--interaction-register)
+                   (lambda (value)
+                     (setq descriptor value)
+                     (setq overlay (make-overlay (point-min) (point-min)))))
+                  ((symbol-function 'mevedel--prompt-announce) #'ignore))
+          (mevedel-plan-mode--render-approval entry)
+          (should (= fontifications 1))
+          ;; Local: every line fits one narrow row.
+          (dolist (line (split-string (plist-get descriptor :body) "\n"))
+            (unless (or (string-prefix-p "#" line)
+                        (string-search " implement " line))
+              (should (<= (string-width line) 29))))
+          (should-not (string-search model (plist-get descriptor :body)))
+          ;; Remote: complete semantic text, independent of the split.
+          (let ((remote (plist-get (overlay-get overlay 'mevedel--remote)
+                                   :body)))
+            (dolist (text (list model (string-join skills ", ") notice
+                                context execution))
+              (should (string-search text remote)))
+            (should-not (string-search "…" remote))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
 
@@ -1669,6 +1743,32 @@
       ;; Here keeps queued follow-ups for after kickoff and shows nothing.
       (plist-put (plist-get entry :selection) :location 'here)
       (should-not (mevedel-plan-mode--worktree-warning entry)))))
+
+(mevedel-deftest mevedel-plan-mode--worktree-dirty-p
+  (:doc "redraws reuse the checked source state until the selection changes")
+  (let* ((session (mevedel-session--create
+                   :authority-mode 'pid-lock :name "test"
+                   :working-directory default-directory))
+         (entry (list :selection (list :location 'worktree)
+                      :chat-buffer (current-buffer)
+                      :session session))
+         (checks 0)
+         (dirty t))
+    (cl-letf (((symbol-function 'mevedel-worktree-collect-status)
+               (lambda (&rest _) (cl-incf checks) (list :dirty-p dirty)))
+              ((symbol-function 'mevedel-plan-approval-render) #'ignore))
+      (dotimes (_ 3)
+        (should (string-match-p "uncommitted changes"
+                                (mevedel-plan-mode--worktree-warning entry))))
+      (should (= 1 checks))
+      ;; The checkout became clean; an explicit selection change rechecks.
+      (setq dirty nil)
+      (should (mevedel-plan-mode--worktree-warning entry))
+      (mevedel-plan-mode--selection-changed entry)
+      (should-not (mevedel-plan-mode--worktree-warning entry))
+      (should (= 2 checks))
+      (should-not (mevedel-plan-mode--worktree-warning entry))
+      (should (= 2 checks)))))
 
 (mevedel-deftest mevedel-plan-mode--accept
   (:doc "archives, exits Plan, shows preparation, and dispatches once")

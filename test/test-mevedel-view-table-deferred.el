@@ -33,7 +33,45 @@
                           (let ((beg (previous-single-property-change (1+ (point)) 'mevedel-view-table-source nil (point-min)))
                                 (end (next-single-property-change (point) 'mevedel-view-table-source nil (point-max))))
                             (should (equal (string-trim-right source)
-                                           (substring-no-properties (mevedel-view--buffer-substring-filter beg end)))))))))))
+                                           (substring-no-properties (mevedel-view--buffer-substring-filter beg end))))))))))
+                 :doc "a table that shrinks when formatted keeps the composer at its pixel Y"
+                 (save-window-excursion
+                   (mevedel-view-test--with-buffers
+                    (let ((window (selected-window)))
+                      (dotimes (i 40)
+                        (mevedel-view-test--insert-data
+                         data-buf (format "Paragraph %d of the earlier answer.\n\n" i) 'response))
+                      ;; Padded rows wrap while raw and fit once formatted.
+                      (mevedel-view-test--insert-data
+                       data-buf
+                       (concat (format "| %-60s | %-60s |\n" "Name" "Value")
+                               (format "|%s|%s|\n" (make-string 62 ?-) (make-string 62 ?-))
+                               (mapconcat (lambda (i) (format "| %-60s | %-60s |\n"
+                                                              (format "row %d" i) "x"))
+                                          (number-sequence 1 6) "")
+                               "\nAfter the table.\n")
+                       'response)
+                      (with-current-buffer view-buf
+                        (set-window-buffer window view-buf)
+                        (mevedel-view--full-rerender)
+                        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+                        (set-window-point window (point))
+                        (set-window-start
+                         window
+                         (save-excursion
+                           (goto-char (mevedel-view--input-start))
+                           (vertical-motion (- (- (window-body-height window) 3)) window)
+                           (point))
+                         t)
+                        (let ((y (mevedel-view-test--composer-screen-y window))
+                              (lines (count-lines (point-min) (point-max))))
+                          (should y)
+                          (mevedel-view--realign-markdown view-buf window)
+                          (should (string-search "│" (buffer-string)))
+                          (should (= lines (count-lines (point-min) (point-max))))
+                          (should (= y (mevedel-view-test--composer-screen-y window)))
+                          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+                          (should (= (point) (+ (mevedel-view--input-start) 4)))))))))
 
 (mevedel-deftest mevedel-view-table-rerender/deferred ()
                  ,test

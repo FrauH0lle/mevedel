@@ -60,6 +60,11 @@
                   "mevedel-view-markdown" (face))
 (autoload 'mevedel-view--source-block-font-lock-face "mevedel-view-markdown")
 
+;; `mevedel-view-zone'
+(declare-function mevedel-view-zone-width "mevedel-view-zone" ())
+(defvar mevedel-view-zone-width-change-functions)
+(autoload 'mevedel-view-zone-width "mevedel-view-zone")
+
 
 ;;
 ;;; Options
@@ -407,11 +412,31 @@ samples scroll with \\`C-v' and \\`M-v'."
   (max 4 (- (mevedel-tool-ask-ui--form-width state) 7)))
 
 (defun mevedel-tool-ask-ui--form-width (state)
-  "Return the width of a window showing STATE's view, or the frame's."
-  (if-let* ((window (get-buffer-window
-                     (mevedel-tool-ask-ui--state-chat-buffer state) t)))
-      (window-body-width window)
-    (frame-width)))
+  "Return the narrowest width of the windows showing STATE's view.
+Fitting the narrowest keeps every row one screen row in all of them."
+  (with-current-buffer (mevedel-tool-ask-ui--state-chat-buffer state)
+    (mevedel-view-zone-width)))
+
+(defun mevedel-tool-ask-ui--wrap-width (state)
+  "Return the text columns a wrapped row of STATE's form holds.
+Each window showing the view holds its body width, less the last column
+when it has no right fringe, as on a terminal, to carry the continuation
+glyph; a row filling such a window wraps.  Measure wrapped text against
+the smallest of these capacities.  Without a window, assume the selected
+one has no fringe."
+  (let ((windows (get-buffer-window-list
+                  (mevedel-tool-ask-ui--state-chat-buffer state) nil t)))
+    (if windows
+        (let ((capacity most-positive-fixnum))
+          (dolist (window windows capacity)
+            (setq capacity
+                  (min capacity
+                       (if (and (display-graphic-p (window-frame window))
+                                overflow-newline-into-fringe
+                                (> (or (nth 1 (window-fringes window)) 0) 0))
+                           (window-body-width window)
+                         (1- (window-body-width window)))))))
+      (1- (mevedel-tool-ask-ui--form-width state)))))
 
 (defun mevedel-tool-ask-ui--wrap-sample-line (line width)
   "Split fontified LINE into rows at WIDTH, marking continuation rows.
@@ -915,7 +940,7 @@ continuation row starts with the line's `wrap-prefix'."
 That is the tallest its questions get with any one of them open or
 none, so opening and answering never change the form's height.  Cached
 per width."
-  (let ((width (mevedel-tool-ask-ui--form-width state))
+  (let ((width (mevedel-tool-ask-ui--wrap-width state))
         (cached (mevedel-tool-ask-ui--state-height state)))
     (if (eql (car cached) width)
         (cdr cached)
@@ -943,7 +968,7 @@ Submit and the hints keep theirs at the bottom."
   (let* ((questions (mevedel-tool-ask-ui--form-questions state))
          (gap (- (mevedel-tool-ask-ui--reserved-rows state)
                  (mevedel-tool-ask-ui--text-rows
-                  questions (mevedel-tool-ask-ui--form-width state))))
+                  questions (mevedel-tool-ask-ui--wrap-width state))))
          (body
           (concat
            questions
@@ -999,7 +1024,6 @@ Submit and the hints keep theirs at the bottom."
         (mevedel--prompt-attribution-line
          (mevedel-tool-ask-ui--state-origin state))
         (mevedel-tool-ask-ui--form-body state))
-       :priority 150
        :keymap (mevedel-tool-ask-ui--keymap state)
        :help-echo "Ask prompt")))
     (let ((overlay (mevedel-tool-ask-ui--state-overlay state))
@@ -1085,6 +1109,19 @@ changed height, as a re-wrapped sample panel does after a resize."
                              (+ start offset)
                            start))))
           (mevedel-tool-ask-ui--post-command))))))
+
+(defun mevedel-tool-ask-ui--width-changed ()
+  "Lay out the current view's pending Ask forms again for its new width.
+A form reserves its height at one width; left alone after a resize, its
+wrapped rows and padding no longer match, and the next keystroke that
+repaints it would change its height."
+  (dolist (state mevedel-tool-ask-ui--states)
+    (unless (eql (car (mevedel-tool-ask-ui--state-height state))
+                 (mevedel-tool-ask-ui--wrap-width state))
+      (mevedel-tool-ask-ui--refresh state))))
+
+(add-hook 'mevedel-view-zone-width-change-functions
+          #'mevedel-tool-ask-ui--width-changed)
 
 (cl-defun mevedel-tool-ask-ui-show (callback questions)
   "Show QUESTIONS as one form and settle it through CALLBACK."

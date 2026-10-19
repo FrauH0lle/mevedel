@@ -97,6 +97,14 @@ the observation-only contract. Close an existing inspector before changing its
 placement. The header's **← Parent** action and `q` close inspection and return
 to the original parent view, including when inspecting another agent from an
 already-open inspector. The parent's draft, point and scroll position survive.
+A parent window that showed its composer gets back the composer's screen row
+from before the inspection opened: the side window narrowed it, and closing
+the side window widens it again, so its text rewraps into fewer rows. Without
+this, the composer of a 25-row window with wrapped paragraphs rose from the
+last row to row 18 above blank space. The row is restored only to windows that
+still show the composer with point in it just before the inspector closes
+(reflow from the close does not qualify a window); a parent window the user
+scrolled or moved into earlier history meanwhile keeps its start and point.
 
 If the observed agent settles while its transcript view is open, the view
 renders the final content immediately and updates its header in place. It
@@ -152,6 +160,11 @@ normally, and terminal settlement renders the final state.
 Live updates preserve the main view's source-backed disclosure state. An
 incremental update or full-rerender fallback must not collapse response,
 reasoning, tool, or audit sections that the reader expanded.
+When a tool run grows past the grouping threshold beneath a reader, its member
+rows remain visible and the group stays expanded after the reader leaves. This
+also applies before any result arrives: running rows retain point by call key,
+then by transcript tool id on settlement, and remembered group expansion carries
+over to the settled group.
 Grouped tool and reasoning rows use their own transcript source identity,
 so expansion and the reader's cursor survive a row moving out of a group
 when a late audit requires individual presentation.
@@ -200,6 +213,9 @@ changes, Retry, or Implement this stashes the chat draft and shows a compact
 directive header, a distinct prompt prefix, and modeline state. The header names
 the next scoped action; its secondary line shows chat isolation, the effective
 permission mode, `Plan paused` when applicable, and `C-c C-k` for Back to chat.
+Both lines are truncated to the narrowest window showing the view, so the scoped
+prompt is always the same four rows; resizing or displaying the view in a
+window of another width refits them before redisplay.
 Directive scope is sticky across sends and exits only through Back to chat;
 leaving restores the chat draft, and resume always starts in chat scope. Queued
 inputs retain the scope in which they were accepted. Status, agent, task, and
@@ -207,6 +223,10 @@ interaction redraws preserve the active scoped draft and point exactly,
 including a multiline draft whose first editable character is `>`.
 Permission cards in the interaction zone start folded; `TAB` re-renders the
 queue head with its details, which also preserves the draft and point. The
+card tags its Keys row, its command or expression, and its two detail blocks
+with zone anchors, so point on the Keys row stays on it when `TAB`, `c`, `n`,
+`p` or `g` redraws text above it; restoring by offset had moved point from the
+Keys row into the middle of the expanded command. The
 [permissions manual](permissions.md) owns what a folded card must show.
 
 Directive prompt construction remains independent of this visible chronology.
@@ -312,11 +332,11 @@ tick before publication; changing the source cancels and restarts the job.
 Markdown fontification sees each whole response but yields between line-aligned
 regions. Tool entries are prepared in small groups; the job owns and releases
 their private buffers and caches. Once ready, the refresh
-renders the turns needed to restore point, selection, and window anchors and
-all chat prompt turns immediately (so moving onto pending responses still has
-an accurate prompt and click target), then replace other visible turns and
-offscreen turn placeholders one per timer
-callback, in that priority order. Each callback
+renders every turn a displaying window shows, the turns needed to restore
+point, selection, and window anchors, and all chat prompt turns immediately (so
+moving onto pending responses still has an accurate prompt and click target).
+Offscreen turn placeholders are then replaced one per timer callback; a reader
+never sees a placeholder replaced in front of them. Each callback
 captures the current draft and reader state, so typing between callbacks is
 preserved. Source text or property changes retire the old plan. Callbacks pause
 while the view is unattended or its transport is busy, and view teardown cancels
@@ -735,7 +755,10 @@ names, and the row shows that body under a header naming the dependencies.
 Runs of more than `mevedel-view-tool-group-collapse-threshold` (default 3)
 plain tool rows fold into one grouped activity row such as
 `Searched 5 patterns, read 1 file, ran 5 commands, thought 8 times`; tools
-without a verb mapping — MCP tools included — appear as `NAME ×N`. The
+without a verb mapping — MCP tools included — appear as `NAME ×N`. A summary
+too long for the narrowest window showing the view ends in `…`, leaving room for
+its running and failed counts, so the folded row stays one screen line as they
+come and go. The
 expanded group reuses the compound-tool nested-row machinery: each tool call
 and substantive reasoning occurrence is a `tool-child` row in chronological
 order with its own collapse state, and collapsing the group takes its rows
@@ -752,8 +775,10 @@ renders nothing and splits nothing. The original yielded Bash row retains
 its linked completion breadcrumb. Breadcrumbs can fold into activity groups as counted completions,
 such as `3 commands completed, 1 failed`, and show linked rows when expanded.
 A newly formed group stays open when one
-of its rows is already open, so grouping
-does not hide text the reader is inspecting. An explicit group fold wins over
+of its rows is already open, or when point or a window's point is on one of its
+rows, settled or running, as the run folds; the group then remembers itself as
+open, so it does not fold later when the reader moves on. Grouping therefore
+does not hide or move text the reader is inspecting. An explicit group fold wins over
 its children's states. Rows that demand individual presentation — agent
 handles, compound tools, rows carrying hook audits, rows their renderer wants expanded or
 compact, and coalesced rows — never fold into a group; they split the run
@@ -775,7 +800,8 @@ settle. A call the pipeline reports finished keeps its place until its
 result reaches the transcript (for a gptel batch, after the whole batch):
 its row shows `✓`, or `×` for a failure, and it leaves the running count,
 so one early finisher never reshapes the run. A folded running group cannot
-show those rows, so its header adds `· N failed`; once no call is left
+show those rows, so its header adds `· N failed: TOOL` naming the failed tools;
+once no call is left
 running, a failure takes the group's marker as `×`. The ID-less post-tool hook
 that precedes the result retires such a finished call first and never a
 bound sibling still running. A response that opens with tool
@@ -803,8 +829,11 @@ calls that reached it, and one formed only by running calls returns to plain
 rows. If that redraw fails, the running decorations are still removed and a
 running group's settled marker is restored in place.
 
-Failed calls split that run around their standalone rows and use
-a red `×` in the `error` face. Warning rows stay groupable; a group containing
+Failed calls stay in their run, so a call failing never reshapes it. A folded
+group containing one takes the red `×` marker in the `error` face and ends its
+summary with `· N failed: Grep`, the same text its running form showed: each
+failed tool is named once, and a long list of names ends in `…` so the row stays
+one line. The failed row inside the group carries its own `×`. Warning rows stay groupable; a group containing
 a warning carries `!`, and the warning stays visible on its nested row.
 Failed tool rows, including nested calls inside compound tools, start collapsed.
 Only the marker uses warning or error highlighting; the tool name, argument,
@@ -921,6 +950,12 @@ Terminology:
   idle. The rail fits the narrowest window showing the view: activity yields
   space before the mode and pending-action hint. It is not part of the history,
   status, or interaction zones; its internal zone name remains `progress`.
+  A window resize refits the rail from `window-size-change-functions`, which
+  run before windows redisplay. Scrolling never rewrites it:
+  `window-scroll-functions` run inside a window's redisplay, which then
+  restores point to its earlier buffer position, so text changed above the
+  composer there would move the cursor within or out of the draft. A label
+  that went stale while offscreen waits for the next once-a-second refresh.
   Its elapsed value measures active request work, excluding
   time spent awaiting an Ask answer, permission decision, Plan approval,
   ApplyPatch review decision, or direct request input. During those waits it
@@ -955,7 +990,9 @@ Zone changes and re-renders preserve one active surface per window: point in a
 surviving visited interaction takes priority, then a visible composer, then the
 logical reading position. Anchors use body-relative pixels and native display
 geometry, including wrapping, remapped faces, inline images and partial vertical
-scrolling. Logical positions are restored before the pixel anchor. A surviving
+scrolling. Bounded fresh chrome measurements keep body coordinates and usable
+height consistent before redisplay, even when header or tab-line heights change.
+Logical positions are restored before the pixel anchor. A surviving
 composer anchor retains intentional blank space. A lost or truncated logical
 window start instead permits filling the last page, even if anchoring exposes
 longer history lines and grows the character tail. Visiting windows repair only
@@ -969,8 +1006,10 @@ repairs only new blank space after the complete command. Ordinary self-insertion
 without overwrite or auto-fill skips capture. Short plain deletions whose line
 fits every window also skip viewport capture; wrapping, remapping and display
 properties take the exact path. Other deletions (including multiline
-delete-selection) and insertion-first commands retain it. Commandless mutations
-repair immediately. History/snapshot replacement and sending a folded draft are
+delete-selection) and insertion-first commands retain it. Pre/post-command hooks
+bound the transaction explicitly and finalize the originating view even when a
+command switches buffers. Commandless mutations repair immediately despite a
+stale `this-command` value. History/snapshot replacement and sending a folded draft are
 single transactions, not independent insertion/deletion viewport states. Only
 an actual increase in blank pixels triggers backward traversal. Height-only
 window growth infers the old blank area from the height delta when the buffer
@@ -995,8 +1034,14 @@ cleanup; they are not independent renderers. Register controls with
 `mevedel-view--interaction-register`; do not direct-insert ad hoc UI near the
 composer. Registering or rebuilding an interaction must not auto-focus the
 prompt or move point out of the composer.
-`C-c C-j` (or the rail's pending-action text) explicitly visits the first
-pending interaction. It remembers the invoking window's draft offset;
+Cards stack in arrival order, the newest farthest from the composer, so an
+arriving card moves only the transcript above it (ADR 0126). The pending-input
+card stays pinned next to the composer. A descriptor re-registered under the
+same id, as rebuilds do, keeps its place; one that closed and returns arrives
+anew.
+`C-c C-j` (or the rail's pending-action text) explicitly visits the pending
+interaction nearest the composer, the one waiting longest, and repeated
+presses cycle outward. It remembers the invoking window's draft offset;
 settlement returns there only while point remains in that interaction.
 Use `:body-properties-owned` only when the producer supplies complete per-span
 `read-only` and stickiness properties, as ApplyPatch does for inline feedback.
@@ -1477,6 +1522,31 @@ dimmed completed row with a fresh ten-second grace period. Time spent expanded
 does not count; while either cursor or mouse remains in the panel, removal
 stays blocked and leaving restarts the full period.
 
+Every row, finished line, preview line and rule fits one screen row of the
+narrowest window showing the view (`mevedel-view-zone-width`, leaving one
+column for a fringeless window's continuation glyph). A row's name gives way
+first, down to twenty columns, then its metadata is cut. The panel sits above
+the anchored composer, so a wrapped row changed the panel's height whenever
+its text changed length. At 100 columns, a long agent row occupied two rows
+and shrank the panel by one when it became a one-row finished line. Expanded
+controls pack whole buttons into explicit rows, shortening a label only when
+it cannot fit alone; all actions stay reachable. This may take an extra row
+in a narrow window rather than wrapping a button label. Completion reserves
+the same control-row budget: the execution's Stop slot becomes inert space,
+and a held agent's controls become a finished notice padded to the live row
+count. Model detail lines fit identically in live and held states. When that
+width changes, the zone runs `mevedel-view-zone-width-change-functions`
+once with the view current. The status zone re-renders from it, so a split
+window does not keep stale wrapped rules until an unrelated redraw changes
+their height. The interaction zone rebuilds from it too, re-fitting its
+separator and queue-backed cards, and pending Ask forms lay themselves out
+again for the new width. An Ask form wraps to the smallest text capacity of
+the windows showing the view: each window contributes its body width, less the
+continuation column when that window has no right fringe (a terminal, or
+`overflow-newline-into-fringe` off), so a wider fringed window never grants a
+narrower fringeless one its last column. With no window the selected window's
+width, fringeless, applies.
+
 ```text
  ─── background work · 1 blocked · 2 agents · 1 command · 1 monitor [-] ──
   ▸ Blocked   agent    /root/reviewer · waiting for permission
@@ -1495,7 +1565,10 @@ row (see [Composer anchoring](#composer-anchoring)), so rows already shown do no
 move. State changes, including blocking, update a row in place; blocked agents
 are marked by the warning face and the rule's count, not by reordering. An agent
 and its descendants form one unit ordered by the top-level agent, children
-indented under their parent. A Bash row shows the
+indented under their parent in path order. Equal unit start times put agent
+trees before executions, then sort lexicographically by agent root path or by
+execution owner path and ID, ascending. These identity tiebreaks do not change
+when a row finishes or is retained. A Bash row shows the
 model-written `description` when present, else the command; a row owned by an
 agent names that owner. The footer progress line shows only the root turn's
 own activity and elapsed time; it never repeats these counts.
@@ -1512,14 +1585,24 @@ the selected window retains normal text selection.
 Only one row is expanded at a time. An expanded agent row shows its provider,
 model and effort with **Open transcript**, **Show in conversation** (the Agent
 call that started it), and **Interrupt**, which interrupts the agent's current
-turn and keeps it retained. An expanded command or Monitor row shows a bounded
-output preview.
+turn and keeps it retained. When an expanded agent finishes, its row becomes a
+finished line and its details stay as inert dimmed lines of the same height,
+with `Agent finished.` in place of the actions, until the row's grace period
+ends. Before this, the panel lost four rows under a pointer aimed at
+`[Interrupt]`. An expanded command or Monitor row shows a bounded output
+preview.
 The preview is not another transcript or process owner: it projects execution
 snapshots and passive progress/terminal events without consuming model output.
-It shows at most three output lines, each limited to 100 columns. It labels its
-output bounds and distinguishes no output yet from unavailable output. An
-expanded execution stays visible after completion until collapsed or replaced,
-so settlement does not close something the user is reading.
+It is always a header and exactly three lines: the last three output lines,
+each cut to one screen row, with blank lines when there are fewer. An open
+inspector therefore keeps one height from no output through completion, and an
+output-limit warning joins the header instead of adding a line. Previously the
+preview grew from one to three lines, wrapping at 100 columns, as output
+arrived, and the selected row moved up four rows during one command. The
+preview labels its output bounds and distinguishes no output yet from
+unavailable output. An expanded execution stays visible, in its place among
+the rows, after completion until collapsed or replaced, so settlement does not
+close or move something the user is reading.
 
 The expanded execution has explicit **Full output**, **Show in conversation**,
 and live-only **Stop** actions. Full output opens a read-only inspection buffer;
@@ -1677,8 +1760,9 @@ choreography during mutation, uniform composer/point/window preservation,
 reconciliation, stale-region recovery, collapse, and navigation. Producers
 retain their domain text and actions.
 
-Separator rules use a common width, four columns less than the widest window
-displaying the view, with a ten-column minimum. Labels are truncated when
+Separator rules use a common width, four columns less than the narrowest window
+displaying the view, with a ten-column minimum. A rule sized for the widest
+window wrapped onto three rows in a narrower split. Labels are truncated when
 necessary to leave room for the rule, including in narrow windows. If truncation
 would hide the background-work panel's `[+]`/`[-]` control, it replaces the
 rule's leading three dashes so the control remains clickable without changing
@@ -1750,10 +1834,11 @@ cleanup, weak request-registration bookkeeping, and standard prompt framing.
 Ask, permission, plan, and preview code retain their domain-specific
 descriptors and outcomes.
 
-When a prompt opens while the selected window's cursor is in the composer,
-focus moves to its `RET` key-help row. Closing that prompt restores the saved
-composer position. Redraws preserve prompt focus and the draft, including
-multiline drafts; new prompts leave readers in history and other windows alone.
+Arriving prompts leave point in the draft or history. `C-c C-j` explicitly visits
+a pending prompt from the invoking window. Settlement restores that window's
+saved composer position only if it is still visiting the prompt. Redraws preserve
+the visited control and the draft, including multiline drafts; other windows keep
+their own reading positions.
 
 Current fragment namespaces:
 
@@ -1763,7 +1848,11 @@ Current fragment namespaces:
   point. Expanded task and agent panels start their rows immediately below
   the separator, without an intervening blank line. Long task titles are
   truncated in the compact rows; the truncation marker is not a disclosure
-  control.
+  control. Every task row and status note is cut to one screen row of the
+  narrowest window showing the view, so the panel's line cap is a row cap.
+  The cap follows the height of the shortest frame showing the view, not of
+  its window: a popup split once changed it from 6 to 4 lines (15 to 10
+  expanded), and the panel re-flowed at the next unrelated status redraw.
 - `interaction`: pending-input summaries and user controls plus a
   non-navigatable `:separator` fragment. Ask, permission, plan, preview, and
   pending-input
@@ -1864,8 +1953,12 @@ from its first tool even when retained-tail projection changes the enclosing
 source of a neighboring blank line. Content hashes and temporary in-flight
 tokens are excluded so growth and settlement do not change reader identity. A
 raw position saved across a delete-and-re-render lands in different content
-whenever lengths shift. Anchors that cannot be resolved after the redraw fall back to the
-clamped raw position.
+whenever lengths shift. A transcript anchor whose section no longer exists, such
+as a tool row folded into its group's row, resolves to the start of the
+narrowest rendered run whose source contains it. Other anchors that cannot be
+resolved fall back to the clamped raw position, but a position that was in the
+transcript never resolves into the editable composer: it goes to the last
+transcript character instead, so the next keystroke cannot edit the draft.
 Restoring an existing mark updates its marker directly, preserving activation
 state without running mark-activation hooks. A redraw must not schedule editor
 mode transitions for the next user command.
@@ -2097,7 +2190,10 @@ with another 250 ms between them. The callback also realigns ratio-sized images.
 
 The callback enters normal projection mutation ownership before locating work,
 so queued work discovers current positions and the changed window's width when
-it actually runs. Updates stay off the undo list and preserve the modified flag,
+it actually runs. A formatted table or resized image usually changes height:
+the callback keeps each visible composer on its screen row, so the change
+scrolls the transcript above it, and gives a window left past a shortened end
+its last page back. Updates stay off the undo list and preserve the modified flag,
 data buffer, composer draft, point, mark, other markers, overlays, and displayed
 window anchors. Table replacement uses cell identity and unwrapped character
 offsets instead of whole-table text diffing. This distinguishes repeated words
@@ -2180,7 +2276,10 @@ enclosing block. These reduce first-arrival allocation without deferring decodin
 or changing metadata validation and ownership checks.
 Scheduled projections show a non-toggleable `Tool: preparing result...` row for
 uncached collapsed tool spans of at least 256 Ki characters. The row indicates
-pending presentation, not a successful tool outcome. One parser thread per view
+pending presentation, not a successful tool outcome. Inside an activity run it
+stays a member of the run's group, shown running, so publication does not
+unfold or refold the group; an open group never parses the deferred span on the
+main thread. One parser thread per view
 processes admitted spans sequentially, waiting between the canonical parser's
 stages. Checkpoints block on a condition variable released by the main-thread
 preparation callback; worker waits never dispatch editor timers or process
@@ -2256,7 +2355,11 @@ and reapply collapse state, including temporary in-flight anchors that later
 settle, so expanded tool/response sections do not collapse again during
 live refreshes. Rebuilding the same transcript retains remembered states for
 children hidden inside folded groups; an explicit transcript-source change
-clears them. Source anchors prevent unmatched states from applying to rewritten
+clears them. Only chosen states are remembered: a toggle, a state already
+remembered, or a captured state that differs from its section type's default
+(responses and turns open, other sections folded). A section shown in its
+default state is not remembered, so a group that once folded by default does
+not later fold over a row the reader opened. Source anchors prevent unmatched states from applying to rewritten
 content at the same position.
 `mevedel-view-render-settle` computes those keys with their durable
 post-settle anchors (`mevedel-view-disclosure--settling-p`): it runs before
@@ -2446,9 +2549,11 @@ commands; root `$` completion offers user-invocable skills. Both insert a
 real space after a completed root name. Command argument completion is
 available for commands with useful candidate sets, such as `/mode` and
 `/model`. Skill hints are rendered
-as a zero-width overlay near point from `argument-hint` or remaining
-`arguments` names. They are not buffer text and are never sent to the
-model.
+as a zero-width overlay at the end of the draft from `argument-hint` or
+remaining `arguments` names. Their place and visibility depend only on the
+draft, never on point, so moving the cursor never reflows the composer; a
+motion command does no hint work at all. They are not buffer text and are
+never sent to the model.
 
 Root prompt producers share `mevedel--insert-user-turn`, which applies the
 configured gptel separator and clears copied view, tool,

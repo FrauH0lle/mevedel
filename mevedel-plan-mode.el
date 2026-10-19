@@ -158,6 +158,10 @@
 (declare-function mevedel-view--interaction-unregister
                   "mevedel-view-interaction" (id))
 
+;; `mevedel-view-zone'
+(declare-function mevedel-view-zone-width "mevedel-view-zone" ())
+(autoload 'mevedel-view-zone-width "mevedel-view-zone")
+
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-collect-status "mevedel-worktree"
 		  (&optional context))
@@ -413,22 +417,33 @@ opening an editable draft."
     (mevedel-worktree-validate-branch-name branch directory)
     branch))
 
+(defun mevedel-plan-mode--worktree-dirty-p (entry)
+  "Return non-nil when ENTRY's source checkout has uncommitted changes.
+The check runs several git processes, about 40 ms, so its result is kept
+on ENTRY for every redraw until the selection changes; foreign rebuilds
+such as queue events and the control-transfer poll redraw the card too.
+Acceptance runs its own check and never relies on this one."
+  (car (or (plist-get entry :worktree-dirty)
+           (let ((dirty (list (with-current-buffer (plist-get entry :chat-buffer)
+                                (and (plist-get (mevedel-worktree-collect-status)
+                                                :dirty-p)
+                                     t)))))
+             (plist-put entry :worktree-dirty dirty)
+             dirty))))
+
 (defun mevedel-plan-mode--worktree-warning (entry)
   "Return ENTRY's Worktree notice when Worktree is selected, or nil.
 It names what would refuse acceptance now, from the same check acceptance
 runs, and warns that uncommitted source changes stay behind."
   (when (eq (plist-get (plist-get entry :selection) :location) 'worktree)
-    (let* ((chat-buffer (plist-get entry :chat-buffer))
-           (blocked
+    (let* ((blocked
             (when-let* ((session (plist-get entry :session)))
               (condition-case err
                   (progn (mevedel-plan-handoff-assert-worktree-ready
-                          session chat-buffer)
+                          session (plist-get entry :chat-buffer))
                          nil)
                 (error (error-message-string err)))))
-           (dirty
-            (with-current-buffer chat-buffer
-              (plist-get (mevedel-worktree-collect-status) :dirty-p))))
+           (dirty (mevedel-plan-mode--worktree-dirty-p entry)))
       (when (or blocked dirty)
         (string-join
          (delq nil
@@ -441,9 +456,11 @@ runs, and warns that uncommitted source changes stay behind."
   "Plan approval entry edited by the current instructions buffer.")
 
 (defun mevedel-plan-mode--selection-changed (entry)
-  "Persist ENTRY's changed selection and redraw its approval."
+  "Persist ENTRY's changed selection and redraw its approval.
+An explicit change also refreshes the cached source checkout state."
   (let ((selection (plist-get entry :selection))
         (session (plist-get entry :session)))
+    (plist-put entry :worktree-dirty nil)
     (if-let* ((callback (plist-get entry :selection-changed)))
         (funcall callback selection)
       (mevedel-plan--metadata-put session :selection selection))
@@ -535,6 +552,20 @@ runs, and warns that uncommitted source changes stay behind."
               (length (string-lines instructions))
               (if (string-match-p "\n" instructions) "s" ""))
     "None"))
+
+(defun mevedel-plan-mode--fit-row (row)
+  "Return ROW cut to one screen row of the current view.
+A cut row ends in an ellipsis and keeps its full text in the help echo.
+The last column is left for a continuation glyph, which a terminal
+window draws there."
+  (let ((width (1- (mevedel-view-zone-width))))
+    (if (<= (string-width row) width)
+        row
+      (let ((cut (truncate-string-to-width row width nil nil "…")))
+        (add-text-properties 0 (length cut)
+                             (list 'help-echo (substring-no-properties row))
+                             cut)
+        cut))))
 
 (defun mevedel-plan-mode--render-approval (entry)
   "Render standalone Plan approval ENTRY in the interaction zone."
@@ -641,28 +672,21 @@ runs, and warns that uncommitted source changes stay behind."
                                (mevedel-plan-mode--worktree-warning entry)))
                  (execution (plist-get selection :execution))
                  (budget (plist-get selection :goal-token-budget))
-                 (body
-                  (mevedel--prompt-framed-body
-                   (concat
-                    (if (fboundp 'mevedel-view--fontify-as)
-                        (mevedel-view--fontify-as
-                         (plist-get entry :body) 'markdown-mode)
-                      (plist-get entry :body))
-                    "\n\n"
-                    (propertize (if directive-p
-                                    "Directive implementation"
-                                  "Implementation")
-                                'font-lock-face 'mevedel-view-plan-mode)
-                    "\n\n"
-                    (unless directive-p
+                 ;; Semantic rows are built once.  Only the local body
+                 ;; cuts them to one screen row; the remote descriptor keeps
+                 ;; every setting and notice whole, independent of host splits.
+                 (rows
+                  (append
+                   (unless directive-p
+                     (list
                       (concat
                        (mevedel--prompt-key "l")
                        "  Location    "
                        (propertize
                         (capitalize
                          (symbol-name (plist-get selection :location)))
-                        'font-lock-face 'bold)
-                       "\n"
+                        'font-lock-face 'bold))
+                      (concat
                        (mevedel--prompt-key "c")
                        "  Context     "
                        (propertize
@@ -671,70 +695,95 @@ runs, and warns that uncommitted source changes stay behind."
                         'font-lock-face 'bold)
                        " — "
                        (mevedel-plan-mode--context-description
-                        (plist-get selection :context))
-                       "\n"
+                        (plist-get selection :context)))
+                      (concat
                        (mevedel--prompt-key "e")
                        "  Execution   "
                        (propertize
                         (capitalize (symbol-name execution))
                         'font-lock-face 'bold)
                        " — "
-                       (mevedel-plan-mode--execution-description execution)
-                       "\n"
-                       (when (eq execution 'goal)
-                         (concat
-                          (mevedel--prompt-key "b")
-                          "  Budget      "
-                          (propertize
-                           (if budget
-                               (format "%d tokens" budget)
-                             "Unlimited")
-                           'font-lock-face 'bold)
-                          "\n"))))
-                    (mevedel--prompt-key "m")
-                    "  Mode        "
-                    (propertize
-                     (capitalize
-                      (symbol-name (plist-get selection :mode)))
-                     'font-lock-face 'bold)
-                    "\n"
-                    (mevedel--prompt-key "M")
-                    "  Model       "
-                    (propertize
-                     (format
-                      "%s · effort %s"
-                      (plist-get selection :model-provider)
-                      (or (plist-get selection :reasoning-effort)
-                          "default"))
-                     'font-lock-face 'bold)
-                    "\n"
-                    (mevedel--prompt-key "s")
-                    "  Skills      "
-                    (propertize
-                     (mevedel-plan-mode--skills-label selection)
-                     'font-lock-face 'bold)
-                    "\n"
-                    (mevedel--prompt-key "i")
-                    "  Instructions "
-                    (propertize
-                     (mevedel-plan-mode--instructions-label selection)
-                     'font-lock-face 'bold)
-                    "\n"
-                    (when warning
-                      (concat "\n"
-                              (propertize warning
-                                          'font-lock-face 'warning)
-                              "\n"))
-                    "\n"
-                    (mevedel--prompt-key "RET")
-                    " implement    "
-                    (mevedel--prompt-key "f")
-                    " feedback    "
-                    (unless directive-p
-                      (concat (mevedel--prompt-key "q") " hide    "))
-                    (mevedel--prompt-key "C-g")
-                    " cancel\n")
-                   'mevedel-view-plan-mode)))
+                       (mevedel-plan-mode--execution-description execution))
+                      ;; The row stays when Execution is not Goal.
+                      (if (eq execution 'goal)
+                          (concat
+                           (mevedel--prompt-key "b")
+                           "  Budget      "
+                           (propertize
+                            (if budget
+                                (format "%d tokens" budget)
+                              "Unlimited")
+                            'font-lock-face 'bold))
+                        (propertize "   Budget      Goal execution only"
+                                    'font-lock-face 'shadow))))
+                   (list
+                    (concat
+                     (mevedel--prompt-key "m")
+                     "  Mode        "
+                     (propertize
+                      (capitalize
+                       (symbol-name (plist-get selection :mode)))
+                      'font-lock-face 'bold))
+                    (concat
+                     (mevedel--prompt-key "M")
+                     "  Model       "
+                     (propertize
+                      (format
+                       "%s · effort %s"
+                       (plist-get selection :model-provider)
+                       (or (plist-get selection :reasoning-effort)
+                           "default"))
+                      'font-lock-face 'bold))
+                    (concat
+                     (mevedel--prompt-key "s")
+                     "  Skills      "
+                     (propertize
+                      (mevedel-plan-mode--skills-label selection)
+                      'font-lock-face 'bold))
+                    (concat
+                     (mevedel--prompt-key "i")
+                     "  Instructions "
+                     (propertize
+                      (mevedel-plan-mode--instructions-label selection)
+                      'font-lock-face 'bold))
+                    ;; The blank row above the actions holds the notice.
+                    (if warning
+                        (propertize
+                         (replace-regexp-in-string "\n" " " warning)
+                         'font-lock-face 'warning)
+                      ""))))
+                 (plan-text
+                  (if (fboundp 'mevedel-view--fontify-as)
+                      (mevedel-view--fontify-as
+                       (plist-get entry :body) 'markdown-mode)
+                    (plist-get entry :body)))
+                 (frame
+                  (lambda (fit)
+                    (mevedel--prompt-framed-body
+                     (concat
+                      plan-text
+                      "\n\n"
+                      (propertize (if directive-p
+                                      "Directive implementation"
+                                    "Implementation")
+                                  'font-lock-face 'mevedel-view-plan-mode)
+                      "\n\n"
+                      ;; Every setting and the notice slot keep one screen
+                      ;; row locally, so changing a setting or Location
+                      ;; never changes the card's height.
+                      (mapconcat (lambda (row) (concat (funcall fit row) "\n"))
+                                 rows "")
+                      (mevedel--prompt-key "RET")
+                      " implement    "
+                      (mevedel--prompt-key "f")
+                      " feedback    "
+                      (unless directive-p
+                        (concat (mevedel--prompt-key "q") " hide    "))
+                      (mevedel--prompt-key "C-g")
+                      " cancel\n")
+                     'mevedel-view-plan-mode)))
+                 (body (funcall frame #'mevedel-plan-mode--fit-row))
+                 (remote-body (funcall frame #'identity)))
             (define-key keymap (kbd "RET") #'accept)
             (define-key keymap (kbd "<return>") #'accept)
             (define-key keymap (kbd "C-c C-c") #'accept)
@@ -760,7 +809,6 @@ runs, and warns that uncommitted source changes stay behind."
                          :id (plist-get entry :interaction-id)
                          :count 1
                          :body body
-                         :priority 200
                          :keymap keymap
                          :entry entry
                          :activate #'deliver)))
@@ -776,7 +824,7 @@ runs, and warns that uncommitted source changes stay behind."
             ;; request the Emacs feedback draft composes.
             (overlay-put overlay 'mevedel--remote
                          (append
-                          (list :body (substring-no-properties body)
+                          (list :body (substring-no-properties remote-body)
                                 :feedback
                                 (lambda (text)
                                   (settle (list :remote-feedback text))))

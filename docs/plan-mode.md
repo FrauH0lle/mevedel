@@ -217,7 +217,11 @@ checks that the session can fork (no pending input, request, live execution,
 active agent turn or active Goal), then prompts for its branch name in Emacs.
 While Worktree is selected, the card names whatever would refuse that check,
 in the same words as the refusal, so a queued follow-up is resolved in the
-Pending Inputs cockpit first instead of being discovered on `RET`. Browser
+Pending Inputs cockpit first instead of being discovered on `RET`. The notice
+that uncommitted changes stay behind comes from a git status check of about
+40 ms; it runs when the card first shows and after each selection change, and
+other redraws, such as queue events and the control-transfer poll, reuse it.
+The blocker check is in memory and stays current on every redraw. Browser
 acceptance is available only for Here, using the host-selected settings;
 settings changes and Worktree acceptance remain in Emacs.
 
@@ -231,15 +235,28 @@ applies while handoff preparation or retry owns the session.
 
 The approval card keeps the Markdown proposal expanded above a compact
 Implementation section. Cycle keys appear beside their settings; accept,
-feedback, hide, and cancel remain in the action footer. A hidden approval stays
-pending and hidden across live-session redraws. `RET` or a mouse click on its
+feedback, hide, and cancel remain in the action footer. Each setting is one
+screen row of the narrowest window showing the view, cut with an ellipsis and
+its full text on hover, and the Worktree notice takes the blank row above the
+actions the same way. Changing a setting therefore never changes the local
+card's height: the Context and Execution descriptions differ in length and
+wrapped below about 84 columns, and the notice used to add two or three rows.
+The cut applies to the local card only: semantic rows are built once and the
+remote (browser) payload keeps every setting, model, skill list, and notice
+whole, so a guest's approval information never depends on the host's split
+geometry. The card is laid out again when that width changes. A hidden approval
+stays pending and hidden across live-session redraws. `RET` or a mouse click on its
 `1 plan` interaction-counter segment shows the card again; resuming a persisted
 session also shows it because hidden state is not persisted.
 
 Direct remains the default and sends one ordinary implementation turn. Goal is
 an explicit opt-in that continues automatically until complete, genuinely
 blocked, paused, or budget-limited. When Goal is selected, the approval shows
-the proposal's target token budget. `b` accepts a positive integer; empty input
+the proposal's target token budget. With Direct, the Budget row stays as a
+dimmed `Goal execution only` placeholder without a key, so cycling Execution
+never changes the card's height: with the composer anchored on its screen row,
+each toggle otherwise moved the card and the transcript above it by one row
+(ADR 0126). `b` accepts a positive integer; empty input
 means Unlimited. The setting starts from the effective session default, stays
 local to the pending proposal, survives Execution toggles and revised
 proposals, and on acceptance sets only the new Goal's budget, not the

@@ -63,6 +63,92 @@
       (should-not (mevedel-view--composer-anchors))
       (should-not (mevedel-view--window-shows-end-p window)))))
 
+(mevedel-deftest mevedel-view--position-screen-y ()
+  (mevedel-view-geometry-test--with-window
+    (skip-unless (display-graphic-p))
+    (setq-local header-line-format "Header" tab-line-format "Tab")
+    (dotimes (_ 80) (insert "history\n"))
+    (setq-local mevedel-view--input-marker (copy-marker (point)))
+    (insert "draft")
+    (let* ((window (selected-window))
+           (input (mevedel-view--input-start)))
+      (set-window-start window
+                        (save-excursion (goto-char input) (forward-line -10) (point))
+                        t)
+      (set-window-vscroll window 7 t)
+      (redisplay t)
+      (setq body-height (window-body-height window t))
+      (should (= 7 (window-vscroll window t)))
+      (should-not (mevedel-view--position-screen-y (point-min) window))
+      (let ((before (mevedel-view--position-screen-y input window)))
+        (should before)
+        ;; The native visibility query measures fresh chrome, while window
+        ;; header/tab height accessors still report the last redisplay.
+        (set (make-local-variable ,chrome)
+             (propertize "Larger chrome" 'face '(:height 1.8)))
+        (should (= before (mevedel-view--position-screen-y input window)))
+        (let ((viewport (mevedel-view--viewport-at-y window input before)))
+          (mevedel-view--set-viewport window viewport)
+          (should (= 7 (window-vscroll window t)))
+          (should (= before (mevedel-view--position-screen-y input window)))))))
+  (chrome)
+  :doc "Fresh header height keeps body Y with nonzero vscroll before redisplay." 'header-line-format
+  :doc "Fresh tab height keeps body Y with nonzero vscroll before redisplay." 'tab-line-format)
+
+(mevedel-deftest mevedel-view--window-body-geometry ()
+  (mevedel-view-geometry-test--with-window
+    (skip-unless (display-graphic-p))
+    (setq-local header-line-format "Header" tab-line-format "Tab"
+                mode-line-format "Mode")
+    (dotimes (_ 80) (insert "history\n"))
+    (insert "draft")
+    (let ((window (selected-window)))
+      (set-window-start window
+                        (save-excursion (forward-line -10) (point)) t)
+      (set-window-vscroll window 7 t)
+      (redisplay t)
+      (setq body-height (window-body-height window t))
+      (should (= 7 (window-vscroll window t)))
+      (set (make-local-variable ,chrome)
+           (propertize "Larger chrome" 'face '(:height 1.8)))
+      (let ((blank (mevedel-view--window-blank-pixels window))
+            (row (mevedel-view--window-end-row window)))
+        (should blank)
+        (redisplay t)
+        ;; The chrome change deliberately changes the body, not the frame.
+        (setq body-height (window-body-height window t))
+        (should (= 7 (window-vscroll window t)))
+        (should (equal row (mevedel-view--window-end-row window)))
+        (should (= blank (mevedel-view--window-blank-pixels window)))
+        (should (= body-height
+                   (cdr (mevedel-view--window-body-geometry window)))))))
+  (chrome)
+  :doc "Header changes give the same blank pixels before and after redisplay." 'header-line-format
+  :doc "Tab changes give the same blank pixels before and after redisplay." 'tab-line-format
+  :doc "Mode-line changes give the same blank pixels before and after redisplay." 'mode-line-format)
+
+(mevedel-deftest mevedel-view--restore-window-blank-pixels
+  (:doc "Shrinking chrome repairs new blank pixels before redisplay.")
+  (mevedel-view-geometry-test--with-window
+    (skip-unless (display-graphic-p))
+    (setq-local tab-line-format (propertize "Tab" 'face '(:height 1.8)))
+    (dotimes (_ 80) (insert "history\n"))
+    (insert "draft")
+    (let ((window (selected-window)))
+      (set-window-start window
+                        (save-excursion (forward-line -10) (point)) t)
+      (set-window-vscroll window 7 t)
+      (redisplay t)
+      (setq body-height (window-body-height window t))
+      (let ((blank (mevedel-view--window-blank-pixels window)))
+        (should blank)
+        (should (= 7 (window-vscroll window t)))
+        (setq-local tab-line-format "Tab")
+        (mevedel-view--restore-window-blank-pixels window blank)
+        (redisplay t)
+        (setq body-height (window-body-height window t))
+        (should (= blank (mevedel-view--window-blank-pixels window)))))))
+
 (mevedel-deftest mevedel-view-geometry-image ()
   (let ((chrome ,chrome))
     (mevedel-view-geometry-test--with-window

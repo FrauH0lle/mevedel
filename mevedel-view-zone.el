@@ -172,6 +172,43 @@ responsible for rerendering the producer."
 
 
 ;;
+;;; Width
+
+(defvar mevedel-view-zone-width-change-functions nil
+  "Functions run with no arguments when a view's zone width changes.
+Each runs with the view buffer current, once per change of
+`mevedel-view-zone-width'.  Chrome whose layout depends on that width
+re-renders here, so a resize does not leave rows wrapped until an
+unrelated redraw changes their height.")
+
+(defvar-local mevedel-view-zone--width nil
+  "Zone width last reported to `mevedel-view-zone-width-change-functions'.")
+
+(defun mevedel-view-zone-width ()
+  "Return the narrowest body width of the windows showing this buffer.
+Without such a window, return the selected window's body width.  Chrome
+that fits in it stays one screen row per line in every window."
+  (let ((windows (get-buffer-window-list (current-buffer) nil t)))
+    (if windows
+        (apply #'min (mapcar #'window-body-width windows))
+      (window-body-width))))
+
+(defun mevedel-view-zone--on-window-change (_window)
+  "Run `mevedel-view-zone-width-change-functions' if the zone width changed."
+  (let ((width (mevedel-view-zone-width)))
+    (unless (eql width mevedel-view-zone--width)
+      (setq mevedel-view-zone--width width)
+      (with-demoted-errors "mevedel: zone width change: %S"
+        (run-hooks 'mevedel-view-zone-width-change-functions)))))
+
+(defun mevedel-view-zone--watch-width ()
+  "Start reporting width changes of the windows showing this buffer."
+  (setq mevedel-view-zone--width (mevedel-view-zone-width))
+  (add-hook 'window-size-change-functions #'mevedel-view-zone--on-window-change nil t)
+  (add-hook 'window-buffer-change-functions #'mevedel-view-zone--on-window-change nil t))
+
+
+;;
 ;;; Rendering
 
 (defun mevedel-view-zone--section-properties (region fragment section)
@@ -499,7 +536,8 @@ Any namespace text outside REGION takes the ordinary cleanup path."
 (defun mevedel-view-zone--region-table ()
   "Return the current buffer's managed-zone region table."
   (unless (hash-table-p mevedel-view-zone--regions)
-    (setq mevedel-view-zone--regions (make-hash-table :test #'eq)))
+    (setq mevedel-view-zone--regions (make-hash-table :test #'eq))
+    (mevedel-view-zone--watch-width))
   mevedel-view-zone--regions)
 
 (defun mevedel-view-zone--live-region (zone)

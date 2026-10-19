@@ -162,6 +162,7 @@ Explicit synchronous projections and expansion leave this nil.")
           (setq name (match-string-no-properties 1)))))
     (list :pending (list :header (concat name ": preparing result…")
                          :vtype 'tool-preparing :status 'running
+                         :group-tool name
                          :initially-collapsed-p t))))
 
 (defun mevedel-view-prepare-get (source start end key)
