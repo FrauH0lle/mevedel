@@ -309,11 +309,11 @@
            (archive
             (cl-letf (((symbol-function
                         'mevedel-session-artifacts-publish-text)
-                       (lambda (seen-session path content &optional coding)
+                       (lambda (seen-session path content &optional coding prepared)
                          (push (list seen-session path content coding)
                                published)
                          (funcall original-publish
-                                  seen-session path content coding))))
+                                  seen-session path content coding prepared))))
               (mevedel-compact-target--agent-apply
                target "## Goal\n- Continue" "Recent tail.\n"
                "Pending result.\n" nil))))

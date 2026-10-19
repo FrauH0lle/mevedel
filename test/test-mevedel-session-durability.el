@@ -4121,6 +4121,9 @@
           (should
            (mevedel-session-persistence-lock-acquire
             session-dir "*agent-terminal*" session))
+          ;; Establish the real target identity before testing a terminal
+          ;; transaction.  Replacement acknowledgement is a separate commit.
+          (mevedel-session-artifacts-check-target-incarnation session parent)
           (should
            (mevedel-session-publication-publish
             session
@@ -4223,7 +4226,7 @@
                    'mevedel-session-artifacts-assert-mutation-authority)
                   (lambda (&rest _) t))
                  ((symbol-function 'mevedel-session-publication-publish)
-                  (lambda (_session artifacts &optional require-commit)
+                  (lambda (_session artifacts &optional require-commit _prepared)
                     (should require-commit)
                     (setq published artifacts)
                     t)))
