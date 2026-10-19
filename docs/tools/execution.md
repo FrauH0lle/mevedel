@@ -192,6 +192,23 @@ An execution stopped by the output limit retains a truncation warning even
 when its bounded spool is readable; that artifact does not contain output
 beyond the limit.
 
+After the terminal polling retention window (60 seconds), retained local
+spools from 64 KiB through 64 MiB are compressed losslessly by a separate
+`python3` process when gzip is smaller. Live output and finished WriteStdin
+polling stay raw throughout that window. Compression failure keeps the raw
+evidence; active resource readers retain it until their operation finishes.
+Output beyond the 64 MiB inflation bound stays raw if a larger execution cap
+is configured, so compression cannot make an otherwise readable spool too
+large to consume. Existing session history is not scanned or rewritten.
+Remote production stays raw,
+while previously compressed output remains consumable through TRAMP.
+
+Artifact addresses and the Full output action remain unchanged. The shared
+execution-storage layer provides disposable logical views for reading and
+searching; neither compressed size nor suffix changes pagination, Glob
+matching, or the retained-output completeness warning. Compression does not
+recover bytes beyond an output-limit stop.
+
 Successful empty-input WriteStdin observations are still returned to the model,
 but do not create separate transcript rows, even when they collect new output
 or the terminal result. That output belongs to the initiating execution row. Actual

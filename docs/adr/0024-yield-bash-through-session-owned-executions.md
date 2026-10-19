@@ -83,6 +83,22 @@ silently losing bytes. Read-only commands may overlap; other commands take a
 fair exclusive lane, released on yield so long-running work does not block
 admission. Managed Bash imposes no automatic timeout.
 
+Retired local spools from 64 KiB through 64 MiB use gzip level 1 only when it is
+smaller. A separate Python worker compresses after the 60-second terminal
+polling window; the owner retires unchanged raw output only after successful
+publication and active reader leases have ended. Live output and terminal
+polling are unaffected, and failures keep raw evidence. Compression is local;
+consumption also supports TRAMP takeover. Save As retains the compressed
+representation, Fork still excludes execution history, and transfer does not
+copy or rewrite it. Historical sessions are not proactively transformed.
+
+`mevedel-execution-spool.el` owns physical selection and asynchronous,
+operation-lifetime logical views behind stable artifact addresses. Read,
+Grep, Glob and Full output share that seam rather than individual gzip
+fallbacks. Views use logical names, bounded inflation, raw preference during
+coexistence, and disposal on settlement or cancellation. No persistent
+inflated cache trades the saved disk space back for read convenience.
+
 Structured execution facts keep exit and outcome separate from command output.
 UI progress is transient; completion updates durable presentation and reaches
 its captured owner's mailbox. A root-owned yielded command that ends on its own
@@ -110,6 +126,23 @@ on elapsed time or on whether a view happened to be open. Distinct executions
 of the same command remain independently navigable.
 
 ## Decision history
+
+- **Lossless retired-spool storage (2026-10).** Session inspection found
+  385,324,439 bytes of execution logs but only 421,924 duplicate bytes;
+  deduplication would save little. Two 64 MiB samples compressed with gzip-1
+  to 390,317 and 3,649,871 bytes. Reducing the output cap or deleting finished
+  logs would discard postmortem evidence. Lossless off-thread compression
+  instead preserves it. A resolver-only `.gz` fallback was rejected because
+  it breaks directory Grep and logical `.log` Glob matching; operation-scoped
+  logical views preserve those interfaces without a persistent inflated cache.
+  On a reflink copy of session `2026-10-19T07-07-cdd7de4f55be`, the implemented
+  owner compressed 20 eligible retained logs from 1,697,026 to 165,195 bytes,
+  saving 1,531,831 bytes (27.70% of all 563 spool logs, 8.58% of the entire
+  tool-results tree). Every inflated result matched its untouched source hash.
+  In an isolated Eask source run, launch calls had a 0.36 ms median and
+  0.83 ms maximum; a 5 ms editor timer's largest gap was 5.57 ms over the
+  0.785-second worker sequence. These measure local retirement/compression,
+  not remote transport or graphical rendering latency.
 
 - **One completion line (2026-10).** The breadcrumb (`↳ Completed: …  [Show
   result]`) and the notice of the transcript's own delivery

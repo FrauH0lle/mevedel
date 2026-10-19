@@ -249,6 +249,31 @@ Oversized tool and execution notices emit followable `artifact://` addresses,
 never absolute session-storage paths. No artifact address can rewrite,
 truncate, or otherwise mutate the captured evidence.
 
+Retired local execution logs may be stored as gzip without changing their
+`artifact://executions/*.log` handles. Read pagination, explicit-file and
+directory Grep, and Glob patterns such as `**/*.log` use the logical names and
+uncompressed text. Private compression temporaries are never artifacts. The
+physical `.log.gz` names are not artifact aliases; explicit Read/Grep/Glob
+addresses using that suffix are unavailable. The
+same handles work when the session is accessed through TRAMP; the target needs
+`python3` to consume compressed output. Ordinary portable artifacts retain
+their publication checks: an unpublished fixed cache cannot become readable
+merely because it has a gzip suffix.
+For remote portable Read, an execution's published or owner-staged source
+still outranks fixed raw/gzip files and retains hash verification. Only
+compressed execution evidence absent from the captured publication uses the
+fixed retained-output view (for locally produced output accessed after
+takeover). This is not a raw-cache fallback or a publication-repair path.
+
+The resource executor borrows an asynchronous, disposable logical view from
+the execution-storage owner, rather than teaching each tool gzip semantics.
+Directory discovery uses placeholders for compressed contents; content search
+inflates only for that operation, and ranged file Read stops after its required
+line prefix. Views have a 64 MiB per-file inflation bound and a 512 MiB total
+bound, and are removed when the operation settles or is cancelled. Worker
+failure or its two-minute deadline returns an error without changing retained
+evidence. No persistent inflated cache is maintained.
+
 ### `skill://`
 
 Skill addresses are read-only and resolve the exact discovered source named by

@@ -67,6 +67,17 @@
 ;; `mevedel-execution'
 (declare-function mevedel-execution-list-user "mevedel-execution" (session))
 
+;; `mevedel-execution-spool'
+(declare-function mevedel-execution-spool-logical-name "mevedel-execution-spool" (path))
+(declare-function mevedel-execution-spool-physical-path "mevedel-execution-spool" (path))
+(declare-function mevedel-execution-spool-private-p "mevedel-execution-spool" (path))
+(declare-function mevedel-execution-spool-with-path "mevedel-execution-spool"
+                  (path operation callback executor &optional max-lines))
+(autoload 'mevedel-execution-spool-logical-name "mevedel-execution-spool")
+(autoload 'mevedel-execution-spool-physical-path "mevedel-execution-spool")
+(autoload 'mevedel-execution-spool-private-p "mevedel-execution-spool")
+(autoload 'mevedel-execution-spool-with-path "mevedel-execution-spool")
+
 ;; `mevedel-journal-index'
 (declare-function mevedel-journal-index-entries "mevedel-journal-index" (workspace &optional cached-only))
 (autoload 'mevedel-journal-index-entries "mevedel-journal-index")
@@ -83,10 +94,19 @@
 (autoload 'mevedel-journal-store-read "mevedel-journal-store")
 (autoload 'mevedel-journal-store-recall-p "mevedel-journal-store")
 
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-handler-resumable "mevedel-pipeline" (function))
+(autoload 'mevedel-pipeline-handler-resumable "mevedel-pipeline")
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-segment-number
                   "mevedel-session-artifacts" (logical))
 (autoload 'mevedel-session-artifacts-segment-number "mevedel-session-artifacts")
+
+;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-uncommitted-artifact
+                  "mevedel-session-publication" (session logical))
+(autoload 'mevedel-session-publication-uncommitted-artifact "mevedel-session-publication")
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-description "mevedel-skills-core" (skill) t)
@@ -818,7 +838,7 @@ listing includes only Markdown files."
             (file-symlink-p (directory-file-name root)))
         nil
       (sort
-       (delq nil
+       (delete-dups (delq nil
              (mapcar
               (lambda (path)
                 (when (and (file-regular-p path)
@@ -826,13 +846,14 @@ listing includes only Markdown files."
                   (let ((relative (mevedel-resource--canonical-relative
                                    path root)))
                     (unless (or (and (eq scheme 'artifact)
-                                     (string-match-p
-                                      "\\`\\.mevedel-pending-executions\\(?:/\\|\\'\\)"
-                                      relative))
+                                     (mevedel-execution-spool-private-p relative))
                                 (and (eq scheme 'mevedel)
                                      (not (string-suffix-p ".md" relative))))
-                      relative))))
-              (directory-files-recursively root "." nil nil nil)))
+                      (if (and (eq scheme 'artifact)
+                               (member "executions" (file-name-split relative)))
+                          (mevedel-execution-spool-logical-name relative)
+                        relative)))))
+              (directory-files-recursively root "." nil nil nil))))
        #'string-lessp))))
 
 (defun mevedel-resource--logical-address (scheme components)
@@ -1655,8 +1676,9 @@ before an authorized handler receives a backing path or virtual record."
      ((eq scheme 'artifact)
       (setq root (mevedel-resource--root scheme session)
             physical (mevedel-resource--safe-path root components))
-      (when (and (eq scheme 'artifact)
-                 (member ".mevedel-pending-executions" components))
+      (when (or (mevedel-execution-spool-private-p (string-join components "/"))
+                (and (equal (car components) "executions")
+                     (string-suffix-p ".log.gz" (car (last components)))))
         (setq data (plist-put data :unavailable-p t))))
      ((eq scheme 'mevedel)
       (setq root (mevedel-resource--root scheme nil)
@@ -1805,8 +1827,9 @@ errors before any content or handler is reached."
               physical (and root
                             (mevedel-resource--safe-path root components))
               logical-p (null components))
-        (when (and (eq scheme 'artifact)
-                   (member ".mevedel-pending-executions" components))
+        (when (or (mevedel-execution-spool-private-p (string-join components "/"))
+                  (and (equal (car components) "executions")
+                       (string-suffix-p ".log.gz" (car (last components)))))
           (setq data (plist-put data :unavailable-p t))))
        ((eq scheme 'mevedel)
         (setq root (mevedel-resource--root scheme nil)
@@ -2082,6 +2105,68 @@ executor."
     (remhash attempt mevedel-resource--attempt-table))
   nil)
 
+(defun mevedel-resource-execute-async (attempt callback executor &optional options)
+  "Execute authorized ATTEMPT with CALLBACK and asynchronous EXECUTOR.
+EXECUTOR receives the ordinary path/descriptor, authored address and final
+callback.  Execution spools borrow a disposable logical view owned by
+that callback or the returned canceller, not by attempt consumption.  OPTIONS
+are the operation's arguments, including any Read pagination."
+  (let* ((data (gethash attempt mevedel-resource--attempt-table))
+         (artifact (eq (plist-get data :scheme) 'artifact))
+         (execution (equal (car (plist-get data :components)) "executions"))
+         (operation (plist-get data :operation))
+         (session (plist-get data :session))
+         (resume (mevedel-pipeline-handler-resumable
+                  (lambda (path address deliver)
+                    (let ((mevedel--session session))
+                      (funcall executor path address deliver))))))
+    (mevedel-resource-execute
+     attempt
+     (lambda (path address)
+       (let* ((roots (and (listp path) (plist-get path :resource-search-roots)))
+              (physical (if roots (plist-get (car roots) :path)
+                          (and (stringp path) path)))
+              (published-read
+               (and execution (eq operation 'read) physical
+                    (not (file-directory-p physical))
+                    (file-remote-p physical)
+                    (eq (mevedel-session-authority-mode session) 'portable)
+                    (let* ((publication (mevedel-session-publication session))
+                           (logical (concat "tool-results/"
+                                            (string-join (plist-get data :components) "/"))))
+                      (or (null publication)
+                          (assoc logical (plist-get publication :artifacts))
+                          (mevedel-session-publication-uncommitted-artifact session logical))))))
+         ;; Ordinary portable artifacts keep their publication-aware Read path.
+         ;; Only execution files, or directory discovery containing them, borrow
+         ;; storage views; a gzip suffix alone never grants that authority.
+         ;; Published/staged remote execution bytes still outrank fixed output;
+         ;; gzip storage never rescues a failed publication verification.
+         (if (not (and artifact physical (not published-read)
+                       (or execution (file-directory-p physical))))
+             (funcall resume path address callback)
+           (mevedel-execution-spool-with-path
+            physical operation callback
+            (lambda (selected deliver)
+              (let ((target path))
+                (if roots
+                    (let ((root (copy-sequence (car roots))))
+                      (setq target (copy-sequence path))
+                      (plist-put root :path selected)
+                      (plist-put target :resource-search-roots (list root)))
+                  (setq target selected))
+                (funcall resume target address deliver)))
+            (when (and (eq operation 'read)
+                       (not (file-directory-p physical))
+                       (integerp (plist-get options :limit))
+                       (> (plist-get options :limit) 0)
+                       (or (null (plist-get options :offset))
+                           (and (integerp (plist-get options :offset))
+                                (> (plist-get options :offset) 0))))
+              (+ (or (plist-get options :offset) 1)
+                 (plist-get options :limit)))))))
+     options)))
+
 (defun mevedel-resource-visit-path (address &optional context)
   "Return the file or directory ADDRESS names in CONTEXT, or nil.
 Logical resources -- listings, agents, history, MCP and shared items --
@@ -2092,7 +2177,10 @@ have no backing file and return nil, as does an unavailable owner."
           (and data
                (not (plist-get data :unavailable-p))
                (not (plist-get data :logical-p))
-               (plist-get data :physical-path)))
+               (let ((path (plist-get data :physical-path)))
+                 (if (eq (plist-get data :scheme) 'artifact)
+                     (mevedel-execution-spool-physical-path path)
+                   path))))
       (when attempt (mevedel-resource-discard-attempts (list attempt))))))
 
 (defun mevedel-resource-current-attempt (address)

@@ -102,6 +102,10 @@
                   "mevedel-execution-telemetry" (facts))
 (defvar mevedel-execution-telemetry-summary-cell)
 
+;; `mevedel-execution-spool'
+(declare-function mevedel-execution-spool-compress "mevedel-execution-spool" (path))
+(autoload 'mevedel-execution-spool-compress "mevedel-execution-spool")
+
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-native-path
                   "mevedel-execution-target" (target path))
@@ -733,7 +737,9 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
     (mevedel-execution--release-runtime record)
     (when-let* ((child (mevedel-execution--record-child record)))
       (mevedel-execution-process-discard-stderr child))
-    (unless preserve-spool
+    (if preserve-spool
+        (when (mevedel-execution--record-finished-p record)
+          (mevedel-execution-spool-compress (mevedel-execution--spool-path record)))
       (when-let* ((child (mevedel-execution--record-child record)))
         (mevedel-execution-process-release child)))
     (let ((state

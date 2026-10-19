@@ -43,6 +43,15 @@ checks; package-manager symlinks identify the owner, not exceptions for content.
 Search exclusions follow the logical resource family even after descendant
 dispatch resolves a backing directory. Artifact discovery omits unpublished
 execution spools, and installed-document discovery remains Markdown-only.
+Retired execution output may be gzip-backed behind the same logical `.log`
+address. Authorized resource execution borrows an asynchronous, disposable
+view from the spool-storage module. Discovery and search expose logical names
+and never private temporary paths. This changes storage representation, not
+resource permission or portable-publication authority. Published/staged remote
+execution bytes outrank conflicting fixed raw/gzip evidence, and failed hash
+verification cannot fall back to it. Compressed locally retained execution
+evidence absent from the captured publication remains consumable after TRAMP
+takeover; ordinary portable artifacts gain no fixed-cache fallback.
 Bare `skill://` supports Read discovery only; searches require a selected
 package. Model-facing prepared skills disclose each contribution's exact source
 address without changing raw preparation, hook inputs, or collapsed render
@@ -98,6 +107,14 @@ substitute for checking a settled operation's result.
 ## Decision history
 
 All revisions below refine ADR 0104's closed resolver decision.
+
+- **Logical execution storage (2026-10).** Retained output dominated the
+  non-publication disk footprint and compressed well, but a filename fallback
+  alone changed directory search semantics. One operation-owned logical-view
+  seam now serves Read, Grep and Glob, including TRAMP consumers, while their
+  existing address projection and containment checks remain authoritative.
+  Native remote helper paths are qualified to their target before containment
+  checks, not trusted or exposed as a substitute for logical addresses.
 
 - **Local discovery and recovery.** Published session evidence showed descendant
   artifact Glob advertising private execution-spool addresses that Read and

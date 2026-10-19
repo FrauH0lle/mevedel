@@ -54,8 +54,8 @@
 (defvar mevedel-pipeline--active-call-source)
 
 ;; `mevedel-resource'
-(declare-function mevedel-resource-execute
-                  "mevedel-resource" (attempt &optional executor options))
+(declare-function mevedel-resource-execute-async
+                  "mevedel-resource" (attempt callback executor &optional options))
 
 ;; `mevedel-request'
 (defvar mevedel--current-request)
@@ -1589,7 +1589,11 @@ from a private copy the Read releases."
       (funcall k (mevedel-tool-fs-read--virtual-text
                   (plist-get path :result) read-args address))))
    (t
-    (unless (and (stringp path) (file-exists-p path))
+    ;; Remote portable artifacts need no fixed cache: --file resolves their
+    ;; verified publication before checking ordinary filesystem existence.
+    (unless (and (stringp path)
+                 (or (file-exists-p path)
+                     (mevedel-tool-fs-read--session-artifact-context path)))
       (error "File not found: %s" address))
     (when (and (string-prefix-p "memory://" address)
                (mevedel-tool-fs-read-media-mime-type path))
@@ -1607,15 +1611,16 @@ Saved history returns a canceller while preparation continues asynchronously."
   (let* ((address (plist-get args :file_path))
          (attempt (mevedel-tool-fs-resource-attempt address)))
     (if attempt
-        (mevedel-resource-execute
-         attempt
-         (lambda (path authored)
+        (mevedel-resource-execute-async
+         attempt callback
+         (lambda (path authored deliver)
            (if (and (listp path) (plist-member path :history-workspace))
-               (mevedel-history-search-start callback args path)
+               (mevedel-history-search-start deliver args path)
              (mevedel-tool-fs-read--run
               (lambda (k) (mevedel-tool-fs-read--resource-path args path authored k))
               (lambda (result)
-                (funcall callback (mevedel-tool-fs-handler-result result)))))))
+                (funcall deliver (mevedel-tool-fs-handler-result result))))))
+         args)
       (mevedel-tool-fs-read--run
        (lambda (k) (mevedel-tool-fs-read--file args k))
        (lambda (result)

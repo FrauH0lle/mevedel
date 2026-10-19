@@ -11,6 +11,7 @@
 (files :defaults
        '("native" "native/*.c" "native/*.eld")
        '("scripts" "scripts/mevedel-mcp-stdio.py")
+       '("scripts/mevedel-execution-spool.py")
        '("agents" "agents/*.md")
        '("prompts/context-summary" "prompts/context-summary/*.md")
        '("prompts/goals" "prompts/goals/*.md")
