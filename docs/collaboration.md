@@ -39,6 +39,15 @@ stopping the share, or exiting Emacs tears its room down. Otherwise the room
 remains available for the host share's lifetime, including when no guest is
 connected. The share surface is a singleton QR panel for the selected room.
 
+When the host moves a shared session's work into a new session, such as a
+plan accepted with Worktree, the room hands off instead of just ending: the
+host shares the new session without asking again, since its guests were
+already following this work, and tells each guest "Continued in NAME" with an
+**Open** action linking the new room at the tier that guest already holds.
+The browser also keeps the room under the project menu's Rooms. When the new
+session cannot be shared, the host gets a warning and guests are told the
+work continues in Emacs; the host's own handoff is never held up.
+
 An open share or lobby requests that the host stay awake while a guest is
 connected, and for two hours after it starts or the last guest leaves,
 whichever is later. `mevedel-collaboration-keep-awake-idle-time` configures this
@@ -940,6 +949,9 @@ questionnaire) — and the first answer,
 from Emacs or any guest, settles everywhere. Pending interactions stay above
 an open panel, such as a shared editor or an artifact, because an item's own
 conversation runs turns that ask too.
+A session shared while an interaction already waits presents that one too:
+starting a room adopts the session's pending prompts in the order they
+arrived, since each announces itself only once, when it is raised.
 `mevedel-collaboration-remote-interactions` gates that surface. Lease
 transfer, save, rewind, fork, publication, and execution-target changes are
 impossible from the browser regardless of link strength.
