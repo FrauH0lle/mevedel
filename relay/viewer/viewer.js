@@ -108,6 +108,7 @@
     connection.className = `conn ${className || ''}`;
     history.connection(className === 'connected');
     if (className !== 'connected') {
+      sessions.disconnected();
       state.connected = false;
       recoveryFrame = null;
       recoverySignature = '';
@@ -383,7 +384,10 @@
     const dialog = document.getElementById('settings');
     if (!dialog || !recoveryFrame) return;
     renderModeChoices();
-    if (!dialog.open) dialog.showModal();
+    if (!dialog.open) {
+      document.getElementById('settings-name').value = state.sessionName || '';
+      dialog.showModal();
+    }
   }
   function renderModeChoices() {
     const group = document.getElementById('settings-mode');
@@ -400,6 +404,12 @@
     }));
     help.textContent = MODES.find(([mode]) => mode === state.mode)?.[2]
       || 'What the assistant may do without asking first.';
+    const plan = document.getElementById('settings-plan');
+    if (plan) {
+      plan.hidden = !state.plan;
+      plan.textContent = 'Plan is active: work stays read-only except for the session plan. '
+        + 'Changing permissions does not leave Plan.';
+    }
   }
   function renderAttention(frame) {
     const section = document.getElementById('settings-attention');
@@ -466,14 +476,14 @@
     const actions = document.getElementById('settings-account-actions');
     if (!section || !title || !actions) return;
     actions.replaceChildren();
-    section.hidden = !frame.provider && !frame.runtime;
+    const providers = frame.providers || [];
+    section.hidden = !frame.provider && !frame.runtime && providers.length === 0;
     if (section.hidden) return;
     title.textContent = frame.provider ? `Account · ${frame.provider}` : 'Account';
-    const providers = frame.providers || [];
     // The owner's choice survives re-renders; otherwise follow the host.
-    const chosen = providers.includes(recoveryProvider) ? recoveryProvider : frame.provider;
+    const chosen = providers.includes(recoveryProvider) ? recoveryProvider : frame.provider || providers[0];
     let provider = null;
-    if (providers.length > 1) {
+    if (providers.length > 1 || (providers.length && !frame.provider)) {
       provider = document.createElement('select');
       provider.className = 'sheet-input';
       provider.title = 'Provider to sign in to';
@@ -518,6 +528,10 @@
     renderAccount(frame);
   }
   function initSettings() {
+    document.getElementById('settings-rename')?.addEventListener('click', () => {
+      const name = document.getElementById('settings-name').value.trim();
+      if (name) recoveryAction('rename', name);
+    });
     const model = document.getElementById('settings-model');
     const preset = document.getElementById('settings-preset');
     const apply = document.getElementById('settings-preset-apply');
@@ -1417,6 +1431,8 @@
       lobby.opened(frame);
     } else if (frame.t === 'delete-session') {
       lobby.deleted(frame);
+    } else if (frame.t === 'rename-session') {
+      lobby.renamed(frame);
     } else if (frame.t === 'files') {
       files.listed(frame);
     } else if (frame.t === 'file') {
@@ -1427,6 +1443,8 @@
       files.removed(frame);
     } else if (frame.t === 'files-changed') {
       files.changed(frame);
+    } else if (frame.t === 'session-models') {
+      sessions.showModels(frame.models);
     } else if (frame.t === 'new-session') {
       sessions.showResult({
         reqId: frame.reqId, ok: frame.ok === true, message: frame.message,

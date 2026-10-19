@@ -172,6 +172,7 @@
     function open(note, prompt) {
       if (typeof prompt === 'string') promptInput.value = prompt;
       showModels();
+      send({t: 'session-models'});
       submit.textContent = state.owner ? 'Create' : 'Ask host';
       lede.textContent = typeof note === 'string' ? note : (state.owner
         ? 'A separate room for separate work. This room, and everyone in '
@@ -182,9 +183,10 @@
       nameInput.focus();
     }
 
-    // Rebuilt on every open: the host's list arrives with each welcome.
+    // Refreshed on open: provider startup can discover more models after welcome.
     // The empty value leaves the choice to the host's default preset.
-    function showModels() {
+    function showModels(offered) {
+      if (Array.isArray(offered)) state.models = offered;
       const models = state.models.filter(model => typeof model === 'string');
       const wanted = modelInput.value;
       const fallback = el('option', null, 'Default');
@@ -199,14 +201,14 @@
     }
 
     // An empty name leaves naming to the host, which titles the session
-    // from its first prompt; a typed one needs a letter or digit.
+    // from its first prompt; a typed name without a letter or digit is also unnamed.
     function submitRequest() {
       const typed = nameInput.value.trim();
-      const name = typed.replace(/[^A-Za-z0-9_-]/g, '_');
-      if (typed && !/[A-Za-z0-9]/.test(name)) return;
+      const sanitized = typed.replace(/[^A-Za-z0-9_-]/g, '_');
+      const name = /[A-Za-z0-9]/.test(sanitized) ? sanitized : '';
       const reqId = ++requestSequence;
       const frame = {t: 'new-session', reqId, prompt: promptInput.value.trim()};
-      if (typed) frame.name = name;
+      if (name) frame.name = name;
       if (!modelInput.hidden && modelInput.value) frame.model = modelInput.value;
       const request = () => {
         const attached = files.items();
@@ -220,14 +222,14 @@
       // A file still being read goes with the request it was added to.
       if (files.busy()) files.settled().then(request);
       else request();
-      notices.push({reqId, name: typed ? name : 'New session', status: 'waiting'});
+      notices.push({reqId, name: name || 'New session', status: 'waiting'});
       nameInput.value = '';
       promptInput.value = '';
       render();
     }
 
     function showResult({reqId, ok, message, link, name}) {
-      const notice = notices.find(candidate => candidate.status === 'waiting'
+      const notice = notices.find(candidate => ['waiting', 'interrupted'].includes(candidate.status)
                                   && candidate.reqId === reqId);
       const parts = ok ? splitLink(link) : null;
       const settled = {
@@ -264,6 +266,16 @@
       renderRooms();
     }
 
+    function disconnected() {
+      for (const notice of notices) {
+        if (notice.status === 'waiting') Object.assign(notice, {
+          status: 'interrupted',
+          message: 'Connection lost. The request was not replayed. Check the lobby before asking again.',
+        });
+      }
+      renderNotices();
+    }
+
     function renderNotices() {
       if (!invites) return;
       invites.replaceChildren();
@@ -275,8 +287,8 @@
                        ? `${notice.name} · waiting for the host`
                        : (notice.status === 'open'
                           ? `${notice.name} · open`
-                          : `${notice.name} · refused`)));
-        if (notice.status === 'refused' && notice.message) {
+                          : `${notice.name} · ${notice.status}`)));
+        if (notice.status !== 'waiting' && notice.message) {
           card.append(el('p', 'own-text', notice.message));
         }
         const actions = el('div', 'invite-actions');
@@ -467,7 +479,7 @@
     if (inviteButton) inviteButton.addEventListener('click', openInvite);
 
     return Object.freeze({setVisible, setInviteVisible,
-                          showResult, offerRoom, useCredentials, setWorkspace,
+                          showResult, showModels, offerRoom, useCredentials, setWorkspace, disconnected,
                           rememberCurrent, rememberLobby, lobbyLink, rooms,
                           hasRooms: () => elsewhere().length > 0, openRooms,
                           openNewSession: open});

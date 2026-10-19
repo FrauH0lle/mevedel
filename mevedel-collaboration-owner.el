@@ -127,6 +127,16 @@ refusal protects the command allowlist from becoming an escalation path."
              mode (plist-get guest :name))
     (mevedel-collaboration--publish-status room)))
 
+(defun mevedel-collaboration--handle-session-models (room peer)
+  "Send PEER the current model choices when it can request a session in ROOM."
+  (when-let* ((guest (mevedel-collaboration--guest room peer))
+              ((if (plist-get room :session)
+                   (plist-get guest :writable)
+                 (plist-get guest :owner))))
+    (mevedel-collaboration--transport-send
+     (plist-get room :transport) peer
+     (list :t "session-models" :models (vconcat (mapcar #'car (mevedel-model-candidates)))))))
+
 (defun mevedel-collaboration--new-session-reply
     (room peer request-id name &rest keys)
   "Send PEER in ROOM a new-session REQUEST-ID outcome for NAME and KEYS."

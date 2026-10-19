@@ -30,7 +30,7 @@ function build({writable = true, owner = false, wanted = null} = {}) {
     getElementById: id => nodes[id],
     createElement: tag => new Element(tag),
   };
-  const window = {};
+  const window = {prompt: () => 'Équipe alpha'};
   const context = {window, document, console, Date};
   load('relay/viewer/viewer-lobby.js', context);
   const sent = [];
@@ -188,6 +188,22 @@ function openButton(nodes, index) {
   lobby.deleted({t: 'delete-session', reqId: 2, ok: true});
   lobby.deleted({t: 'delete-session', reqId: 2, ok: false, message: 'late'});
   assert.deepEqual(notices, ['Close old in Emacs first']);
+}
+
+// Owner rename retains Unicode and reports refusal without losing the row.
+{
+  const {lobby, nodes, sent, notices} = build({owner: true});
+  lobby.show(listing);
+  const button = nodes['lobby-list'].children[0].children.find(node => textOf(node) === 'Rename');
+  assert.ok(button, 'owner row offers Rename');
+  button.dispatch('click');
+  assert.deepEqual(plain(sent), [{t: 'rename-session', reqId: 1, id: 'a', name: 'Équipe alpha'}]);
+  lobby.renamed({reqId: 1, ok: false, message: 'Session is busy'});
+  assert.equal(button.disabled, false);
+  assert.deepEqual(notices, ['Session is busy']);
+  const full = build();
+  full.lobby.show(listing);
+  assert.ok(!full.nodes['lobby-list'].children[0].children.some(node => textOf(node) === 'Rename'));
 }
 
 // A session created from the lobby is joined; one created from a room is

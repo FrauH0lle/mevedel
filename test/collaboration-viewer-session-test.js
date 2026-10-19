@@ -55,9 +55,10 @@ function build(tierBytes, seed, models = [], roomId = 'here') {
   load('relay/viewer/attachments.js', context);
   load('relay/viewer/viewer-session.js', context);
   const sent = [];
+  const modelRequests = [];
   const controller = window.mevedelSessionView.create({
     state: {mode: 'ask', owner: tierBytes === 64, models},
-    send: frame => sent.push(frame),
+    send: frame => (frame.t === 'session-models' ? modelRequests : sent).push(frame),
     el: (tag, className, text) => element(document, tag, className, text),
     encode: base64urlEncode,
     decode: base64urlDecode,
@@ -69,7 +70,19 @@ function build(tierBytes, seed, models = [], roomId = 'here') {
     ownerToken: tierBytes >= 64 ? new Uint8Array(16).fill(1) : null,
   });
   controller.setWorkspace('ws');
-  return {controller, nodes, sent, copied, document};
+  return {controller, nodes, sent, modelRequests, copied, document};
+}
+
+// Opening refreshes the host's offered catalog; an in-flight pick survives.
+{
+  const {controller, nodes, modelRequests} = build(64, null, ['Claude Code:sonnet']);
+  controller.openNewSession();
+  assert.deepEqual(plain(modelRequests), [{t: 'session-models'}]);
+  nodes['new-session-model'].value = 'Claude Code:sonnet';
+  controller.showModels(['Claude Code:sonnet', 'Claude Code:new-model']);
+  assert.equal(nodes['new-session-model'].value, 'Claude Code:sonnet');
+  assert.deepEqual(nodes['new-session-model'].children.map(textOf),
+                   ['Default', 'Claude Code:sonnet', 'Claude Code:new-model']);
 }
 
 // What just happened, in the dock.
@@ -267,7 +280,21 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64),
   assert.deepEqual(rooms(nodes), ['2026-10-05T17-00-abc']);
   nodes['new-session-name'].value = '///';
   nodes['new-session'].close('create');
-  assert.equal(sent.length, 1, 'a typed name without a letter or digit is not sent');
+  assert.equal(sent.length, 2, 'an unusable name still submits as an unnamed session, like the host');
+  assert.equal('name' in sent[1], false);
+}
+
+// A lost peer cannot receive approval; reconnect must not leave a permanent wait.
+{
+  const {controller, nodes} = build(48);
+  nodes['new-session-name'].value = 'waiting';
+  nodes['new-session-prompt'].value = '';
+  nodes['new-session'].close('create');
+  controller.disconnected();
+  assert.match(cards(nodes)[0], /interrupted/);
+  assert.match(textOf(nodes.invites), /not replayed|Ask again/);
+  const actions = nodes.invites.children[0].children.at(-1);
+  assert.equal(textOf(actions.children.at(-1)), 'Dismiss');
 }
 
 // A lobby keeps itself among the rooms, so the rooms it opens list it;

@@ -53,6 +53,24 @@
     (should (eq 'second gptel-model))
     (should (equal "Recovery:second" (mevedel-session-model-provider session)))
     (should-not (mevedel-recovery-blocker session)))
+  :doc "a stale recovery action cannot detach a healthy local native history"
+  (test-mevedel-collaboration-recovery--with-owner
+    (setf (mevedel-session-external-conversations session)
+          (list (list "root" :engine 'claude-code :id "healthy" :state 'ready
+                      :host (system-name)
+                      :directory (expand-file-name mevedel-claude-code-directory))))
+    (let ((before (copy-tree (mevedel-session-external-conversations session))))
+      (should-error (mevedel-collaboration-recovery-handle room 1 '(:action "history" :value "root"))
+                    :type 'user-error)
+      (should (equal before (mevedel-session-external-conversations session)))))
+  :doc "refused login never replaces the owner's selected provider"
+  (test-mevedel-collaboration-recovery--with-owner
+    (let* ((previous (gptel-make-openai-oauth "Previous"))
+           (guest (gethash 1 guests)))
+      (plist-put guest :recovery-backend previous)
+      (should-error (mevedel-collaboration-recovery-handle
+                     room 1 '(:action "login" :provider "Recovery")) :type 'user-error)
+      (should (eq previous (plist-get guest :recovery-backend)))))
   :doc "retry clears the failure pause once retained input is resolved"
   (test-mevedel-collaboration-recovery--with-owner
     (mevedel-session-set-pending-input-failure-paused session t)

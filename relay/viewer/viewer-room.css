@@ -75,6 +75,8 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 .ledger { width:100%; max-width:864px; padding:34px 24px 24px; gap:26px; }
 .history { width:100%; max-width:864px; margin:24px auto 0; padding:0 24px; }
 .history-description,.history-note { margin:0 0 12px; font-size:13px; color:var(--muted); }
+.history-chat + .history-chat { margin-top:24px; }
+.history-chat-title { margin:0 0 12px; font-size:14px; font-weight:600; overflow-wrap:anywhere; }
 .history-segment { position:relative; border-block:1px solid var(--line); margin-top:-1px; }
 .history-collapse { position:absolute; inset:0 auto 0 -24px; display:flex; flex-direction:column; align-items:center; width:20px; padding:0; border:0; border-radius:3px; color:var(--muted); background:transparent; cursor:pointer; text-align:center; }
 .history-collapse::before { content:''; position:absolute; top:0; bottom:0; left:9px; width:1px; background:var(--line); }

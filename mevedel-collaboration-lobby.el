@@ -80,7 +80,10 @@
 ;; `mevedel-collaboration-owner'
 (declare-function mevedel-collaboration--handle-new-session
                   "mevedel-collaboration-owner" (room peer frame))
+(declare-function mevedel-collaboration--handle-session-models
+                  "mevedel-collaboration-owner" (room peer))
 (autoload 'mevedel-collaboration--handle-new-session "mevedel-collaboration-owner")
+(autoload 'mevedel-collaboration--handle-session-models "mevedel-collaboration-owner")
 
 ;; `mevedel-collaboration-presence'
 (declare-function mevedel-collaboration-presence-handle
@@ -119,6 +122,11 @@
                   "mevedel-collaboration-files" (owner peer frame root))
 (declare-function mevedel-collaboration-files-handle-upload
                   "mevedel-collaboration-files" (owner peer frame root))
+
+;; `mevedel-session-naming'
+(declare-function mevedel-session-naming-rename "mevedel-session-naming" (session buffer name &optional current-p))
+(defvar mevedel-session-naming-renamed-hook)
+(autoload 'mevedel-session-naming-rename "mevedel-session-naming")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-delete
@@ -320,10 +328,12 @@ gone, in which case it is forgotten."
     (truncate (float-time time))))
 
 (defun mevedel-collaboration-lobby--live-sessions (workspace)
-  "Return WORKSPACE's live root sessions as (ID NAME . BUFFER) entries."
+  "Return WORKSPACE's listed live root sessions as (ID NAME . BUFFER) entries.
+Dedicated artifact conversations are reached only through their artifact."
   (let (live)
     (pcase-dolist (`(,name . ,buffer) (mevedel--workspace-sessions workspace))
       (when-let* ((session (buffer-local-value 'mevedel--session buffer))
+                  ((not (mevedel-session-dedicated-artifact session)))
                   (id (mevedel-session-session-id session)))
         (push (cons id (cons name buffer)) live)))
     (nreverse live)))
@@ -333,10 +343,7 @@ gone, in which case it is forgotten."
 Live sessions that were never saved lead; saved ones follow in their
 own order, marked live or shared when they are open here.  A row's
 `:updated' is in seconds since the epoch."
-  (let* ((live (cl-remove-if (lambda (entry)
-                               (mevedel-session-dedicated-artifact
-                                (buffer-local-value 'mevedel--session (cddr entry))))
-                             (mevedel-collaboration-lobby--live-sessions workspace)))
+  (let* ((live (mevedel-collaboration-lobby--live-sessions workspace))
          (saved (mevedel-session-persistence-without-dedicated
                  workspace (mevedel-session-persistence-list-sessions workspace)))
          (saved-ids (mapcar (lambda (entry)
@@ -456,6 +463,51 @@ already; PEER receives the room at its own tier."
 
 
 ;;
+;;; Renaming a session
+
+(defun mevedel-collaboration-lobby--session-renamed (session)
+  "Refresh running lobbies of SESSION's workspace after its name commits."
+  (maphash
+   (lambda (_root lobby)
+     (when (equal (plist-get lobby :workspace) (mevedel-session-workspace session))
+       (maphash (lambda (peer _guest)
+                  (condition-case err
+                      (mevedel-collaboration-lobby--send-listing lobby peer)
+                    (error (message "mevedel: lobby rename refresh failed: %s"
+                                    (error-message-string err)))))
+                (plist-get lobby :guests))))
+   mevedel-collaboration-lobby--lobbies))
+
+(add-hook 'mevedel-session-naming-renamed-hook
+          #'mevedel-collaboration-lobby--session-renamed)
+
+(defun mevedel-collaboration-lobby--handle-rename (lobby peer frame)
+  "Rename the listed session FRAME names for owner PEER in LOBBY."
+  (when-let* ((guest (mevedel-collaboration--guest lobby peer))
+              (request-id (plist-get frame :reqId))
+              ((mevedel-collaboration--request-id-p request-id)))
+    (let ((failure
+           (condition-case err
+               (progn
+                 (unless (plist-get guest :owner)
+                   (user-error "Only an owner link can rename sessions"))
+                 (let ((id (plist-get frame :id))
+                       (name (mevedel-collaboration--guest-text (plist-get frame :name))))
+                   (unless (and (stringp id) (not (string-empty-p id)) name)
+                     (user-error "A session and nonempty name are required"))
+                   (let ((buffer (mevedel-collaboration-lobby--session-buffer lobby id)))
+                     (mevedel-session-naming-rename
+                      (buffer-local-value 'mevedel--session buffer) buffer name)))
+                 nil)
+             (inhibited-interaction "This session needs a decision in Emacs first")
+             (error (format "Session could not be renamed: %s" (error-message-string err))))))
+      (mevedel-collaboration--transport-send
+       (plist-get lobby :transport) peer
+       (append (list :t "rename-session" :reqId request-id)
+               (if failure (list :ok :json-false :message failure) (list :ok t)))))))
+
+
+;;
 ;;; Deleting a session
 
 (defun mevedel-collaboration-lobby--delete-failure (lobby guest id)
@@ -533,8 +585,12 @@ whose link is meant to keep working."
              (mevedel-collaboration-lobby--handle-open lobby peer frame))
             ("new-session"
              (mevedel-collaboration--handle-new-session lobby peer frame))
+            ("session-models"
+             (mevedel-collaboration--handle-session-models lobby peer))
             ("delete-session"
              (mevedel-collaboration-lobby--handle-delete lobby peer frame))
+            ("rename-session"
+             (mevedel-collaboration-lobby--handle-rename lobby peer frame))
             ("files"
              (mevedel-collaboration-files-handle-list lobby peer frame root))
             ("file-get"

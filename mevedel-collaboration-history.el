@@ -24,7 +24,9 @@
 (declare-function mevedel-collaboration--transport-send "mevedel-collaboration-transport" (transport peer frame))
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-read-segment "mevedel-session-artifacts" (session number))
+(declare-function mevedel-session-artifacts-session-chats "mevedel-session-artifacts" (session))
 (autoload 'mevedel-session-artifacts-read-segment "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-session-chats "mevedel-session-artifacts")
 
 (defun mevedel-collaboration--history-records (room number)
   "Project archived segment NUMBER in ROOM without activating it."
@@ -89,7 +91,18 @@ Cache immutable segment metadata, never a second transcript store."
   "Publish ROOM's history index when changed, or directly to joining PEER."
   (let* ((session (plist-get room :session))
          (current (or (and session (mevedel-session-current-segment session)) 1))
-         (records (mevedel-collaboration--history-artifacts room))
+         (artifacts (mevedel-collaboration--history-artifacts room))
+         ;; Chat descriptors share the bounded records stream with artifacts,
+         ;; rather than repeating an unbounded index in every chunk's metadata.
+         (records (append artifacts
+                          (when session
+                            (mapcar
+                             (lambda (chat)
+                               (list :kind "chat" :number (plist-get chat :number)
+                                     :firstSegment (plist-get chat :first-segment)
+                                     :lastSegment (plist-get chat :last-segment)
+                                     :title (plist-get chat :title)))
+                             (mevedel-session-artifacts-session-chats session)))))
          (index (cons current records))
          (meta (list :t "history-index" :currentSegment current)))
     (when (or peer (not (equal index (plist-get room :history-index))))
@@ -102,7 +115,7 @@ Cache immutable segment metadata, never a second transcript store."
                    (if peer
                        (mevedel-collaboration--transport-send (plist-get room :transport) peer frame)
                      (mevedel-collaboration--broadcast room frame))))))
-    records))
+    artifacts))
 
 (defun mevedel-collaboration--handle-history-get (room peer frame)
   "Send a bounded projection of an archived segment to authenticated PEER."

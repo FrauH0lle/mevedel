@@ -25,7 +25,8 @@ Link tiers grant progressively more typed actions:
 - **Full:** additionally queue prompts, interrupt the running request, answer
   eligible interactions, invoke host-admitted commands or skills, and edit
   shared whiteboards and documents through the host.
-- **Owner:** additionally change permission mode and create a same-workspace
+- **Owner:** additionally change permission mode, rename the session through
+  its native naming path, and create a same-workspace
   isolated session directly. A full-link creation request instead requires
   approval from Emacs or an owner-link guest. An artifact's own
   conversation is not such a session: a full link starts it on first use
@@ -49,7 +50,9 @@ host's ordinary restore path. It may reclaim a provably stale same-host PID
 lock without confirmation, but only while the observed holder remains
 unchanged. Live, foreign or uncertain holders and portable lease takeovers
 retain their existing decision requirements; guest frames never wait for an
-Emacs prompt.
+Emacs prompt. Owners can rename listed sessions through that same restore and
+naming path. A rename preserves the session identity and bearer room, and
+refreshes all connected lobby listings as well as the room's heading.
 
 Tool display comes from the host's bounded semantic presentation tree and
 selected direct-tool identity. Display metadata is allowlisted rather than
@@ -68,6 +71,10 @@ Artifacts live in the workspace artifact store, not in relay file storage. See
 
 Compaction reduces model context without withdrawing browser history. Earlier
 segments load as read-only disclosures through the existing session reader.
+Canonical chat descriptors group those segments across `/clear` boundaries;
+compaction is continuation within a chat, not a new chat. The host publishes
+chat numbers, segment ranges and titles in bounded history-index chunks, without
+reading transcript files just to recover chat identity.
 The room caches only their published artifact metadata, keeping sidebar access
 independent of the current context segment; transcript bodies load on demand.
 

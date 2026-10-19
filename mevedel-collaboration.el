@@ -842,10 +842,13 @@ room, and follows a rename, including an automatic title."
       (error (mevedel-collaboration--observer-failure room err)))))
 
 (defun mevedel-collaboration--on-session-event (data-buffer event)
-  "Publish DATA-BUFFER's status when its session EVENT changes it.
-A rename, manual or automatic, changes the name the room is headed by."
+  "Publish what DATA-BUFFER's session EVENT changes for its room.
+A rename, manual or automatic, changes the name the room is headed by
+and the title of its current chat; a history save may change its Goal."
   (pcase event
-    ('rename (mevedel-collaboration-notify-request-changed data-buffer))
+    ('rename
+     (mevedel-collaboration-notify-request-changed data-buffer)
+     (mevedel-collaboration-notify-history-changed data-buffer))
     ('save-history
      (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
        (mevedel-collaboration--publish-goal room)))))

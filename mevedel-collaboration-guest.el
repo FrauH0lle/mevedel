@@ -119,9 +119,13 @@
 (declare-function mevedel-collaboration--owner "mevedel-collaboration-owner" (room peer))
 (declare-function mevedel-collaboration--handle-new-session
                   "mevedel-collaboration-owner" (room peer frame))
+(declare-function mevedel-collaboration--handle-session-models
+                  "mevedel-collaboration-owner" (room peer))
 (declare-function mevedel-collaboration--handle-set-mode
                   "mevedel-collaboration-owner" (room peer frame))
 (autoload 'mevedel-collaboration--handle-new-session
+  "mevedel-collaboration-owner")
+(autoload 'mevedel-collaboration--handle-session-models
   "mevedel-collaboration-owner")
 (autoload 'mevedel-collaboration--handle-set-mode
   "mevedel-collaboration-owner")
@@ -1312,7 +1316,9 @@ sending guest instead of waiting for an answer."
     ("set-mode"
      (mevedel-collaboration--handle-set-mode room peer frame))
     ("new-session"
-     (mevedel-collaboration--handle-new-session room peer frame))))
+     (mevedel-collaboration--handle-new-session room peer frame))
+    ("session-models"
+     (mevedel-collaboration--handle-session-models room peer))))
 
 (defun mevedel-collaboration--on-control (data-buffer event peer)
   "Handle relay control EVENT for PEER in DATA-BUFFER's room."
