@@ -181,7 +181,7 @@
 (declare-function mevedel-session-publication-discard-rolled-back "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-logical-path-p "mevedel-session-publication" (path))
 (declare-function mevedel-session-publication-prune-committed "mevedel-session-publication" (session artifacts))
-(declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit))
+(declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit prepared))
 (declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir &optional head names))
 (declare-function mevedel-session-publication-uncommitted-artifact "mevedel-session-publication" (session logical))
 (autoload 'mevedel-session-publication-committed-p
@@ -1919,6 +1919,19 @@ Missing snapshots clear presentations only in preservation mode."
 (defvar mevedel-session-artifacts--collecting-critical-artifacts-p nil
   "Non-nil while portable save captures durability-critical file writes.")
 
+(defvar mevedel-session-artifacts--preparing-sessions nil
+  "Sessions whose checkpoint bytes and metadata are being prepared.")
+
+(defun mevedel-session-artifacts-call-with-checkpoint (session function)
+  "Call FUNCTION while excluding nested SESSION checkpoint writers.
+The owning writer explicitly admits its final prepared publication.  Nested
+writers must fail before they can publish tentative live metadata or mail."
+  (when (memq session mevedel-session-artifacts--preparing-sessions)
+    (user-error "Session checkpoint is being prepared"))
+  (let ((mevedel-session-artifacts--preparing-sessions
+         (cons session mevedel-session-artifacts--preparing-sessions)))
+    (funcall function)))
+
 (defun mevedel-session-artifacts-printed-value (value)
   "Return VALUE in the package's durable Lisp representation."
   (with-temp-buffer
@@ -1930,11 +1943,12 @@ Missing snapshots clear presentations only in preservation mode."
     (buffer-string)))
 
 (defun mevedel-session-artifacts-publish-text
-    (session path content &optional coding)
+    (session path content &optional coding prepared)
   "Publish SESSION's durability-critical CONTENT atomically at PATH.
 CONTENT is text, or a unibyte string written as its raw bytes.  CODING
 encodes text for portable writes; direct writes encode text as UTF-8.
 
+PREPARED is reserved for the owning checkpoint's final write.
 Portable project writes enter the session publication queue.  File-workspace
 writes retain the existing same-filesystem temporary-file and rename
 behavior.  Return the publication outcome, or PATH after a direct write."
@@ -1944,7 +1958,8 @@ behavior.  Return the publication outcome, or PATH after a direct write."
       (mevedel-session-durability-with-transaction
         (mevedel-session-artifacts-assert-mutation-authority session)
         (mevedel-session-publication-publish
-         session (list (list :path path :content content :coding coding))))
+        session (list (list :path path :content content :coding coding))
+        nil prepared))
     (progn
       (make-directory (file-name-directory (expand-file-name path)) t)
       (with-temp-buffer
@@ -1992,6 +2007,8 @@ ROOT-BUFFER must be SESSION's live root data buffer. Reentrant calls are
 rejected before staging. Pre-commit failures propagate; post-commit cleanup
 failures remain diagnostic under the publisher's strict commit contract.
 PID-lock sessions write their fixed sidecar after the same authority check."
+  (when (memq session mevedel-session-artifacts--preparing-sessions)
+    (user-error "Session checkpoint is being prepared"))
   (let ((artifact (mevedel-session-artifacts--sidecar-publication-artifact
                    session root-buffer)))
     (if (mevedel-session-codec-portable-authority-p session)
@@ -2001,13 +2018,14 @@ PID-lock sessions write their fixed sidecar after the same authority check."
        (plist-get artifact :content)))))
 
 (defun mevedel-session-artifacts-publish-transcript-state
-    (session root-buffer transcript-path content &optional coding)
+    (session root-buffer transcript-path content &optional coding prepared)
   "Publish portable SESSION transcript CONTENT and its sidecar atomically.
 
 ROOT-BUFFER must be SESSION's live root data buffer.  TRANSCRIPT-PATH must be
 a logical artifact below SESSION's save path.  The current authoritative
 sidecar is rebuilt from SESSION and ROOT-BUFFER and commits the two-artifact
-batch.  Reentrant publication is rejected before any bytes are queued."
+batch.  Reentrant publication is rejected before any bytes are queued.
+PREPARED admits only the owning checkpoint's final frozen batch."
   (unless (stringp content)
     (error "Transcript publication requires string content"))
   (let* ((sidecar-artifact
@@ -2025,7 +2043,7 @@ batch.  Reentrant publication is rejected before any bytes are queued."
      (list
       (list :path path :content content :coding coding)
       sidecar-artifact)
-     t)))
+     t prepared)))
 
 (defun mevedel-session-artifacts-publish-agent-terminal-state (invocation)
   "Publish INVOCATION's portable transcript and final session sidecar together.
@@ -2056,42 +2074,45 @@ continues to wait for the root turn's completed-turn publication boundary."
       (unless (and buffer-file-name
                    (equal (expand-file-name buffer-file-name) transcript))
         (error "Agent transcript path does not match its invocation"))
-      (mevedel-session-artifacts-assert-mutation-authority session)
-      (let ((modified-p (buffer-modified-p)))
-        (when modified-p
-          (when (bound-and-true-p gptel-mode)
-            (gptel--save-state))
-          (let ((before-save-hook
-                 (remq 'gptel--save-state before-save-hook)))
-            (mevedel-session-artifacts--run-save-hooks-silently
-             'before-save-hook)))
-        (mevedel-session-persistence-update-transcript-entry
-         session (mevedel-agent-invocation-agent-id invocation)
-         (list :updated-at (format-time-string "%FT%H-%M-%S")))
-        (mevedel-session-publication-publish
-         session
-         (list
-          (list :path transcript
-                :content (buffer-substring-no-properties
-                          (point-min) (point-max))
-                :coding (or buffer-file-coding-system 'utf-8-unix))
-          ;; The sidecar commits transcript metadata and final registry state.
-          (mevedel-session-artifacts--sidecar-artifact session parent))
-         t)
-        (when modified-p
-          (condition-case err
-              (progn
-                (set-visited-file-modtime 0)
-                (set-buffer-modified-p nil)
-                (mevedel-session-artifacts--run-save-hooks-silently
-                 'after-save-hook))
-            (error
-             (mevedel--warn-once
-              'artifacts-agent-post-save
-              "Agent transcript post-save cleanup failed: %s"
-              (error-message-string err)))))
-        (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil)
-        t))))
+      (mevedel-session-artifacts-call-with-checkpoint
+       session
+       (lambda ()
+	 (mevedel-session-artifacts-assert-mutation-authority session)
+	 (let ((modified-p (buffer-modified-p)))
+           (when modified-p
+             (when (bound-and-true-p gptel-mode)
+               (gptel--save-state))
+             (let ((before-save-hook
+                    (remq 'gptel--save-state before-save-hook)))
+               (mevedel-session-artifacts--run-save-hooks-silently
+		'before-save-hook)))
+           (mevedel-session-persistence-update-transcript-entry
+            session (mevedel-agent-invocation-agent-id invocation)
+            (list :updated-at (format-time-string "%FT%H-%M-%S")))
+           (mevedel-session-publication-publish
+            session
+            (list
+             (list :path transcript
+                   :content (buffer-substring-no-properties
+                             (point-min) (point-max))
+                   :coding (or buffer-file-coding-system 'utf-8-unix))
+             ;; The sidecar commits transcript metadata and final registry state.
+             (mevedel-session-artifacts--sidecar-artifact session parent))
+            t t)
+           (when modified-p
+             (condition-case err
+		 (progn
+                   (set-visited-file-modtime 0)
+                   (set-buffer-modified-p nil)
+                   (mevedel-session-artifacts--run-save-hooks-silently
+                    'after-save-hook))
+               (error
+		(mevedel--warn-once
+		 'artifacts-agent-post-save
+		 "Agent transcript post-save cleanup failed: %s"
+		 (error-message-string err)))))
+           (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil)
+           t))))))
 
 (defun mevedel-session-artifacts--instruction-artifacts (session buffer)
   "Return SESSION instruction snapshot artifacts derived from BUFFER."
@@ -2233,9 +2254,8 @@ calling this serializer."
                (append changed
                        (list (mevedel-session-artifacts--sidecar-artifact
                               session buffer)))))
-          (if mevedel-session-artifacts-require-agent-commit-p
-              (mevedel-session-publication-publish session publication t)
-            (mevedel-session-publication-publish session publication)))
+          (mevedel-session-publication-publish
+           session publication mevedel-session-artifacts-require-agent-commit-p t))
         (when segment-artifact
           (with-current-buffer buffer
             (condition-case err
@@ -2268,12 +2288,15 @@ mark the latest assistant response
 A portable session whose durable state is byte for byte the committed one
 performs no target transaction.  FORCE publishes anyway, for a caller that
 must materialize a snapshot rather than record a change."
-  (if (fboundp 'mevedel-telemetry-measure)
-      (mevedel-telemetry-measure
-       session 'session-save 0
-       (lambda () (mevedel-session-artifacts--save session buffer settled force))
-       :kind 'full :settled (and settled t))
-    (mevedel-session-artifacts--save session buffer settled force)))
+  (mevedel-session-artifacts-call-with-checkpoint
+   session
+   (lambda ()
+     (if (fboundp 'mevedel-telemetry-measure)
+	 (mevedel-telemetry-measure
+	  session 'session-save 0
+	  (lambda () (mevedel-session-artifacts--save session buffer settled force))
+	  :kind 'full :settled (and settled t))
+       (mevedel-session-artifacts--save session buffer settled force)))))
 
 (defun mevedel-session-artifacts--save (session buffer settled force)
   "Save SESSION from BUFFER as `mevedel-session-artifacts-save' documents.
@@ -2405,6 +2428,8 @@ materialized or has no committed sidecar."
 
 (defun mevedel-session-artifacts--save-agent-registry (session buffer)
   "Persist SESSION's sidecar from BUFFER as the public entry documents."
+  (when (memq session mevedel-session-artifacts--preparing-sessions)
+    (user-error "Session checkpoint is being prepared"))
   (when-let* ((save-path (mevedel-session-save-path session))
               (buffer (mevedel-session-persistence-authoritative-buffer
                        buffer)))

@@ -44,20 +44,24 @@
                   "mevedel-session-artifacts" (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-assert-not-superseded
                   "mevedel-session-artifacts" ())
+(declare-function mevedel-session-artifacts-call-with-checkpoint
+                  "mevedel-session-artifacts" (session function))
 (declare-function mevedel-session-artifacts-find-artifact-noselect
                   "mevedel-session-artifacts"
                   (session logical &optional inspection committed-only))
 (declare-function mevedel-session-artifacts-publish-text
                   "mevedel-session-artifacts"
-                  (session path content &optional coding))
+                  (session path content &optional coding prepared))
 (declare-function mevedel-session-artifacts-publish-transcript-state
                   "mevedel-session-artifacts"
-                  (session root-buffer transcript-path content &optional coding))
+                  (session root-buffer transcript-path content &optional coding prepared))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds
                   "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-strip-gptel-config-properties
                   "mevedel-session-artifacts" nil)
 (autoload 'mevedel-session-artifacts-artifact-present-p
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-call-with-checkpoint
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-find-artifact-noselect
   "mevedel-session-artifacts")
@@ -81,7 +85,7 @@
 (declare-function mevedel-session-persistence-update-transcript-entry
                   "mevedel-session-persistence" (session agent-id updates))
 (declare-function mevedel-session-persistence-write-sidecar-now
-                  "mevedel-session-persistence" (session buffer))
+                  "mevedel-session-persistence" (session buffer &optional prepared))
 (autoload 'mevedel-session-persistence-update-transcript-entry
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-write-sidecar-now
@@ -753,85 +757,88 @@ Return nil when INVOCATION has no live conversation buffer."
 (defun mevedel-agent-conversation--write (invocation)
   "Write INVOCATION's retained conversation, returning non-nil on success."
   (when (mevedel-agent-invocation-p invocation)
-    (let ((buffer (mevedel-agent-invocation-buffer invocation))
-          (relative
-           (mevedel-agent-invocation-transcript-relative-path invocation))
-          (session (mevedel-agent-invocation-parent-session invocation))
-          (parent
-           (mevedel-agent-invocation-parent-data-buffer invocation)))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (when (and buffer-file-name relative session
-                     (mevedel-session-save-path session)
-                     (mevedel--same-file-p
-                      buffer-file-name
-                      (expand-file-name
-                       relative (mevedel-session-save-path session))))
-            (condition-case err
-                (progn
-                  (mevedel-session-persistence-update-transcript-entry
-                   session
-                   (mevedel-agent-invocation-agent-id invocation)
-                   (list :updated-at (format-time-string "%FT%H-%M-%S")))
-                  (when (buffer-modified-p)
-                    (when (bound-and-true-p gptel-mode)
-                      (gptel--save-state))
-                    (let* ((coding-system-for-write 'utf-8-unix)
-                           (save-silently t)
-                           (inhibit-message t)
-                           (message-log-max nil)
-                           (before-save-hook
-                            (remq 'gptel--save-state before-save-hook))
-                           (undo-tree-auto-save-history nil)
-                           (write-file-functions
-                            (remq 'undo-tree-save-history-from-hook
-                                  write-file-functions)))
-                      ;; Portable authority resolves this transcript
-                      ;; through the publication, so a direct write would
-                      ;; leave resume unable to see it.
-                      (if (mevedel-session-codec-portable-authority-p session)
-                          (progn
-                            (run-hooks 'before-save-hook)
-                            (let ((content (buffer-substring-no-properties
-                                            (point-min) (point-max)))
-                                  (root (or (mevedel-session-root-buffer session) parent)))
-                              (if (and (mevedel-agent-invocation-sidecar-dirty invocation)
-                                       (buffer-live-p root)
-                                       (mevedel-session-artifacts-artifact-present-p
-                                        session "session.meta.el" t))
-                                  (progn
-                                    (mevedel-session-artifacts-publish-transcript-state
-                                     session root buffer-file-name content 'utf-8-unix)
-                                    (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil))
-                                (mevedel-session-artifacts-publish-text
-                                 session buffer-file-name content 'utf-8-unix)))
-                            (set-visited-file-modtime 0)
-                            (set-buffer-modified-p nil)
-                            (run-hooks 'after-save-hook))
-                        (mevedel-session-artifacts-assert-not-superseded)
-                        (basic-save-buffer))))
-                  (when (and
-                         (mevedel-agent-invocation-sidecar-dirty invocation)
-                         (buffer-live-p parent)
-                         (mevedel-session-persistence-write-sidecar-now
-                          session parent))
-                    (setf (mevedel-agent-invocation-sidecar-dirty invocation)
-                          nil))
-                  t)
-              (mevedel-session-control-fs-busy
-               ;; Reached from a timer or sentinel inside a remote command:
-               ;; the control filesystem refused to nest and nothing was
-               ;; written, so write again once the transport is free.
-               (mevedel-transport-run-when-idle
-                (list 'agent-conversation-save
-                      (mevedel-agent-invocation-agent-id invocation))
-                (mevedel-session-save-path session)
-                (lambda () (mevedel-agent-conversation--write invocation)))
-               nil)
-              (error
-               (message "mevedel: conversation save failed for %s: %S"
-                        (mevedel-agent-invocation-agent-id invocation) err)
-               nil))))))))
+    (mevedel-session-artifacts-call-with-checkpoint
+     (mevedel-agent-invocation-parent-session invocation)
+     (lambda ()
+       (let ((buffer (mevedel-agent-invocation-buffer invocation))
+             (relative
+              (mevedel-agent-invocation-transcript-relative-path invocation))
+             (session (mevedel-agent-invocation-parent-session invocation))
+             (parent
+              (mevedel-agent-invocation-parent-data-buffer invocation)))
+	 (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (when (and buffer-file-name relative session
+			(mevedel-session-save-path session)
+			(mevedel--same-file-p
+			 buffer-file-name
+			 (expand-file-name
+			  relative (mevedel-session-save-path session))))
+               (condition-case err
+                   (progn
+                     (mevedel-session-persistence-update-transcript-entry
+                      session
+                      (mevedel-agent-invocation-agent-id invocation)
+                      (list :updated-at (format-time-string "%FT%H-%M-%S")))
+                     (when (buffer-modified-p)
+                       (when (bound-and-true-p gptel-mode)
+			 (gptel--save-state))
+                       (let* ((coding-system-for-write 'utf-8-unix)
+                              (save-silently t)
+                              (inhibit-message t)
+                              (message-log-max nil)
+                              (before-save-hook
+                               (remq 'gptel--save-state before-save-hook))
+                              (undo-tree-auto-save-history nil)
+                              (write-file-functions
+                               (remq 'undo-tree-save-history-from-hook
+                                     write-file-functions)))
+			 ;; Portable authority resolves this transcript
+			 ;; through the publication, so a direct write would
+			 ;; leave resume unable to see it.
+			 (if (mevedel-session-codec-portable-authority-p session)
+                             (progn
+                               (run-hooks 'before-save-hook)
+                               (let ((content (buffer-substring-no-properties
+                                               (point-min) (point-max)))
+                                     (root (or (mevedel-session-root-buffer session) parent)))
+				 (if (and (mevedel-agent-invocation-sidecar-dirty invocation)
+					  (buffer-live-p root)
+					  (mevedel-session-artifacts-artifact-present-p
+                                           session "session.meta.el" t))
+                                     (progn
+                                       (mevedel-session-artifacts-publish-transcript-state
+					session root buffer-file-name content 'utf-8-unix t)
+                                       (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil))
+                                   (mevedel-session-artifacts-publish-text
+                                    session buffer-file-name content 'utf-8-unix t)))
+                               (set-visited-file-modtime 0)
+                               (set-buffer-modified-p nil)
+                               (run-hooks 'after-save-hook))
+                           (mevedel-session-artifacts-assert-not-superseded)
+                           (basic-save-buffer))))
+                     (when (and
+                            (mevedel-agent-invocation-sidecar-dirty invocation)
+                            (buffer-live-p parent)
+                            (mevedel-session-persistence-write-sidecar-now
+                             session parent t))
+                       (setf (mevedel-agent-invocation-sidecar-dirty invocation)
+                             nil))
+                     t)
+		 (mevedel-session-control-fs-busy
+		  ;; Reached from a timer or sentinel inside a remote command:
+		  ;; the control filesystem refused to nest and nothing was
+		  ;; written, so write again once the transport is free.
+		  (mevedel-transport-run-when-idle
+                   (list 'agent-conversation-save
+			 (mevedel-agent-invocation-agent-id invocation))
+                   (mevedel-session-save-path session)
+                   (lambda () (mevedel-agent-conversation--write invocation)))
+		  nil)
+		 (error
+		  (message "mevedel: conversation save failed for %s: %S"
+                           (mevedel-agent-invocation-agent-id invocation) err)
+		  nil))))))))))
 
 (defun mevedel-agent-conversation-save (invocation &optional deferred)
   "Save INVOCATION's retained conversation.

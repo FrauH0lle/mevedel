@@ -10,14 +10,11 @@ commits. They refuse reentrant queueing. Observational activity changes and
 explicit mailbox discards schedule one sidecar-only registry save per session, with
 a two-second default debounce through the idle-transport scheduler.
 
-After initial materialization, acknowledged registry and mailbox mutations also
-publish only the sidecar and any retained artifact batches. They preserve the
-committed root segment and prompt index rather than checkpointing unrelated
-streaming text. The first acknowledged mutation still forces a full root
-snapshot; terminal agent settlement commits its transcript with its metadata.
-Thus a mailbox acknowledgement and its staged transcript dependencies become
-reachable together, before any consumer wakes. This changes save granularity,
-not acknowledgement durability or the ordinary root checkpoint cadence.
+Acknowledged registry and mailbox mutations force a full root checkpoint and
+include any retained artifact batches. Root metadata can advance before its
+deferred settlement save, so a sidecar-only acknowledgement is not safe without
+a separate committed-root projection. Terminal agent settlement commits its
+transcript with its metadata.
 
 Delivered mail is consumed only after successful transcript insertion. Queue
 removal checkpoints the receiving conversation through the existing root/agent
@@ -27,6 +24,12 @@ the mailbox; a file-session checkpoint writes text before its sidecar. Failure
 restores consumed records while preserving later arrivals. One nonempty batch
 pays for one checkpoint instead of saving each retained-agent block separately,
 and empty/repeated acknowledgements do no work.
+
+Root and agent checkpoint preparation excludes nested same-session writers,
+including observational sidecar saves from hooks. The owning writer explicitly
+admits its final prepared publication; failures unwind the exclusion. Otherwise
+a save hook could commit tentative consumption without its transcript and then
+fail, leaving in-memory rollback unable to repair the committed mailbox.
 
 New retained transcript text and dirty transcript metadata share a strict
 publication when the portable sidecar already exists. The session root supplies
@@ -77,23 +80,21 @@ All revisions belong to ADR 0112:
   checkpoint, preserving native response boundaries and prompt-index updates;
   raw text plus a sidecar would leave those offsets stale. This deliberately
   spends one synchronous checkpoint per delivered batch to close the loss window.
-  Agent delivery replaces its per-block saves with this one checkpoint. Compiled
-  alternating root enqueue/consume cycles were neutral for single messages
-  (222.7 versus 222.1 ms), but batching retained the enqueue savings. Replaying
-  the observed root mix of 190 messages in 117 contiguous delivery regions on a
-  private final-size session copy reduced combined time from 39.83 to 31.78 s
-  (two runs per variant, alternating order, reset transcript). This includes
-  the old deferred registry flush and the new checkpoint; it is a workload-shape
-  comparison, not reconstruction of historical drain calls or session elapsed time.
-- **2026-10-19 acknowledged saves:** the long multi-agent session recorded 1,878
-  session saves totaling 145 seconds, and execution-delivery callbacks spent
-  143-176 ms synchronously saving the whole root. Existing immutable manifests
-  already retain the root snapshot and merge staged transcript batches with a
-  sidecar commit. Reusing that transaction removes root serialization, prompt
-  indexing and snapshot scans without deferring acknowledged delivery. Eight
-  alternating compiled observations per variant on a restored private copy
-  (1.79 MB root, 27 retained agents) reduced median acknowledged save time from
-  145.2 to 55.2 ms, with no GC in either measured path.
+  Agent delivery replaces its per-block saves with this one checkpoint.
+- **2026-10-19 acknowledged-save experiment reversed:** a sidecar-only path
+  reduced median compiled acknowledgement from 145.2 to 55.2 ms on a private
+  1.79 MB/27-agent session copy. A real-disk restore at the synchronous turn
+  commit/deferred save seam then reproduced turn 1 metadata against a partial
+  turn 0 transcript. The same hole followed failed root-save preparation.
+  Full acknowledged checkpoints are retained rather than adding a separate
+  committed-root schema and special cases for history and checkpoint writers.
+  Speedup measurements from the rejected narrow-save variant are not evidence
+  for the current design. Reentrant hook testing additionally reproduced lost
+  mail after a nested commit; preparation exclusion closes that independent gap.
+  With full acknowledgements restored, compiled root enqueue/consume cycles on
+  the private session copy add 120–132 ms per delivery batch versus deferred
+  consumption (four alternating observations per variant, batch sizes 1/3/6).
+  This is a measured durability cost, not a performance improvement.
 - **2026-09-22 agent transition capture:** a 565-ms graphical heartbeat delay
   coincided with three publications and GC at agent completion. Startup had a
   similar burst. Five alternating real-storage lifecycle replays reduced startup
