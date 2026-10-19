@@ -31,7 +31,7 @@ compaction restores the current Plan reminder before dispatch rather than
 depending on a generated summary to retain the proposal contract.
 
 An accepted plan may execute directly or as a Goal, here or in a worktree, with
-fresh or summarized context and, when staying here, current context. When it
+current, fresh, or summarized context at either location. When it
 seeds a Goal, its outcomes, constraints, and achievement criteria remain binding
 unless a later Goal-objective edit changes them. Implementation mechanics remain
 revisable. See [Plan mode](../plan-mode.md) and [Goals](../goals.md).
@@ -49,8 +49,8 @@ stores an optional strict implementation policy and uses it for active ordinary
 root turns, including follow-ups, continuation, and resume. New ordinary chat
 with a paused, blocked, budget-limited, or complete Goal uses the baseline;
 already-admitted turns retain their captured policy until settlement. Both Here
-and Worktree leave session baselines unchanged. Worktree keeps its usual or
-restored target policy plus the inherited preset. The selected budget belongs
+and Worktree leave session baselines unchanged. The Worktree fork copies the
+planning session's ordinary defaults and preset. The selected budget belongs
 only to the Goal, not `mevedel-goal-token-budget`.
 
 `mevedel-implementation-policy.el` owns the strict serializable record
