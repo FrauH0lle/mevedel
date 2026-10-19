@@ -15,12 +15,12 @@
 - [Investigate history before recommending removal of a boundary](investigate-history-before-removing-boundaries.md) - Read the commits and ADRs that introduced a boundary before proposing to remove it
 - [Verify through the production path and the caller's identity](production-path-verification.md) - Test real producer/parser boundaries and caller identity; quoted payload delimiters are not structural
 - [Read-only verification can rest on independently checked artifacts](read-only-verification-artifacts.md) - Inability to rerun a writing check is not absence of verification evidence
-- [Execution UI: work-oriented default and minimal command row](execution-ui-presentation-preference.md) - User favors a work-oriented execution UI and A's minimal command row over B's result card with output preview; breadcrumb rule unconfirmed
+- [Background-work UI: minimal, unified, and composer-stable](execution-ui-presentation-preference.md) - Unify running work, avoid duplicate status, keep controls out of busy headers, and prevent status growth from displacing the composer
 - [Keep live-state inspection probes bounded and non-perturbing](bounded-live-inspection-probes.md) - Return scalars or booleans from live Emacs probes; large object dumps and profiling workload distort what you are measuring
 - [Verify consumer-visible state, not intermediate signals](rendered-state-verification-feedback.md) - Assert rendered/consumed state, not internal flags, audit rows, or same-segment tests
 - [Judge inline image previews by displayed size](inline-image-size-feedback.md) - Compact previews are a visual requirement, not a preference for pixel or fractional settings
 - [Artifact context, visible titles, and user-controlled Git tracking](artifact-collaboration-user-preferences.md) - Use the viewing chat's context for artifact comments, display titles rather than hashes, and leave Git tracking user-controlled
-- [Do not attribute guessed values to a reference system](reference-system-values-feedback.md) - Check authoritative documentation before presenting a proposed limit as inherited from another product
+- [Do not attribute guesses or unchecked behavior to reference systems](reference-system-values-feedback.md) - Check authoritative documentation, source, or observed behavior before using another product to justify a design
 - [Reduce permission prompts' visual weight](permission-prompt-visual-weight.md) - User finds sandbox and permission prompts imposing and prefers collapsing parts of them
 - [View changes must preserve rendering and CPU gains](view-render-performance-constraint.md) - Rendering cost and CPU use are hard constraints; measure graphical-only effects in a graphical environment
 - [Prove injected failures and stubs exercise the intended path](injected-failure-test-evidence.md) - Check injection entry, exact diagnostics, isolated-file behavior, and a discriminating negative control
@@ -37,3 +37,9 @@
 - [Fix review findings without deferral](fix-review-findings-without-deferral.md) - In review-and-fix work, address every finding in the same pass rather than parking it in the backlog
 - [Use Claude Code as the Monitor design reference](monitor-design-reference-preference.md) - For Monitor and background-wake design, consult Claude Code through its CLI and use it as the default reference when uncertain
 - [Actively use a partner when pair work is invoked](explicit-pair-workflow-feedback.md) - An explicit $pair implementation request calls for real partner participation, not solo implementation
+- [Preserve conversational continuity at plan handoff](plan-handoff-continuity-preference.md) - Plan acceptance should preserve the conversation and window, without leaving a confusing obsolete planning view
+- [Desktop/laptop sessions](two-machine-session-workflow.md) - TRAMP takeover is real usage; verify both clients
+- [Deployment references](deployment-access-reference.md) - SSH aliases, rootless containers, and diagnostics; recheck before use
+- [Presentation measurements](presentation-measurement-validity.md) - Locking can suppress rendering; isolate and warm the fixture
+- [Suspend versus stalls](correlate-stalls-with-suspend.md) - Correlate telemetry gaps with system sleep records
+- [Narrow-phone viewer testing](narrow-phone-viewer-testing.md) - iPhone mini Safari, vertical fit, and real narrow renders
