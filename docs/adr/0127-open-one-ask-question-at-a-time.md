@@ -18,6 +18,15 @@ difference with blank lines above Submit. The questions stay anchored at the
 top of the form and Submit and the key hints at its bottom; opening or
 answering a question changes neither the form's height nor anything outside it.
 
+The browser applies the same one-open-question and fixed-height rules. It
+keeps presentation state local and sends all answers atomically through the
+existing host questionnaire descriptor. Previous/Next controls and clickable
+summaries navigate questions; Tab and Shift-Tab keep the browser's ordinary
+focus traversal so every option, sample action, and text input stays keyboard
+accessible. Both navigation controls retain their slots when disabled. The
+browser measures the tallest open panel once per width, not while typing or
+moving focus, and leaves unchanged host replays intact.
+
 ## Rationale
 
 With all questions expanded, a form with several sample-bearing questions

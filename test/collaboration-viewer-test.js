@@ -930,6 +930,8 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-presence.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-header.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-name.js', 'utf8'), context);
+  context.ResizeObserver = class { observe() {} disconnect() {} };
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-requests.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-appearance.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
   assert.equal(tabStorage.get('mevedel-tab-share'), `${roomId}.${ownerSecret}`);
@@ -2108,7 +2110,7 @@ async function main() {
     if (node.tagName === 'button') askButtons.push(node);
     node.children.forEach(collect);
   })(askCard);
-  const submitButton = askButtons[askButtons.length - 1];
+  const submitButton = askButtons.find(button => textOf(button) === 'Submit answers');
   assert.equal(textOf(submitButton), 'Submit answers');
   const askBefore = first.sent.length;
   // Question 1 unanswered is the canonical no-preference value.
@@ -2117,7 +2119,7 @@ async function main() {
   assert.deepEqual(await unseal(key, first.sent[askBefore]),
                    {t: 'ui-response', reqId: 43, answers: ['', 'main']});
   // Choosing an option reveals its sample and preserves the prefilled answer.
-  askButtons[0].dispatch('click');
+  askButtons.find(button => textOf(button) === 'MVP first (Recommended)').dispatch('click');
   assert.match(textOf(askCard), /ship the smallest slice/);
   submitButton.dispatch('click');
   await waitFor(() => first.sent.length === askBefore + 2, 'ask answers');

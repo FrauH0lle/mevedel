@@ -55,6 +55,100 @@ function ask(page) {
   });
 }
 
+async function requestRenderer(page) {
+  await page.addScriptTag({content: await readFile(
+    resolve(root, 'relay/viewer/viewer-requests.js'), 'utf8')});
+  await page.addScriptTag({content: `(() => {
+    const requests = document.getElementById('requests');
+    const el = (tag, className = '', text = '') => {
+      const node = document.createElement(tag);
+      node.className = className; node.textContent = text; return node;
+    };
+    window.requestSent = [];
+    const send = frame => window.requestSent.push(frame);
+    window.requestView = window.mevedelRequestView.create({requests, el, send});
+  })();`});
+}
+
+test('changed pending cards keep their original arrival order', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await room(browser);
+    await requestRenderer(page);
+    await page.evaluate(() => {
+      requestView.render({reqId: 1, body: 'First', options: []});
+      requestView.render({reqId: 2, body: 'Second', options: []});
+      requestView.render({reqId: 1, body: 'First updated', options: []});
+    });
+    assert.deepEqual(await page.locator('.request-card').evaluateAll(
+      cards => cards.map(card => card.dataset.reqId)), ['1', '2']);
+  } finally { await browser.close(); }
+});
+
+test('Ask focuses one question with inspectable samples and stable phone geometry', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 1200]) {
+      const page = await room(browser);
+      await page.setViewportSize({width, height: 812});
+      await requestRenderer(page);
+      await page.evaluate(() => requestView.render({reqId: 3, allowCancel: true,
+        questions: [
+          {question: 'Which implementation?', options: [
+            {label: 'Small', description: 'Ship the smallest useful implementation.',
+             sample: 'short sample'},
+            {label: 'Long', sample: 'long wrapped sample '.repeat(90)},
+            {label: 'No sample'}]},
+          {question: 'Which branch?', options: [{label: 'main'}]},
+        ]}));
+      assert.equal(await page.locator('.question-panel:not([inert])').count(), 1);
+      assert.equal(await page.getByText('Ship the smallest useful implementation.').isVisible(), true);
+      await page.waitForFunction(() => document.querySelector('.questionnaire').style.height);
+      const height = () => page.locator('[data-req-id="3"]').evaluate(node => node.getBoundingClientRect().height);
+      const before = await height();
+      await page.getByRole('button', {name: 'Long', exact: true}).focus();
+      assert.match(await page.locator('.question-sample:visible').innerText(), /long wrapped/);
+      assert.equal(await height(), before, 'inspecting a longer sample holds height');
+      await page.getByRole('button', {name: 'No sample', exact: true}).focus();
+      assert.match(await page.locator('.question-sample:visible').innerText(), /long wrapped/);
+      await page.getByRole('button', {name: 'Small', exact: true}).click();
+      assert.equal(await page.getByRole('button', {name: 'main', exact: true}).isVisible(), true);
+      assert.equal(await height(), before, 'advancing to a short question holds height');
+      await page.getByRole('textbox', {name: 'Custom answer 2'}).fill('topic/browser');
+      await page.getByRole('textbox', {name: 'Custom answer 2'}).press('Enter');
+      assert.equal(await page.locator('.question-panel:not([inert])').count(), 0);
+      assert.equal(await height(), before, 'reviewing answers holds height');
+      await page.getByRole('button', {name: 'Previous question', exact: true}).click();
+      assert.equal(await page.getByRole('button', {name: 'main', exact: true}).isVisible(), true);
+      assert.equal(await page.getByRole('button', {name: 'Next question', exact: true}).isDisabled(), true);
+      assert.equal(await height(), before, 'reopening answers holds height');
+      await page.getByRole('button', {name: 'Submit answers', exact: true}).click();
+      assert.deepEqual(await page.evaluate(() => requestSent.at(-1)),
+        {t: 'ui-response', reqId: 3, answers: ['Small', 'topic/browser']});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('a long closed question keeps its answer visible on a phone', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await room(browser);
+    await page.setViewportSize({width: 375, height: 812});
+    await requestRenderer(page);
+    await page.evaluate(() => requestView.render({reqId: 5, questions: [
+      {question: 'A very long question '.repeat(20), options: [{label: 'Chosen answer'}]},
+      {question: 'Second?', options: [{label: 'Next'}]},
+    ]}));
+    await page.getByRole('button', {name: 'Chosen answer', exact: true}).click();
+    const answer = page.locator('.question-summary-answer').first();
+    assert.equal(await answer.isVisible(), true);
+    assert.match(await answer.innerText(), /Chosen answer/);
+    assert.ok((await answer.boundingBox()).width >= 100);
+  } finally { await browser.close(); }
+});
+
 test('a pending interaction rises above every open panel', async () => {
   const browser = await chromium.launch();
   try {

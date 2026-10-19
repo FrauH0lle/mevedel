@@ -905,6 +905,25 @@ conversation runs turns that ask too.
 transfer, save, rewind, fork, publication, and execution-target changes are
 impossible from the browser regardless of link strength.
 
+Ask shows one open question and single-line summaries of the others. Choosing
+an option or pressing Enter in a custom answer opens the next unanswered
+question; Submit sends the entire form, including unanswered questions as no
+preference. Previous/Next question and the summaries reopen answers for review.
+Tab and Shift-Tab retain normal browser focus traversal instead of skipping
+HTML controls, unlike Emacs's question-navigation bindings. The navigation row
+keeps its space at both ends of the form.
+
+Option descriptions are visible text, including on touch devices. Focus or
+hover inspects an option's inline sample without selecting it; **Sample** does
+the same on touch. The last inspected sample remains when an option has none.
+Samples wrap at the browser's own width in a fixed-height panel, with long
+samples scrolling. The whole form reserves the tallest question at that width;
+changing questions, answers or samples does not move its footer or the composer.
+Resizing recomputes that reservation. Repeated unchanged host frames preserve
+drafts, focus and scroll. Changed cards replace their existing slot rather than
+moving behind later requests. Browser requests read oldest first, so the
+scrolling stack initially exposes the decision that has waited longest.
+
 ## Commands, skills, and tool display
 
 A writable guest's welcome also publishes the invocation roster its link

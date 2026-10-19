@@ -51,6 +51,11 @@ line count, moving the next question by as much on an 80-column window.
   width-change hook, instead of soft-wrapping until the next repaint.
 - Samples are not shown side by side with the options, as some terminal UIs do.
   An Emacs buffer has no column layout that wraps both sides independently.
+- The browser uses the same inline, sticky sample model at its own viewport
+  width. Focus or hover inspects a sample; an explicit Sample button gives touch
+  users the same inspection without choosing the answer. Descriptions are
+  visible text, not hover-only tooltips. Browser sample panels cap at twelve
+  wrapped rows and scroll, rather than using Emacs's paging keys.
 
 ## Decision history
 
