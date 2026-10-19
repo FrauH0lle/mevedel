@@ -210,7 +210,10 @@
                           :message))))))))
 
 (mevedel-deftest mevedel-collaboration--handle-ui-response
-  (:doc "settles once with the mapped outcome and ignores unauthorized answers")
+  ()
+  ,test
+  (test)
+  :doc "settles once with the mapped outcome and ignores unauthorized answers"
   (with-temp-buffer
     (insert "prompt text")
     (let* ((guests (make-hash-table :test #'eql))
@@ -264,6 +267,9 @@
                                          "Accept"))
                              :feedback t))
           ;; A symbol option settles through the shared settle.
+          (mevedel-collaboration--handle-ui-response
+           room 1 (list :reqId 41 :option -1))
+          (should-not settled)
           (mevedel-collaboration--handle-ui-response
            room 1 (list :reqId 41 :option 0))
           (should (eq 'allow-once settled))
@@ -368,7 +374,43 @@
           (should-not settled)
           (should (equal '(1 . (:t "notice" :message
                                   "Request is no longer pending; nothing was approved."))
-                         (car sent))))))))
+                         (car sent)))))))
+
+  :doc "actionable response failures reach the normal owner-safe frame boundary"
+  (with-temp-buffer
+    (let* ((overlay (make-overlay (point-min) (point-min)))
+           (guests (make-hash-table :test #'eql))
+           (requests (make-hash-table :test #'eql))
+           (room (list :transport 'transport :guests guests
+                       :data-buffer (current-buffer) :ui-requests requests))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           (mevedel-collaboration-remote-interactions t)
+           sent)
+      (overlay-put overlay 'mevedel--remote
+                   (list :options
+                         (list (cons (lambda () (user-error "Review changed patch"))
+                                     "Apply patch"))))
+      (puthash 41 overlay requests)
+      (puthash 1 '(:writable t :ready t :name "writer") guests)
+      (puthash 2 '(:writable t :owner t :ready t :name "owner") guests)
+      (puthash 3 '(:writable nil :ready t :name "reader") guests)
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                 (lambda (_transport peer frame) (push (cons peer frame) sent))))
+        (mevedel-test--with-captured-messages nil
+          (mevedel-collaboration--on-frame
+           (current-buffer) 3 '(:t "ui-response" :reqId 41 :option 0))
+          (should-not sent)
+          (mevedel-collaboration--on-frame
+           (current-buffer) 1 '(:t "ui-response" :reqId 41 :option 0))
+          (should (equal (caar sent) 1))
+          (should (equal (plist-get (cdar sent) :t) "notice"))
+          (should-not (string-match-p "Review changed patch"
+                                      (plist-get (cdar sent) :message)))
+          (mevedel-collaboration--on-frame
+           (current-buffer) 2 '(:t "ui-response" :reqId 41 :option 0))
+          (should (equal (caar sent) 2))
+          (should (equal (plist-get (cdar sent) :message) "Review changed patch"))
+          (should (eq (gethash 41 requests) overlay)))))))
 
 (provide 'test-mevedel-collaboration-guest-remote)
 ;;; test-mevedel-collaboration-guest-remote.el ends here

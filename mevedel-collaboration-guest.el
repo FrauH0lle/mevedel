@@ -116,15 +116,17 @@
                   "mevedel-collaboration-presence" (frame))
 
 ;; `mevedel-collaboration-owner'
-(declare-function mevedel-collaboration--owner "mevedel-collaboration-owner" (room peer))
 (declare-function mevedel-collaboration--handle-new-session
                   "mevedel-collaboration-owner" (room peer frame))
 (declare-function mevedel-collaboration--handle-set-mode
                   "mevedel-collaboration-owner" (room peer frame))
+(declare-function mevedel-collaboration--owner
+                  "mevedel-collaboration-owner" (room peer))
 (autoload 'mevedel-collaboration--handle-new-session
   "mevedel-collaboration-owner")
 (autoload 'mevedel-collaboration--handle-set-mode
   "mevedel-collaboration-owner")
+(autoload 'mevedel-collaboration--owner "mevedel-collaboration-owner")
 
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
@@ -757,7 +759,7 @@ answer can execute the same path the host key binding would."
                     (if (functionp feedback-handler)
                         (lambda () (funcall feedback-handler text))
                       (cons 'feedback text))))
-                 ((and (integerp option) (nth option options))
+                 ((and (natnump option) (nth option options))
                   (car (nth option options))))))
           (when (and outcome (buffer-live-p (overlay-buffer overlay)))
             (message "mevedel: interaction answered by guest %s"
@@ -765,13 +767,11 @@ answer can execute the same path the host key binding would."
             (with-current-buffer (overlay-buffer overlay)
               (let ((mevedel-collaboration-remote-guest
                      (plist-get guest :name)))
-                (condition-case err
-                    (if (functionp outcome)
-                        (funcall outcome)
-                      (mevedel--prompt--settle overlay outcome))
-                  (user-error
-                   (message "mevedel: remote answer rejected: %s"
-                            (error-message-string err))))))))))))
+                ;; The frame boundary reports failures to the answering peer,
+                ;; with owner-only diagnostics, like every other guest action.
+                (if (functionp outcome)
+                    (funcall outcome)
+                  (mevedel--prompt--settle overlay outcome))))))))))
 
 
 ;;

@@ -38,6 +38,11 @@ skills in one prompt; the typed names are checked independently of literal
 message arguments, and cannot accompany a slash command. Directive-scoped
 prompts select discussion only.
 Interaction answers share the per-string input bound used by prompts.
+An interaction callback's refusal uses the ordinary guest-frame error boundary:
+the answering owner sees its diagnostic and other writers see a redacted notice.
+The interaction adapter must not consume that error into host-only logging, and
+owner lookup must work on first use before any owner settings action has loaded
+its module. Numeric option IDs are nonnegative indices into the offered list.
 Attachments have allowlisted types and host-generated filenames. Browser input
 uses the ordinary pending-input path; guest attribution is visible to users but
 excluded from model context. Browser permissions are one-shot, not a way to

@@ -924,6 +924,12 @@ drafts, focus and scroll. Changed cards replace their existing slot rather than
 moving behind later requests. Browser requests read oldest first, so the
 scrolling stack initially exposes the decision that has waited longest.
 
+A refused interaction action is reported to the answering browser through the
+same error boundary as other guest actions: owners receive the actionable host
+diagnostic, while full-link guests receive a redacted notice. Rejection does not
+pretend that the pending request was approved. Option IDs must name a nonnegative
+offered option; malformed IDs cannot select the first choice accidentally.
+
 ## Commands, skills, and tool display
 
 A writable guest's welcome also publishes the invocation roster its link
