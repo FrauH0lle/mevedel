@@ -41,6 +41,10 @@ the affected paths. An application failure triggers recovery; an incomplete
 rollback remains an explicit failure rather than a claim of atomic success.
 Review must leave the user able to inspect conflicts and preserve intervening
 work. [ADR 0109](0109-edit-patch-changes-side-by-side.md) defines staged editing.
+Detailed conflict exceptions stay in the native review. A remote refusal sends
+an actionable explanation and an explicit incomplete-rollback warning, not the
+exception text: even a relative patch operand can produce an exception naming
+private absolute host paths. The browser diff continues to use authored operands.
 
 ## Decision history
 

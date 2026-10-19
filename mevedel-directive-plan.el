@@ -482,33 +482,47 @@ CALLBACK runs after implementation settles."
          (session (and (buffer-live-p chat-buffer)
                        (buffer-local-value 'mevedel--session chat-buffer)))
          (attempt (gensym "directive-plan-"))
-         (callback
-          (plist-get (and session
-                          (mevedel-session-directive-planning session))
-                     :callback)))
+         (workflow (and session (mevedel-session-directive-planning session)))
+         (callback (plist-get workflow :callback)))
     (unless (mevedel-directive-plan--live-p plan 'draft 'proposed)
       (user-error "Directive has no planning conversation to continue"))
-    (mevedel-directive-plan-put record :status 'planning :attempt attempt)
-    (overlay-put directive 'mevedel-directive-action 'plan)
-    (prog1
-        (mevedel--process-directive
-         directive (alist-get 'implement mevedel-action-preset-alist)
-         (lambda (_content)
-           (mevedel-directive-plan--planning-prompt
-            (plist-get plan :implementation-prompt)
-            feedback (plist-get plan :proposal)))
-         (lambda (err fsm)
-           (mevedel-directive-plan--settle-planning
-            directive record callback err fsm attempt session))
-         (list :planned-action (plist-get plan :action) :message feedback
-               :plan-continuation t
-               :model-policy
-               (mevedel-directive-plan--planning-model-policy directive)))
-      (when-let* ((workflow (mevedel-session-directive-planning session))
-                  ((equal (plist-get workflow :directive-id)
-                          (mevedel-directive-id record))))
-        (setf (mevedel-session-directive-planning session)
-              (plist-put workflow :attempt attempt))))))
+    (let ((policy (mevedel-directive-plan--planning-model-policy directive))
+          (action (overlay-get directive 'mevedel-directive-action)))
+      (mevedel-directive-plan-put record :status 'planning :attempt attempt)
+      (overlay-put directive 'mevedel-directive-action 'plan)
+      (condition-case err
+          (prog1
+              (mevedel--process-directive
+               directive (alist-get 'implement mevedel-action-preset-alist)
+               (lambda (_content)
+                 (mevedel-directive-plan--planning-prompt
+                  (plist-get plan :implementation-prompt)
+                  feedback (plist-get plan :proposal)))
+               (lambda (err fsm)
+                 (mevedel-directive-plan--settle-planning
+                  directive record callback err fsm attempt session))
+               (list :planned-action (plist-get plan :action) :message feedback
+                     :plan-continuation t :model-policy policy))
+            (when-let* ((active (mevedel-session-directive-planning session))
+                        ((equal (plist-get active :directive-id)
+                                (mevedel-directive-id record))))
+              (setf (mevedel-session-directive-planning session)
+                    (plist-put active :attempt attempt))))
+        (error
+         ;; Approval delivery retains the old callback on startup failure.
+         ;; Restore its attempt, but never undo settlement or a replacement.
+         (let ((current (mevedel-directive-plan record)))
+           (when (and (eq attempt (plist-get current :attempt))
+                      (mevedel-directive-plan--live-p current 'planning))
+             (setf (mevedel-directive-plan record) plan)
+             (overlay-put directive 'mevedel-directive-action action)
+             ;; Request startup cleanup releases its workflow.  Do not
+             ;; overwrite another workflow admitted during that cleanup.
+             (when (and session
+                        (not (mevedel-session-directive-planning session)))
+               (setf (mevedel-session-directive-planning session) workflow))
+             (mevedel-directive-plan--refresh directive)))
+         (signal (car err) (cdr err)))))))
 
 (defun mevedel-directive-plan-restore-pending (session chat-buffer)
   "Restore SESSION's directive planning workflow in CHAT-BUFFER."

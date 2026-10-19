@@ -42,6 +42,10 @@ owner link continues that directive's planning conversation directly, with the
 current proposal as reference; it neither submits ordinary chat nor enters the
 host's composer. View links cannot answer the approval. Feedback captured from
 a replaced, cancelled, or invalidated attempt cannot restart its planning.
+If planning policy resolution or synchronous request startup fails, the
+proposal, selection, and approval attempt remain available for another feedback
+submission. Startup recovery does not roll back an attempt that has already
+settled or been replaced.
 
 ## Directive skills
 
