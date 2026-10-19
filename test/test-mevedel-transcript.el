@@ -68,6 +68,104 @@
 ;;
 ;;; Segment extraction
 
+(mevedel-deftest mevedel-transcript--first-source-change ()
+  (progn
+    (should (= 2 (mevedel-transcript--first-source-change "ab" "abc")))
+    (should (= 2 (mevedel-transcript--first-source-change "abc" "ab")))
+    (should (= 1 (mevedel-transcript--first-source-change "abc" "axc")))
+    (should (= 3 (mevedel-transcript--first-source-change "abc" "abc")))
+    (should (= 1 (mevedel-transcript--first-source-change
+                  "abc" (concat "a" (propertize "b" 'gptel 'response) "c"))))))
+
+(mevedel-deftest mevedel-transcript--cache-restart ()
+  (with-temp-buffer
+    (insert (make-string 100 ?x))
+    (let ((cache (mevedel-transcript-cache-create
+                  :ranges '((tool 10 20) (reasoning 30 40) (tool 60 70))
+                  :raw '((reasoning 25 80)))))
+      (should (= 25 (mevedel-transcript--cache-restart cache 90)))
+      (setf (mevedel-transcript-cache-blocked cache) 24)
+      (should (= 10 (mevedel-transcript--cache-restart cache 90)))
+      (should (= 1 (mevedel-transcript--cache-restart cache 20))))))
+
+(mevedel-deftest mevedel-transcript-cached-segments ()
+  ,test
+  (test)
+  :doc "incomplete controls before a closed tool remain resumable on a later close"
+  (dolist (pair '(("#+begin_reasoning\n" . "#+end_reasoning\n")
+                  ("<system-reminder>\n" . "</system-reminder>\n")
+                  ("<hook-context>\n" . "</hook-context>\n")
+                  ("<task-background>\n" . "</task-background>\n")
+                  (":PROMPT:\n" . ":END:\n")
+                  ("<agent-result sender=\"/root/a\">\n" . "</agent-result>\n")))
+    (with-temp-buffer
+      (mevedel--transcript-org-mode)
+      (insert (car pair) "Before\n#+begin_tool\n"
+              (propertize "(:name \"Read\" :args nil)\nresult\n" 'gptel '(tool . "a"))
+              "#+end_tool\n" (propertize "Streaming\n" 'gptel 'response))
+      (let ((cache (mevedel-transcript-cache-create)))
+        (should (equal (mevedel-transcript-segments (point-min) (point-max))
+                       (mevedel-transcript-cached-segments cache)))
+        (insert (cdr pair))
+        (should (equal (mevedel-transcript-segments (point-min) (point-max))
+                       (mevedel-transcript-cached-segments cache))))))
+  :doc "a property-only change, narrowing and switching source invalidate retained structure"
+  (let ((cache (mevedel-transcript-cache-create)))
+    (dotimes (_ 2)
+      (with-temp-buffer
+        (mevedel--transcript-org-mode)
+        (insert "Prompt\n" (propertize "Answer\n" 'gptel 'response))
+        (mevedel-transcript-cached-segments cache)
+        (with-silent-modifications (put-text-property 1 4 'gptel 'ignore))
+        (should (equal (mevedel-transcript-segments (point-min) (point-max))
+                       (mevedel-transcript-cached-segments cache)))
+        (save-restriction
+          (narrow-to-region 2 (1- (point-max)))
+          (should (equal (mevedel-transcript-segments (point-min) (point-max))
+                         (mevedel-transcript-cached-segments cache)))))))
+  :doc "leading saved state and summary contents are not parsed as conversation controls"
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (insert ":PROPERTIES:\n:MODEL: test\n:END:\n"
+            "#+begin_summary\n<agent-result sender=\"/root/a\">\n"
+            "Summary\n</agent-result>\n#+end_summary\n\n"
+            "Prompt\n" (propertize "Answer\n" 'gptel 'response))
+    (let ((cache (mevedel-transcript-cache-create)))
+      (dotimes (_ 2)
+        (should (equal (mevedel-transcript-segments (point-min) (point-max))
+                       (mevedel-transcript-cached-segments cache)))
+        (insert (propertize "More\n" 'gptel 'response)))))
+  :doc "a control inside tool metadata restarts at the containing tool, not its payload"
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (let* ((cache (mevedel-transcript-cache-create))
+           (body (concat "(:name \"Read\" :args nil)\nresult\n"
+                         (mevedel-tool-render-data-format
+                          '(:nested "<agent-result sender=\"/root/a\">\nquoted\n</agent-result>\n")
+                          "one"))))
+      (insert "Prompt\n#+begin_tool\n" (propertize body 'gptel '(tool . "one"))
+              "#+end_tool\n" (propertize "Answer\n" 'gptel 'response))
+      (mevedel-transcript-cached-segments cache)
+      (insert (propertize "More\n" 'gptel 'response))
+      (should (equal (mevedel-transcript-segments (point-min) (point-max))
+                     (mevedel-transcript-cached-segments cache)))))
+  :doc "tool recovery can extend its last close beyond a later closed audit"
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (insert "Prompt\n#+begin_tool\n"
+            (propertize "(:name \"Read\" :args nil)\nresult\n" 'gptel '(tool . "one"))
+            "#+end_tool\n"
+            (mevedel--format-hook-audit-record '(:type guest-prompt :name "Guest"))
+            (propertize "Answer\n" 'gptel 'response))
+    (let ((cache (mevedel-transcript-cache-create))
+          (old-end (point-max)))
+      (mevedel-transcript-cached-segments cache)
+      (insert (propertize "recovered output\n" 'gptel '(tool . "one")) "#+end_tool\n")
+      (let* ((full (mevedel-transcript-segments (point-min) (point-max)))
+             (tool (assq 'tool full)))
+        (should (> (caddr tool) old-end))
+        (should (equal full (mevedel-transcript-cached-segments cache)))))))
+
 (mevedel-deftest mevedel-transcript--overlay-ranges ()
   ,test
   (test)

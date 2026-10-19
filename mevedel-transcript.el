@@ -405,12 +405,13 @@ With LITERAL, return a valid block without checking its authority."
           "\\|!-- /?mevedel-\\)\\|:PROMPT:\\|:END:\\)")
   "Candidate prefix regexp shared by direct and resumable scans.")
 
-(defun mevedel-transcript--control-line-positions ()
+(defun mevedel-transcript--control-line-positions (&optional start)
   "Return a vector of candidate control lines in the accessible buffer.
-Index prefixes only; the existing parsers still validate each complete marker."
+Begin at START when resuming an unchanged prefix.  Index prefixes only;
+the existing parsers still validate each complete marker."
   (save-excursion
     (save-match-data
-      (goto-char (point-min))
+      (goto-char (or start (point-min)))
       (let (positions)
         (while (re-search-forward mevedel-transcript--control-line-regexp nil t)
           (let ((start (match-beginning 0)))
@@ -758,12 +759,14 @@ source, not a work-slice boundary."
     (nreverse ranges)))
 
 (defun mevedel-transcript--structural-ranges (start end base-segments
-                                                    &optional prepared-ranges)
+                                                    &optional prepared-ranges
+                                                    retained-tools)
   "Return canonical control ranges in START..END.
 BASE-SEGMENTS are raw `gptel' property runs used to validate persisted
 tool blocks.  Each result is `(TYPE START END VALUE...)'.
 PREPARED-RANGES, when non-nil, is a cons whose cdr holds candidates
-collected by a resumable scan of this same source."
+collected by a resumable scan of this same source.  RETAINED-TOOLS holds
+validated tool ranges before START when resuming an unchanged prefix."
   (let* ((mevedel-transcript--render-data-blocks
           (or mevedel-transcript--render-data-blocks
               (make-hash-table :test #'eql)))
@@ -782,7 +785,7 @@ collected by a resumable scan of this same source."
                          (car block) (cdr block))
                         ""))
               tool-ranges))
-      (setq tool-ranges (nreverse tool-ranges))
+      (setq tool-ranges (append retained-tools (nreverse tool-ranges)))
       (setq ranges
             (append ranges tool-ranges
                     (mevedel-transcript--unparseable-tool-ranges
@@ -1140,6 +1143,145 @@ stale `gptel' runs; incomplete controls remain ordinary transcript text."
           (while (not (mevedel-transcript-scan-step job)))
           (mevedel-transcript-scan-result job))
       (mevedel-transcript-scan-cancel job))))
+
+(cl-defstruct (mevedel-transcript-cache
+               (:constructor mevedel-transcript-cache-create)
+               (:copier nil))
+  "Derived segmentation of one accessible transcript, never persisted.
+SOURCE snapshots property values too, protecting comparisons on later edits
+from shared mutable objects.  Like the full projection, the unchanged fast
+path relies on the buffer modification tick.  BLOCKED is the earliest
+unresolved opener or orphan tool property run."
+  buffer low mode tick source raw ranges blocked segments)
+
+(defun mevedel-transcript--first-source-change (old new)
+  "Return the first differing character or property offset in OLD and NEW."
+  (let* ((comparison (compare-strings old nil nil new nil nil))
+         (limit (if (eq comparison t) (length old)
+                  (1- (abs comparison))))
+         (pos 0))
+    (while (and (< pos limit)
+                (equal (text-properties-at pos old)
+                       (text-properties-at pos new)))
+      (setq pos (min limit (next-property-change pos old (length old))
+                     (next-property-change pos new (length new)))))
+    pos))
+
+(defun mevedel-transcript--cache-restart (cache change)
+  "Return CACHE's last closed control before CHANGE, or the buffer start.
+An unresolved opener or a raw container crossing that point moves the
+restart back: a later close can change even a previously rejected range."
+  (let ((start (point-min))
+        (limit (min change (or (mevedel-transcript-cache-blocked cache) change)))
+        last-tool moved)
+    (dolist (range (mevedel-transcript-cache-ranges cache))
+      (when (and (< (cadr range) limit) (< (caddr range) limit))
+        (setq start (max start (cadr range)))
+        (when (eq (car range) 'tool)
+          (setq last-tool (max (or last-tool (point-min)) (cadr range))))))
+    ;; Tool recovery chooses the last close before the next genuine opener,
+    ;; even across other controls.  Keep that final tool's lookahead live.
+    (when last-tool (setq start (min start last-tool)))
+    (setq moved t)
+    (while moved
+      (setq moved nil)
+      (dolist (range (append (mevedel-transcript-cache-raw cache)
+                            (mevedel-transcript-cache-ranges cache)))
+        (when (and (< (cadr range) start) (> (caddr range) start))
+          (setq start (cadr range) moved t))))
+    start))
+
+(defun mevedel-transcript-cached-segments (cache)
+  "Return full canonical segmentation, retaining unchanged structure in CACHE.
+Resume control searches at the last closed control before the first source
+change.  Validate against the complete raw property runs and apply neighbor
+repairs to the joined result, preserving the full parser's context.  The
+cache is valid only for its source buffer, restriction and major mode."
+  (let* ((tick (buffer-modified-tick))
+         (same (and (eq (current-buffer) (mevedel-transcript-cache-buffer cache))
+                    (eql (point-min) (mevedel-transcript-cache-low cache))
+                    (eq major-mode (mevedel-transcript-cache-mode cache))))
+         (old (and same (mevedel-transcript-cache-source cache))))
+    (if (and old (eql tick (mevedel-transcript-cache-tick cache))
+             (= (length old) (- (point-max) (point-min))))
+        (mevedel-transcript-cache-segments cache)
+      (let* ((source (buffer-substring (point-min) (point-max)))
+             (change (and old (+ (point-min)
+                                (mevedel-transcript--first-source-change old source))))
+             (base (mevedel-transcript--property-segments (point-min) (point-max)))
+             (low (if base (cadr (car base)) (point-min)))
+             (old (and old (>= change low) old))
+             (start (if old (max low (mevedel-transcript--cache-restart cache change))
+                      low))
+             (mevedel-transcript--render-data-blocks (make-hash-table :test #'eql))
+             (mevedel-transcript--control-lines
+              (mevedel-transcript--control-line-positions start))
+             (raw (and old (cl-remove-if-not
+                            (lambda (range) (<= (caddr range) start))
+                            (mevedel-transcript-cache-raw cache))))
+             (prefix (and old (cl-remove-if-not
+                               (lambda (range) (<= (caddr range) start))
+                               (mevedel-transcript-cache-ranges cache))))
+             (blocked (and old (mevedel-transcript-cache-blocked cache)
+                           (< (mevedel-transcript-cache-blocked cache) start)
+                           (mevedel-transcript-cache-blocked cache))))
+        (dolist (spec mevedel-transcript--range-scans)
+          (let ((pos start) next)
+            (while (setq next (mevedel-transcript--next-raw-range spec pos (point-max)))
+              (if (cdr next) (push (cdr next) raw)
+                (setq blocked (min (or blocked pos) pos)))
+              (setq pos (car next)))))
+        (let* ((ranges (mevedel-transcript--structural-ranges
+                        start (point-max) base
+                        (cons t (append (cl-remove-if
+                                         (lambda (range) (eq (car range) 'tool)) prefix)
+                                        (cl-remove-if
+                                         (lambda (range) (<= (caddr range) start)) raw)))
+                        (cl-remove-if-not (lambda (range) (eq (car range) 'tool)) prefix)))
+               (segments (mevedel-transcript--finish-segments
+                          base ranges (point-min) (point-max)))
+               (tools (sort (cl-remove-if-not (lambda (range) (eq (car range) 'tool))
+                                              (copy-sequence ranges))
+                            (lambda (a b) (< (cadr a) (cadr b))))))
+          ;; An incomplete or unrecognized tool opener can acquire its first
+          ;; valid close later, even when it was not a canonical tool before.
+          (save-excursion
+            (cl-loop for position across mevedel-transcript--control-lines do
+                     (goto-char position)
+                     (when (looking-at-p "#\\+begin_tool\\b")
+                       (while (and tools (<= (caddr (car tools)) position))
+                         (setq tools (cdr tools)))
+                       (unless (and tools (<= (cadr (car tools)) position))
+                         (setq blocked (min (or blocked position) position))))))
+          ;; Orphan tool properties can make recovery extend an earlier close
+          ;; when a later tool run arrives.  Do not freeze that earlier state.
+          (let ((tools (sort (cl-remove-if-not
+                              (lambda (range) (eq (car range) 'tool))
+                              (copy-sequence ranges))
+                             (lambda (a b) (< (cadr a) (cadr b))))))
+            (dolist (segment base)
+              (when (eq (car segment) 'tool)
+                (while (and tools (<= (caddr (car tools)) (cadr segment)))
+                  (setq tools (cdr tools)))
+                (unless (and tools (<= (cadr (car tools)) (cadr segment))
+                             (>= (caddr (car tools)) (caddr segment)))
+                  (setq blocked (min (or blocked (cadr segment)) (cadr segment)))))))
+          ;; Freeze shared property objects only after comparisons and parsing.
+          (let ((pos 0))
+            (while (< pos (length source))
+              (let ((next (next-property-change pos source (length source))))
+                (set-text-properties pos next (copy-tree (text-properties-at pos source)) source)
+                (setq pos next))))
+          (setf (mevedel-transcript-cache-buffer cache) (current-buffer)
+                (mevedel-transcript-cache-low cache) (point-min)
+                (mevedel-transcript-cache-mode cache) major-mode
+                (mevedel-transcript-cache-tick cache) tick
+                (mevedel-transcript-cache-source cache) source
+                (mevedel-transcript-cache-raw cache) raw
+                (mevedel-transcript-cache-ranges cache) ranges
+                (mevedel-transcript-cache-blocked cache) blocked
+                (mevedel-transcript-cache-segments cache) segments)
+          segments)))))
 
 (defun mevedel-transcript--finish-segments (segments ranges scan-start scan-end)
   "Apply RANGES and canonical neighbor repairs to SEGMENTS in source bounds."

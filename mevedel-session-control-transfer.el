@@ -111,7 +111,7 @@
 (declare-function mevedel-session-transfer-observe-decision
                   "mevedel-session-transfer" (session request))
 (declare-function mevedel-session-transfer-poll
-                  "mevedel-session-transfer" (session))
+                  "mevedel-session-transfer" (session &optional admission))
 (declare-function mevedel-session-transfer-release
                   "mevedel-session-transfer" (session))
 (declare-function mevedel-session-transfer-request
@@ -378,12 +378,13 @@ is conservatively treated as still draining."
               (mevedel-session-control-transfer-drains session))
     "the view")))
 
-(defun mevedel-session-control-transfer-observe (session)
+(defun mevedel-session-control-transfer-observe (session &optional admission)
   "Refresh SESSION's durable transfer state without settling it.
 
 Admission checks use this operation so observing a grant never saves or
-releases the owner's session."
-  (let ((state (mevedel-session-transfer-poll session)))
+releases the owner's session.  ADMISSION combines the recovery observations
+with the transfer read inside the caller's durable transaction."
+  (let ((state (mevedel-session-transfer-poll session admission)))
     (mevedel-session-set-control-transfer
      session (or state (mevedel-session-control-transfer session)))
     (mevedel-session-control-transfer session)))

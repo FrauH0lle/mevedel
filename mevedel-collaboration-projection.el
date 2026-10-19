@@ -264,6 +264,7 @@ the projection context, and every live lookup it made are unchanged, so a
 retained projection equals a full one.  A segment's projection may
 therefore read only its source text, that context and observed lookups."
   context tick bounds segments
+  (transcript (mevedel-transcript-cache-create))
   (entries (make-hash-table :test #'equal)))
 
 (defvar mevedel-collaboration--observed nil
@@ -1114,7 +1115,10 @@ owner; omitted means the root transcript."
              (items (ignore-errors (mevedel-shared-conversation-ranges)))
              (segments (if unchanged
                            (mevedel-collaboration--projection-cache-segments cache)
-                         (mevedel-transcript-segments (point-min) (point-max))))
+                         (if cache
+                             (mevedel-transcript-cached-segments
+                              (mevedel-collaboration--projection-cache-transcript cache))
+                           (mevedel-transcript-segments (point-min) (point-max)))))
              (following-render-data (make-hash-table :test #'eql))
              (breadcrumbs (mevedel-transcript-audit-buffer-spans
                            'execution-breadcrumb))

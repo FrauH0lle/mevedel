@@ -171,14 +171,16 @@ An abandonment marker may outlive its explicitly discarded directory."
           :kind (plist-get marker :kind)
           :created-at (plist-get marker :created-at))))
 
-(defun mevedel-session-recovery--markers (session-dir &optional preamble)
+(defun mevedel-session-recovery--markers
+    (session-dir &optional preamble root-observation)
   "Return validated specialized recovery markers below SESSION-DIR.
 
 One directory operation answers existence and kind together, so the
 common no-recovery case costs one target process instead of two.  With
 PREAMBLE, the same process also proves SESSION-DIR has no PID lock and,
 inside a durable transaction, reads the target clock the lease checks that
-follow will need."
+follow will need.  ROOT-OBSERVATION is an optional directory probe result
+from the caller's admission program, which already carries that preamble."
   (let* ((root (mevedel-session-control-fs-physical-path
                 (mevedel-session-recovery--root session-dir)))
          (lease (and preamble
@@ -188,15 +190,16 @@ follow will need."
                          session-dir)))
          (clock (and preamble
                      (mevedel-session-durability--clock-operation lease)))
-         (results (mevedel-session-control-fs-run-program
-                   (append (and pid-lock (list pid-lock))
-                           (list (list :op 'directory-p :path root
-                                       :optional t))
-                           (and clock (list clock)))))
-         (result (nth (if pid-lock 1 0) results)))
-    (when pid-lock
+         (results (unless root-observation
+                    (mevedel-session-control-fs-run-program
+                     (append (and pid-lock (list pid-lock))
+                             (list (list :op 'directory-p :path root
+                                         :optional t))
+                             (and clock (list clock))))))
+         (result (or root-observation (nth (if pid-lock 1 0) results))))
+    (when (and pid-lock (not root-observation))
       (mevedel-session-durability--settle-pid-lock session-dir (car results)))
-    (when clock
+    (when (and clock (not root-observation))
       (mevedel-session-durability--settle-clock lease (car (last results))))
     (pcase (plist-get result :status)
       ('absent nil)
@@ -209,13 +212,14 @@ follow will need."
          root "\\`recovery-[0-9a-f]+\\.el\\'")))
       (_ (error "Invalid specialized recovery root: %s" root)))))
 
-(defun mevedel-session-recovery-read (session-dir)
+(defun mevedel-session-recovery-read (session-dir &optional root-observation)
   "Return the first target-side specialized recovery for SESSION-DIR.
 
 The result is a plist containing `:marker', `:directory', `:reason', and
-`:created-at', or nil when no durable recovery marker is installed."
+`:created-at', or nil when no durable recovery marker is installed.
+ROOT-OBSERVATION is the recovery-root probe from an admission program."
   (let ((remote-file-name-inhibit-cache t))
-    (car (mevedel-session-recovery--markers session-dir t))))
+    (car (mevedel-session-recovery--markers session-dir t root-observation))))
 
 (defun mevedel-session-recovery--id (session reason)
   "Return a fresh target-side recovery id for SESSION and REASON."
@@ -336,12 +340,13 @@ after this function returns."
   (when (mevedel-session-recovery--local-temporary-p path)
     (delete-directory path t)))
 
-(defun mevedel-session-recovery-refresh (session)
+(defun mevedel-session-recovery-refresh (session &optional root-observation)
   "Refresh SESSION's pending state from its target recovery marker.
 
 The marker is authoritative across client loss.  Existing local recovery
 state is preserved while the target marker is attached to the pending record,
-so a later explicit abandonment can remove both sources safely."
+so a later explicit abandonment can remove both sources safely.
+ROOT-OBSERVATION is the recovery-root probe from this admission's program."
   (when (and (mevedel-session-durability--portable-session-p session)
              (mevedel-session-save-path session)
              (not (memq session
@@ -350,7 +355,7 @@ so a later explicit abandonment can remove both sources safely."
       (push session (car mevedel-session-recovery--mutation-cache)))
     (when-let* ((recovery
                 (mevedel-session-recovery-read
-                 (mevedel-session-save-path session))))
+                 (mevedel-session-save-path session) root-observation)))
       (let ((pending
              (copy-sequence
               (or (mevedel-session-pending-publication session)

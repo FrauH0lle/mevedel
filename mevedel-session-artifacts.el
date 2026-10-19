@@ -124,7 +124,7 @@
 (autoload 'mevedel-session-control-fs-write-file "mevedel-session-control-fs")
 
 ;; `mevedel-session-control-transfer'
-(declare-function mevedel-session-control-transfer-observe "mevedel-session-control-transfer" (session))
+(declare-function mevedel-session-control-transfer-observe "mevedel-session-control-transfer" (session &optional admission))
 (declare-function mevedel-session-control-transfer-register-root-buffer "mevedel-session-control-transfer" (session buffer))
 (autoload 'mevedel-session-control-transfer-observe
   "mevedel-session-control-transfer")
@@ -200,7 +200,7 @@
   "mevedel-session-publication")
 
 ;; `mevedel-session-recovery'
-(declare-function mevedel-session-recovery-refresh "mevedel-session-recovery" (session))
+(declare-function mevedel-session-recovery-refresh "mevedel-session-recovery" (session &optional root-observation))
 (defvar mevedel-session-recovery--mutation-cache)
 (autoload 'mevedel-session-recovery-refresh "mevedel-session-recovery")
 
@@ -1551,10 +1551,22 @@ authority gate; callers use this narrower guard at admission boundaries."
                (mevedel-session-session-id session))
       (let ((state
              (plist-get
-              (mevedel-session-control-transfer-observe session) :state)))
+              (mevedel-session-control-transfer-observe session t) :state)))
         (when (memq state '(quiescing released))
           (user-error "Session is quiescing for cooperative control transfer"))))
-    (mevedel-session-artifacts-assert-mutation-authority session)))
+    (mevedel-session-artifacts-assert-mutation-authority session)
+    ;; Authority checks can yield to an owner grant or release.  The state
+    ;; observed before those checks cannot authorize work after that handoff.
+    (when (memq (plist-get (mevedel-session-control-transfer session) :state)
+                '(quiescing released))
+      (user-error "Session is quiescing for cooperative control transfer"))
+    ;; Manual release and renewal failure need not create transfer state.
+    ;; Reuse this transaction's clock, but never its former lease binding.
+    (when (and (mevedel-session-execution-target session)
+               (mevedel-session-codec-portable-authority-p session)
+               (not (mevedel-session-durability-lease-owned-p session)))
+      (user-error "Portable session lease changed during admission checks"))
+    t))
 
 
 ;;

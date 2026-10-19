@@ -466,45 +466,51 @@ Small value ranges repeat texts, so occurrence-numbered ids are exercised."
          'mode))))
 
 (mevedel-deftest mevedel-collaboration--canonical-records/retained
-  (:doc "a retained projection equals a full one across transcript mutations")
-  (with-temp-buffer
-    (mevedel--transcript-org-mode)
-    (let ((cache (mevedel-collaboration--projection-cache-create)))
-      (random "mevedel-collaboration-retained-projection")
-      (dotimes (index 14)
-        (insert (mevedel-test--projection-piece index)))
-      (dotimes (step 300)
-        (let* ((before (buffer-string))
-               (mutation (mevedel-test--projection-mutate step))
-               (narrow (and (zerop (random 8)) (> (buffer-size) 2)))
-               (from (and narrow (1+ (random (/ (buffer-size) 2)))))
-               (to (and narrow (+ from 1 (random (- (point-max) from))))))
-          (save-restriction
-            (when narrow (narrow-to-region from to))
-            ;; A mutation can break a tool block; both projections must
-            ;; then fail alike.
-            (let ((retained (condition-case err
-                                (mevedel-collaboration--canonical-records
-                                 (current-buffer) nil nil cache)
-                              (error err)))
-                  (full (condition-case err
-                            (mevedel-collaboration--canonical-records
-                             (current-buffer))
-                          (error err))))
-              (should (equal (list step mutation narrow retained)
-                             (list step mutation narrow full)))
-              ;; Undo a mutation that broke the transcript, so later steps
-              ;; keep comparing records rather than the same error.
-              (when (and (consp full) (symbolp (car full)) (get (car full) 'error-conditions))
-                (widen)
-                (erase-buffer)
-                (insert before))
-              ;; Callers rewrite ids and revisions in the records they get.
-              (when (plist-get (car-safe retained) :id)
-                (dolist (record retained)
-                  (plist-put record :id "rewritten")
-                  (plist-put record :revision 99)
-                  (plist-put record :guest "rewritten"))))))))))
+  (:doc "a retained projection equals a full one across transcript mutations"
+   ;; Mutations also corrupt tool args; compare the renderer's fallback
+   ;; records without printing its expected malformed-input diagnostics.
+   :quiet t)
+  (dotimes (seed 12)
+    (with-temp-buffer
+      (mevedel--transcript-org-mode)
+      (let ((cache (mevedel-collaboration--projection-cache-create)))
+        (random (if (zerop seed) "mevedel-collaboration-retained-projection"
+                  (format "mevedel-collaboration-retained-projection-%d" seed)))
+        (dotimes (index 14)
+          (insert (mevedel-test--projection-piece index)))
+        (dotimes (step 300)
+          (let* ((before (buffer-string))
+                 (mutation (mevedel-test--projection-mutate step))
+                 (narrow (and (zerop (random 8)) (> (buffer-size) 2)))
+                 (from (and narrow (1+ (random (/ (buffer-size) 2)))))
+                 (to (and narrow (+ from 1 (random (- (point-max) from))))))
+            (save-restriction
+              (when narrow (narrow-to-region from to))
+              ;; A mutation can break a tool block; both projections must
+              ;; then fail alike.
+              (let ((retained (condition-case err
+                                  (mevedel-collaboration--canonical-records
+                                   (current-buffer) nil nil cache)
+                                (error err)))
+                    (full (condition-case err
+                              (mevedel-collaboration--canonical-records
+                               (current-buffer))
+                            (error err))))
+                (ert-info ((format "seed=%s source=%S" seed (buffer-string)))
+                  (should (equal (list step mutation narrow retained)
+                                 (list step mutation narrow full))))
+                ;; Undo a mutation that broke the transcript, so later steps
+                ;; keep comparing records rather than the same error.
+                (when (and (consp full) (symbolp (car full)) (get (car full) 'error-conditions))
+                  (widen)
+                  (erase-buffer)
+                  (insert before))
+                ;; Callers rewrite ids and revisions in the records they get.
+                (when (plist-get (car-safe retained) :id)
+                  (dolist (record retained)
+                    (plist-put record :id "rewritten")
+                    (plist-put record :revision 99)
+                    (plist-put record :guest "rewritten")))))))))))
 
 (mevedel-deftest mevedel-collaboration--canonical-records/streaming
   (:doc "a streamed sentence reprojects only the growing response")
@@ -522,12 +528,20 @@ Small value ranges repeat texts, so occurrence-numbered ids are exercised."
     (let ((cache (mevedel-collaboration--projection-cache-create))
           (parse (symbol-function 'mevedel-view--tool-call-parse))
           (clean (symbol-function 'mevedel-collaboration--clean-response))
-          (parses 0) (cleans 0))
+          (controls (symbol-function 'mevedel-transcript--control-line-positions))
+          (tool-end (symbol-function 'mevedel-transcript--tool-block-end-from-start))
+          (parses 0) (cleans 0) (ends 0) restart)
       (mevedel-collaboration--canonical-records (current-buffer) nil nil cache)
       (cl-letf (((symbol-function 'mevedel-view--tool-call-parse)
                  (lambda (&rest args) (cl-incf parses) (apply parse args)))
                 ((symbol-function 'mevedel-collaboration--clean-response)
-                 (lambda (&rest args) (cl-incf cleans) (apply clean args))))
+                 (lambda (&rest args) (cl-incf cleans) (apply clean args)))
+                ((symbol-function 'mevedel-transcript--control-line-positions)
+                 (lambda (&optional start)
+                   (setq restart start)
+                   (funcall controls start)))
+                ((symbol-function 'mevedel-transcript--tool-block-end-from-start)
+                 (lambda (&rest args) (cl-incf ends) (apply tool-end args))))
         (let ((inhibit-modification-hooks t))
           (insert (propertize " more text." 'gptel 'response)))
         (let ((records (mevedel-collaboration--canonical-records
@@ -535,6 +549,8 @@ Small value ranges repeat texts, so occurrence-numbered ids are exercised."
           (should (equal "Streaming more text."
                          (plist-get (car (last records)) :text)))
           (should (= 0 parses))
+          (should (> restart (/ (buffer-size) 2)))
+          (should (<= ends 2))
           (should (= 1 cleans)))
         ;; An unmodified buffer reprojects nothing at all.
         (mevedel-collaboration--canonical-records (current-buffer) nil nil cache)

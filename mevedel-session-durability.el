@@ -76,7 +76,7 @@
   "mevedel-session-publication")
 
 ;; `mevedel-session-recovery'
-(declare-function mevedel-session-recovery-read "mevedel-session-recovery" (session-dir))
+(declare-function mevedel-session-recovery-read "mevedel-session-recovery" (session-dir &optional root-observation))
 (autoload 'mevedel-session-recovery-read "mevedel-session-recovery")
 
 ;; `mevedel-session-transfer'

@@ -67,10 +67,14 @@
                   "mevedel-session-durability" (observed))
 (declare-function mevedel-session-durability--owned-lease-record-p
                   "mevedel-session-durability" (lease directory &optional now))
+(declare-function mevedel-session-durability--pid-lock-operation
+                  "mevedel-session-durability" (session-dir))
 (declare-function mevedel-session-durability--portable-session-p
                   "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability--read-plist
                   "mevedel-session-durability" (path))
+(declare-function mevedel-session-durability--settle-pid-lock
+                  "mevedel-session-durability" (session-dir result))
 (declare-function mevedel-session-durability--target-time
                   "mevedel-session-durability" (directory))
 (declare-function mevedel-session-durability--valid-lease-p
@@ -80,6 +84,14 @@
                   (session-dir &optional session))
 (defvar mevedel-session-durability--client-id)
 (defvar mevedel-session-durability--observed-time)
+
+;; `mevedel-session-recovery'
+(declare-function mevedel-session-recovery--root
+                  "mevedel-session-recovery" (session-dir))
+(declare-function mevedel-session-recovery-refresh
+                  "mevedel-session-recovery" (session &optional root-observation))
+(autoload 'mevedel-session-recovery--root "mevedel-session-recovery")
+(autoload 'mevedel-session-recovery-refresh "mevedel-session-recovery")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-control-transfer
@@ -526,7 +538,7 @@ return nil: a remote stat costs the round trip it would save."
                 (file-attribute-size attributes))
         'absent))))
 
-(defun mevedel-session-transfer-poll (session)
+(defun mevedel-session-transfer-poll (session &optional admission)
   "Poll SESSION's immutable control-transfer request and decision records.
 
 The owner may call this from a UI timer or command loop.  An unanswered
@@ -537,7 +549,9 @@ transfer authority.
 A local owner with no transfer in flight skips the target program while its
 request mailbox is unchanged since a poll that found no request: that program
 spawned a shell every few seconds per view, and lease renewal, not this
-poll, detects a lost lease."
+poll, detects a lost lease.  With ADMISSION, carry the recovery-root and
+PID-lock observations in the same program, within the caller's durable
+transaction; the ordinary mutation gate consumes those proofs afterward."
   (unless (mevedel-session-durability--portable-session-p session)
     (error "Control transfer requires a portable project session"))
   (let ((stamp (mevedel-session-transfer--mailbox-stamp session))
@@ -546,30 +560,42 @@ poll, detects a lost lease."
              (not (memq state '(requested quiescing)))
              (equal stamp (gethash session mevedel-session-transfer--quiet-mailboxes)))
         (mevedel-session-control-transfer session)
-      (prog1 (mevedel-session-transfer--poll-target session)
+      (prog1 (mevedel-session-transfer--poll-target session admission)
         (if (and stamp
                  (not (memq (plist-get (mevedel-session-control-transfer session) :state)
                             '(requested quiescing))))
             (puthash session stamp mevedel-session-transfer--quiet-mailboxes)
           (remhash session mevedel-session-transfer--quiet-mailboxes))))))
 
-(defun mevedel-session-transfer--poll-target (session)
-  "Poll SESSION's transfer records on its target, as the owner poll does."
+(defun mevedel-session-transfer--poll-target (session &optional admission)
+  "Poll SESSION's transfer records, combining recovery probes for ADMISSION."
   (mevedel-session-durability-with-transaction
     (let* ((session-dir (mevedel-session-save-path session))
            (session-id (mevedel-session-session-id session))
            (bound (mevedel-session-lease session))
+           (transfer (mevedel-session-control-transfer session))
            (directory (and session-dir
                            (mevedel-session-durability--lease-path
                             session-dir)))
+           (pid-lock (and admission directory
+                          (mevedel-session-durability--pid-lock-operation
+                           session-dir)))
            ;; One observation answers the clock, the listing, and the
            ;; bound generation's record; the poll used to pay each as its
            ;; own target process on every tick.
            (observed (and directory
                           (mevedel-session-durability--observe-lease
                            directory (plist-get bound :generation)
-                           (list (mevedel-session-transfer--requests-operation
-                                  directory)))))
+                           (append
+                            (list (mevedel-session-transfer--requests-operation
+                                   directory))
+                            (when admission
+                              (append
+                               (and pid-lock (list pid-lock))
+                               (list (list :op 'directory-p
+                                           :path (mevedel-session-recovery--root
+                                                  session-dir)
+                                           :optional t))))))))
            (current
             (and observed
                  (let ((record (plist-get observed :record)))
@@ -588,6 +614,18 @@ poll, detects a lost lease."
                             (plist-get observed :now)))
                        (mevedel-session-durability--target-time
                         directory)))))
+    (when (and admission observed)
+      (let ((results (cdr (plist-get observed :extra))))
+        ;; Before first lease acquisition, the absent lease directory can
+        ;; stop the program before these probes run.  Leave the transaction
+        ;; caches unanswered: the ordinary authority gate must perform its
+        ;; recovery/PID-lock checks before acquiring that first lease.
+        (unless (cl-some (lambda (result)
+                          (eq 'skipped (plist-get result :status)))
+                        results)
+          (when pid-lock
+            (mevedel-session-durability--settle-pid-lock session-dir (pop results)))
+          (mevedel-session-recovery-refresh session (car results)))))
     (when (and session-dir session-id
                (mevedel-session-durability--valid-lease-p current)
                (equal mevedel-session-durability--client-id
@@ -663,18 +701,28 @@ poll, detects a lost lease."
                 (error "Invalid portable control-transfer decision: %s"
                        decision-path)))
             (setq decision candidate)))
-        (cond
-         ((not request)
-          (mevedel-session-control-transfer session))
-         ((not decision)
-          (mevedel-session-transfer--set-state
-           session 'requested request nil observed-at))
-         ((eq 'grant (plist-get decision :decision))
-          (mevedel-session-transfer--set-state
-           session 'quiescing request decision observed-at))
-         (t
-          (mevedel-session-transfer--set-state
-           session 'rejected request decision observed-at))))))))
+        (let ((live (mevedel-session-control-transfer session)))
+          (cond
+           ;; Preserve a nested callback's newer state, except that this
+           ;; poll's durable decision supersedes a refresh of the same
+           ;; undecided request.  Otherwise an outer timeout grant could
+           ;; leave admission open after a nested poll set `requested'.
+           ((and (not (eq transfer live))
+                 (not (and decision
+                           (eq 'requested (plist-get live :state))
+                           (mevedel-session-transfer--record-matches-p
+                            request (plist-get live :request)))))
+            live)
+           ((not request) live)
+           ((not decision)
+            (mevedel-session-transfer--set-state
+             session 'requested request nil observed-at))
+           ((eq 'grant (plist-get decision :decision))
+            (mevedel-session-transfer--set-state
+             session 'quiescing request decision observed-at))
+           (t
+            (mevedel-session-transfer--set-state
+             session 'rejected request decision observed-at)))))))))
 
 (defun mevedel-session-transfer-decide
     (session decision)

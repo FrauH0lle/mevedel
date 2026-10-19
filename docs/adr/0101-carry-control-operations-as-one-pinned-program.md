@@ -122,6 +122,43 @@ protocol, extraction directory, or generic resolver cache is needed.
 
 ## Decision history
 
+- **Batched discovery could outlive its lease listing.** A deterministic
+  two-client interleaving reproduced an activated successor pruning every
+  generation from the reader's earlier listing. The later batched read then
+  reported no publication for a saved session. Discovery now refreshes once
+  when the observed generation set changed and no live record was obtained.
+  It reports an error if that nonempty replacement set also becomes unreadable;
+  unchanged records, malformed leases and manifest failures are not retried.
+  The normal successful batch pays no additional program. This reproduced
+  correctness bug was found while investigating an intermittent SSH acceptance
+  discovery failure; that original failure retained no incompatible-row detail,
+  so its cause cannot be attributed to this interleaving.
+
+- **Prompt admission still split adjacent observations.** The collaboration
+  backlog recorded about 120 ms of synchronous admission controls on the
+  deployed host. Current-code regression fixtures confirmed that cold local
+  and remote admission used separate transfer and recovery programs, even
+  though both belong to the same admission transaction. The transfer program
+  now carries the recovery-root and PID-lock probes; the ordinary authority
+  gate consumes their results without repeating them. Uncontested admission
+  with an owned lease takes one program instead of two. A warm local mailbox
+  already avoided the transfer program, so it remains at one. These are program-count results,
+  not a new deployed-host latency measurement. Lease, recovery and incarnation
+  checks remain synchronous authority requirements; no cross-admission cache
+  or delayed safety check was introduced. A deterministic interleaving also
+  reproduced an older poll overwriting a nested grant with `requested` and
+  admitting work. Poll application now preserves newer local transfer state,
+  and admission rechecks quiescing/released state and its live lease binding
+  after yielding checks. A second regression reproduced manual lease release
+  during those checks, which has no cooperative transfer state to inspect.
+  Full-suite integration exposed first acquisition without a lease directory:
+  its failed observation skips later probes, so those unexecuted probes now
+  leave the ordinary authority gate responsible for fresh mandatory checks.
+  A nested refresh of `requested` also reproduced the opposite ordering bug:
+  the outer poll committed a timeout grant but kept the nested undecided state.
+  Its durable decision now supersedes a refresh of the same immutable request,
+  while newer terminal states and different requests remain protected.
+
 - **Shared-note cleanup needed byte-preserving undo for arbitrary files.**
   Curated-memory write intents retain full UTF-8 snapshots of at most 32 KiB
   inside 4-MiB escaped Lisp records, and `verify` ships expected bytes in the

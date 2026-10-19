@@ -106,7 +106,7 @@
 (declare-function mevedel-session-recovery--delete-local
                   "mevedel-session-recovery" (path))
 (declare-function mevedel-session-recovery-refresh
-                  "mevedel-session-recovery" (session))
+                  "mevedel-session-recovery" (session &optional root-observation))
 (declare-function mevedel-session-recovery-refresh-session-buffers
                   "mevedel-session-recovery" (session))
 (autoload 'mevedel-session-recovery--abandon "mevedel-session-recovery")
@@ -1039,14 +1039,31 @@ LISTINGS must be observations from this discovery, never a retained cache."
           (setq records (nthcdr count records))
           (unless (plist-get row :error)
             (condition-case err
-                (when lease
-                  (unless (mevedel-session-durability--valid-lease-p lease)
-                    (error "Invalid portable session lease"))
-                  (when-let* ((head (plist-get lease :publication-head)))
-                    (plist-put row :head head)
-                    (plist-put row :manifest
-                               (mevedel-session-publication--publication-path
-                                (plist-get row :directory) head))))
+                (progn
+                  ;; A successor prunes its predecessors after activation.
+                  ;; If our listed records disappeared before their reads,
+                  ;; prove the name set changed and refresh once.  Do not
+                  ;; retry unchanged malformed records or any manifest error.
+                  (when (and (null lease) (> count 0))
+                    (let ((fresh-paths
+                           (mevedel-session-durability--generation-paths
+                            (mevedel-session-durability--lease-path
+                             (plist-get row :directory)))))
+                      (unless (equal fresh-paths (plist-get row :paths))
+                        (setq lease
+                              (mevedel-session-durability--head-of-records
+                               (mevedel-session-durability--read-records
+                                fresh-paths)))
+                        (when (and fresh-paths (null lease))
+                          (error "Portable session lease changed during discovery")))))
+                  (when lease
+                    (unless (mevedel-session-durability--valid-lease-p lease)
+                      (error "Invalid portable session lease"))
+                    (when-let* ((head (plist-get lease :publication-head)))
+                      (plist-put row :head head)
+                      (plist-put row :manifest
+                                 (mevedel-session-publication--publication-path
+                                  (plist-get row :directory) head)))))
               (error (plist-put row :error err)))))))
     (let* ((selected (seq-filter (lambda (row) (plist-get row :manifest)) rows))
            (manifests (mevedel-session-durability--read-records

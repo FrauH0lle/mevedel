@@ -16,13 +16,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 - Consider making mevedel's data buffers hidden
 - Add optional cached container/VM/WSL detection to environment context for
   local and SSH targets; TRAMP execution targets are already reported.
-- Collaboration publishes while a reply streams still scan the whole
-  transcript's segments (`mevedel-transcript-segments`, about two thirds of a
-  retained publish: 8 of 12.5 ms at 1,001 records on the desktop). Resume the
-  scan from the last closed control before the first change.
-- A guest prompt waits ~120 ms on the deployed host for the synchronous
-  session-transfer control programs in prompt admission before it is
-  inserted. Same evidence.
 - Check if memory and journal processing could be async
 
 ## Execution

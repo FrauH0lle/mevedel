@@ -209,7 +209,11 @@
                                        :session-id))
                      :test #'equal)))
       (unless entry
-        (error "Remote acceptance session was not discoverable"))
+        ;; Retain the failed discovery itself before fixture cleanup removes
+        ;; its evidence.  Do not retry: a second read can hide an interleaving.
+        (error "Remote acceptance session %s was not discoverable: %S"
+               session-id
+               (mevedel-session-persistence--enumerate-sessions workspace t)))
       (let ((buffer
              (cl-letf (((symbol-function 'mevedel--chat-buffer-init-common)
                         #'ignore)

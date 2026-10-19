@@ -1104,6 +1104,24 @@ cost is real only there, and because a command in flight is also a window in
 which a foreign process sentinel can issue its own remote operation on the same
 connection — see [Transport reentrancy](#transport-reentrancy).
 
+New mutation admission, including guest prompt delivery, observes transfer
+state without draining or releasing the session. When that observation needs
+a target program, its lease, clock and mailbox reads carry the recovery-root
+and mixed-authority probes too. The ordinary authority gate consumes those
+observations within the same admission transaction; it still checks recovery,
+lease expiry and target incarnation. Thus an uncontested cold local or remote
+admission with an owned lease needs one control program, as does a warm local
+admission whose mailbox poll is skipped. A live request, recovery or acquisition
+may need more. If the lease directory does not yet exist and the program skips
+the added probes, the ordinary gate performs them before first acquisition;
+skipped probes are never treated as evidence of absence.
+No authority observation is cached across admissions. A newer grant or release
+handled during a yielding read cannot be overwritten by the older poll. A
+durable timeout decision still supersedes a nested refresh of that same
+undecided request. Admission rechecks the local transfer fence and live lease
+binding after its authority checks return, including a manual release without
+transfer state.
+
 While a transfer is in flight — a request outstanding on either side — both
 sides poll at `mevedel-view-control-transfer-active-poll-seconds` instead.
 The idle cadence is chosen for a connection nobody is waiting on, and a
@@ -1912,6 +1930,13 @@ Session discovery reuses control observations only within its current
 enumeration. In particular, a pinned probe that found no portable lease is
 sufficient for that enumeration's PID profile check. Failed probes and
 contradictory controls still reject the entry; a later discovery probes again.
+An activated successor can prune lease generations between the batch's listing
+and record reads. If those observations yield no live record, discovery checks
+whether the generation names changed and reads the replacement set once. A
+nonempty replacement set that also yields no usable lease reports a discovery
+error rather than silently claiming the session has no publication. Unchanged
+records and manifest failures are not retried; lease, path and sidecar validation
+still apply to the refreshed observation.
 
 Only a sidecar whose format is exactly the current
 `mevedel-session-codec-format-version` and whose complete current shape

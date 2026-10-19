@@ -72,6 +72,13 @@
                  (test-mevedel-session-persistence-cost--measure
                    (mevedel-session-artifacts-save session buffer))))
             (should (<= processes 45)))
+          ;; Cold admission combines transfer, recovery, PID-lock and clock
+          ;; observations.  The quiet local mailbox then keeps warm admission
+          ;; at that same one-program cost, not zero authority checks.
+          (dotimes (_ 2)
+            (should (= 1 (test-mevedel-session-persistence-cost--measure
+                           (mevedel-session-artifacts-assert-new-mutation-authority
+                            session)))))
           ;; A save that carries a change publishes it; the artifacts whose
           ;; bytes the target already holds are not republished.
           (goto-char (point-max))
@@ -197,10 +204,10 @@
               (mevedel-session-artifacts-save session buffer)
               ;; A tool call's admission: transfer state, recovery markers,
               ;; the PID-lock proof and the ownership clock.
-              (should (<= (test-mevedel-session-persistence-cost--measure
+              (should (= (test-mevedel-session-persistence-cost--measure
                             (mevedel-session-artifacts-assert-new-mutation-authority
                              session))
-                          2))
+                         1))
               ;; The owner's transfer poll observes lease and requests at once.
               (should (= 1 (test-mevedel-session-persistence-cost--measure
                              (mevedel-session-control-transfer-poll

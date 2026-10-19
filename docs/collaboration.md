@@ -871,9 +871,14 @@ when its characters or text properties, the session context including plan
 mode, or a live input it read -- a running execution, pending completion
 evidence, an artifact's file stat, the tool registry -- has changed, so the
 result always equals a full projection. A room's first projection fills this
-cache. Segment classification still scans the whole transcript: while a
-reply streams, a publish costs about a fifth of a full projection, but still
-grows with transcript length. Streamed updates therefore coalesce for at least
+cache. Later classifications compare a source snapshot, including text
+properties, and resume control and tool searches at the last closed control
+before the first change. Tool recovery keeps the final tool's lookahead live;
+unresolved openers, orphan tool properties and enclosing payloads move the
+restart back. This also handles producers that inhibit modification hooks.
+Raw property classification, prefix validation, neighbor repairs and record
+reconciliation still grow with transcript length; this is not a constant-time
+publish. Streamed updates therefore coalesce for at least
 0.1 s and four times the previous publish's cost, up to one second, keeping a
 streaming room to about a fifth of the Emacs thread that every room shares
 without letting one slow publish stall the stream.

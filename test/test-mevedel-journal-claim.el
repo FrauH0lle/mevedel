@@ -107,8 +107,13 @@
             (while (and (cl-some #'process-live-p processes) (< (float-time) deadline))
               (accept-process-output nil 0.01)))
           (dolist (process processes)
-            (should-not (process-live-p process))
-            (should (= 0 (process-exit-status process))))
+            (ert-info ((format "Contender %S: status %S, exit %S\nCommand: %S\nOutput:\n%s"
+                               (process-name process) (process-status process)
+                               (process-exit-status process) (process-command process)
+                               (with-current-buffer (process-buffer process)
+                                 (buffer-string))))
+              (should-not (process-live-p process))
+              (should (= 0 (process-exit-status process)))))
           (let ((results (mapcar (lambda (buffer)
                                    (with-current-buffer buffer
                                      (car (read-from-string (buffer-string)))))
