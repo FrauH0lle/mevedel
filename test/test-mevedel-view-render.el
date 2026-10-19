@@ -5243,8 +5243,7 @@
                         (current-buffer) (point-min) (point-max))))
         (should (eq 'error (plist-get rendering :status))))))
   :doc "collapsed cached renderings omit bodies but expansion keeps them"
-  (let ((mevedel-view--tool-rendering-cache (make-hash-table :test #'equal))
-        (mevedel-view--render-cache-entries 0))
+  (let ((mevedel-view--tool-rendering-cache (make-hash-table :test #'equal)))
     (with-temp-buffer
       (insert "(:name \"ThirdParty\" :args (:query \"thing\"))\nlarge body\n")
       (let ((collapsed (mevedel-view--segment-rendering
@@ -5276,7 +5275,6 @@
     (should-not mevedel-tool-render-summary-only))
   :doc "unrelated appends keep completed tool renderings cached"
   (let ((mevedel-view--tool-rendering-cache (make-hash-table :test #'equal))
-        (mevedel-view--render-cache-entries 0)
         (calls 0))
     (mevedel-tool-register
      (mevedel-tool--create
@@ -5302,7 +5300,6 @@
           (should (= 1 calls))))))
   :doc "tool text changes invalidate cached renderings"
   (let ((mevedel-view--tool-rendering-cache (make-hash-table :test #'equal))
-        (mevedel-view--render-cache-entries 0)
         (calls 0))
     (mevedel-tool-register
      (mevedel-tool--create
@@ -7825,7 +7822,7 @@
         (should (eq 'earlier (gethash earlier mevedel-view--tool-rendering-cache)))
         (should-not (gethash header mevedel-view--tool-rendering-cache))
         (should-not (gethash body mevedel-view--tool-rendering-cache))
-        (should (= 1 mevedel-view--render-cache-entries))))))
+        (should (= 1 (hash-table-count mevedel-view--tool-rendering-cache)))))))
 
 (mevedel-deftest mevedel-view--sweep-tool-rendering-cache ()
   ,test
@@ -7843,7 +7840,7 @@
         (mevedel-view--sweep-tool-rendering-cache mevedel-view--tool-cache-used)
         (should-not (gethash old mevedel-view--tool-rendering-cache))
         (should (eq 'kept (gethash kept mevedel-view--tool-rendering-cache)))
-        (should (= 1 mevedel-view--render-cache-entries))
+        (should (= 1 (hash-table-count mevedel-view--tool-rendering-cache)))
         (with-current-buffer data-buf
           (should (= 1 (hash-table-count mevedel-view--source-revisions)))
           (should (eq (nth 3 kept) (mevedel-view--source-revision 7 13))))))))
