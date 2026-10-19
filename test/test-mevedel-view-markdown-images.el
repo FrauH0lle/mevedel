@@ -72,7 +72,18 @@
                     (should button)
                     (should (= (button-start button) (point-min)))
                     (should (= (button-end button) (1- (point-max))))
-                    (let ((face (get-text-property (point) 'face)))
+                    ;; The view fontifies with `font-lock-defaults' (nil t),
+                    ;; whose unfontify pass strips the `face' property once
+                    ;; jit-lock reaches the line.  Check what redisplay sees
+                    ;; afterwards, including the button's category face.
+                    ;; Batch Emacs declines `font-lock-mode', whose teardown
+                    ;; drops the `font-lock-face' alias the view buffer has;
+                    ;; install it after fontifying.
+                    (setq-local font-lock-defaults '(nil t))
+                    (font-lock-ensure)
+                    (setq-local char-property-alias-alist
+                                '((face font-lock-face)))
+                    (let ((face (get-char-property (point) 'face)))
                       (dolist (attribute '(:underline :overline :strike-through :box))
                         (should (plist-member face attribute))
                         (should-not (plist-get face attribute))))

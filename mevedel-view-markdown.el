@@ -334,20 +334,25 @@ during a redraw."
   (when-let* ((first (car (split-string (or text "") "," t))))
     (mevedel-view--line-ref-start-line first)))
 
-(defun mevedel-view--make-file-button (start end path line)
-  "Make START..END a button visiting PATH at optional LINE."
+(define-button-type 'mevedel-view-image-button
+  'face nil)
+
+(defun mevedel-view--make-file-button (start end path line &optional type)
+  "Make START..END a button visiting PATH at optional LINE.
+TYPE is a button type, defaulting to the standard one."
   (let ((target (mevedel-view--path-target path)))
-    (make-text-button
-     start end
-     'action #'mevedel-view--linkify-path-action
-     'mevedel-view-path path
-     'mevedel-view-line line
-     'mevedel-view-session (car-safe target)
-     'mevedel-view-session-artifact (cdr-safe target)
-     'follow-link t
-     'help-echo (if line
-                    (format "Visit %s:%d" path line)
-                  (format "Visit %s" path)))))
+    (apply #'make-text-button
+           start end
+           'action #'mevedel-view--linkify-path-action
+           'mevedel-view-path path
+           'mevedel-view-line line
+           'mevedel-view-session (car-safe target)
+           'mevedel-view-session-artifact (cdr-safe target)
+           'follow-link t
+           'help-echo (if line
+                          (format "Visit %s:%d" path line)
+                        (format "Visit %s" path))
+           (and type (list :type type)))))
 
 (defun mevedel-view--markdown-code-blocks (start end &optional incomplete)
   "Return fenced Markdown code blocks between START and END.
@@ -548,14 +553,19 @@ recreates only stale images."
          (sizing (mevedel-view--image-sizing window)))
     (setq mevedel-view--image-layout-width nil)
     (when-let* ((image (mevedel-view--image-display path (car sizing))))
-      (mevedel-view--make-file-button start end path nil)
+      ;; The image button type has no category face: font-lock's unfontify
+      ;; pass strips `face', and the default button category's underlined
+      ;; face would then draw across the image's text baseline.  The
+      ;; `font-lock-face' copy survives fontification.
+      (mevedel-view--make-file-button
+       start end path nil 'mevedel-view-image-button)
       ;; Override the transcript's explicit keymap, not just its category.
-      ;; Link decorations otherwise draw across the image's text baseline.
-      (add-text-properties start end
-                           `(keymap ,button-map pointer hand
-                             face (:underline nil :overline nil
-                                   :strike-through nil :box nil)
-                             mevedel-view-committed-only t))
+      (let ((plain '(:underline nil :overline nil
+                     :strike-through nil :box nil)))
+        (add-text-properties start end
+                             `(keymap ,button-map pointer hand
+                               face ,plain font-lock-face ,plain
+                               mevedel-view-committed-only t)))
       (add-text-properties
        start end
        (if (floatp mevedel-view-inline-image-max-width)
