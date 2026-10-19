@@ -16,6 +16,7 @@
 (require 'mevedel-execution)
 (require 'mevedel-execution-spool)
 (require 'mevedel-agents)
+(require 'mevedel-agent-control)
 (require 'mevedel-execution-test-helpers
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file))
@@ -52,6 +53,24 @@ mouse events in them, which later interactive calls would read."
   "Activate rendered TEXT with its actual RET binding."
   (mevedel-view-execution-test--at text)
   (call-interactively (key-binding (kbd "RET"))))
+
+(defun mevedel-view-execution-test--assert-held-row (label expected-face metadata)
+  "Assert rendered LABEL has EXPECTED-FACE, dim METADATA and an inert row."
+  (mevedel-view-execution-test--at label)
+  (let ((start (line-beginning-position))
+        (end (line-end-position))
+        (glyph (point)))
+    (dolist (property '(face font-lock-face))
+      (should (eq expected-face (get-text-property glyph property)))
+      (should (eq expected-face (get-text-property (+ 2 glyph) property)))
+      (dolist (text metadata)
+        (save-excursion
+          (search-forward text end)
+          (should (eq 'mevedel-view-tool-metadata
+                      (get-text-property (1- (point)) property))))))
+    (dolist (property '(mevedel-view-zone-activate mouse-face
+                       mevedel-view-zone-toggle))
+      (should-not (text-property-not-all start end property nil)))))
 
 (mevedel-deftest mevedel-view-execution-fragment ()
   ,test
@@ -418,7 +437,145 @@ mouse events in them, which later interactive calls would read."
       (setf (plist-get (nth 1 live) :output-tail) (make-string 36 ?a))
       (mevedel-view--render-status)
       (should (looking-at-p "est-oldest"))
-      (should-not (get-text-property (point) 'help-echo)))))
+      (should-not (get-text-property (point) 'help-echo))))
+  :doc "pending reduction survives failed computation, but an empty fragment consumes it"
+  (mevedel-view-execution-test--with-view
+    (setq mevedel-view-execution--reflow-pending t)
+    (let (entered)
+      (cl-letf (((symbol-function 'mevedel-view-execution--line)
+                 (lambda (&rest _)
+                   (setq entered t)
+                   (error "Injected background row failure"))))
+        (should (equal '(error "Injected background row failure")
+                       (should-error (mevedel-view-execution-fragment session)))))
+      (should entered))
+    (should mevedel-view-execution--reflow-pending)
+    (should (mevedel-view-execution-fragment session))
+    (should-not mevedel-view-execution--reflow-pending)
+    ;; No previous shown rows means no held completions mask the empty case.
+    (setq mevedel-view-execution--shown nil
+          mevedel-view-execution--reflow-pending t
+          live nil)
+    (should-not (mevedel-view-execution-fragment session))
+    (should-not mevedel-view-execution--reflow-pending)
+    (setq live (list '(:execution-id "later" :owner "/root" :yielded t
+                      :state running :command "later work")))
+    (mevedel-view--render-status)
+    (should (string-search "later work" (buffer-string)))
+    (should-not mevedel-view-execution--reflow-pending)))
+
+(mevedel-deftest mevedel-view-execution--controls ()
+  ,test
+  (test)
+  :doc "Show fewer applies under stationary point, mouse-only hover, and another window's point"
+  (dolist (source '(point mouse other-window))
+    (ert-info ((format "hover source: %S" source))
+      (mevedel-view-execution-test--with-view
+        (save-window-excursion
+          (switch-to-buffer view-buf)
+          (setq live (cl-loop for n from 1 to 7
+                              collect (list :execution-id (format "e%d" n) :owner "/root"
+                                            :yielded t :state 'running :started-at (float n)
+                                            :command (format "cmd %d" n))))
+          (let ((window (selected-window))
+                (other (when (eq source 'other-window) (split-window-below))))
+            (cl-letf (((symbol-function 'mouse-pixel-position)
+                       (lambda () (cons (selected-frame)
+                                        (if (eq source 'mouse) '(1 . 1) '(-1 . -1)))))
+                      ((symbol-function 'posn-at-x-y)
+                       (lambda (&rest _)
+                         (list window
+                               (1+ (plist-get (mevedel-view-zone-fragment-bounds
+                                               'status 'background) :start))
+                               '(1 . 1) 0))))
+              (mevedel-view--render-status)
+              (mevedel-view-execution-test--activate "[Show all 7]")
+              (should (= 7 (mevedel-view-test--count-substring "▸ Running" (buffer-string))))
+              (goto-char (point-max))
+              (insert "> draft\nsecond line")
+              (let ((control (save-excursion
+                               (mevedel-view-execution-test--at "[Show fewer]")
+                               (point))))
+                (pcase source
+                  ('point (goto-char control))
+                  ('other-window (set-window-point other control)))
+                (should (mevedel-view-execution--pointer-on-panel-p))
+                ;; Invoke the rendered control without moving composer point
+                ;; in the mouse-only and other-window cases.
+                (funcall (get-text-property control 'mevedel-view-zone-activate))
+                (dotimes (_ 3)
+                  (should (= 5 (mevedel-view-test--count-substring "▸ Running" (buffer-string))))
+                  (should (string-search "[Show all 7]" (buffer-string)))
+                  (should-not mevedel-view-execution--reflow-pending)
+                  (should (mevedel-view-execution--pointer-on-panel-p))
+                  (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+                  (mevedel-view--render-status)))))))))
+  :doc "queued reduction drains once, accounts for shown completion, and keeps true hover and selection"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (setq live (cl-loop for n from 1 to 7
+                          collect (list :execution-id (format "e%d" n) :owner "/root"
+                                        :yielded t :state 'running :started-at (float n)
+                                        :command (format "cmd %d" n))))
+      (mevedel-view--render-status)
+      (mevedel-view-execution-test--activate "[Show all 7]")
+      (mevedel-view-execution-test--activate "cmd 1")
+      (goto-char (point-max))
+      (insert "> draft\nsecond line")
+      (mevedel-view-execution-test--at "[Show fewer]")
+      (let ((before (buffer-string)))
+        (unwind-protect
+            (progn
+              (mevedel-view-render-mutate
+               'test-background-writer
+               (lambda ()
+                 (mevedel-view-execution-test--activate "[Show fewer]")
+                 (should mevedel-view-execution--reflow-pending)
+                 (should (equal-including-properties before (buffer-string)))
+                 ;; e2 was shown before the queued action.  It must still be
+                 ;; held even though reduction would normally hide its row.
+                 (setq live (cl-remove "e2" live :test #'equal
+                                       :key (lambda (item) (plist-get item :execution-id))))
+                 (push '(:execution-id "e8" :owner "/root" :yielded t
+                         :state running :started-at 8.0 :command "cmd 8") live)
+                 (mevedel-view--render-status)
+                 (should mevedel-view-execution--reflow-pending)
+                 (should (= 7 (length mevedel-view-execution--shown)))))
+              (should-not mevedel-view-render--owner)
+              (should-not mevedel-view-render--pending)
+              (should-not mevedel-view-execution--reflow-pending)
+              (should mevedel-view-execution--hovering)
+              (should (string-search "▾ Running   bash     cmd 1" (buffer-string)))
+              (should (string-search "✓ Completed bash     cmd 2" (buffer-string)))
+              (should (string-search "▸ Running   bash     cmd 8" (buffer-string)))
+              (should-not (string-search "bash     cmd 3" (buffer-string)))
+              (should (= 4 (mevedel-view-test--count-substring "▸ Running" (buffer-string))))
+              ;; Time alone must not release the completion under real point.
+              (setf (plist-get (nth 2 (car mevedel-view-execution--held)) :release-at) 0.0)
+              (mevedel-view--render-status)
+              (should (string-search "✓ Completed bash     cmd 2" (buffer-string)))
+              (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+          (mevedel-view-execution--cancel-release)))))
+  :doc "Show all supersedes a queued Show fewer through the still-rendered control"
+  (mevedel-view-execution-test--with-view
+    (setq live (cl-loop for n from 1 to 7
+                        collect (list :execution-id (format "e%d" n) :owner "/root"
+                                      :yielded t :state 'running :command "work")))
+    (mevedel-view--render-status)
+    (mevedel-view-execution-test--activate "[Show all 7]")
+    (mevedel-view-render-mutate
+     'test-background-writer
+     (lambda ()
+       (mevedel-view-execution-test--activate "[Show fewer]")
+       (should mevedel-view-execution--reflow-pending)
+       ;; The display has not changed yet; its callback toggles current intent.
+       (mevedel-view-execution-test--activate "[Show fewer]")
+       (should mevedel-view-execution--show-all)
+       (should-not mevedel-view-execution--reflow-pending)))
+    (should (= 7 (mevedel-view-test--count-substring "▸ Running" (buffer-string))))
+    (should (string-search "[Show fewer]" (buffer-string)))
+    (should-not mevedel-view-execution--reflow-pending)))
 
 (mevedel-deftest mevedel-view-execution--line ()
   ,test
@@ -811,12 +968,14 @@ mouse events in them, which later interactive calls would read."
   (mevedel-view-execution-test--with-view
     (setq mevedel-view-execution--selected-agent "/root/a"
           mevedel-view-execution--show-all t
+          mevedel-view-execution--reflow-pending t
           mevedel-view-execution--held (list (list '(agent "/root/a") 'agent '(:path "/root/a")))
           mevedel-view-execution--release-timer (run-with-timer 3600 nil #'ignore))
     (mevedel-view-zone-set-collapse-state mevedel-view-execution--collapse-key t)
     (mevedel-view-execution-reset)
     (should-not mevedel-view-execution--selected-agent)
     (should-not mevedel-view-execution--show-all)
+    (should-not mevedel-view-execution--reflow-pending)
     (should-not mevedel-view-execution--held)
     (should-not mevedel-view-execution--release-timer)
     (should-not (mevedel-view-zone-collapse-state mevedel-view-execution--collapse-key))
@@ -899,11 +1058,115 @@ mouse events in them, which later interactive calls would read."
                   ((:state running :kind monitor) . mevedel-view-agent-running)
                   ((:state stopping) . mevedel-view-tool-warning)
                   ((:state lost) . error)
+                  ((:state failed) . error)
+                  ((:state completed :outcome success) . success)
+                  ((:state completed :outcome no-match :exit-code 1) . success)
+                  ((:state completed :outcome different :exit-code 1) . success)
+                  ((:state completed :outcome false :exit-code 1) . success)
+                  ((:state completed :outcome failure) . error)
+                  ((:state completed :outcome failure :termination stopped)
+                   . mevedel-view-tool-warning)
+                  ((:state completed :outcome failure :termination owner-stopped)
+                   . mevedel-view-tool-warning)
+                  ((:state completed :outcome failure :termination interrupted)
+                   . mevedel-view-tool-warning)
                   ((:state completed :termination exited :exit-code 0) . success)
                   ((:state completed :termination exited :exit-code 7) . error)
+                  ((:terminal-p t :termination exited :exit-code 0) . success)
+                  ((:terminal-p t :termination exited :exit-code 7) . error)
+                  ((:state completed :termination exited) . mevedel-view-tool-metadata)
+                  ((:state completed) . mevedel-view-tool-metadata)
+                  ((:terminal-p t) . mevedel-view-tool-metadata)
+                  ((:terminal-p t :outcome unknown) . mevedel-view-tool-metadata)
                   ((:terminal-p t :termination user-stop) . mevedel-view-tool-warning)
                   ((:unavailable-p t) . mevedel-view-tool-metadata)))
-    (should (eq (cdr case) (mevedel-view-execution--state-face (car case))))))
+    (ert-info ((format "snapshot: %S" (car case)))
+      (should (eq (cdr case) (mevedel-view-execution--state-face (car case)))))))
+
+(mevedel-deftest mevedel-view-execution--hold-terminal-facts ()
+  ,test
+  (test)
+  :doc "both terminal event orders render bounded command outcomes, leaving unknown gaps dim"
+  (dolist (order '(terminal-first removal-first))
+    (dolist (case '(((:state completed :outcome success :termination exited :exit-code 0)
+                    . success)
+                   ((:state completed :outcome no-match :termination exited :exit-code 1)
+                    . success)
+                   ((:state completed :outcome failure :termination exited :exit-code 7)
+                    . error)
+                   ((:state completed :outcome failure :termination stopped)
+                    . mevedel-view-tool-warning)
+                   ((:state completed) . mevedel-view-tool-metadata)))
+      (ert-info ((format "event order: %S facts: %S" order (car case)))
+        (mevedel-view-execution-test--with-view
+          (mevedel-view--render-status)
+          (goto-char (point-max))
+          (insert "> draft\nsecond line")
+          (let ((event (list :session session :data-buffer data-buf :owner "/root"
+                             :type 'terminal :facts (append '(:execution-id "e1") (car case)))))
+            (unwind-protect
+                (progn
+                  (when (eq order 'terminal-first)
+                    (mevedel-view-execution--event event)
+                    (let ((shown (nth 2 (car mevedel-view-execution--shown))))
+                      (should (plist-get shown :terminal-p))
+                      (dolist (key '(:state :outcome :termination :exit-code))
+                        (should (equal (plist-get shown key) (plist-get (car case) key))))))
+                  (setq live nil)
+                  (mevedel-view--render-status)
+                  (when (eq order 'removal-first)
+                    (mevedel-view-execution-test--at "✓ Completed")
+                    (dolist (property '(face font-lock-face))
+                      (should (eq 'mevedel-view-tool-metadata
+                                  (get-text-property (point) property)))
+                      (should (eq 'mevedel-view-tool-metadata
+                                  (get-text-property (+ 2 (point)) property))))
+                    (mevedel-view-execution--event event))
+                  (let ((held (nth 2 (car mevedel-view-execution--held))))
+                    (should (plist-get held :terminal-p))
+                    (dolist (key '(:state :outcome :termination :exit-code))
+                      (should (equal (plist-get held key) (plist-get (car case) key)))))
+                  (dotimes (_ 2)
+                    (mevedel-view-execution-test--assert-held-row
+                     "✓ Completed" (cdr case) '("bash" "same command"))
+                    (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+                    (mevedel-view--render-status)))
+              (mevedel-view-execution--cancel-release))))))))
+
+(mevedel-deftest mevedel-view-execution--held-line ()
+  ,test
+  (test)
+  :doc "held agents snapshot settled record outcomes and keep only glyph/state colored"
+  (dolist (case '((completed . success) (errored . error)
+                  (interrupted . mevedel-view-tool-warning)
+                  (nil . mevedel-view-tool-metadata)))
+    (ert-info ((format "settled agent outcome: %S" (car case)))
+      (mevedel-view-execution-test--with-view
+        (let* ((agents '((:path "/root/worker" :status running :depth 0)))
+               (record (mevedel-agent-record--create :id "worker" :path "/root/worker"
+                                                     :parent-path "/root" :activity 'running)))
+          (setf (mevedel-session-agent-registry session) (list (cons "/root/worker" record)))
+          (cl-letf (((symbol-function 'mevedel-view--agent-status-collect) (lambda () agents)))
+            (mevedel-view--render-status)
+            (goto-char (point-max))
+            (insert "> draft\nsecond line")
+            (setf (mevedel-agent-record-activity record) 'idle
+                  (mevedel-agent-record-settled-outcome record) (car case))
+            (setq agents nil)
+            (unwind-protect
+                (progn
+                  (mevedel-view--render-status)
+                  (should (eq (car case)
+                              (plist-get (nth 2 (car mevedel-view-execution--held)) :outcome)))
+                  ;; A follow-up mutates the retained record, not the old row.
+                  (setf (mevedel-agent-record-settled-outcome record)
+                        (if (eq (car case) 'completed) 'errored 'completed))
+                  (dotimes (_ 2)
+                    (mevedel-view-execution-test--assert-held-row
+                     "✓ Finished" (cdr case) '("agent" "/root/worker"))
+                    (mevedel-view--render-status))
+                  (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
+              (mevedel-view-execution--cancel-release))))))))
 
 (mevedel-deftest mevedel-view-execution--line-presentation ()
   ,test
@@ -929,7 +1192,33 @@ mouse events in them, which later interactive calls would read."
                    (substring-no-properties
                     (mevedel-view-execution--line
                      '(:owner "/root" :execution-id "e1" :state running
-                       :command "make test")))))))
+                       :command "make test"))))))
+  :doc "retained expanded executions use the same rendered outcome faces as held summaries"
+  (dolist (case '(((:state completed :outcome success :termination exited :exit-code 0)
+                  . success)
+                 ((:state completed :outcome failure :termination exited :exit-code 9)
+                  . error)
+                 ((:state completed :outcome failure :termination stopped)
+                  . mevedel-view-tool-warning)
+                 ((:state completed) . mevedel-view-tool-metadata)))
+    (mevedel-view-execution-test--with-view
+      (mevedel-view--render-status)
+      (mevedel-view-execution-test--activate "  ▸ Running")
+      (goto-char (point-max))
+      (insert "> draft\nsecond line")
+      (setq live nil)
+      (mevedel-view-execution--event
+       (list :session session :data-buffer data-buf :owner "/root" :type 'terminal
+             :facts (append '(:execution-id "e1") (car case)) :whole-output "final output"))
+      (dotimes (_ 2)
+        (mevedel-view-execution-test--at "  ▾ Completed")
+        (search-forward "Completed")
+        (dolist (property '(face font-lock-face))
+          (should (eq (cdr case) (get-text-property (1- (point)) property))))
+        (should (string-search "final output" (buffer-string)))
+        (should-not (string-search "[Stop]" (buffer-string)))
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+        (mevedel-view--render-status)))))
 
 (mevedel-deftest mevedel-view-execution--agent-line ()
   ,test

@@ -136,8 +136,13 @@ put agents before executions, then sort lexicographically by agent root path or
 execution owner path and ID, ascending; live, held and retained rows use the
 same identity tiebreaks. State changes, including blocking, update rows in place.
 While point or the mouse is on the panel, it keeps exactly the rows it showed:
-finished rows stay as inert dimmed lines and new work is only counted, until
-both leave.
+finished rows stay as inert lines and new work is only counted, until both
+leave. Completion glyphs and state labels use success/error faces for known
+outcomes, warning for explicit stops, and a subdued face while unknown; names
+and metadata remain dim. Explicit Show fewer is a user-requested layout change,
+so it applies the normal limit under the pointer while preserving selected
+inspectors and retained finished rows. Subsequent passive updates freeze that
+reduced set. This intent survives deferred and coalesced status rendering.
 A finished row also lingers for ten seconds after the pointer is away, and
 leaving the panel restarts that period, so removals happen when nobody is
 aiming at the panel.
@@ -179,6 +184,15 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Explicit overflow reduction and outcome colors (2026-10-19).** Applying
+  passive row freezing after Show fewer left every expanded row visible while
+  point remained on the control, even though its label changed to Show all.
+  Explicit reduction now bypasses only that row-selection freeze, not the
+  pointer tracking that protects completed rows and their grace periods.
+  Previously dimmed completion labels also hid known success and failure;
+  bounded terminal facts and a snapshot of each finished agent's outcome now
+  color the label without making held rows interactive or changing their size.
 
 - **Compare before capturing (2026-10-19).** An unchanged zone still spent
   0.60--0.99 milliseconds capturing composer geometry, even though its mutation

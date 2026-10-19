@@ -1509,9 +1509,14 @@ directive, historical, agent, and side scopes cannot create one.
 The status zone shows one **background work** panel for everything that runs
 beside the conversation: active agents, yielded Bash commands, and Monitors.
 A finished item stays in place for ten seconds
-(`mevedel-view-execution-grace-seconds`) as an inert, dimmed `✓ Completed` (or
+(`mevedel-view-execution-grace-seconds`) as an inert `✓ Completed` (or
 `✓ Finished` for an agent) line, so a glance shows what just ended; its
-transcript notice remains the durable record. While point (in any window
+transcript notice remains the durable record. The glyph and state label use
+the theme's success or error face for a known successful or failed outcome;
+explicit stops use the warning face, and unknown outcomes stay subdued until
+terminal facts arrive. Successful command outcomes include expected no-match,
+different, and false results, not just exit zero. Names and metadata stay dim.
+While point (in any window
 showing the view) or the mouse is on the panel, finished lines never leave, and
 leaving restarts their grace period. The panel then also keeps exactly the rows
 it showed, so the row being aimed at cannot shift: new work, including a new
@@ -1519,7 +1524,7 @@ child agent, is only counted in the rule and `[Show all N]` until both leave.
 In-place updates still apply. A timer runs only while finished lines are held,
 to notice the pointer leaving and grace periods ending; the layout then
 recomputes in one step. Collapsing a retained finished inspector leaves its
-dimmed completed row with a fresh ten-second grace period. Time spent expanded
+completed row with a fresh ten-second grace period. Time spent expanded
 does not count; while either cursor or mouse remains in the panel, removal
 stays blocked and leaving restarts the full period.
 
@@ -1616,7 +1621,12 @@ The panel lists up to five rows plus the expanded row when needed; retained
 finished rows also stay visible throughout their grace period. Its last
 row holds the explicit controls: `[Show all N]` (then `[Show fewer]`) when rows
 overflow, which expands the panel in place, and `[Manage]`, which opens the
-background-work cockpit. Blank space does nothing. Monitor expiry is a fixed
+background-work cockpit. An explicit `[Show fewer]` immediately applies the
+normal row limit even while point or the mouse remains on the panel; selected
+inspectors and retained finished rows keep their existing exceptions. The
+request survives deferred status redraws. Later passive updates protect the
+reduced set of rows normally, without restarting finished-row grace periods.
+Blank space does nothing. Monitor expiry is a fixed
 timestamp, not a new countdown timer. Existing execution events and agent
 state changes refresh the panel through managed-zone reconciliation,
 preserving composer text, point, selection, and windows. Quiet progress that
