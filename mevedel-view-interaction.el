@@ -700,10 +700,11 @@ descriptor registration and callback ownership remain immediate."
          'interaction #'mevedel-view--interaction-render-now)
       (mevedel-view--interaction-render-now))))
 
-(defun mevedel-view--interaction-render-now ()
-  "Materialize interactions without reentering a projection writer."
+(defun mevedel-view--interaction-render-now (&optional visits)
+  "Materialize interactions without reentering a projection writer.
+VISITS preserves explicit visitors captured before a full view reset."
   (unless mevedel-view--interaction-render-suppressed
-    (let* ((visits (mevedel-view--interaction-focused-visits))
+    (let* ((visits (or visits (mevedel-view--interaction-focused-visits)))
            (label (mevedel-view--interaction-count-label))
            (pairs (mevedel-view--interaction-descriptor-pairs))
            (render-p (or label pairs
@@ -762,7 +763,7 @@ The notice only informs: it has no controls and does not pause active work."
                     count "permission request" "permission requests")
                    (format-time-string "%H:%M" (plist-get hold :expired-at)))))))
 
-(defun mevedel-view--interaction-rebuild ()
+(defun mevedel-view--interaction-rebuild (&optional owned visits)
   "Rebuild interaction-zone descriptors from live preview and queue state.
 Descriptors are dropped and re-registered without rendering the
 intermediate states; the single final render reconciles the zone once.
@@ -770,7 +771,10 @@ A descriptor that comes back under the same id reuses its overlay
 object, so an unchanged rebuild leaves the zone text, point, and held
 overlay references untouched.  Callbacks are never settled here.  A
 rebuild that drops a descriptor closes that interaction, which can leave
-queued idle work free to proceed."
+queued idle work free to proceed.
+With OWNED, the current projection writer materializes the zone now,
+before restoring reader anchors into its rebuilt content.  VISITS holds
+explicit visitors captured before that writer removed the old zone."
   (unless mevedel-view--agent-transcript-p
     (let (closed)
       (unwind-protect
@@ -802,7 +806,9 @@ queued idle work free to proceed."
               (dolist (id closed)
                 (mevedel-view--interaction-lifecycle-close id))))
         (unwind-protect
-            (mevedel-view--interaction-render)
+            (if owned
+                (mevedel-view--interaction-render-now visits)
+              (mevedel-view--interaction-render))
           (mevedel-view--interaction-sync-active-work-pause)))
       (when closed
         (mevedel-view--interaction-offer-idle-work)))))

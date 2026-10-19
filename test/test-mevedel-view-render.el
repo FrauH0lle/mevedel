@@ -1139,10 +1139,13 @@
       (with-current-buffer view-buf
         (cl-letf (((symbol-function 'mevedel-view-refresh-input-prompt)
                    (lambda () (push 'input calls)))
-                  ((symbol-function 'mevedel-view--render-status)
+                  ((symbol-function 'mevedel-view--render-status-now)
                    (lambda (_buffer) (push 'status calls)))
                   ((symbol-function 'mevedel-view--interaction-rebuild)
-                   (lambda () (push 'interaction calls)))
+                   (lambda (owned visits)
+                     (should owned)
+                     (should-not visits)
+                     (push 'interaction calls)))
                   ((symbol-function 'mevedel-view--ensure-request-progress)
                    (lambda (_buffer) (push 'progress calls))))
           (mevedel-view--full-rerender-finish

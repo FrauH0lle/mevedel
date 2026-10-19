@@ -248,7 +248,7 @@
 (declare-function mevedel-view--pinned-prompt "mevedel-view" (window))
 (declare-function mevedel-view--refresh-continuation-prompt
                   "mevedel-view" (data-buffer historical-p))
-(declare-function mevedel-view--render-status
+(declare-function mevedel-view--render-status-now
                   "mevedel-view" (&optional data-buf))
 (declare-function mevedel-view--unattended-p "mevedel-view" (&optional buffer))
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
@@ -343,8 +343,10 @@
 (defvar mevedel-view-disclosure--settling-p)
 
 ;; `mevedel-view-interaction'
-(declare-function mevedel-view--interaction-rebuild
+(declare-function mevedel-view--interaction-focused-visits
                   "mevedel-view-interaction" ())
+(declare-function mevedel-view--interaction-rebuild
+                  "mevedel-view-interaction" (&optional owned visits))
 
 ;; `mevedel-view-markdown'
 (declare-function mevedel-view--last-live-response-boundary
@@ -8992,6 +8994,7 @@ Until the complete plan is ready, keep the previous view in place."
          (agent (plist-get job :agent))
          (started (plist-get job :started))
          (plan (plist-get job :plan))
+         (interaction-visits (mevedel-view--interaction-focused-visits))
          (mevedel-view-render--prepared-responses (plist-get job :fontified))
          (mevedel-transcript--tool-block-index (plist-get job :index))
          (mevedel-transcript-audit--decode-cache (plist-get job :audits))
@@ -9055,7 +9058,10 @@ Until the complete plan is ready, keep the previous view in place."
                          (cl-remove-if (lambda (entry) (memq (car entry) immediate))
                                        (plist-get job :pending)))
                    (mevedel-view--full-rerender-finish
-                    data live-data (list :view-buffer view) historical
+                    data live-data
+                    (list :view-buffer view
+                          :interaction-visits interaction-visits)
+                    historical
                     started)))))
             (setf (plist-get job :phase) 'project)
             (if (plist-get job :pending)
@@ -9180,8 +9186,12 @@ with the next boundary render of the live turn."
       (mevedel-view--schedule-tool-boundary-render live-data-buf))
     (unless mevedel-view--agent-transcript-p
       (mevedel-view-refresh-input-prompt)
-      (mevedel-view--render-status live-data-buf)
-      (mevedel-view--interaction-rebuild)
+      ;; Reset removed these zones too.  Materialize them under the current
+      ;; writer so its preservation wrapper can resolve their reader anchors;
+      ;; queued redraws would run only after those anchors were restored.
+      (mevedel-view--render-status-now live-data-buf)
+      (mevedel-view--interaction-rebuild
+       t (plist-get rendering :interaction-visits))
       (mevedel-view--ensure-request-progress live-data-buf)
       (when (fboundp 'mevedel-directive-frame-refresh-filter)
         (mevedel-directive-frame-refresh-filter)))
@@ -9254,6 +9264,7 @@ view chrome."
              (in-flight-was
               (and (not historical-p)
                    (mevedel-view-stream-in-flight-turn-start-position)))
+             (interaction-visits (mevedel-view--interaction-focused-visits))
              (preserved-live-tail
               (when-let* (((not historical-p))
                           ((not agent-transcript-p))
@@ -9284,6 +9295,8 @@ view chrome."
                (mevedel-view--full-rerender-project
                 data-buf session-data-buf render-view-buf
                 agent-transcript-p data-turn-start-pos saved-states)))
+          (setq rendering (plist-put rendering :interaction-visits
+                                     interaction-visits))
           (mevedel-view--full-rerender-reanchor
            data-buf rendering in-flight-was
            data-turn-start-pos preserved-live-tail)
