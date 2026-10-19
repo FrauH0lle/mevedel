@@ -67,4 +67,25 @@ assert.equal(live.disabled, false);
 const gone = chips(renderer.renderRecord(itemTurn, () => ({label: '◇ Board', gone: true})))[0];
 assert.equal(textOf(gone), '◇ Board · deleted');
 assert.equal(gone.disabled, true);
+// Agent outcomes come from the structural envelope, not optimistic body prose.
+for (const [outcome, verb] of [['completed', 'finished'], ['errored', 'failed'],
+  ['interrupted', 'interrupted'], ['incomplete', 'incomplete']]) {
+  const mail = {id: 'mail', kind: 'agent-notice', sender: '/root/reviewer',
+    mailType: 'result', outcome, text: 'Everything succeeded? **Final answer**'};
+  const turn = renderer.renderRecord(mail);
+  assert.match(textOf(turn), new RegExp(`Agent /root/reviewer ${verb}`));
+  assert.match(textOf(turn), /Final answer/);
+  assert.equal(turn.disclosures.get('mailbox').open, false);
+  turn.disclosures.get('mailbox').open = true;
+  assert.equal(renderer.renderRecord(mail, null, null, turn).disclosures.get('mailbox').open, true);
+}
+assert.match(textOf(renderer.renderRecord({id: 'message', kind: 'agent-notice',
+  sender: '/root/reviewer', mailType: 'message', text: 'Interim finding'})),
+  /Message from \/root\/reviewer/);
+let openedAgent;
+const linkedMail = renderer.renderRecord({id: 'linked', kind: 'agent-notice',
+  sender: '/root/reviewer', mailType: 'result', outcome: 'completed', text: 'Report'},
+  null, null, null, null, path => { openedAgent = path; });
+linkedMail.disclosures.get('mailbox').children.at(-1).dispatch('click');
+assert.equal(openedAgent, '/root/reviewer');
 console.log('Tool presentation renderer passed');

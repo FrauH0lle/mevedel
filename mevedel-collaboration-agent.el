@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Publishes the retained-agent roster and serves projected live agent
+;; Publishes the retained-agent roster and serves projected live and archived agent
 ;; transcripts to collaboration guests.  Agent lookup is registry-only; cold
 ;; conversation loading runs outside guest frame handlers.
 
@@ -69,7 +69,8 @@
 (declare-function mevedel-session-artifacts-read-transcript-segment
                   "mevedel-session-artifacts" (session descriptor))
 (declare-function mevedel-session-artifacts-transcript-segments
-                  "mevedel-session-artifacts" (session live-buffer))
+                  "mevedel-session-artifacts"
+                  (session live-buffer &optional agent-transcript-p))
 
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-send
@@ -77,6 +78,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-agent-registry "mevedel-structs" (session))
+(declare-function mevedel-session-save-path "mevedel-structs" (session))
 (defvar mevedel--session)
 
 ;; `mevedel-transcript'
@@ -93,7 +95,10 @@
                   "mevedel-tool-render-data" (buffer tool-use-id))
 
 ;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
 (declare-function mevedel-transport-run-at-time "mevedel-transport" (seconds function &rest args))
+(declare-function mevedel-transport-run-when-idle "mevedel-transport"
+                  (key path thunk &optional on-cancel delay))
 (autoload 'mevedel-transport-run-at-time "mevedel-transport")
 
 ;; `mevedel-view-agent'
@@ -101,7 +106,7 @@
                   "mevedel-view-agent" (record))
 
 (defconst mevedel-collaboration--agent-fetch-window 1.0
-  "Seconds within which repeated agent fetches from one guest are dropped.")
+  "Minimum seconds between current or archive agent fetches from one guest.")
 (defconst mevedel-collaboration--execution-result-limit 50000
   "Maximum bytes of retained execution evidence in one guest response.")
 
@@ -158,13 +163,14 @@ transcript stays reachable from the viewer's finished-agents list."
         (mevedel-collaboration--schedule-publish room)
       (error (mevedel-collaboration--observer-failure room err)))))
 
-(defun mevedel-collaboration--agent-frame-overhead (req-id path)
-  "Return encoded agent-frame overhead for REQ-ID and PATH."
+(defun mevedel-collaboration--agent-frame-overhead (req-id path &optional segment)
+  "Return encoded agent-frame overhead for REQ-ID, PATH and optional SEGMENT."
   (string-bytes
    (json-encode
-    (list :t "agent" :reqId req-id :path path
-          :digest (make-string 64 ?0) :records (vconcat nil)
-          :final :json-false))))
+    (append (list :t "agent" :reqId req-id :path path
+                  :digest (make-string 64 ?0) :records (vconcat nil)
+                  :final :json-false)
+            (when segment (list :segment segment))))))
 
 (defun mevedel-collaboration--agent-record (room path)
   "Return the registry record for canonical PATH in ROOM, or nil."
@@ -216,70 +222,153 @@ A failure is remembered, so later guest polls are refused, not retried."
               (with-current-buffer data
                 (bound-and-true-p mevedel-session--read-only-mode)))
              nil)
-         (error 'failed))))))
+         (error 'failed)))
+      ;; Current-transcript viewers poll, but an immutable archive is a
+      ;; one-shot disclosure.  Finish its admitted request after hydration.
+      (let* ((waiters (plist-get room :agent-fetch-waiters))
+             (ready (cl-remove-if-not
+                     (lambda (entry) (equal path (plist-get entry :path))) waiters)))
+        (plist-put room :agent-fetch-waiters
+                   (cl-set-difference waiters ready :test #'eq))
+        (dolist (entry ready)
+          (funcall (plist-get entry :resume)))))))
+
+(defun mevedel-collaboration--agent-fetch-records (room live-buffer path segment)
+  "Project PATH's LIVE-BUFFER or child archive SEGMENT for ROOM.
+SEGMENT is nil for the current transcript.  Archive buffers are disposable;
+only canonical child descriptors can select them, never root history."
+  (let* ((session (plist-get room :session))
+         (descriptor
+          (when segment
+            (cl-find-if
+             (lambda (entry)
+               (and (equal segment (plist-get entry :number))
+                    (not (plist-get entry :current-p))
+                    (eq (plist-get entry :status) 'readable)))
+             (mevedel-session-artifacts-transcript-segments session live-buffer t))))
+         (buffer
+          (if segment
+              (if descriptor
+                  (mevedel-session-artifacts-read-transcript-segment session descriptor)
+                (error "Unknown archived agent segment"))
+            live-buffer)))
+    (unwind-protect
+        (with-current-buffer buffer
+          ;; Inspection buffers carry no authority; projection needs only the
+          ;; session's published artifact paths and this child's owner path.
+          (when segment (setq-local mevedel--session session))
+          (mapcar
+           (lambda (record)
+             (let ((copy (if (or segment (plist-get record :artifact))
+                             (copy-sequence record) record)))
+               (when (plist-get record :artifact)
+                 (plist-put copy :id
+                            (concat "agent-artifact-"
+                                    (secure-hash 'sha256
+                                                 (concat path "\0" (plist-get record :id))))))
+               (when segment
+                 (plist-put copy :id
+                            (format "agent-history-%d-%s" segment (plist-get copy :id))))
+               copy))
+           (mevedel-collaboration--canonical-records buffer nil nil nil path)))
+      (when (and segment (buffer-live-p buffer) (not (eq buffer live-buffer)))
+        (kill-buffer buffer)))))
+
+(defun mevedel-collaboration--reply-agent-records (room peer guest frame records)
+  "Send projected agent RECORDS for guest PEER's FRAME in ROOM.
+Retain full artifact lookup metadata in GUEST, not on the wire."
+  (let* ((req-id (plist-get frame :reqId))
+         (path (plist-get frame :path))
+         (segment (plist-get frame :segment))
+         (transport (plist-get room :transport))
+         (chunks (mevedel-collaboration--snapshot-chunks
+                  records (mevedel-collaboration--agent-frame-overhead req-id path segment)))
+         (digest (secure-hash 'sha256
+                              (mapconcat #'identity (apply #'append chunks) "\n")))
+         (meta (append (list :t "agent" :reqId req-id :path path :digest digest)
+                       (when segment (list :segment segment)))))
+    (plist-put guest :agent-artifacts
+               (cl-remove-if-not (lambda (record) (plist-get record :artifact)) records))
+    (if (equal digest (plist-get frame :known))
+        (mevedel-collaboration--transport-send
+         transport peer (append meta '(:unchanged t)))
+      (cl-loop for rest on chunks do
+               (mevedel-collaboration--transport-send
+                transport peer
+                (mevedel-collaboration--records-frame
+                 meta (car rest) (null (cdr rest))))))))
 
 (defun mevedel-collaboration--handle-fetch-agent (room peer frame)
-  "Answer guest PEER's agent-transcript fetch FRAME for ROOM."
+  "Answer guest PEER's agent-transcript fetch FRAME for ROOM.
+Optional positive integer `:segment' selects this child's compact archive."
   (let ((guest (mevedel-collaboration--guest room peer))
         (req-id (plist-get frame :reqId))
         (path (plist-get frame :path))
+        (segment (plist-get frame :segment))
         (transport (plist-get room :transport))
         (now (float-time)))
     (when (and guest (mevedel-collaboration--request-id-p req-id))
-      ;; ponytail: one budget per guest; split by path only if the viewer
-      ;; gains concurrent agent panels.
-      (let ((last (plist-get guest :last-agent-fetch)))
-        (unless (and last (< (- now last)
-                             mevedel-collaboration--agent-fetch-window))
-          (plist-put guest :last-agent-fetch now)
-          (if-let* ((buffer (mevedel-collaboration--agent-conversation
-                             room path)))
-              (let* ((records
-                      (mapcar
-                       (lambda (record)
-                         (if (plist-get record :artifact)
-                             (let ((copy (copy-sequence record)))
-                               (plist-put
-                                copy :id
-                                (concat
-                                 "agent-artifact-"
-                                 (secure-hash
-                                  'sha256
-                                  (concat path "\0"
-                                          (plist-get record :id))))))
-                           record))
-                       (mevedel-collaboration--canonical-records buffer nil nil nil path)))
-                     (chunks (mevedel-collaboration--snapshot-chunks
-                              records
-                              (mevedel-collaboration--agent-frame-overhead
-                               req-id path)))
-                     (digest (secure-hash
-                              'sha256
-                              (mapconcat #'identity
-                                         (apply #'append chunks) "\n"))))
-                (plist-put guest :agent-artifacts
-                           (cl-remove-if-not
-                            (lambda (record) (plist-get record :artifact))
-                            records))
-                (if (equal digest (plist-get frame :known))
-                    (mevedel-collaboration--transport-send
-                     transport peer
-                     (list :t "agent" :reqId req-id :path path
-                           :digest digest :unchanged t))
-                  (cl-loop for rest on chunks do
-                           (mevedel-collaboration--transport-send
-                            transport peer
-                            (mevedel-collaboration--records-frame
-                             (list :t "agent" :reqId req-id :path path :digest digest)
-                             (car rest) (null (cdr rest)))))))
-            ;; While the conversation loads, the viewer keeps showing its
-            ;; loading note and its next poll finds the resident buffer.
-            (unless (mevedel-collaboration--queue-agent-load room path)
-              (plist-put guest :agent-artifacts nil)
-              (mevedel-collaboration--transport-send
-               transport peer
-               (list :t "agent" :reqId req-id
-                     :error "This agent's transcript is not available")))))))))
+      ;; Live polls must not consume a one-shot archive disclosure's budget.
+      (let* ((archive-p (plist-member frame :segment))
+             (slot (if archive-p :last-agent-archive-fetch :last-agent-fetch))
+             (last (plist-get guest slot))
+             (throttled (and last (< (- now last)
+                                    mevedel-collaboration--agent-fetch-window))))
+        (when (and throttled archive-p)
+          ;; Archive opens do not poll, so silence would leave them loading
+          ;; forever.  Keep the last successful artifact lookup authority.
+          (mevedel-collaboration--transport-send
+           transport peer
+           (list :t "agent" :reqId req-id :path path :segment segment
+                 :error "Please wait a moment, then retry.")))
+        (unless throttled
+          (plist-put guest slot now)
+          (cl-labels
+              ((refuse (message)
+                 (plist-put guest :agent-artifacts nil)
+                 (mevedel-collaboration--transport-send
+                  transport peer
+                  (append (list :t "agent" :reqId req-id :error message)
+                          (when (plist-member frame :segment)
+                            (list :path path :segment segment)))))
+               (fetch ()
+                 (condition-case err
+                     (if-let* ((buffer (mevedel-collaboration--agent-conversation room path)))
+                         (mevedel-collaboration--reply-agent-records
+                          room peer guest frame
+                          (mevedel-collaboration--agent-fetch-records room buffer path segment))
+                       ;; Cold conversation hydration stays outside the handler.
+                       ;; Current viewers poll; archives finish this one request.
+                       (if (mevedel-collaboration--queue-agent-load room path)
+                           (when segment
+                             ;; At most one pending archive disclosure per peer.
+                             (plist-put room :agent-fetch-waiters
+                                        (cons (list :path path :peer peer :resume #'resume)
+                                              (cl-remove-if
+                                               (lambda (entry)
+                                                 (equal peer (plist-get entry :peer)))
+                                               (plist-get room :agent-fetch-waiters)))))
+                         (refuse "This agent's transcript is not available")))
+                   (error (if segment
+                              (refuse "This agent's archived segment could not be read")
+                            (signal (car err) (cdr err))))))
+               (resume ()
+                 (when (and (eq room (mevedel-collaboration--room-for-session
+                                     (plist-get room :session)))
+                            (eq guest (mevedel-collaboration--guest room peer)))
+                   (fetch))))
+            (cond
+             ((and (plist-member frame :segment)
+                   (not (and (integerp segment) (> segment 0))))
+              (refuse "Invalid archived agent segment: expected a positive integer"))
+             ((and segment
+                   (mevedel-transport-busy-p
+                    (mevedel-session-save-path (plist-get room :session))))
+              (mevedel-transport-run-when-idle
+               (list 'collaboration-agent-history (plist-get room :room-id) peer req-id)
+               (mevedel-session-save-path (plist-get room :session))
+               #'resume))
+             (t (fetch)))))))))
 
 (defun mevedel-collaboration--find-transcript-evidence (session live-buffer find)
   "Run FIND on SESSION's readable source-backed segments of LIVE-BUFFER.

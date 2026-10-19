@@ -85,6 +85,17 @@
 (declare-function mevedel-collaboration--store-frame
                   "mevedel-collaboration-artifact" (room &optional rows))
 
+;; `mevedel-collaboration-background'
+(declare-function mevedel-collaboration--background-frame
+                  "mevedel-collaboration-background" (room))
+(declare-function mevedel-collaboration--handle-background-locate
+                  "mevedel-collaboration-background" (room peer frame))
+(declare-function mevedel-collaboration--handle-background-stop
+                  "mevedel-collaboration-background" (room peer frame))
+(autoload 'mevedel-collaboration--background-frame "mevedel-collaboration-background")
+(autoload 'mevedel-collaboration--handle-background-stop "mevedel-collaboration-background")
+(autoload 'mevedel-collaboration--handle-background-locate "mevedel-collaboration-background")
+
 ;; `mevedel-collaboration-discussions'
 (declare-function mevedel-collaboration-discussions-handle
                   "mevedel-collaboration-discussions" (room peer frame))
@@ -870,6 +881,9 @@ Authority comes only from the tokens FRAME proves it holds."
     (mevedel-collaboration--transport-send
      (plist-get room :transport) peer
      (mevedel-collaboration--agents-frame room))
+    (mevedel-collaboration--transport-send
+     (plist-get room :transport) peer
+     (mevedel-collaboration--background-frame room))
     ;; The task list is latched the same way.
     (mevedel-collaboration--transport-send
      (plist-get room :transport) peer
@@ -1316,6 +1330,10 @@ sending guest instead of waiting for an answer."
       room peer frame))
     ("prompt" (mevedel-collaboration--handle-prompt room peer frame))
     ("abort" (mevedel-collaboration--handle-abort room peer))
+    ("background-stop"
+     (mevedel-collaboration--handle-background-stop room peer frame))
+    ("background-locate"
+     (mevedel-collaboration--handle-background-locate room peer frame))
     ("fetch-agent"
      (mevedel-collaboration--handle-fetch-agent room peer frame))
     ("execution-result-get"

@@ -127,6 +127,24 @@ leaving restarts this period.")
   (when (> (mevedel-execution-count-user session) 0)
     (mevedel-execution-list-user session)))
 
+(defun mevedel-view-execution--entries (agents executions)
+  "Return native panel entries for AGENTS and yielded EXECUTIONS."
+  (append
+   (mapcar (lambda (row)
+             (list (mevedel-view-execution--key 'agent row) 'agent row))
+           agents)
+   (cl-loop for item in executions when (plist-get item :yielded)
+            collect (list (mevedel-view-execution--key 'execution item)
+                          'execution item))))
+
+(defun mevedel-view-execution-collect (session)
+  "Collect SESSION's active background panel entries without view state.
+Each entry is (KEY KIND DATA).  Presentation adapters pass these entries
+and their own retained terminal entries to `mevedel-view-execution--ordered'."
+  (mevedel-view-execution--entries
+   (mevedel-view-agent-active-rows session)
+   (mevedel-view-execution--live session)))
+
 (defun mevedel-view-execution--current (session snapshot &optional live-only)
   "Resolve SNAPSHOT in the current SESSION, or signal a stale action.
 With LIVE-ONLY, a retained terminal selection is not sufficient."
@@ -904,14 +922,7 @@ It offers `[Show all N]' or `[Show fewer]' when rows overflow, and
          (retained (when (and mevedel-view-execution--selected (not selected-live))
                      (setq mevedel-view-execution--selected
                            (plist-put mevedel-view-execution--selected :unavailable-p t))))
-         (entries (append
-                   (mapcar (lambda (row)
-                             (list (mevedel-view-execution--key 'agent row) 'agent row))
-                           agents)
-                   (mapcar (lambda (item)
-                             (list (mevedel-view-execution--key 'execution item)
-                                   'execution item))
-                           live)))
+         (entries (mevedel-view-execution--entries agents live))
          (hover (and (or mevedel-view-execution--shown mevedel-view-execution--held)
                      (mevedel-view-execution--pointer-on-panel-p)))
          (held (mevedel-view-execution--update-held entries hover))

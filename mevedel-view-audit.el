@@ -3,6 +3,8 @@
 ;;; Commentary:
 
 ;; Renders parsed transcript audit attachments as collapsible view blocks.
+;; Owns the read-only source identity and archive lookup shared by native
+;; actions and independent browser inspectors.
 
 ;;; Code:
 
@@ -773,23 +775,22 @@ the forwarded mailbox message appears only in the parent's current segment."
                        (kill-buffer older)))))))
         record)))
 
-(defun mevedel-view-audit--select-source (record)
-  "Select the archived segment owning RECORD's tool row, if any.
-The completion's source target may be a later segment after compaction."
-  (when-let* ((tool-id (plist-get record :tool-use-id))
-              ((buffer-live-p mevedel--data-buffer))
-              (session (buffer-local-value 'mevedel--session mevedel--data-buffer)))
+(defun mevedel-view-audit-locate-source (session live-buffer tool-id &optional agent-transcript-p)
+  "Return the readable descriptor owning TOOL-ID in SESSION's LIVE-BUFFER.
+AGENT-TRANSCRIPT-P selects the child's own compact archives, never root
+history.  Nested ToolCall IDs resolve their outer source.  This read-only
+lookup releases archive buffers and never selects or modifies a view."
+  (when (and session (buffer-live-p live-buffer) (stringp tool-id))
     (let ((parent-id tool-id)
           (descriptors (reverse (mevedel-session-artifacts-transcript-segments
-                                 session mevedel--data-buffer
-                                 mevedel-view--agent-transcript-p)))
+                                 session live-buffer agent-transcript-p)))
           chosen)
       (while (string-match "/[0-9]+\\'" parent-id)
         (setq parent-id (substring parent-id 0 (match-beginning 0))))
       (dolist (descriptor descriptors)
         (when (and (not chosen) (eq (plist-get descriptor :status) 'readable))
           (let* ((current-p (plist-get descriptor :current-p))
-                 (buffer (if current-p mevedel--data-buffer
+                 (buffer (if current-p live-buffer
                            (condition-case nil
                                (mevedel-session-artifacts-read-transcript-segment
                                 session descriptor)
@@ -808,13 +809,23 @@ The completion's source target may be a later segment after compaction."
                                         at 'gptel nil (point-max))
                                        (point-max)))))))
                 (unless current-p (kill-buffer buffer)))))))
+      chosen)))
+
+(defun mevedel-view-audit--select-source (record)
+  "Select the archived segment owning RECORD's tool row, if any.
+The completion's source target may be a later segment after compaction."
+  (when-let* (((buffer-live-p mevedel--data-buffer))
+              (session (buffer-local-value 'mevedel--session mevedel--data-buffer))
+              (chosen (mevedel-view-audit-locate-source
+                       session mevedel--data-buffer (plist-get record :tool-use-id)
+                       mevedel-view--agent-transcript-p)))
       ;; The view's segment switcher follows this receiving transcript:
       ;; root segments for the session, agent compaction archives for an agent.
       (when chosen
         (if (plist-get chosen :current-p)
             (when (mevedel-view-historical-segment-p)
               (mevedel-view-return-to-latest-segment))
-          (mevedel-view-go-to-segment (plist-get chosen :number)))))))
+          (mevedel-view-go-to-segment (plist-get chosen :number))))))
 
 (defun mevedel-view-audit--evidence (record)
   "Display retained read-only evidence or an explicit limitation for RECORD."
@@ -1026,6 +1037,26 @@ their own source IDs even though they share the outer view row."
                          :tool-use-id tool-id)
             record))))))
 
+(defun mevedel-view-audit-execution-record (session live execution-id &optional agent-transcript-p)
+  "Find EXECUTION-ID's trusted source record in SESSION's receiving LIVE buffer.
+Search current and readable older transcripts without opening a view.
+AGENT-TRANSCRIPT-P restricts history to this child's own compact archives."
+  (when (buffer-live-p live)
+    (or (mevedel-view-audit--control-record-in-buffer live execution-id)
+        (and session (catch 'found
+          (dolist (descriptor (reverse (mevedel-session-artifacts-transcript-segments
+                                        session live agent-transcript-p)))
+            (when (and (eq (plist-get descriptor :status) 'readable)
+                       (not (plist-get descriptor :current-p)))
+              (when-let* ((older
+                           (condition-case nil
+                               (mevedel-session-artifacts-read-transcript-segment session descriptor)
+                             (error nil))))
+                (unwind-protect
+                    (when-let* ((match (mevedel-view-audit--control-record-in-buffer older execution-id)))
+                      (throw 'found match))
+                  (kill-buffer older))))))))))
+
 (defun mevedel-view-audit-show-control-result (execution-id)
   "Open EXECUTION-ID's original Bash row from an input or stop interaction.
 Search the displayed transcript and readable older segments by execution ID,
@@ -1040,28 +1071,8 @@ evidence or an explicit absence."
                     mevedel--data-buffer))
          (session (and live (buffer-local-value 'mevedel--session live))))
     (unless record
-      (when (and live (not (eq data live)))
-        (setq record (mevedel-view-audit--control-record-in-buffer
-                      live execution-id))))
-    (unless record
-      (when session
-        (catch 'found
-          (dolist (descriptor (reverse (mevedel-session-artifacts-transcript-segments
-                                        session live mevedel-view--agent-transcript-p)))
-            (when (and (eq (plist-get descriptor :status) 'readable)
-                       (not (plist-get descriptor :current-p)))
-              (when-let* ((older
-                           (condition-case nil
-                               (mevedel-session-artifacts-read-transcript-segment
-                                session descriptor)
-                             (error nil))))
-                (unwind-protect
-                    (when-let* ((match
-                                 (mevedel-view-audit--control-record-in-buffer
-                                  older execution-id)))
-                      (setq record match)
-                      (throw 'found match))
-                  (kill-buffer older))))))))
+      (setq record (mevedel-view-audit-execution-record
+                    session live execution-id mevedel-view--agent-transcript-p)))
     (mevedel-view-audit-show-result
      (or record (list :execution-id execution-id)))))
 

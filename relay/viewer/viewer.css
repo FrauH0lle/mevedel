@@ -17,6 +17,20 @@ body {
 .prose, .own-entry .own-text { font: 1rem/1.7 var(--font-ui); }
 code, pre { font-family: var(--font-mono); }
 
+.activity-group { min-width: 0; }
+.activity-group > summary {
+  display: flex;
+  align-items: baseline;
+  gap: .5em;
+  cursor: pointer;
+  min-width: 0;
+}
+.activity-group > summary::before { content: '▸'; flex: none; }
+.activity-group[open] > summary::before { content: '▾'; }
+.activity-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-counts { max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-group > .turn { padding-inline: 0; }
+
 /* ── Header ─────────────────────────────────────────────────────────── */
 .topbar {
   position: sticky;

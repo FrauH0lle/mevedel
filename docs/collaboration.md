@@ -893,27 +893,83 @@ record too large to travel in a frame of its own is dropped rather than
 sent: the relay refuses an oversized frame by closing the connection, and
 for the host connection it collects the room with it.
 
-Guests of every link tier also receive the retained agent roster:
-the canonical path, role, status, and effective provider/model/known effort of
-every active or settled registered agent,
-broadcast on change and told to a joining guest directly. An active
-agent carries its blocked/waiting/running status; a settled one carries
-its terminal outcome (done, errored, or interrupted), because retained
-agents persist in the session and their final reports are worth reading
-after the fact. The roster is read state, which is why a view link gets
-it too. It rides the same coalesced publication as the transcript; the
-view's status render nudges that publication so a retained agent working
-while the root request is idle, when no gptel observer fires, still
-reaches the strip. The viewer splits the roster inside the Session menu:
-active agents render as chips with compact model:effort attribution, marking a blocked or waiting agent so a
-session that fans out workers never reads as an opaque gap, while settled
-agents collapse into a "Finished agents" disclosure whose rows open the
-same transcript sheet. Waiting is not itself a request for host intervention;
-only blocked agents mark the summary as requiring attention. The inspection
-sheet shows full provider/model attribution, without borrowing the parent's
-configuration or inventing an unknown effort.
-Expanded active and finished rows wrap long paths and model labels within the
-disclosure rather than making a narrow viewport scroll horizontally.
+Every link tier receives the unified **Background work** panel: active agents,
+yielded Bash commands, and Monitors. The host's `background-work` frame uses
+the native panel's collector, canonical agent activity and stable ordering;
+the browser does not reconstruct process state or sort by mutable status.
+Rows carry stable keys, owner and execution ID or agent path, native start
+time and order, status labels, descriptions, effective provider/model/known
+effort, and the tool ID needed to find the originating call. Waiting is not
+itself a request for intervention; blocked agents are distinct. Retained-agent
+roster metadata still supports transcript inspection, including settled agents,
+without a second agent-chip or finished-agent presentation.
+
+An execution preview is exactly three bounded output lines, with an explicit
+availability label, preview/output truncation facts, and output counts. Preview
+rows are capped at 512 characters; browsers fit each to one visible row. Full
+output uses the existing scoped execution-result request, never a browser-sent
+host filesystem path. Passive execution events refresh the same coalesced
+publication without consuming output. The host retains at most 128 terminal
+snapshots for 30 seconds so completion survives registry removal and short
+reconnects; effective child model metadata stays with the completed row. Each
+terminal row includes `terminalAgeSeconds`, measured from its original host
+cache timestamp. A newly joining browser subtracts that age from its ten-second
+visible grace instead of reviving old completions; no host/browser clock
+synchronization is needed. Duplicate evidence and frame reads never restart
+the age, and age changes alone do not broadcast another frame. Active
+and terminal rows pass through the same native ordering. Frames admit live work
+before terminal evidence, cap at 128 rows and 64 KiB of encoded JSON, and signal
+any omitted rows explicitly. Changed frames broadcast once; joining guests
+receive the current frame directly. Expansion, hover/focus freezing and the
+ten-second visible finished-row grace belong to each browser, not the host view.
+
+The panel replaces the separate agent chips and finished-agent list. It shows
+up to five host-ordered rows, the selected inspector and recent finished rows;
+**Show all** expands that limit in place. Its own scroll area is capped at
+34% of the viewport (300px maximum), keeping work from growing over the composer
+on a narrow phone. Row names and metadata fit one line; execution inspectors
+reserve three preview lines and the same action slots through completion.
+Only one inspector opens at a time. Expanded completed executions remain until
+collapsed; collapse starts a fresh ten-second grace. Mouse hover or keyboard
+focus freezes the currently shown row set and holds its finished rows; new work
+is counted until the pointer and focus leave, which restarts their grace. Touch
+does not acquire a synthetic hover hold: expansion and focus provide the hold,
+and tapping elsewhere releases focus. The panel's collapse control hides its
+rows without discarding durable transcript completion notices.
+
+**Open transcript** reads an active retained agent in its existing sheet.
+**Show in conversation** asks the host to locate the original call in its
+owner's current or archived conversation, then loads exactly that segment.
+It opens the tool row, including a nested ToolCall child and its enclosing
+activity disclosure; child-owned rows open that child's transcript sheet.
+The browser neither scans archives sequentially nor guesses a nearby row.
+Only a host-reported unavailable source falls back to retained execution
+output; connection, loading and projection failures report a retryable notice
+instead. Inspecting work never edits the parent's draft or changes its workspace.
+Finished agent controls become inert in place; the final report's durable
+transcript link remains available afterwards.
+
+Source navigation is read-only for every link tier. A typed `background-locate`
+request names an execution owner/ID or a known child's path; the host obtains
+the tool ID from current scoped execution facts, retained evidence, or the
+registered child's launch invocation. Native audit lookup then identifies the
+actual current or archived receiving transcript, including nested ToolCall
+sources. The `background-source` reply carries only its owner, tool ID, current
+flag and optional segment number, or an explicit unavailable message. Lookup
+and cold read-only child hydration run only on click, outside the guest filter,
+with room/guest and remote transport readiness rechecked before reading.
+No archive scan or I/O is added to background publication. A child's
+`fetch-agent` request may name the located segment number; the host resolves
+only that child's canonical compact archive and returns uniquely identified
+records, never the parent's history or a browser-supplied filesystem path.
+
+Full and owner links may submit typed `background-stop` actions: an execution's
+owner/ID tuple or a retained child's canonical path, optionally with its row key.
+The host checks the guest's current writable tier and resolves the target again
+in that room's live execution registry or retained-agent registry before using
+the native user-authority stop/interrupt API. View links inspect only; forged,
+stale, cross-session, ambiguous and root-agent targets are refused. Interrupting
+a child ends its current turn without deleting its retained conversation.
 
 The same publication cycle sends the session task list to either link:
 identity, subject, status, optional owner, running agent activity, owner status
@@ -947,7 +1003,7 @@ text are each capped at 4 KiB with an explicit truncation notice, keeping the fr
 below 64 KiB even with JSON escaping. Goal changes stay in Emacs:
 the browser adds no Goal editing, pause, resume, or completion authority.
 
-Tapping a chip opens that agent's live transcript as a full-screen
+The panel's **Open transcript** action opens that agent's live transcript as a full-screen
 sheet. The viewer polls with `fetch-agent` frames while the sheet is
 open and refetches promptly on a roster change; the host validates the
 path against the agent registry -- never the filesystem -- and answers
@@ -967,8 +1023,9 @@ stays until a later poll finds the conversation. A failed load is
 remembered for the room and refused instead of retried. The frame handler
 itself never starts target I/O. Artifact cards in an agent reply receive
 room-wide ids derived from the agent path and transcript-local id, so they
-remain openable without colliding with a root-transcript card. Agent control
--- chat, interrupt, kill -- stays in Emacs.
+remain openable without colliding with a root-transcript card. Agent chat and
+kill stay in Emacs; writable browser links can interrupt through the scoped
+background-work control described above.
 
 ## Remote interactions
 
@@ -1095,6 +1152,15 @@ rows, parallel groups and returned output. Skill bodies render as safe
 Markdown, with delivered dependencies in separate collapsed foldouts. Missing
 historical dependency bodies are labelled unavailable rather than reread from
 current files. Raw model-facing reminder wrappers are not the display body.
+Plain activity runs over the native grouping threshold fold into one browser
+disclosure with the native semantic summary. Running counts and failed tool
+names stay in its one-line heading; the full summary is available on hover.
+Opening the group exposes the original tool/message/completion rows, with
+their own disclosure choices intact. Newly grouped rows already being read
+remain open; an explicit group fold wins thereafter. Scope changes, compound
+tools, artifact cards and background result notices split runs. Ordinary
+agent messages and a command's own completion can join them. Main, earlier
+conversation and agent transcripts share this grouping renderer.
 Noteworthy sandbox boundaries use the host's formatted, bounded disclosure in
 the collapsed tool header, including nested Bash rows. Raw sandbox facts and
 grant details are not sent as presentation metadata.
@@ -1127,6 +1193,13 @@ text in its output body. A `MONITOR` mailbox produces a separate, unlinked
 from the payload. Background-event turn attribution hides the harness's fixed
 wake prompt, while retaining the assistant's response and event notices. An
 ordinary user prompt with the same words remains visible.
+Ordinary retained-agent deliveries also remain in the receiving conversation:
+result notices say `Agent /root/name finished`, `failed`, `interrupted`, or
+`incomplete` from the structural result envelope, never body prose or the
+current roster. Their Markdown final answers start folded and retain their
+disclosure choice across updates. Interim messages use a separate `Message
+from /root/name` disclosure. **Open transcript** inspects the retained child
+without changing the parent's composer or workspace.
 **Show result** makes a separate read-only request for retained output; it does
 not duplicate the body in the parent transcript or alter the model-visible
 mailbox. The host validates owner and ID against either the receiving root or

@@ -16,6 +16,37 @@
 (require 'mevedel-tool-ptc)
 (require 'mevedel-tool-render-data)
 
+(mevedel-deftest mevedel-collaboration--agent-mailbox ()
+  ,test
+  (test)
+  :doc "agent results retain envelope outcomes, bodies, identities and wire fields"
+  (dolist (outcome '("completed" "errored" "interrupted" nil))
+    (with-temp-buffer
+      (mevedel--transcript-org-mode)
+      (insert (format "<agent-result sender=\"/root/reviewer\"%s>\n"
+                      (if outcome (format " outcome=\"%s\"" outcome) ""))
+              "Completed successfully? Body prose is not status.\n</agent-result>\n")
+      (let* ((records (mevedel-collaboration--canonical-records (current-buffer)))
+             (record (car records))
+             (wire (mevedel-collaboration--json-record record)))
+        (should (= 1 (length records)))
+        (should (equal "agent-notice" (plist-get record :kind)))
+        (should (equal "/root/reviewer" (alist-get "sender" wire nil nil #'equal)))
+        (should (equal (or outcome "incomplete") (alist-get "outcome" wire nil nil #'equal)))
+        (should (equal "result" (alist-get "mailType" wire nil nil #'equal)))
+        (should (string-match-p "Body prose" (plist-get record :text)))
+        (should (equal records (mevedel-collaboration--canonical-records (current-buffer)))))))
+  :doc "ordinary messages remain inspectable and distinct in source order"
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (dotimes (_ 2)
+      (insert "<agent-message type=\"MAIL\" sender=\"/root/reviewer\">\n"
+              "interim **finding**\n</agent-message>\n"))
+    (let ((records (mevedel-collaboration--canonical-records (current-buffer))))
+      (should (= 2 (length records)))
+      (should (equal "message" (plist-get (car records) :mailType)))
+      (should-not (equal (plist-get (car records) :id) (plist-get (cadr records) :id))))))
+
 (ert-deftest mevedel-collaboration-approval-presentation ()
   "Canonical tool projection carries bounded display-only approval reasons."
   (with-temp-buffer
@@ -31,9 +62,47 @@
             "#+end_tool\n")
     (let* ((record (car (mevedel-collaboration--canonical-records (current-buffer))))
            (presentation (plist-get record :presentation)))
+      (should (equal "approved" (plist-get record :toolUseId)))
+      (should (equal "approved" (alist-get "toolUseId"
+                                          (mevedel-collaboration--json-record record)
+                                          nil nil #'equal)))
       (should (equal "Safe inspection" (plist-get presentation :approval)))
       (should (equal "failed" (plist-get presentation :status)))
       (should-not (string-match-p "Safe inspection" (plist-get record :result))))))
+
+(mevedel-deftest mevedel-collaboration--activity-records ()
+  (let* ((records
+          (cl-loop for name in '("Read" "Grep" "Read" "Eval") for n from 1
+                   collect (list :id (format "tool-%s" n) :kind "tool"
+                                 :status (if (= n 2) "failed" "completed")
+                                 :presentation (list :name name :groupable t))))
+         (grouped (mevedel-collaboration--activity-records records))
+         (activity (plist-get (car grouped) :activity)))
+    (should (equal "tool-1" (plist-get activity :id)))
+    (should (equal "Read 2 files, searched 1 pattern, evaluated 1 form"
+                   (plist-get activity :summary)))
+    (should (equal "1 failed: Grep" (plist-get activity :failures)))
+    (should (equal "failed" (plist-get activity :status)))
+    (should (cl-every (lambda (record) (equal activity (plist-get record :activity))) grouped))
+    (should-not (plist-get (car (mevedel-collaboration--activity-records (cl-subseq records 0 3)))
+                           :activity))
+    (should-not (plist-get (car (mevedel-collaboration--activity-records
+                                (append (cl-subseq records 0 2)
+                                        (list '(:id "result" :kind "agent-notice" :mailType "result"))
+                                        (cl-subseq records 2)))) :activity))
+    (let* ((completion (list :id "completion" :kind "execution" :status "completed"
+                             :execution '(:owner "/root" :ownPath "/root" :id "bash-1")))
+           (message (list :id "message" :kind "agent-notice" :mailType "message"))
+           (with-notices (mevedel-collaboration--activity-records
+                          (append records (list completion message))))
+           (activity (plist-get (car with-notices) :activity)))
+      (should (string-match-p "1 command completed, received 1 message" (plist-get activity :summary)))
+      (should (equal activity (plist-get completion :activity)))
+      (setf (plist-get (car records) :status) "running")
+      (let ((running (plist-get (car (mevedel-collaboration--activity-records records)) :activity)))
+        (should (= 1 (plist-get running :running)))
+        (should (equal "running" (plist-get running :status)))
+        (should (equal "1 failed: Grep" (plist-get running :failures)))))))
 
 (mevedel-deftest mevedel-collaboration-tool-presentation/approval ()
   ,test
@@ -54,6 +123,7 @@
                        :result "Error: failed" :render-data data))
            (nested (mevedel-collaboration-tool-presentation call)))
       (should-not (plist-get nested :approval))
+      (should (equal "outer/1" (plist-get (aref (plist-get nested :children) 0) :sourceId)))
       (should (equal "failed" (plist-get (aref (plist-get nested :children) 0) :status)))
       (should (<= (length (plist-get (aref (plist-get nested :children) 0) :approval)) 1024))
       (setf (plist-get call :render-data) (plist-put data :direct-tool "ApprovalProbe"))

@@ -6,19 +6,16 @@
 const assert = require('node:assert/strict');
 const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
 
-const ids = ['agents', 'agents-done-list', 'agent-panel', 'agent-title',
-             'agent-meta', 'agent-close', 'agent-transcript'];
+const ids = ['agent-panel', 'agent-title',
+             'agent-meta', 'agent-close', 'agent-latest', 'agent-transcript'];
 const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
-nodes.agents.hidden = true;
 nodes['agent-panel'].hidden = true;
-// The roster reports its counts into the shared session summary line,
-// which viewer.js owns; here it is just recorded.
-let summary = null;
 const document = {
   getElementById: id => nodes[id],
   createElement: tag => new Element(tag),
 };
 const sent = [];
+const notices = [];
 let poll = null;
 const window = {};
 const context = {
@@ -33,23 +30,15 @@ const controller = window.mevedelAgentView.create({
   el: (tag, className, text) => element(document, tag, className, text),
   directiveLabel: () => '',
   openArtifact: () => {},
-  summarize: (key, text, warning) => { summary = {key, text, warning}; },
+  flash: message => notices.push(message),
 });
 
 controller.show([
   {path: '/root/blocked', role: 'explorer', status: 'blocked'},
   {path: '/root/worker', role: 'worker', status: 'running'},
 ]);
-assert.equal(nodes.agents.hidden, false);
-assert.equal(nodes.agents.children.length, 2);
-assert.match(nodes.agents.children[0].className, /stuck/);
-assert.match(textOf(nodes.agents), /explorer · blocked/);
-// No settled agents yet, and an agent that is not running is a warning
-// the collapsed summary has to carry.
-assert.equal(nodes['agents-done-list'].children.length, 0);
-assert.deepEqual(summary, {key: 'agents', text: '2 agents', warning: true});
-
-nodes.agents.children[1].dispatch('click');
+// The unified work panel and durable notices open this inspection surface.
+controller.open({path: '/root/worker'});
 assert.equal(nodes['agent-panel'].hidden, false);
 assert.equal(textOf(nodes['agent-title']), '/root/worker');
 assert.deepEqual({...sent[0]},
@@ -71,7 +60,6 @@ controller.show([{path: '/root/worker', role: 'worker', status: 'waiting'}]);
 assert.match(textOf(nodes['agent-meta']), /waiting/);
 assert.equal(sent[2].reqId, 3);
 controller.show([]);
-assert.equal(nodes.agents.hidden, true);
 assert.equal(textOf(nodes['agent-meta']), 'settled');
 
 controller.handle({reqId: 3, error: 'No longer available'});
@@ -81,8 +69,7 @@ assert.equal(nodes['agent-panel'].hidden, true);
 assert.equal(nodes['agent-transcript'].children.length, 0);
 assert.equal(poll, null);
 
-// A settled agent leaves the strip for the finished list, where its row
-// still opens the transcript panel with its terminal outcome.
+// A settled agent remains inspectable from its durable final notice.
 controller.show([
   {path: '/root/worker', role: 'worker', status: 'running'},
   {path: '/root/blocked', role: 'explorer', status: 'errored'},
@@ -90,13 +77,7 @@ controller.show([
   {path: '/root/interrupted', role: 'worker', status: 'interrupted'},
   {path: '/root/unknown', role: 'worker', status: 'unknown'},
 ]);
-assert.equal(nodes.agents.hidden, false);
-assert.equal(nodes.agents.children.length, 1);
-assert.deepEqual(summary,
-                 {key: 'agents', text: '1 agent · 3 finished', warning: false});
-assert.equal(nodes['agents-done-list'].children.length, 3);
-assert.match(textOf(nodes['agents-done-list']), /explorer · errored/);
-nodes['agents-done-list'].children[1].children[0].dispatch('click');
+controller.open({path: '/root/settled'});
 assert.equal(nodes['agent-panel'].hidden, false);
 assert.equal(textOf(nodes['agent-title']), '/root/settled');
 assert.equal(textOf(nodes['agent-meta']), 'explorer · done');
@@ -104,9 +85,6 @@ assert.equal(sent.at(-1).path, '/root/settled');
 // A roster keeping the watched settled agent keeps its outcome meta;
 // an emptied roster clears both surfaces and falls back to "settled".
 controller.show([]);
-assert.equal(nodes.agents.hidden, true);
-assert.equal(nodes['agents-done-list'].children.length, 0);
-assert.deepEqual(summary, {key: 'agents', text: '', warning: false});
 assert.equal(textOf(nodes['agent-meta']), 'settled');
 const skill = {id: 'skill', kind: 'tool', name: 'ToolCall', status: 'completed',
   presentation: {id: 'root', name: 'Skill', detail: 'dashboard', collapsed: true,
@@ -124,14 +102,42 @@ nodes['agent-close'].dispatch('click');
 assert.equal(poll, null);
 controller.show([{path: '/root/model-check', status: 'waiting',
   backend: 'Child provider', model: 'child-model', effort: 'high'}]);
-assert.match(textOf(nodes.agents), /child-model:high/);
-assert.doesNotMatch(nodes.agents.children[0].title, /needs the host/);
-assert.equal(summary.warning, false);
-nodes.agents.children[0].dispatch('click');
+controller.open({path: '/root/model-check'});
 assert.match(textOf(nodes['agent-meta']), /Child provider.*child-model:high/);
 controller.show([{path: '/root/model-check', status: 'done', model: 'recovered'}]);
 assert.match(textOf(nodes['agent-meta']), /recovered/);
 assert.equal(controller.describe().agent.status, 'done');
 assert.equal(controller.describe().agent.model, 'recovered');
+nodes['agent-close'].dispatch('click');
+
+// Source navigation loads the host-located immutable child archive only once;
+// Latest explicitly returns to polling the current segment.
+controller.open({path: '/root/model-check', segment: 2});
+assert.equal(sent.at(-1).segment, 2);
+assert.match(textOf(nodes['agent-meta']), /Segment 2/);
+assert.equal(nodes['agent-latest'].hidden, false);
+assert.equal(poll, null);
+assert.equal(controller.describe().agent.segment, 2);
+controller.handle({reqId: sent.at(-1).reqId, digest: 'archive-two', final: true,
+  records: [{id: 'archive-answer', kind: 'assistant', text: 'Earlier child answer'}]});
+assert.match(textOf(nodes['agent-transcript']), /Earlier child answer/);
+nodes['agent-latest'].dispatch('click');
+assert.equal(Object.hasOwn(sent.at(-1), 'segment'), false);
+assert.equal(nodes['agent-latest'].hidden, true);
+assert.equal(typeof poll, 'function');
+nodes['agent-close'].dispatch('click');
+
+// A host-located but unprojected source fails visibly once, rather than
+// retaining a hidden auto-scroll request across later live polls.
+let revealAttempts = 0;
+window.mevedelTranscriptRenderer = {...window.mevedelTranscriptRenderer,
+  revealTool() { revealAttempts++; return false; }};
+controller.open({path: '/root/model-check', revealTool: 'omitted-source'});
+controller.handle({reqId: sent.at(-1).reqId, digest: 'omitted-one', final: true, records: []});
+assert.match(notices.at(-1) || '', /located source.*not.*browser/i);
+poll();
+controller.handle({reqId: sent.at(-1).reqId, digest: 'omitted-two', final: true, records: []});
+assert.equal(revealAttempts, 1);
+assert.equal(notices.length, 1);
 nodes['agent-close'].dispatch('click');
 console.log('viewer agent passed');

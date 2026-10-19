@@ -23,7 +23,7 @@ test('long agent attribution and task owners fit phone and desktop', async () =>
           contentType: path.endsWith('.css') ? 'text/css' : 'text/html'});
       });
       await page.goto('http://viewer.test/index.html');
-      for (const asset of ['viewer-agent.js', 'viewer-task.js']) {
+      for (const asset of ['renderer.js', 'viewer-agent.js', 'viewer-background.js', 'viewer-task.js']) {
         await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer', asset), 'utf8')});
       }
       await page.evaluate(() => {
@@ -35,20 +35,25 @@ test('long agent attribution and task owners fit phone and desktop', async () =>
         };
         const path = '/root/' + 'long_agent_name_'.repeat(10);
         const model = 'provider-model-'.repeat(10);
-        window.agentView = window.mevedelAgentView.create({el, send() {}, summarize() {}});
+        window.agentSent = [];
+        window.agentView = window.mevedelAgentView.create({el, send(frame) { window.agentSent.push(frame); }});
         window.agentView.show([
           {path, status: 'running', model, effort: 'high'},
           {path: path + '/finished', status: 'done', model, effort: 'high'},
         ]);
+        window.mevedelBackgroundView.create({el, send() {}, state: {connected: true, writable: true},
+          openAgent: row => window.agentView.open(row), openExecution() {}, showConversation() {}}).show({rows: [
+          {key: 'running', kind: 'agent', path, owner: path, status: 'running', statusLabel: 'Running', description: path, model, effort: 'high'},
+          {key: 'finished', kind: 'agent', path: path + '/finished', status: 'done', statusLabel: 'Finished', description: path + '/finished', model, terminal: true},
+        ]});
         window.mevedelTaskView.create({el, summarize() {}}).show({t: 'tasks',
           total: 1, completed: 0, omitted: 0, omittedActive: 0,
           tasks: [{id: 1, subject: 'Review', status: 'in-progress', owner: path,
             note: 'unbroken_status_note_'.repeat(10)}]});
         document.getElementById('session-box').open = true;
         document.getElementById('session-box').hidden = false;
-        document.getElementById('agents-done-list').closest('details').open = true;
       });
-      for (const selector of ['#agents .dock-chip', '.done-row', '#tasks-list .task']) {
+      for (const selector of ['#background-work', '[data-key="running"]', '[data-key="finished"]', '#tasks-list .task']) {
         const fits = await page.locator(selector).evaluate(node => {
           const box = node.getBoundingClientRect();
           return box.width > 0 && box.left >= 0 && box.right <= innerWidth + 1
@@ -56,9 +61,24 @@ test('long agent attribution and task owners fit phone and desktop', async () =>
         });
         assert.equal(fits, true, `${selector} fits at ${width}px`);
       }
-      await page.locator('#agents .dock-chip').click();
+      await page.evaluate(() => { document.getElementById('session-box').open = false; });
+      await page.locator('[data-key="running"] .background-toggle').click();
+      await page.locator('[data-key="running"] .background-controls button').first().click();
       assert.equal(await page.locator('#agent-panel').evaluate(node =>
         node.scrollWidth <= node.clientWidth + 1), true, `inspection fits at ${width}px`);
+      await page.locator('#agent-close').click();
+      await page.evaluate(() => {
+        window.agentView.open({path: '/root/archived', segment: 2, revealTool: 'archive-tool'});
+        window.agentView.handle({reqId: window.agentSent.at(-1).reqId, final: true, segment: 2,
+          records: [{id: 'archive-row', kind: 'tool', toolUseId: 'archive-tool',
+            presentation: {name: 'Bash', body: 'Archived child output', collapsed: true}}]});
+      });
+      assert.equal(await page.evaluate(() => window.agentSent.at(-1).segment), 2);
+      assert.equal(await page.locator('[data-record-id="archive-row"] details').evaluate(node => node.open), true);
+      assert.match(await page.locator('#agent-meta').innerText(), /Segment 2/);
+      await page.locator('#agent-latest').click();
+      assert.equal(await page.evaluate(() => 'segment' in window.agentSent.at(-1)), false);
+      assert.equal(await page.locator('#agent-latest').isVisible(), false);
       await page.locator('#agent-close').click();
       await page.close();
     }

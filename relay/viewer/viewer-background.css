@@ -1,0 +1,68 @@
+/* One host-ordered surface for agents, commands and Monitors. */
+.background-work {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  width: 100%;
+  max-height: min(34dvh, 300px);
+  overflow: auto;
+  scrollbar-width: thin;
+  text-align: left;
+}
+.background-work > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  padding: 3px 8px;
+  min-height: 32px;
+  font-size: 12px;
+}
+#background-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#background-collapse { border: 0; background: none; color: inherit; cursor: pointer; min-width: 28px; min-height: 28px; }
+#background-list { list-style: none; margin: 0; padding: 0 8px; }
+.background-row { margin: 0; padding: 0; }
+.background-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+}
+.background-toggle::before { content: '▸'; flex: none; }
+.background-toggle[aria-expanded="true"]::before { content: '▾'; }
+.background-mark, .background-kind { flex: none; }
+.background-name, .background-meta, .background-preview-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.background-name { flex: 1; }
+.background-meta, .background-preview-label { height: 20px; font-size: 11px; color: var(--muted); }
+.background-row.finished .background-toggle, .background-row.finished .background-details { color: var(--muted); }
+.background-row.blocked .background-mark { color: var(--failed); }
+.background-mark.failed { color: var(--failed); }
+.background-preview {
+  height: 54px;
+  line-height: 18px;
+  margin: 0;
+  padding: 0;
+  white-space: pre;
+  overflow: hidden;
+  font-size: 11px;
+}
+.background-controls { display: flex; gap: 5px; padding: 4px 0 6px; flex-wrap: wrap; }
+.background-controls .btn, #background-more { font-size: 11px; padding: 5px 7px; }
+#background-more { margin: 4px 8px; }

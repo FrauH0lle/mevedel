@@ -1275,6 +1275,7 @@ execution's progress cost."
   (append
    (list :type type
          :emitted-at (float-time)
+         :started-at (mevedel-execution--record-started-at record)
          :session (mevedel-execution--origin-session
                    (mevedel-execution--record-origin record))
          :data-buffer (mevedel-execution--origin-data-buffer

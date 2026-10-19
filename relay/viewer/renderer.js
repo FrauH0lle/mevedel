@@ -440,6 +440,8 @@
       if (record.guest) who.append(el('span', 'badge', 'guest'));
     } else if (record.kind === 'assistant') {
       who.append(el('span', 'name', 'Assistant'));
+    } else if (record.kind === 'agent-notice') {
+      who.append(el('span', 'name', 'Agent'));
     } else if (record.artifact) {
       who.append(el('span', 'name', 'Artifact'));
     } else {
@@ -501,6 +503,7 @@
   function renderToolPresentation(presentation, disclosures, path) {
     const status = presentation.status || 'completed';
     const details = el('details', `tool ${status}`);
+    if (presentation.sourceId && presentation.sourceId !== 'root') details.dataset.toolUseId = presentation.sourceId;
     details.open = presentation.collapsed === false;
     disclosures.set(path, details);
     const summary = el('summary');
@@ -575,7 +578,25 @@
     return details;
   }
 
-  function renderContent(record, onArtifactOpen, disclosures, onExecutionOpen) {
+  function renderContent(record, onArtifactOpen, disclosures, onExecutionOpen, onAgentOpen) {
+    if (record.kind === 'agent-notice') {
+      const details = el('details', 'agent-notice');
+      disclosures.set('mailbox', details);
+      const summary = el('summary');
+      const verb = {completed: 'finished', errored: 'failed', interrupted: 'interrupted'}[record.outcome]
+        || 'incomplete';
+      const sender = String(record.sender || 'unknown agent').replace(/[\n\r\t]+/g, ' ');
+      summary.append(el('span', record.outcome === 'errored' ? 'failed' : '',
+        record.mailType === 'result' ? `● Agent ${sender} ${verb}` : `Message from ${sender}`));
+      details.append(summary);
+      details.append(renderMarkdown(record.text || ''));
+      const open = el('button', 'btn quiet', 'Open transcript');
+      open.type = 'button';
+      open.disabled = typeof onAgentOpen !== 'function' || !record.sender;
+      if (!open.disabled) open.addEventListener('click', () => onAgentOpen(record.sender));
+      details.append(open);
+      return details;
+    }
     if (record.kind === 'execution') {
       const facts = record.execution || {};
       const row = el('div', 'execution-breadcrumb');
@@ -651,10 +672,81 @@
     }
   }
 
-  function renderRecord(record, scopeChip, onArtifactOpen, previous, onExecutionOpen) {
+  // Group the original record elements, rather than rendering a second copy.
+  // IDs, result links, filters and per-tool disclosure state stay addressable.
+  const activityStates = new WeakMap();
+  function groupActivity(transcript) {
+    const groups = activityStates.get(transcript) || new Map();
+    activityStates.set(transcript, groups);
+    const turns = [];
+    for (const node of transcript.children) {
+      if (node.groupDetails) {
+        groups.set(node.groupId, node);
+        turns.push(...[...node.groupDetails.children].filter(child => child.dataset.recordId));
+      } else turns.push(node);
+    }
+    const current = new Set(turns.map(node => node.activity?.id).filter(Boolean));
+    for (const key of groups.keys()) if (!current.has(key)) groups.delete(key);
+    const desired = [];
+    for (let index = 0; index < turns.length;) {
+      const first = turns[index];
+      const activity = !first.hidden && first.activity;
+      if (!activity) { desired.push(first); index++; continue; }
+      let end = index + 1;
+      while (end < turns.length && !turns[end].hidden && turns[end].activity?.id === activity.id) end++;
+      const members = turns.slice(index, end);
+      let group = groups.get(activity.id);
+      if (!group) {
+        group = el('article', 'turn ai');
+        group.dataset.role = 'ai';
+        group.groupId = activity.id;
+        const content = el('div', 'content');
+        const details = el('details', 'activity-group');
+        const summary = el('summary');
+        const marker = el('span');
+        const label = el('span', 'activity-label');
+        const counts = el('span', 'activity-counts');
+        summary.append(marker, label, counts);
+        details.append(summary);
+        content.append(details);
+        group.append(el('div', 'rail'), content);
+        group.groupDetails = details;
+        group.groupLabel = label;
+        group.groupCounts = counts;
+        group.groupMarker = marker;
+        groups.set(activity.id, group);
+        details.open = members.some(node => [...(node.disclosures?.values() || [])].some(d => d.open)
+          || node.contains(document.activeElement)
+          || window.getSelection()?.containsNode(node, true));
+      }
+      group.groupLabel.textContent = activity.summary;
+      group.groupLabel.title = activity.summary;
+      group.groupCounts.textContent = [activity.running ? `${activity.running} running` : '',
+        activity.failures || ''].filter(Boolean).join(' · ');
+      group.groupCounts.title = group.groupCounts.textContent;
+      group.groupMarker.className = `st ${activity.status}`;
+      group.groupMarker.textContent = {running: '●', failed: '✕', warning: '!'}[activity.status] || '✓';
+      group.groupMarker.setAttribute('aria-label', activity.status);
+      members.forEach((node, n) => {
+        const at = group.groupDetails.children[n + 1];
+        if (at !== node) group.groupDetails.insertBefore(node, at || null);
+      });
+      while (group.groupDetails.children.length > members.length + 1) group.groupDetails.lastElementChild.remove();
+      desired.push(group);
+      index = end;
+    }
+    desired.forEach((node, index) => {
+      if (transcript.children[index] !== node) transcript.insertBefore(node, transcript.children[index] || null);
+    });
+    while (transcript.children.length > desired.length) transcript.lastElementChild.remove();
+  }
+
+  function renderRecord(record, scopeChip, onArtifactOpen, previous, onExecutionOpen, onAgentOpen) {
     const turn = el('article', `turn ${roleOf(record)}`);
     turn.dataset.recordId = record.id;
+    if (record.toolUseId) turn.dataset.toolUseId = record.toolUseId;
     turn.dataset.role = roleOf(record);
+    turn.activity = record.activity;
     const rail = el('div', 'rail');
     const glyphText = roleOf(record) === 'ai' ? 'm'
       : (record.guest || (roleOf(record) === 'you' ? 'H' : 'G')).slice(0, 1).toUpperCase();
@@ -663,7 +755,7 @@
     const content = el('div', 'content');
     content.append(whoLine(record, scopeChip));
     turn.disclosures = new Map();
-    const rendered = renderContent(record, onArtifactOpen, turn.disclosures, onExecutionOpen);
+    const rendered = renderContent(record, onArtifactOpen, turn.disclosures, onExecutionOpen, onAgentOpen);
     content.append(rendered);
     turn.append(content);
     // Rebuilding a record owns disclosure continuity. Callers supply the
@@ -675,6 +767,21 @@
     return turn;
   }
 
+  function revealTool(transcript, id) {
+    const target = [...transcript.querySelectorAll('[data-tool-use-id]')]
+      .find(node => node.dataset.toolUseId === id);
+    if (!target) return false;
+    let node = target;
+    while (node && node !== transcript) {
+      if (node.tagName === 'DETAILS') node.open = true;
+      node = node.parentElement;
+    }
+    const root = target.disclosures?.get('root');
+    if (root) root.open = true;
+    target.scrollIntoView({block: 'center', behavior: 'smooth'});
+    return true;
+  }
+
   window.mevedelTranscriptRenderer = Object.freeze(
-    {renderRecord, markContinuations, renderDiff, renderMarkdown, formatBytes, scopeKey});
+    {renderRecord, markContinuations, groupActivity, revealTool, renderDiff, renderMarkdown, formatBytes, scopeKey});
 })();

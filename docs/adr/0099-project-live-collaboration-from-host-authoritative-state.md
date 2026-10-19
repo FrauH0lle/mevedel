@@ -80,10 +80,46 @@ Tool display comes from the host's bounded semantic presentation tree and
 selected direct-tool identity. Display metadata is allowlisted rather than
 exposing raw internal render data. Delivered Skill dependencies are historical
 captured bodies, not current file reads. Each browser owns nested disclosures.
+Agent messages and final reports are projected from structural mailbox
+envelopes as inspectable notices in the receiving transcript. Outcome labels
+come from the saved envelope, not optimistic body prose or mutable roster
+state; folded final answers do not require opening the child's transcript.
+Activity grouping metadata reuses native eligibility, semantic summaries and
+failure names. Original records and IDs remain independently addressable;
+the browser moves their existing elements into local disclosures instead of
+creating a second transcript or replacing records with group envelopes.
 Nested invocation events update host facts immediately but coalesce tree
 construction and publication through the room's existing stream timer. Every
 projection read refreshes dirty pending trees; top-level events publish immediately,
 including settlement. Canonical transcript records replace these transient trees.
+
+The browser's unified background-work panel projects the native agent/execution
+collector and stable ordering instead of independently interpreting transcript
+notices or sorting mutable statuses. Bounded passive terminal snapshots preserve
+completion facts when executions leave the live registry; each browser owns its
+selection, focus and finished-row grace. The host sends relative terminal age
+from the original cache timestamp, so reconnects do not revive expired visible
+grace or require synchronized clocks. Duplicate evidence does not restart that
+age, and elapsed age alone does not trigger publication. Preview availability
+and truncation are explicit, with exactly three bounded output lines and a 64 KiB encoded-frame
+budget. Full and owner links may stop a live scoped execution or interrupt a
+known retained child through typed identity-bearing actions. The host rechecks
+the current guest tier and registry identity before the native user-authority
+operation; view links remain inspection-only. No browser-supplied host path or
+row key grants execution authority. Read-only source navigation uses the same
+native audit lookup as the Emacs action: only a click scans source-backed
+history, and the host returns the receiving transcript's owner and exact segment
+instead of asking the browser to guess or sequentially load archives. Child
+archive fetches are confined to that retained child's canonical history.
+
+The browser replaces separate agent chips and finished-agent rows with this
+single panel. A bounded scroll area and three fixed preview lines keep status
+growth away from the composer. Expansion retains completed rows until collapse;
+collapse starts a fresh ten-second grace. Mouse hover and keyboard focus hold
+the displayed row set, but touch does not acquire a synthetic hover hold.
+Disclosure and hold state belong to the inspecting browser, not shared native
+view state. Original tool IDs also reveal the source inside folded activity
+groups without replacing records or disturbing a draft.
 
 Artifact cards are settled live or archived transcript records; bytes are fetched on demand by
 record ID, resolved and bounded by the host. HTML runs in a sandboxed iframe
@@ -136,6 +172,13 @@ inherit the viewer origin that holds decrypted content and credentials.
 
 ## Decision history
 
+- **Unified work inspection, 2026-10-19:** the browser's independent agent chips
+  and finished-agent list omitted running Bash and Monitor work, their previews
+  and stop controls even after native execution changes. A shared native
+  collector now supplies all work and ordering; one browser-local inspector
+  preserves expanded completions and grants only explicitly tier-checked stop
+  actions. This replaces the old agent-only presentation rather than keeping
+  competing status surfaces.
 - **Lobby crash recovery, 2026-10-14:** lobby opens previously refused even a
   provably stale same-host PID lock because lock acquisition asked Emacs to
   confirm. A crashed host therefore stranded browser users until someone
