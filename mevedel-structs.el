@@ -412,6 +412,7 @@ owner alongside the newly committed session state."
   objective          ; non-empty free-form string
   status             ; active, paused, blocked, budget-limited, or complete
   reason             ; non-empty string for paused/blocked/budget-limited
+  reason-diagnostic  ; non-nil when reason is private host diagnostic text
   implementation-policy ; exact model/effort/permission snapshot or nil
   token-budget       ; positive integer or nil
   tokens-used        ; non-negative integer; lower bound when incomplete

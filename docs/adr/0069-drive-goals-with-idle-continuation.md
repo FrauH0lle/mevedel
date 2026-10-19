@@ -29,6 +29,11 @@ Browser inspection follows the same observation-only boundary: every link tier
 receives durable Goal facts through a latched projection and opens a read-only
 status-strip detail sheet. It reports durable accounting with incompleteness
 preserved, not an inferred live total. The browser has no Goal mutation controls.
+Failure producers mark diagnostic reasons in the durable Goal, allowing the
+shared projection to replace private provider/runtime/hook details with public
+recovery-category text. Public model blockers and user explanations retain their
+text. Source-owned provenance, rather than guessing from reason text, prevents
+both disclosure of host paths and accidental hiding of ordinary session content.
 
 Continuation and follow-up delivery are re-offered at the closing seam, not by
 each interaction kind: the interaction zone offers the root session's held

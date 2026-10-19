@@ -2078,7 +2078,7 @@
                  (session (mevedel-session-create "main" workspace))
                  (goal (mevedel-goal--create
                         :id "g1" :objective "Ship"
-                        :status 'active :tokens-used 0
+                        :status 'active :tokens-used 0 :reason-diagnostic t
                         :time-used-seconds 0 :turns-run 0))
                  saved)
             (setf (mevedel-session-goal session) goal)
@@ -2097,7 +2097,8 @@
             (should (null mevedel--current-request))
             (should (eq 'paused (mevedel-goal-status goal)))
             (should (equal "interrupted by user"
-                           (mevedel-goal-reason goal)))))
+                           (mevedel-goal-reason goal)))
+            (should-not (mevedel-goal-reason-diagnostic goal))))
       (delete-directory root t)))
 
 		 :doc "idles a root roster left running by a lost request teardown"

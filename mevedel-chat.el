@@ -190,6 +190,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-reason-diagnostic "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-file-snapshots "mevedel-structs"
 		  (cl-x) t)
@@ -1151,6 +1152,7 @@ BUF defaults to the current buffer if not specified."
 			  ((eq (mevedel-goal-status goal) 'active)))
 		(setf (mevedel-goal-status goal) 'paused
                       (mevedel-goal-reason goal) "interrupted by user"
+	                      (mevedel-goal-reason-diagnostic goal) nil
                       (mevedel-goal-updated-at goal)
                       (format-time-string "%FT%T%z")))
               (if (bound-and-true-p mevedel--current-request)

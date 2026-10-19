@@ -164,6 +164,7 @@ SUMMARY is required for `blocked'.  CAPTURED-ID must match its Goal identity."
                (or (not (stringp summary)) (string-blank-p summary)))
       (error "Blocked Goal requires a nonblank summary"))
     (setf (mevedel-goal-status goal) status
+          (mevedel-goal-reason-diagnostic goal) nil
           (mevedel-goal-reason goal)
           (and (eq status 'blocked) (string-trim summary))
           (mevedel-goal-updated-at goal) (format-time-string "%FT%T%z"))
