@@ -581,8 +581,9 @@ load a deferred conversation is reported at access before provider dispatch.
 
 Inspection keeps the resolver's read-only/no-save marker after major-mode setup.
 A later owned follow-up loads a writable conversation rather than writing through
-an inspection snapshot. Browser polling keeps its existing resident-only contract;
-it does not cause cold target reads.
+an inspection snapshot. Browser inspection queues hydration of the selected
+retained conversation outside the guest frame handler; the handler itself
+never performs cold target reads.
 
 The registry stores each conversation location as a session-relative path.
 For a remote session, cold hydration, terminal inspection, recovery links, and

@@ -833,7 +833,8 @@ sent: the relay refuses an oversized frame by closing the connection, and
 for the host connection it collects the room with it.
 
 Guests of every link tier also receive the retained agent roster:
-the canonical path, role, and status of every active or settled registered agent,
+the canonical path, role, status, and effective provider/model/known effort of
+every active or settled registered agent,
 broadcast on change and told to a joining guest directly. An active
 agent carries its blocked/waiting/running status; a settled one carries
 its terminal outcome (done, errored, or interrupted), because retained
@@ -843,13 +844,15 @@ it too. It rides the same coalesced publication as the transcript; the
 view's status render nudges that publication so a retained agent working
 while the root request is idle, when no gptel observer fires, still
 reaches the strip. The viewer splits the roster inside the Session menu:
-active agents render as chips, marking a blocked or waiting agent so a
+active agents render as chips with compact model:effort attribution, marking a blocked or waiting agent so a
 session that fans out workers never reads as an opaque gap, while settled
 agents collapse into a "Finished agents" disclosure whose rows open the
-same transcript sheet. A settled agent whose conversation
-buffer is not resident (cold state after a restart) answers a fetch with
-the standard not-available message; a browser poll never hydrates cold
-state.
+same transcript sheet. Waiting is not itself a request for host intervention;
+only blocked agents mark the summary as requiring attention. The inspection
+sheet shows full provider/model attribution, without borrowing the parent's
+configuration or inventing an unknown effort.
+Expanded active and finished rows wrap long paths and model labels within the
+disclosure rather than making a narrow viewport scroll horizontally.
 
 The same publication cycle sends the session task list to either link:
 identity, subject, status, optional owner, running agent activity, owner status

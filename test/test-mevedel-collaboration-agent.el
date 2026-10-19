@@ -38,6 +38,7 @@
           (list (cons "/root/worker-2"
                       (mevedel-agent-record--create
                        :path "/root/worker-2" :role 'worker
+                       :model-metadata '(:backend "Child provider" :model "child-model" :effort "high")
                        :activity 'running))
                 (cons "/root/explorer-1"
                       (mevedel-agent-record--create
@@ -80,6 +81,10 @@
                      "interrupted")
                    (mapcar (lambda (row) (cdr (assoc "status" row))) rows)))
     (should (equal "explorer" (cdr (assoc "role" (nth 0 rows)))))
+    (should (equal "Child provider" (cdr (assoc "backend" (nth 2 rows)))))
+    (should (equal "child-model" (cdr (assoc "model" (nth 2 rows)))))
+    (should (equal "high" (cdr (assoc "effort" (nth 2 rows)))))
+    (should-not (assoc "effort" (nth 0 rows)))
     ;; A record without a role sends no role field at all.
     (should-not (assoc "role" (nth 1 rows)))
     ;; A room without a session has no roster.

@@ -122,4 +122,16 @@ skillTurn = nodes['agent-transcript'].children[0];
 assert.equal(skillTurn.disclosures.get('root/attachment:base').open, true);
 nodes['agent-close'].dispatch('click');
 assert.equal(poll, null);
+controller.show([{path: '/root/model-check', status: 'waiting',
+  backend: 'Child provider', model: 'child-model', effort: 'high'}]);
+assert.match(textOf(nodes.agents), /child-model:high/);
+assert.doesNotMatch(nodes.agents.children[0].title, /needs the host/);
+assert.equal(summary.warning, false);
+nodes.agents.children[0].dispatch('click');
+assert.match(textOf(nodes['agent-meta']), /Child provider.*child-model:high/);
+controller.show([{path: '/root/model-check', status: 'done', model: 'recovered'}]);
+assert.match(textOf(nodes['agent-meta']), /recovered/);
+assert.equal(controller.describe().agent.status, 'done');
+assert.equal(controller.describe().agent.model, 'recovered');
+nodes['agent-close'].dispatch('click');
 console.log('viewer agent passed');
