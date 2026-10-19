@@ -63,6 +63,14 @@ class Element {
     return result;
   }
   scrollIntoView() { this.scrolled = true; }
+  getBoundingClientRect() { return {top: 0, bottom: 0, height: 0}; }
+  closest(selector) {
+    for (let node = this; node; node = node.parentElement) {
+      if (selector === '.viewer-panel' && node.classList.contains('viewer-panel')) return node;
+    }
+    return null;
+  }
+  scrollBy(options) { this.scrollTop = Math.max(0, (this.scrollTop || 0) + options.top); }
   remove() {
     if (this.parent) this.parent.children = this.parent.children.filter(x => x !== this);
   }
@@ -843,6 +851,7 @@ async function main() {
     addEventListener(type, callback) { (this.listeners[type] ||= []).push(callback); },
     setTimeout(callback) { timer = callback; return 1; },
     scrollTo(options) { this.scrollY = options.top; },
+    scrollBy(options) { this.scrollY = Math.max(0, this.scrollY + options.top); },
     open() { return null; },
   };
   const document = {

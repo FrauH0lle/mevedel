@@ -886,6 +886,10 @@ rows without discarding durable transcript completion notices.
 owner's current or archived conversation, then loads exactly that segment.
 It opens the tool row, including a nested ToolCall child and its enclosing
 activity disclosure; child-owned rows open that child's transcript sheet.
+Source scrolling uses the unobscured transcript viewport between the sticky
+header and dock, rather than the whole window. Oversized tools start below the
+header; short sources center in the available space. Child-sheet navigation
+scrolls only its own transcript and leaves the parent's scroll position alone.
 The browser neither scans archives sequentially nor guesses a nearby row.
 Only a host-reported unavailable source falls back to retained execution
 output; connection, loading and projection failures report a retryable notice

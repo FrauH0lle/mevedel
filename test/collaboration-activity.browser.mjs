@@ -95,3 +95,58 @@ test('source navigation loads exactly the host-located archive', async () => {
     assert.equal(await page.evaluate(() => window.sourceSent.length), 1);
   } finally { await browser.close(); }
 });
+
+test('revealed sources use the unobscured transcript viewport', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 1280]) {
+      const page = await browser.newPage({viewport: {width, height: 900}});
+      await page.setContent(`<style>
+        body { margin:0; } .topbar { position:fixed; top:0; height:64px; width:100%; background:white; z-index:3; }
+        .dock { position:fixed; bottom:0; height:520px; width:100%; background:white; z-index:3; }
+        .spacer { height:1100px; } .viewer-panel { position:fixed; inset:0; background:white; z-index:4; }
+        .agent-ledger { position:absolute; top:64px; bottom:0; width:100%; overflow:auto; }
+      </style><header class="topbar">Header</header><div class="spacer"></div>
+      <main id="transcript"></main><div class="spacer"></div><section id="history-body"></section>
+      <div class="spacer"></div><aside class="dock"><textarea id="draft">exact draft</textarea></aside>
+      <section class="viewer-panel" hidden><header class="topbar">Agent header</header><div id="agent-transcript" class="agent-ledger"></div></section>`);
+      await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
+      await page.evaluate(() => {
+        for (const id of ['transcript', 'history-body', 'agent-transcript']) {
+          const container = document.getElementById(id);
+          if (id === 'agent-transcript') container.innerHTML = '<div class="spacer"></div>';
+          container.append(window.mevedelTranscriptRenderer.renderRecord({id, kind: 'tool', toolUseId: `source-${id}`,
+            presentation: {name: 'Bash', body: id === 'history-body'
+              ? Array.from({length: 60}, (_, n) => `Oversized source line ${n}`).join('\n')
+              : 'first output line\nsecond output line', collapsed: true}}));
+          if (id === 'agent-transcript') container.insertAdjacentHTML('beforeend', '<div class="spacer"></div>');
+        }
+      });
+      for (const id of ['transcript', 'history-body', 'agent-transcript']) {
+        const rootScroll = await page.evaluate(() => scrollY);
+        await page.evaluate(id => {
+          const container = document.getElementById(id);
+          if (id === 'agent-transcript') container.closest('.viewer-panel').hidden = false;
+          window.mevedelTranscriptRenderer.revealTool(container, `source-${id}`);
+        }, id);
+        await page.waitForTimeout(700);
+        const geometry = await page.locator(`[data-tool-use-id="source-${id}"]`).evaluate(node => {
+          const rect = node.getBoundingClientRect();
+          const panel = node.closest('.viewer-panel');
+          const top = panel ? panel.querySelector('.topbar').getBoundingClientRect().bottom
+            : document.querySelector('body > .topbar').getBoundingClientRect().bottom;
+          const bottom = panel ? innerHeight : document.querySelector('.dock').getBoundingClientRect().top;
+          const hit = document.elementFromPoint(rect.left + 10, rect.top + 10);
+          return {top: rect.top, visibleTop: top, visibleBottom: bottom,
+            exposed: !!hit && (node.contains(hit) || hit.contains(node))};
+        });
+        assert.ok(geometry.top >= geometry.visibleTop && geometry.top + 10 < geometry.visibleBottom && geometry.exposed,
+          `${id} is visible above sticky UI at ${width}px: ${JSON.stringify(geometry)}`);
+        if (id === 'agent-transcript') assert.equal(await page.evaluate(() => scrollY), rootScroll,
+          'sheet inspection must not scroll the parent conversation');
+      }
+      assert.equal(await page.locator('#draft').inputValue(), 'exact draft');
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});

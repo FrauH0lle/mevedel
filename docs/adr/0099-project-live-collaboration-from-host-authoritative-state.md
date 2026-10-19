@@ -105,6 +105,9 @@ Other dock controls retain their own focus behavior.
 Disclosure and hold state belong to the inspecting browser, not shared native
 view state. Original tool IDs also reveal the source inside folded activity
 groups without replacing records or disturbing a draft.
+Reveal aligns within the actual readable viewport: centering in the entire
+window hid root and archived sources behind a large writable dock. Child-sheet
+reveal scrolls only the sheet, not its parent's conversation.
 
 Artifact cards are settled live or archived transcript records; bytes are fetched on demand by
 record ID, resolved and bounded by the host. HTML runs in a sandboxed iframe
