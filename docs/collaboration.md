@@ -759,6 +759,11 @@ reading never creates or resumes a session. It does not combine project chats.
 History keeps newest complete turns within 128,000 characters, reports omitted
 older turns and unavailable archives, and places answers by their recorded
 discussion/message identities. Live copies replace preserved compaction tails.
+If a transcript segment cannot be read, this history action fails explicitly
+instead of returning partial history. Its browser error identifies only an
+unavailable logical segment (with its number when known at the read boundary);
+the complete condition and private archive path stay in the host's local
+diagnostic log, not the discussion response, for every link tier.
 An open artifact polls every five seconds; source identities cache up to four
 bounded projections per room, and a matching digest returns only an unchanged
 reply rather than reading and projecting archives again. Source checks stay

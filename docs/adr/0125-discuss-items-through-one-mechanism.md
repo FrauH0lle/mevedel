@@ -125,6 +125,12 @@ participant's place while they type; the user chose marks over jumping.
   access. The newest complete turns fit within 128,000 characters, with explicit
   omission and unavailable-history notices. Five-second polls use cached source
   identities and digest/unchanged responses to avoid repeated archive projection.
+  Native archive-reader errors contain private storage paths, so this browser
+  history boundary reports only an unavailable logical segment and logs the
+  complete diagnostic locally. A known current-segment number may be shown;
+  nested archive failures do not require guessing one from error text. Failed
+  reads never silently publish partial history, and native inspection diagnostics
+  and other discussion errors retain their own contracts.
 - A lobby discussion whose dedicated conversation has a pending interaction
   shows **Waiting for a decision in NAME**, with an explicit **Open
   conversation** for the existing full/owner Conversation authority. A pending

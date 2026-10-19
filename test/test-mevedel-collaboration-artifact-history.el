@@ -112,10 +112,11 @@
 
   :doc "reports unavailable archives and bounded whole-turn omissions explicitly"
   (mevedel-artifact-history-test--with-room
-    (mevedel-collaboration-discussions-perform
-     room guest '(:action "history" :item "artifact:page")
-     (lambda (value) (setq reply value)))
-    (should (string-match-p "Segment file is missing" (plist-get reply :error)))
+    (mevedel-test--with-captured-messages nil
+      (mevedel-collaboration-discussions-perform
+       room guest '(:action "history" :item "artifact:page")
+       (lambda (value) (setq reply value))))
+    (should (equal "An answering-session transcript segment is unavailable" (plist-get reply :error)))
     (with-current-buffer buffer
       (mevedel-artifact-history-test--turn "Review" "Long live answer" "artifact:page"))
     (let ((mevedel-shared-conversation--history-limit 1))
@@ -125,6 +126,44 @@
     (should-not (plist-get reply :error))
     (should (eq t (plist-get reply :conversationTruncated)))
     (should (= 0 (length (plist-get reply :conversation)))))
+
+  :doc "archive failures expose only logical segments and keep host diagnostics local"
+  (dolist (failure '(unreadable missing read-error cold-current))
+    (mevedel-artifact-history-test--with-room
+      (let* ((number (if (eq failure 'cold-current) 2 1))
+             (path (mevedel-session-artifacts-segment-path directory number))
+             (messages nil)
+             (original (symbol-function 'insert-file-contents)))
+        (with-current-buffer buffer
+          (mevedel-artifact-history-test--turn "Recent review" "Partial live answer" "artifact:page"))
+        (pcase failure
+          ('unreadable (make-directory path))
+          ('read-error (write-region "Archived text" nil path nil 'silent))
+          ('cold-current (plist-put room :data-buffer nil)))
+        (cl-letf (((symbol-function 'insert-file-contents)
+                   (lambda (filename &rest args)
+                     (if (and (eq failure 'read-error) (equal filename path))
+                         (signal 'file-error (list "PRIVATE READ DETAIL" filename))
+                       (apply original filename args)))))
+          (mevedel-test--with-captured-messages messages
+            (mevedel-collaboration-discussions-perform
+             room guest '(:action "history" :item "artifact:page")
+             (lambda (value) (setq reply value)))))
+        (should-not (string-match-p (regexp-quote directory) (json-encode reply)))
+        (should-not (string-match-p "PRIVATE READ DETAIL" (json-encode reply)))
+        (should-not (plist-member reply :conversation))
+        (should-not (plist-get room :artifact-conversations))
+        (should (equal (if (eq failure 'cold-current)
+                           (format "Session history segment %d is unavailable" number)
+                         "An answering-session transcript segment is unavailable")
+                       (plist-get reply :error)))
+        (should (string-match-p (regexp-quote path) messages))
+        (should (string-match-p
+                 (pcase failure
+                   ('unreadable "Segment file is unreadable")
+                   ('read-error "PRIVATE READ DETAIL")
+                   (_ "Segment file is missing"))
+                 messages)))))
 
   :doc "wire responses strip host-only fields from canonical records"
   (mevedel-artifact-history-test--with-room
