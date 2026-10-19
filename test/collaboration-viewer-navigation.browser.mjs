@@ -50,6 +50,7 @@ async function unseal(key, bytes) {
 
 const lobbyRoom = makeRoom('lobbylobbylobby1', 1);
 const sessionRoom = makeRoom('sessionsession01', 2);
+const forkRoom = makeRoom('forkforkforkfork', 3);
 const PAGE_HTML = '<!doctype html><h1 id="inside">Inside the artifact</h1>';
 
 // What the stand-in host answers in each room.
@@ -87,6 +88,14 @@ function host(lobbyRunning) {
                data: Buffer.from(PAGE_HTML).toString('base64'), final: true});
       }
     },
+    [forkRoom.id]: (frame, reply) => {
+      if (frame.t === 'hello') {
+        reply({t: 'welcome', proto: 3, readOnly: false, workspace: 'ws',
+               project: 'proj', lobby: lobbyRunning, recordCount: 0});
+        reply({t: 'snapshot-chunk', records: [], final: true});
+        reply({t: 'status', name: 'Implement plan', busy: false});
+      }
+    },
   };
 }
 
@@ -95,14 +104,17 @@ async function open(browser, {lobbyRunning = true, viewport = {width: 1200, heig
   const page = await context.newPage();
   const answers = host(lobbyRunning);
   const keys = {};
-  for (const room of [lobbyRoom, sessionRoom]) {
+  for (const room of [lobbyRoom, sessionRoom, forkRoom]) {
     keys[room.id] = await crypto.subtle.importKey(
       'raw', room.secret.slice(0, 32), 'AES-GCM', false, ['encrypt', 'decrypt']);
   }
   page.joined = [];
+  // Frames the host sends unprompted, by room.
+  page.push = {};
   await page.routeWebSocket(/\/r\//, socket => {
     const id = new URL(socket.url()).pathname.split('/').pop();
     page.joined.push(id);
+    page.push[id] = async frame => socket.send(await seal(keys[id], frame));
     socket.onMessage(async message => {
       if (typeof message === 'string') return;
       const frame = await unseal(keys[id], message);
@@ -126,6 +138,43 @@ async function open(browser, {lobbyRunning = true, viewport = {width: 1200, heig
 
 const title = page => page.locator('#session-label').textContent();
 const visible = (page, selector) => page.locator(selector).isVisible();
+
+test('a room handed off leads its guests to the room that continues it', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const viewport of [{width: 1200, height: 800}, {width: 375, height: 812}]) {
+      const page = await open(browser, {viewport});
+      await page.goto(sessionRoom.link);
+      await page.waitForFunction(() => document.getElementById('session-label')
+        .textContent === 'Feature work');
+      await page.push[sessionRoom.id]({t: 'bye', reason: 'handoff',
+                                       name: 'Implement plan', link: forkRoom.link});
+      const action = page.locator('#terminal-action');
+      await action.waitFor();
+      assert.equal(await page.locator('#terminal-title').textContent(),
+                   'Continued in Implement plan');
+      assert.equal(await action.textContent(), 'Open Implement plan');
+      const box = await action.boundingBox();
+      assert.ok(box.x >= 0 && box.x + box.width <= viewport.width,
+                `the Open action fits ${viewport.width}px`);
+      await action.click();
+      await page.waitForFunction(() => document.getElementById('session-label')
+        .textContent === 'Implement plan');
+      assert.equal(await visible(page, '#terminal-state'), false);
+      assert.ok(page.joined.includes(forkRoom.id));
+
+      // A successor the host could not share leaves nowhere to go.
+      await page.push[forkRoom.id]({t: 'bye', reason: 'handoff-failed'});
+      await page.locator('#terminal-state').waitFor();
+      assert.equal(await page.locator('#terminal-title').textContent(),
+                   'Continued in Emacs');
+      assert.equal(await visible(page, '#terminal-action'), false);
+      await page.context().close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
 
 test('the lobby, a room and its artifact lead back through header and history', async () => {
   const browser = await chromium.launch();

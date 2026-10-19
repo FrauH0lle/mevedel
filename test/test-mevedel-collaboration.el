@@ -1419,6 +1419,136 @@
         (remove-hook 'mevedel-interaction-prompt-settled-hook
                      #'mevedel-collaboration--on-prompt-settled)))))
 
+(defmacro mevedel-test--with-stub-relay (sent &rest body)
+  "Run BODY with the relay transport stubbed, pushing (PEER . FRAME) to SENT.
+Remove the global hooks a started room installs afterwards."
+  (declare (indent 1) (debug t))
+  `(unwind-protect
+       (cl-letf (((symbol-function 'mevedel-collaboration--transport-open)
+                  (lambda (url &rest _) (list :url url)))
+                 ((symbol-function 'mevedel-collaboration--transport-send)
+                  (lambda (_transport peer frame)
+                    (push (cons peer frame) ,sent)
+                    t))
+                 ((symbol-function 'mevedel-collaboration--transport-stop)
+                  #'ignore)
+                 ((symbol-function 'mevedel-collaboration--transport-control)
+                  #'ignore)
+                 ((symbol-function 'mevedel-collaboration-presence-publish)
+                  #'ignore)
+                 ((symbol-function 'mevedel-sleep-update) #'ignore)
+                 ((symbol-function 'mevedel-collaboration--canonical-records)
+                  (lambda (&rest _) nil)))
+         ,@body)
+     (dolist (room (mevedel-collaboration--room-list))
+       (mevedel-collaboration--stop-internal room 'user-stop))
+     (remove-hook 'kill-emacs-hook #'mevedel-collaboration--stop-for-emacs)
+     (remove-hook 'mevedel-interaction-prompt-created-hook
+                  #'mevedel-collaboration--on-prompt-created)
+     (remove-hook 'mevedel-interaction-prompt-settled-hook
+                  #'mevedel-collaboration--on-prompt-settled)))
+
+(mevedel-deftest mevedel-collaboration--adopt-prompts
+  (:doc "shows guests an interaction raised before the session was shared")
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-collaboration-relay-url "ws://127.0.0.1:1")
+          (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+          (session (mevedel-session--create :name "late-share"))
+          sent)
+      (with-current-buffer data-buf
+        (mevedel--prompt-user-with-overlay
+         "Confirm" "Raised before sharing" "Proceed?" nil #'ignore))
+      (mevedel-test--with-stub-relay sent
+        (let ((room (mevedel-collaboration--start session data-buf)))
+          ;; A guest joining afterwards is replayed the waiting decision.
+          (puthash 7 (list :name "g" :writable t :ready t)
+                   (plist-get room :guests))
+          (mevedel-collaboration--send-ui-requests room 7)
+          (let ((frames (mapcar #'cdr (seq-filter (lambda (entry)
+                                                    (eql 7 (car entry)))
+                                                  sent))))
+            (should (= 1 (length frames)))
+            (should (equal "ui-request" (plist-get (car frames) :t)))
+            (should (string-match-p "Raised before sharing"
+                                    (plist-get (car frames) :body)))))))))
+
+(mevedel-deftest mevedel-collaboration-hand-off ()
+  ,test
+  (test)
+
+  :doc "hands each guest the successor room at its own tier"
+  (let ((source (generate-new-buffer " *collab-handoff-source*"))
+        (target (generate-new-buffer " *collab-handoff-target*"))
+        (mevedel-collaboration-relay-url "ws://127.0.0.1:1")
+        (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+        sent)
+    (unwind-protect
+        (mevedel-test--with-stub-relay sent
+          (with-current-buffer target
+            (setq-local mevedel--session
+                        (mevedel-session--create :name "implement-plan")))
+          (let ((room (mevedel-collaboration--start
+                       (mevedel-session--create :name "plan") source))
+                (guests '((1 :name "viewer")
+                          (2 :name "writer" :writable t)
+                          (3 :name "owner" :writable t :owner t))))
+            (pcase-dolist (`(,peer . ,guest) guests)
+              (puthash peer guest (plist-get room :guests)))
+            (let ((successor (mevedel-collaboration-hand-off source target)))
+              (should (eq successor
+                          (mevedel-collaboration--room-for-buffer target)))
+              (should-not (mevedel-collaboration--room-for-buffer source))
+              (pcase-dolist (`(,peer . ,link)
+                             `((1 . ,(plist-get successor :link-view))
+                               (2 . ,(plist-get successor :link-full))
+                               (3 . ,(plist-get successor :link-owner))))
+                (let ((frame (cdr (assq peer sent))))
+                  (should (equal "bye" (plist-get frame :t)))
+                  (should (equal "handoff" (plist-get frame :reason)))
+                  (should (equal "implement-plan" (plist-get frame :name)))
+                  (should (equal link (plist-get frame :link)))))
+              ;; Per-guest farewells replace the room-wide broadcast.
+              (should-not (assq 0 sent)))))
+      (kill-buffer source)
+      (kill-buffer target)))
+
+  :doc "does nothing for a session that is not shared"
+  (let ((source (generate-new-buffer " *collab-handoff-source*"))
+        (target (generate-new-buffer " *collab-handoff-target*"))
+        (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+        sent)
+    (unwind-protect
+        (mevedel-test--with-stub-relay sent
+          (with-current-buffer target
+            (setq-local mevedel--session (mevedel-session--create :name "x")))
+          (should-not (mevedel-collaboration-hand-off source target))
+          (should-not (mevedel-collaboration--room-list))
+          (should-not sent))
+      (kill-buffer source)
+      (kill-buffer target)))
+
+  :doc "tells guests the work continues in Emacs when the successor cannot be shared"
+  (let ((source (generate-new-buffer " *collab-handoff-source*"))
+        (target (generate-new-buffer " *collab-handoff-target*"))
+        (mevedel-collaboration-relay-url "ws://127.0.0.1:1")
+        (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+        sent warning)
+    (unwind-protect
+        (mevedel-test--with-stub-relay sent
+          (let ((room (mevedel-collaboration--start
+                       (mevedel-session--create :name "plan") source)))
+            (puthash 2 (list :name "writer" :writable t)
+                     (plist-get room :guests))
+            ;; TARGET has no session, so sharing it fails.
+            (cl-letf (((symbol-function 'display-warning)
+                       (lambda (_type message &rest _) (setq warning message))))
+              (should-not (mevedel-collaboration-hand-off source target)))
+            (should (string-match-p "Could not share" warning))
+            (should-not (mevedel-collaboration--room-list))
+            (should (equal '((0 :t "bye" :reason "handoff-failed")) sent))))
+      (kill-buffer source)
+      (kill-buffer target))))
+
 (mevedel-deftest mevedel-collaboration--multi-room
   (:doc "gives each shared session its own independent room")
   (let ((data-a (generate-new-buffer " *collab-multi-a*"))

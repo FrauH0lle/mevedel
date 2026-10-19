@@ -1055,7 +1055,8 @@
   // Request ids already notified about, so a re-sent card stays silent.
   const notifiedRequests = new Set();
 
-  function showTerminal(connectionText, noticeText) {
+  // ACTION, when given, is {label, href}: somewhere this ended room leads.
+  function showTerminal(connectionText, noticeText, action = null) {
     if (transport) transport.end();
     state.connected = false;
     notifications.forget();
@@ -1081,6 +1082,11 @@
     showNotice('');
     document.getElementById('terminal-title').textContent = connectionText;
     document.getElementById('terminal-message').textContent = noticeText;
+    const actionLink = document.getElementById('terminal-action');
+    actionLink.hidden = !action;
+    actionLink.textContent = action ? action.label : '';
+    if (action) actionLink.href = action.href;
+    else actionLink.removeAttribute('href');
     document.getElementById('terminal-state').hidden = false;
     window.scrollTo({top: 0, behavior: 'instant'});
   }
@@ -1273,6 +1279,20 @@
     } else if (frame.t === 'bye' && frame.reason === 'session-deleted') {
       showTerminal('Session deleted', 'This session was deleted from its '
                    + 'project lobby. The lobby lists the others.');
+    } else if (frame.t === 'bye' && frame.reason === 'handoff'
+               && typeof frame.link === 'string') {
+      // The work moved on, such as a plan accepted into a Worktree fork;
+      // the host hands every guest the new room at the tier it holds.
+      const name = typeof frame.name === 'string' && frame.name
+        ? frame.name : 'a new session';
+      sessions.offerRoom({name, link: frame.link});
+      showTerminal(`Continued in ${name}`, 'The host moved this work to a '
+                   + 'new session. Open it to follow along.',
+                   {label: `Open ${name}`, href: frame.link});
+    } else if (frame.t === 'bye' && frame.reason === 'handoff-failed') {
+      showTerminal('Continued in Emacs', 'The host moved this work to a new '
+                   + 'session but could not share it. Ask the host for an '
+                   + 'invitation to follow along.');
     } else if (frame.t === 'bye') {
       showTerminal('Session ended', 'The host has ended this shared session. '
                    + 'Ask the host for a new invitation to continue.');
