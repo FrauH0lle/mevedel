@@ -267,10 +267,110 @@
                                                            (vector (list :type "text" :text
                                                                          (concat (make-string 3185 ?x) needle))))))))
       (should-not (string-search needle (text (run "Read" (list :file_path address)))))
-      (dolist (path (list "shared://" address (concat address "/elements/long")))
-        (should (string-search
-                 path (text (run "Grep" (list :path path :pattern needle
-                                             :output_mode "files_with_matches")))))))))
+      (let ((start (symbol-function 'mevedel-execution-start-helper)) commands)
+        (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                   (lambda (&rest args)
+                     (push (nth 2 args) commands)
+                     (apply start args))))
+          (dolist (path (list "shared://" address (concat address "/elements/long")))
+            (should (string-search
+                     path (text (run "Grep" (list :path path :pattern needle
+                                                 :output_mode "files_with_matches")))))))
+        (dolist (command commands)
+          (should (member "--files-with-matches" command))
+          (should-not (member "--json" command)))))))
+
+(mevedel-deftest mevedel-tool-editing-search-files-bounded
+  (:doc "File-only shared matching short-circuits within a small helper output budget" :quiet t)
+  (mevedel-tool-editing-test--with-session
+    (setf (mevedel-session-sandbox-mode session) 'off)
+    (setq-local mevedel--current-request (mevedel-request--create :session session))
+    (let* ((id (plist-get (parse (run "SharedCreate" '(:kind "document" :title "Bounded files"))) :id))
+           (path (concat "shared://" id "/elements/large")))
+      (run "SharedEdit" (list :id id :action "patch"
+                              :changes (vector (list :id "large" :after
+                                                     (list :type "paragraph" :content
+                                                           (vector (list :type "text" :text (make-string 100000 ?x))))))))
+      (let* ((mevedel-execution-process-output-limit (* 256 1024))
+             (hits (text (run "Grep" (list :path path :pattern "x{10}" :output_mode "files_with_matches")))))
+        (should (string-search path hits))
+        (should-not (string-search "partial" hits))))))
+
+(mevedel-deftest mevedel-tool-editing-search-read-location
+  (:doc "Grep locations read the actual matching long shared content" :quiet t)
+  (mevedel-tool-editing-test--with-session
+    (setf (mevedel-session-sandbox-mode session) 'off)
+    (setq-local mevedel--current-request (mevedel-request--create :session session))
+    (let* ((id (plist-get (parse (run "SharedCreate" '(:kind "document" :title "Locations"))) :id))
+           (address (concat "shared://" id "/elements/long"))
+           (needle "LOCATION-NEEDLE"))
+      (run "SharedEdit" (list :id id :action "patch"
+                              :changes (vector (list :id "long" :after
+                                                     (list :type "paragraph" :content
+                                                           (vector (list :type "text" :text
+                                                                         (concat (make-string 7000 ?x) needle))))))))
+      (let ((hits (text (run "Grep" (list :path address :pattern needle :output_mode "content")))))
+        (should (string-match (concat (regexp-quote address) ":\\([0-9]+\\):") hits))
+        (let ((line (string-to-number (match-string 1 hits))))
+          (should (string-search needle (text (run "Read" (list :file_path address
+                                                                :offset line :limit 1))))))))))
+
+(mevedel-deftest mevedel-tool-editing-search-read-context
+  (:doc "Shared search maps later rows, context, modes and overview hits to Read" :quiet t)
+  (mevedel-tool-editing-test--with-session
+    (setf (mevedel-session-sandbox-mode session) 'off)
+    (setq-local mevedel--current-request (mevedel-request--create :session session))
+    (let* ((id (plist-get (parse (run "SharedCreate" '(:kind "document" :title "Later rows"))) :id))
+           (address (concat "shared://" id)))
+      (cl-labels
+          ((host (args)
+             (let (reply)
+               (mevedel-shared-editing-call workspace args (lambda (value) (setq reply value)))
+               (let ((deadline (+ (float-time) 10)))
+                 (while (and (not reply) (< (float-time) deadline)) (accept-process-output nil 0.05)))
+               (should-not (plist-get reply :error))
+               (should reply)))
+           (verify (path needle)
+             (let ((hits (text (run "Grep" (list :path path :pattern needle :output_mode "content"
+                                                :context 1)))))
+               (ert-info ((format "Grep %S at %s" needle path))
+                 (should (string-match "\\(shared://[^[:space:]]+\\):\\([0-9]+\\):" hits)))
+               (let ((target (match-string 1 hits)) (line (string-to-number (match-string 2 hits))))
+                 (should (string-search needle (text (run "Read" (list :file_path target :offset line :limit 1)))))
+                 (should (string-search (format "%s-%d-" target (1- line)) hits))))))
+        (host (list :action "discussion-post" :id id :opId "long-message" :messageId "long-message"
+                    :actor "Alice" :target '(:kind "whole") :text (make-string 7000 ?x)))
+        (host (list :action "discussion-post" :id id :opId "later-message" :messageId "later-message"
+                    :actor "Alice" :target '(:kind "whole") :text "LATER-DISCUSSION-NEEDLE"))
+        (verify (concat address "/discussions") "LATER-DISCUSSION-NEEDLE")
+        (run "SharedEdit" (list :id id :action "rename" :title "SHORT-HISTORY-NEEDLE"))
+        (run "SharedEdit" (list :id id :action "patch"
+                                :changes (vconcat
+                                          (cl-loop for n below 100 collect
+                                                   (list :id (format "history-object-%04d" n)
+                                                         :after '(:type "paragraph"))))))
+        (verify (concat address "/history") "SHORT-HISTORY-NEEDLE")
+        (run "SharedEdit" (list :id id :action "patch"
+                                :changes (vector (list :id "long" :after
+                                                       (list :type "paragraph" :content
+                                                             (vector (list :type "text" :text
+                                                                           (concat (make-string 7000 ?x) "OVERVIEW-NEEDLE"))))))))
+        (verify address "OVERVIEW-NEEDLE")
+        (let ((path (concat address "/elements/long")))
+          (should (string-search path (text (run "Grep" (list :path address :pattern "OVERVIEW-NEEDLE")))))
+          (should (string-search path (text (run "Grep" (list :path address :pattern "OVERVIEW-NEEDLE"
+                                                              :glob "long")))))
+          (should (string-search (concat path ":1")
+                                 (text (run "Grep" (list :path address :pattern "OVERVIEW-NEEDLE" :output_mode "count")))))
+          (let ((hits (text (run "Grep" (list :path path :pattern "OVERVIEW-NEEDLE"
+                                             :output_mode "content" :context 1 :-A 3 :-B 2)))))
+            (should (string-match (concat (regexp-quote path) ":\\([0-9]+\\):") hits))
+            (let ((line (string-to-number (match-string 1 hits))))
+              (should (string-search (format "%s-%d-" path (+ line 3)) hits))
+              (should (string-search (format "%s-%d-" path (- line 2)) hits))))
+          (should (string-search "OVERVIEW-NEEDLE"
+                                 (text (run "Grep" (list :path path :pattern "OVERVIEW-NEEDLE"
+                                                        :output_mode "content" :-n :json-false))))))))))
 
 (defconst mevedel-tool-editing-test--png-base64
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="

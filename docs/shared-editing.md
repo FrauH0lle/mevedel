@@ -397,10 +397,11 @@ changes stored content, image addresses or the hash. Long discussion and
 contribution lines use the same lossless chunks. Document images appear as
 `shared://ID/images/KEY`, never as image data. Text pages through Read's ordinary `offset` and `limit` and its
 50 KiB output bound, so an item of any size can be read in parts. Grep searches
-expanded text at the same addresses: an item's complete overview, element,
-discussions or history, or every item's overview under bare `shared://`.
-It uses neither overview previews nor string chunks, so matches beyond previews
-and across display chunk boundaries remain searchable. Images go through Read's ordinary media
+complete values while returning addresses and physical line numbers of ordinary
+Read output. An item's overview, or bare `shared://`, also searches the existing
+full-element resources behind abbreviated entries. Matching joins string-chunk
+display boundaries internally, then maps each hit and its context back to the
+actual Read lines, including all lines touched by a cross-chunk match. Images go through Read's ordinary media
 delivery, so models without image support get its explicit refusal. Glob and
 ApplyPatch do not accept `shared://`. Views are computed by the workspace's
 editing host from committed state, without a browser.

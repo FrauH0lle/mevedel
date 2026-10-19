@@ -4,6 +4,7 @@ import { handle } from '../host.mjs';
 import { canonical, contentHash, readable, discussionsView, historyView } from '../view.mjs';
 import { captureContext } from '../context.mjs';
 import { restore } from '../model.mjs';
+import { searchDocument } from '../search.mjs';
 
 const rect = (id, x, extra = {}) => ({ id, type: 'rectangle', x, y: 0, width: 100, height: 50, ...extra });
 const view = async (state, part, extra = {}) => (await handle({ action: 'view', state, part, ...extra })).result;
@@ -50,14 +51,39 @@ test('search views preserve full strings across display chunk boundaries', async
       content: [{type: 'text', text: long}]}]}, actor: 'Guest', opId: 'create'});
   assert.ok(!(await view(state, 'overview')).text.includes(needle));
   for (const part of ['overview', 'element']) {
-    const text = (await view(state, part, {element: 'long', search: true})).text;
-    assert.ok(text.includes(needle), `${part} search retains the whole literal`);
-    assert.ok(!text.includes('string-chunks('), 'search never introduces artificial boundaries');
+    const documents = (await view(state, part, {element: 'long', search: true})).documents;
+    assert.ok(documents.some(doc => doc.text.includes(needle)), `${part} search retains the whole literal`);
+    const doc = documents.find(doc => doc.text.includes(needle));
+    assert.equal(doc.address, 'shared://search-item/elements/long');
+    const start = Buffer.byteLength(doc.text.slice(0, doc.text.indexOf(needle)));
+    const spans = doc.spans.filter(([a,b]) => a < start + needle.length && b > start);
+    assert.equal(new Set(spans.map(span => span[2])).size, 2, 'cross-chunk match names both real Read lines');
   }
   const discussions = [{id: 'general', target: {kind: 'whole'}, messages: [{actor: 'Alice', text: long}]}];
-  assert.ok(discussionsView(discussions, true).includes(needle));
+  assert.ok(searchDocument('shared://search-item/discussions', discussionsView(discussions)).text.includes(needle));
   const history = {revision: 1, transactions: [{id: 'tx', revision: 1, actor: long, time: 1, changes: []}]};
-  assert.ok(historyView(history, true).includes(needle));
+  assert.ok(searchDocument('shared://search-item/history', historyView(history)).text.includes(needle));
+});
+
+test('search spans name Read lines after long element, discussion and history values', async () => {
+  const long = '😀'.repeat(3500) + 'FIRST-NEEDLE';
+  const {state} = await handle({action: 'create', id: 'mapped', kind: 'document',
+    content: {type: 'doc', content: [{type: 'paragraph', attrs: {id: 'long'},
+      content: [{type: 'text', text: long}]}]}, actor: 'Guest', opId: 'create'});
+  const element = (await view(state, 'element', {element: 'long'})).text;
+  const discussions = discussionsView([{id: 'general', target: {kind: 'whole'}, messages: [
+    {actor: 'Alice', text: long}, {actor: 'Bob', text: 'LATER-NEEDLE'}]}]);
+  const history = historyView({revision: 2, transactions: [
+    {id: 'long', revision: 2, actor: long, time: 2, changes: []},
+    {id: 'LATER-NEEDLE', revision: 1, actor: 'Guest', time: 1, changes: []}]});
+  for (const text of [element, discussions, history]) {
+    const doc = searchDocument('shared://mapped', text);
+    for (const needle of ['FIRST-NEEDLE', ...(text === element ? [] : ['LATER-NEEDLE'])]) {
+      const start = Buffer.byteLength(doc.text.slice(0, doc.text.indexOf(needle)));
+      const span = doc.spans.find(([a,b]) => a <= start && b > start);
+      assert.ok(doc.lines[span[2] - 1].includes(needle), 'reported line is immediately readable');
+    }
+  }
 });
 
 test('readable structures preserve escaped long strings, keys and nested arrays', () => {

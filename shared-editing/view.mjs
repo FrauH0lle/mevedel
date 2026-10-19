@@ -132,12 +132,11 @@ export function line(id, kind, node, summarize = true) {
 }
 
 /* One element or block in full, structured and lossless even for long text. */
-export function element(id, kind, node, search = false) {
-  const value = shown(id, kind, node);
-  return `hash ${contentHash(node)}\n${search ? JSON.stringify(value) : readable(value)}\n`;
+export function element(id, kind, node) {
+  return `hash ${contentHash(node)}\n${readable(shown(id, kind, node))}\n`;
 }
 
-export function overview(id, state, inspected, discussions, search = false) {
+export function overview(id, state, inspected, discussions) {
   const { kind, title, background, content } = inspected;
   const nodes = nodesOf(kind, content);
   const noun = kind === 'whiteboard' ? 'element' : 'block';
@@ -149,15 +148,13 @@ export function overview(id, state, inspected, discussions, search = false) {
       (kind === 'whiteboard' ? ` · Rendering: ${address(id, 'view.png')}` : '') +
       ` · Discussions (${discussions.length}): ${address(id, 'discussions')} · History: ${address(id, 'history')}`,
   ];
-  // Search receives original strings, never preview or artificial chunk boundaries.
-  const lines = nodes.map(node => search
-    ? `${contentHash(node)} ${JSON.stringify(shown(id, kind, node))}` : line(id, kind, node));
+  const lines = nodes.map(node => line(id, kind, node));
   return `${[...head, ...lines].join('\n')}\n`;
 }
 
 /* Discussions, the one about the whole item first: each with its target's
    live state, then its messages in order. */
-export function discussionsView(discussions, search = false) {
+export function discussionsView(discussions) {
   if (!discussions.length) return 'No discussions.\n';
   const ordered = [...discussions].sort((a, b) =>
     (b.id === GENERAL_DISCUSSION) - (a.id === GENERAL_DISCUSSION));
@@ -169,12 +166,12 @@ export function discussionsView(discussions, search = false) {
     const lines = [`discussion ${d.id} · ${d.resolved ? 'resolved' : 'open'}${status} · ${target}${area}`,
       ...(d.target.kind === 'whole' ? [] : [`  quote: ${JSON.stringify(d.liveQuote ?? d.quote ?? '')}`]),
       ...d.messages.map((m) => `  ${m.actor}: ${m.alone ? '(sent the selection as the request)' : JSON.stringify(m.text)}`)];
-    return lines.map(line => !search && line.length > LINE ? readable(line) : line).join('\n');
+    return lines.map(line => line.length > LINE ? readable(line) : line).join('\n');
   }).join('\n')}\n`;
 }
 
 /* Contributions newest first; Revert takes a contribution id. */
-export function historyView(state, search = false) {
+export function historyView(state) {
   if (!state.transactions.length) return `No retained contributions at revision ${state.revision}.\n`;
   const describe = (c) => `${c.id} (${!c.before ? 'added' : !c.after ? 'deleted' : 'changed'})`;
   return `${state.transactions.map((tx) => [
@@ -182,5 +179,5 @@ export function historyView(state, search = false) {
     tx.changes.length ? ` · ${tx.changes.map(describe).join(', ')}` : '',
     tx.title ? ` · title ${JSON.stringify(tx.title.before)} → ${JSON.stringify(tx.title.after)}` : '',
     tx.background ? ` · background ${tx.background.before ?? 'theme'} → ${tx.background.after ?? 'theme'}` : '',
-  ].join('')).map(line => !search && line.length > LINE ? readable(line) : line).join('\n')}\n`;
+  ].join('')).map(line => line.length > LINE ? readable(line) : line).join('\n')}\n`;
 }

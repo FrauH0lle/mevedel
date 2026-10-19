@@ -429,16 +429,24 @@ editing. This output-only notation describes its own reconstruction; stored
 content and canonical hashes remain unchanged. It also keeps long discussion
 and contribution lines lossless. The editing host computes the views from committed
 state; the resolver only validates the address and availability, and Read and
-Grep fetch the view asynchronously before paging or searching it. Grep requests
-expanded text at the same address: complete values without overview previews
-or artificial string-chunk boundaries. Read stays concise and pageable without
-removing full-text search from the resource family.
+Grep fetch the view asynchronously before paging or searching it. Search
+snapshots derive from these same formatted Read lines. The helper joins only
+string-chunk display boundaries and retains byte-span-to-Read-line maps;
+ripgrep's exact submatch offsets select the actual Read lines for hits and
+context. An abbreviated overview also searches its existing full-element
+resources, whose addresses and line numbers are directly readable. Read stays
+concise and pageable without removing full-text search or requiring the caller
+to translate locations.
 
 The first full-element formatter split stroke points only. A valid document
 paragraph of 3,000 characters still occupied one line, so Read's 2,000-character
 cap hid its suffix even at the full-element address; paging could not recover
 it. Structural formatting with explicit string chunks replaces that incomplete
 representation without adding a second address grammar or changing generic Read.
+An initial compact expanded Grep view preserved long-text matching but returned
+line numbers from a different rendering (line 2 instead of Read line 20 for a
+7,000-character paragraph). Shared search now owns the location mapping instead
+of leaving the caller to recover from that drift.
 
 ### Decision history: one read tool returning the whole item
 

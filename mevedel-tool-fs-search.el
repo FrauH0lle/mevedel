@@ -99,10 +99,12 @@ remote media conversion, this processes an already transferred copy locally."
               (native (copy-sequence args)))
           (dolist (document documents)
             (unless (and (stringp (car document))
-                         (equal (car document) (file-name-nondirectory (car document)))
-                         (not (member (car document) '("" "." "..")))
+                         (not (file-name-absolute-p (car document)))
+                         (cl-every (lambda (part) (not (member part '("" "." ".."))))
+                                   (split-string (car document) "/"))
                          (stringp (cdr document)))
               (error "Internal resource error: invalid search document"))
+            (make-directory (file-name-directory (file-name-concat directory (car document))) t)
             (let ((coding-system-for-write 'utf-8-unix))
               (write-region (cdr document) nil
                             (file-name-concat directory (car document))
@@ -112,6 +114,7 @@ remote media conversion, this processes an already transferred copy locally."
                      (list (list :path directory
                                  :address (file-name-directory address))))
           (plist-put native :resource-address address)
+          (plist-put native :resource-search-maps (plist-get descriptor :resource-search-maps))
           (funcall operation
                    (lambda (result)
                      (unwind-protect (funcall callback result) (funcall cleanup)))
@@ -139,6 +142,7 @@ then searched as virtual documents whose results CALLBACK receives."
                   (error "Grep searches text; %s is an image" address))
                  (t (list (cons (car (last components)) components)))))
          (documents nil)
+         (maps nil)
          (next nil))
     (setq next
           (mevedel-pipeline-handler-resumable
@@ -146,9 +150,10 @@ then searched as virtual documents whose results CALLBACK receives."
              (if (null views)
                  (mevedel-tool-fs-search--documents
                   callback args
-                  (list :resource-search-documents (nreverse documents) :address address)
+                  (list :resource-search-documents (nreverse documents)
+                        :resource-search-maps (nreverse maps) :address address)
                   operation)
-               (pcase-let ((`(,name . ,parts) (pop views)))
+               (pcase-let ((`(,_name . ,parts) (pop views)))
                  (mevedel-tool-editing-view
                   parts
                   (lambda (view)
@@ -157,11 +162,86 @@ then searched as virtual documents whose results CALLBACK receives."
                                  (list :result (format "Error: Could not search %s: %s"
                                                        address message)
                                        :status 'error))
-                      (push (cons name (plist-get view :text)) documents)
+                      (mapc (lambda (document)
+                              (let ((name (format "view-%d/%s" (length documents)
+                                                  (file-name-nondirectory (plist-get document :address)))))
+                                (push (cons name (plist-get document :text)) documents)
+                                (push (cons name document) maps)))
+                            (plist-get view :documents))
                       (funcall next))) t))))))
     (if views
         (funcall next)
       (funcall callback (list :result (format "No shared items to search under %s" address))))))
+
+(defun mevedel-tool-fs-search--shared-line (spans byte)
+  "Map search BYTE to the physical Read line in sorted byte SPANS."
+  (let ((lo 0) (hi (length spans)))
+    (while (< lo hi)
+      (let ((mid (/ (+ lo hi) 2)))
+        (if (<= (aref (aref spans mid) 1) byte)
+            (setq lo (1+ mid))
+          (setq hi mid))))
+    (aref (aref spans (min lo (1- (length spans)))) 2)))
+
+(defun mevedel-tool-fs-search--shared-name (path)
+  "Return the private snapshot key for ripgrep result PATH."
+  (concat (file-name-nondirectory (directory-file-name (file-name-directory path)))
+          "/" (file-name-nondirectory path)))
+
+(defun mevedel-tool-fs-search--shared-output
+    (output maps mode numbered before after partial)
+  "Map ripgrep OUTPUT with MAPS to actual Read locations.
+MODE and NUMBERED select ordinary Grep output.  BEFORE and AFTER count real
+Read context lines.  Files mode uses NUL-delimited paths and short-circuits
+matching.  Other modes use JSON; PARTIAL allows an incomplete final event."
+  (let ((hits (make-hash-table :test #'equal)) out)
+    (if (equal mode "files_with_matches")
+        (dolist (path (butlast (split-string output "\0")))
+          (let ((name (mevedel-tool-fs-search--shared-name path)))
+            (unless (assoc name maps) (error "Unknown shared search document"))
+            (puthash name t hits)))
+      (dolist (row (split-string output "\n" t))
+      (let ((event (condition-case nil
+                       (json-parse-string row :object-type 'plist :array-type 'list)
+                     (error (unless partial (error "Invalid shared search result"))))))
+        (when (equal (plist-get event :type) "match")
+          (let* ((data (plist-get event :data))
+                 (path (plist-get (plist-get data :path) :text))
+                 (name (mevedel-tool-fs-search--shared-name path))
+                 (document (cdr (assoc name maps)))
+                 (spans (plist-get document :spans))
+                 (base (plist-get data :absolute_offset))
+                 (selected (or (gethash name hits) (make-hash-table :test #'eql))))
+            (unless (and document (> (length spans) 0)) (error "Unknown shared search document"))
+            (dolist (match (plist-get data :submatches))
+              (let* ((start (+ base (plist-get match :start)))
+                     (end (+ base (plist-get match :end)))
+                     (first (mevedel-tool-fs-search--shared-line spans start))
+                     (last (mevedel-tool-fs-search--shared-line spans (max start (1- end)))))
+                (cl-loop for line from first to last do (puthash line t selected))))
+            (puthash name selected hits))))))
+    (dolist (entry maps)
+      (when-let* ((selected (gethash (car entry) hits)))
+        (let* ((document (cdr entry))
+               (address (plist-get document :address))
+               (lines (plist-get document :lines)))
+          (pcase mode
+            ("files_with_matches" (push address out))
+            ("count" (push (format "%s:%d" address (hash-table-count selected)) out))
+            ("content"
+             (let ((visible (make-hash-table :test #'eql)) previous)
+               (maphash (lambda (line _)
+                          (cl-loop for n from (max 1 (- line before))
+                                   to (min (length lines) (+ line after))
+                                   do (puthash n t visible))) selected)
+               (dolist (line (sort (hash-table-keys visible) #'<))
+                 (when (and previous (> line (1+ previous)) (> (+ before after) 0))
+                   (push "--" out))
+                 (let ((sep (if (gethash line selected) ":" "-")))
+                   (push (concat address sep (when numbered (format "%d%s" line sep))
+                                 (aref lines (1- line))) out))
+                 (setq previous line))))))))
+    (if out (concat (string-join (nreverse out) "\n") "\n") "")))
 
 (defun mevedel-tool-fs-search--visible-path (path)
   "Return PATH in the current search operation's visible domain."
@@ -844,6 +924,7 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
       (let* ((pattern (plist-get args :pattern))
              (path (mevedel-tool-string-arg args :path "."))
              (resource-roots (plist-get args :resource-roots))
+             (maps (plist-get args :resource-search-maps))
              (resource-address (or (plist-get args :resource-address)
                                    mevedel-tool-fs-search--resource-address))
              (file-glob (mevedel-tool-string-arg args :glob))
@@ -912,7 +993,15 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
               (let ((rg-args (list "--hidden" "--no-require-git"))
                     (session (bound-and-true-p mevedel--session)))
                 ;; Output mode flags
-                (pcase output-mode
+                (if maps
+                    (progn
+                      (if (equal output-mode "files_with_matches")
+                          (progn (push "--files-with-matches" rg-args) (push "--null" rg-args))
+                        (push "--json" rg-args))
+                      (when (equal output-mode "content") (push "--max-count=1000" rg-args))
+                      (dolist (value (list ctx-before ctx-after ctx-around))
+                        (when (and value (< value 0)) (error "Grep context must be 0 or greater"))))
+                  (pcase output-mode
                   ("content"
                    (when line-numbers (push "--line-number" rg-args))
                    ;; Resource pages must retain their source even when an
@@ -937,13 +1026,13 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                   ("files_with_matches"
                    (push "--files-with-matches" rg-args))
                   ("count"
-                   (push "--count" rg-args)))
+                   (push "--count" rg-args))))
                 ;; Common flags
                 (when case-fold (push "-i" rg-args))
                 (when multiline (push "-U" rg-args) (push "--multiline-dotall" rg-args))
                 (when file-glob (push (format "--glob=%s" file-glob) rg-args))
                 (when file-type (push (format "--type=%s" file-type) rg-args))
-                (when (or resource-roots mevedel-tool-fs-search--resource-address)
+                (when (and (not maps) (or resource-roots mevedel-tool-fs-search--resource-address))
                   (push "--null" rg-args))
                 (setq rg-args (nreverse rg-args))
                 (setq rg-args
@@ -955,6 +1044,16 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                        (list "-e" pattern)))
                 (mevedel-tool-fs-search--start-grep
                  (lambda (child-result)
+                   (when (and maps (memq (mevedel-tool-fs-search--rg-outcome child-result)
+                                         '(success no-match timeout output-limit)))
+                     (setq child-result
+                           (plist-put
+                            (copy-sequence child-result) :output
+                            (mevedel-tool-fs-search--shared-output
+                             (or (plist-get child-result :output) "") maps output-mode line-numbers
+                             (or ctx-before ctx-around 0) (or ctx-after ctx-around 0)
+                             (memq (mevedel-tool-fs-search--rg-outcome child-result)
+                                   '(timeout output-limit))))))
                    (with-temp-buffer
                      (let* ((settlement
                              (mevedel-tool-fs-search--settle-rg-result
