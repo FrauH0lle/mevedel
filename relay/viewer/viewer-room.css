@@ -7,7 +7,9 @@ button,select,input { font:inherit; }
    It never wraps; viewer-header.js folds actions into its ⋯ menu instead.
    Lift an open menu above the dock/sidebar (20), preserving the normal mobile
    dock order when closed and leaving full editor/artifact panels above it (30). */
-:root { --topbar-h:76px; }
+/* --column is the conversation column's outer width; its blocks use it less
+   the ledger's 24px gutters, while prose keeps its own reading measure. */
+:root { --topbar-h:76px; --column:864px; }
 .topbar:has(details[open]) { z-index:21; }
 .topbar { display:flex; align-items:center; height:var(--topbar-h); min-height:0; padding:0 32px; gap:24px; border-bottom:2px solid var(--ink); flex-wrap:nowrap; background:var(--surface); overflow-x:clip; overflow-y:visible; }
 .viewer-panel > .topbar { position:relative; top:auto; flex:none; z-index:11; }
@@ -69,12 +71,12 @@ input.heading-title[readonly] { cursor:default; }
 /* With no transcript, give the ended room the center of the available space. */
 body:has(#transcript:empty) .terminal-state { margin-block:auto; }
 body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-top:0; }
-.filter { order:0; position:sticky; top:var(--topbar-h); z-index:9; flex:none; margin:0; padding:12px max(24px,calc((100% - 816px)/2)); width:100%; background:var(--ground); border-bottom:1px solid var(--line); }
+.filter { order:0; position:sticky; top:var(--topbar-h); z-index:9; flex:none; margin:0; padding:12px max(24px,calc((100% - var(--column))/2 + 24px)); width:100%; background:var(--ground); border-bottom:1px solid var(--line); }
 .filter:has(> button:only-child) { display:none; }
 .filter button { background:none; border:0; border-bottom:2px solid transparent; border-radius:0; padding:7px 10px; font-size:12px; }
 .filter button[aria-pressed="true"] { color:var(--accent); background:none; box-shadow:none; border-bottom-color:var(--accent); }
-.ledger { width:100%; max-width:864px; padding:34px 24px 24px; gap:26px; }
-.history { width:100%; max-width:864px; margin:24px auto 0; padding:0 24px; }
+.ledger { width:100%; max-width:var(--column); padding:34px 24px 24px; gap:26px; }
+.history { width:100%; max-width:var(--column); margin:24px auto 0; padding:0 24px; }
 .history-description,.history-note { margin:0 0 12px; font-size:13px; color:var(--muted); }
 .history-chat + .history-chat { margin-top:24px; }
 .history-chat-title { margin:0 0 12px; font-size:14px; font-weight:600; overflow-wrap:anywhere; }
@@ -100,6 +102,10 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 .who { color:var(--ink); font-size:12px; margin:0 0 12px; gap:8px; }
 .badge { color:var(--muted); background:transparent; padding:0; font-weight:400; }
 .prose,.prompt { max-width:72ch; font-size:15px; line-height:1.75; }
+/* In the conversation, text keeps its reading measure while code, tables
+   and other blocks take the column. */
+:is(.ledger,.history) :is(.prose,.prompt) { max-width:none; }
+:is(.ledger,.history) :is(.prose,.prompt) > :is(p,ul,ol,dl,blockquote,h1,h2,h3,h4,h5,h6) { max-width:72ch; }
 .prose h2 { font-size:23px; font-weight:600; letter-spacing:-.035em; line-height:1.35; margin:8px 0 16px; }
 .prose p { margin:0 0 14px; }
 .prose p:last-child { margin-bottom:0; }
@@ -111,7 +117,8 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 .artifact-size { font-size:11px; }
 .artifact-open { background:transparent!important; color:var(--accent)!important; border:0!important; font-size:12px; }
 .dock { margin-top:auto; background:var(--ground); padding:20px 24px 12px; gap:9px; }
-.assistant-working { width:100%; max-width:816px; margin:0; padding:4px 2px 7px; font-size:15px; font-weight:500; color:var(--ink); }
+.requests,.own-queue,.dock-strip,.dock-disclosure,.composer,.disclosure,.modeline,.empty-state { max-width:calc(var(--column) - 48px); }
+.assistant-working { width:100%; max-width:calc(var(--column) - 48px); margin:0; padding:4px 2px 7px; font-size:15px; font-weight:500; color:var(--ink); }
 .assistant-working::before { width:16px; height:16px; margin-right:10px; color:var(--accent); vertical-align:-3px; }
 .composer { padding:14px 18px 12px; border-color:var(--rule-strong); border-radius:4px; box-shadow:none; gap:8px; }
 .composer-label { font-weight:500; color:var(--ink); font-size:12px; }
@@ -201,13 +208,29 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 .decision-feedback[open] > summary { color:var(--ink); }
 .decision-feedback .request-feedback { font-size:14px; padding:8px 10px; }
 @media (min-width:1100px) {
-  body:has(#session-box:not([hidden])) { --edge:max(24px,calc((100vw - 1560px)/2)); padding-left:var(--edge); padding-right:calc(var(--edge) + 320px); }
-  body:has(#session-box:not([hidden])) > .topbar { width:auto; margin-left:calc(-1 * var(--edge)); margin-right:calc(-1 * (var(--edge) + 320px)); }
-  /* Extend into the outer margin to give the scrollbar its own space. */
-  #session-box { position:fixed; top:112px; bottom:24px; right:calc(var(--edge) - 24px); width:304px; max-height:none; padding:0 16px 0 26px; border-left:1px solid var(--line); overflow-y:auto; scrollbar-width:thin; scrollbar-gutter:stable; }
+  /* The sidebar keeps to the window's right edge and the conversation takes
+     the rest, up to a column wide enough for code, tables and tool rows. */
+  :root { --column:1148px; --side:304px; }
+  body:has(#session-box:not([hidden])) { padding-left:24px; padding-right:calc(var(--side) + 40px); }
+  body:has(#session-box:not([hidden])) > .topbar { width:auto; margin-left:-24px; margin-right:calc(-1 * (var(--side) + 40px)); }
+  #session-box { position:fixed; top:112px; bottom:24px; right:0; width:var(--side); max-height:none; padding:0 16px 0 26px; border-left:1px solid var(--line); overflow-y:auto; scrollbar-width:thin; scrollbar-gutter:stable; }
   #session-box .dock-disclosure-body { max-height:none; }
   #session-box > summary #session-summary { display:none; }
 }
+@media (min-width:1600px) { :root { --side:360px; } }
+/* A whiteboard or document docked beside the chat, under the room's header,
+   on a window at least 1800px wide (viewer-editing.js). The chat keeps a
+   fixed width and the item takes the rest. In this room opens from the
+   header's button as a drawer over the item's right side. */
+body:has(#editing-panel.docked) { --chat:860px; --pad-r:calc(100vw - var(--chat)); padding-left:24px; padding-right:var(--pad-r); }
+body:has(#editing-panel.docked) > .topbar { width:auto; margin-left:-24px; margin-right:calc(-1 * var(--pad-r)); }
+#editing-panel.docked { inset:var(--topbar-h) 0 0 var(--chat); height:auto; border-left:1px solid var(--line); }
+#editing-panel.docked > .topbar { height:56px; padding:0 20px; gap:16px; border-bottom-width:1px; }
+#editing-panel.docked > .topbar .wordmark { display:none; }
+#editing-panel.docked > .topbar .room-heading { padding-left:16px; }
+body:has(#editing-panel.docked) #session-box:not([open]) { display:none; }
+body:has(#editing-panel.docked) #session-box[open] { z-index:31; top:var(--topbar-h); bottom:0; right:0; width:360px; padding-top:20px; background:var(--surface); box-shadow:var(--shadow); }
+body:has(#editing-panel.docked) .room-button { display:grid; }
 @media (max-width:1099px) {
   body:has(#session-box:not([hidden])) { padding:0; }
   body:has(#session-box:not([hidden])) > .topbar { width:100%; }
@@ -291,12 +314,12 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 
 /* A short phone, such as an iPhone mini in Safari, keeps its rows for the
    conversation: In this room opens from the header, and a connected status
-   line with nothing else to say gives way. */
-.room-button { display:none; }
+   line with nothing else to say gives way. A docked item shows the button too. */
+.room-button { display:none; place-items:center; min-width:36px; min-height:36px; padding:0; border:1px solid var(--line); border-radius:4px; background:transparent; color:var(--ink); }
+.room-button[aria-expanded="true"] { color:var(--accent); border-color:var(--accent); background:var(--accent-soft); }
+.room-button svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linejoin:round; }
 @media (max-width:640px) and (max-height:700px) {
-  .room-button { display:grid; place-items:center; min-width:36px; min-height:36px; padding:0; border:1px solid var(--line); border-radius:4px; background:transparent; color:var(--ink); }
-  .room-button[aria-expanded="true"] { color:var(--accent); border-color:var(--accent); background:var(--accent-soft); }
-  .room-button svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linejoin:round; }
+  .room-button { display:grid; }
   #session-box:not([open]) { display:none; }
   #modeline:has(.conn.connected):not(:has(.settings-button,.ml.plan,.ml.tail:not(:empty))) { display:none; }
 }

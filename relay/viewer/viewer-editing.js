@@ -1,7 +1,8 @@
 /* Trusted room controller. The opaque editor gets only an item-scoped port. */
 'use strict';
 window.mevedelEditingView = {
-  create({ state, send, el, flash, summarize, onVisibility = () => {}, onCatalog = () => {} }) {
+  create({ state, send, el, flash, summarize, onVisibility = () => {}, onCatalog = () => {},
+           onDock = () => {}, onFocusChat = () => {} }) {
     const box = document.getElementById('editing-box'),
       list = document.getElementById('editing-items');
     const panel = document.getElementById('editing-panel'),
@@ -30,11 +31,41 @@ window.mevedelEditingView = {
     // local recoveries stay listed so they remain reachable.
     let attached = new Set();
     let unavailableReason = 'Checking shared editing on the Emacs host…';
+    // From this width an item opens beside the room's chat in this tab rather
+    // than in a tab of its own. Narrowing below it makes the docked editor
+    // full screen; widening again leaves it so until the next open.
+    const wide = window.matchMedia('(min-width:1800px)');
+    let docked = false;
+    // ONDOCK learns of a docked open once the item is on screen, and of every undock.
+    function setDocked(value) {
+      if (docked === value) return;
+      docked = value;
+      panel.classList.toggle('docked', value);
+      panel.setAttribute('role', value ? 'region' : 'dialog');
+      document.getElementById('editing-full').hidden = !value;
+      if (value) panel.style.height = panel.style.top = '';
+      else viewport();
+      retitle();
+      port?.postMessage({ type: 'docked', docked: value });
+      if (!value) onDock(false, null);
+    }
+    wide.addEventListener('change', (event) => { if (!event.matches) setDocked(false); });
     // The head shows the open item's title, renamed in place, and its save
-    // state; the editor reports both and performs the rename.
+    // state; the editor reports both and performs the rename. A docked item
+    // shares the page with the room, which keeps the page title.
+    function roomTitle() {
+      return state.sessionName ? `${state.sessionName} · mevedel` : 'mevedel live session';
+    }
+    function retitle() {
+      if (!panel.hidden && !docked) document.title = state.editorTitle = `${titleInput.value} · mevedel`;
+      else if (state.editorTitle) {
+        state.editorTitle = null;
+        document.title = roomTitle();
+      }
+    }
     function showTitle(title) {
       if (document.activeElement !== titleInput) titleInput.value = title;
-      if (!panel.hidden) document.title = state.editorTitle = `${title} · mevedel`;
+      retitle();
     }
     function showState(text, error = false) {
       savedLine.textContent = text || '';
@@ -76,15 +107,29 @@ window.mevedelEditingView = {
     }
     function launch(id, tab) {
       if (editorTab) return open(id);
+      if (!tab && wide.matches) return dock(id);
       const url = new URL(window.location.href);
       url.searchParams.set('shared', id);
       url.hash = state.fragment || window.location.hash;
       (tab || reserveTab()).location.replace(url.href);
     }
+    async function dock(id) {
+      setDocked(true);
+      try {
+        await open(id);
+      } catch (error) {
+        if (panel.hidden) setDocked(false);
+        throw error;
+      }
+      if (docked && current === id && !panel.hidden) onDock(true, id);
+    }
+    // A tab is reserved synchronously from the click, before any await, or
+    // the browser blocks it; a docked item needs none.
+    const reserveLaunchTab = () => (wide.matches ? null : reserveTab());
     // Mobile keyboards resize the visual viewport, not necessarily the layout
     // viewport. Keep the complete editor above the keyboard, including in Safari.
     function viewport() {
-      if (!window.visualViewport) return;
+      if (!window.visualViewport || docked) return;
       panel.style.height = `${window.visualViewport.height}px`;
       panel.style.top = `${window.visualViewport.offsetTop}px`;
     }
@@ -188,10 +233,13 @@ window.mevedelEditingView = {
         });
       });
     }
-    function setConversationHistory(result) {
+    function rememberConversation(result) {
       archived = result.conversation || [];
       conversationTruncated = Boolean(result.conversationTruncated);
       conversationError = result.conversationError || null;
+    }
+    function setConversationHistory(result) {
+      rememberConversation(result);
       conversation();
     }
     async function refreshConversation() {
@@ -310,7 +358,7 @@ window.mevedelEditingView = {
       if (current === id && frame && !committed) {
         panel.hidden = false;
         onVisibility(true);
-        document.title = state.editorTitle = `${titleInput.value} · mevedel`;
+        retitle();
         return;
       }
       const draft = readDraft(id);
@@ -327,13 +375,14 @@ window.mevedelEditingView = {
       port?.close();
       recovering = recoveryOnly;
       current = id;
-      setConversationHistory(result);
+      // The new editor's channel receives the conversation once it exists.
+      rememberConversation(result);
       panel.hidden = false;
       onVisibility(true);
       titleInput.value = result.title;
       titleInput.readOnly = state.readOnly || recoveryOnly;
       showState(recoveryOnly ? 'Local recovery' : '');
-      document.title = state.editorTitle = `${result.title} · mevedel`;
+      retitle();
       frame = el('iframe');
       frame.title = `Shared ${result.kind}: ${result.title}`;
       frame.setAttribute('sandbox', 'allow-scripts allow-forms');
@@ -377,6 +426,11 @@ window.mevedelEditingView = {
           if (!state.readOnly && catalog.has(id)) confirmDelete(catalog.get(id));
           return;
         }
+        // The docked editor's whole-item discussion is the room's chat.
+        if (data.type === 'focus-chat') {
+          if (docked) onFocusChat();
+          return;
+        }
         if (data.type !== 'request' || typeof data.reqId !== 'string') return;
         const args = data.args;
         if (
@@ -417,6 +471,7 @@ window.mevedelEditingView = {
             draft,
             readOnly: state.readOnly || recoveryOnly,
             online: connected && !recoveryOnly,
+            docked,
             appearance,
             name: state.guestName || 'Participant',
           },
@@ -606,7 +661,10 @@ window.mevedelEditingView = {
         const { id, kind, title, revision } = value,
           previous = catalog.get(id);
         catalog.set(id, { id, kind, title, revision });
-        if (!previous || previous.title !== title || previous.kind !== kind) render();
+        if (!previous || previous.title !== title || previous.kind !== kind) {
+          render();
+          onCatalog();
+        }
         if (id === current) {
           showTitle(title);
           port?.postMessage({ type: 'changed', ...value });
@@ -669,7 +727,7 @@ window.mevedelEditingView = {
         (button.onclick = async () => {
           let tab;
           try {
-            tab = reserveTab();
+            tab = reserveLaunchTab();
             const item = await request({
               action: 'create',
               kind: button.dataset.createEditor,
@@ -693,7 +751,7 @@ window.mevedelEditingView = {
       if (!file) return;
       let tab;
       try {
-        tab = reserveTab();
+        tab = reserveLaunchTab();
         if (file.size > 16 * 1024 * 1024) throw new Error('File is too large');
         let format = /\.excalidraw$/i.test(file.name)
             ? 'excalidraw'
@@ -765,8 +823,9 @@ window.mevedelEditingView = {
       openingGeneration++;
       panel.hidden = true;
       onVisibility(false);
+      setDocked(false);
       state.editorTitle = null;
-      document.title = state.sessionName ? `${state.sessionName} · mevedel` : 'mevedel live session';
+      document.title = roomTitle();
       requestedItem = null;
       const url = new URL(window.location.href);
       url.searchParams.delete('shared');
@@ -779,6 +838,17 @@ window.mevedelEditingView = {
           mode: 'clear',
           point: null,
         });
+    };
+    // The docked item, full screen in a tab of its own.
+    document.getElementById('editing-full').onclick = () => {
+      const id = current;
+      try {
+        const tab = reserveTab();
+        document.getElementById('editing-close').click();
+        launch(id, tab);
+      } catch (error) {
+        flash(error.message);
+      }
     };
     // A room message about an item goes to the assistant in the item's
     // general discussion, about the whole item as currently committed.
@@ -797,6 +867,8 @@ window.mevedelEditingView = {
       if (!box.hidden) render();
     }
     return { welcome, connection, receive, open, openItem, conversation, refreshConversation, setAppearance, setName, ask, present,
-             attachedItems, page: () => (panel.hidden ? null : current) };
+             attachedItems, page: () => (panel.hidden ? null : current),
+             dockedItem: () => (docked && !panel.hidden ? current : null),
+             title: (id) => catalog.get(id)?.title || null };
   },
 };

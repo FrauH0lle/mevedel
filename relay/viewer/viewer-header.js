@@ -59,10 +59,11 @@
                                attributes: true, attributeFilter: ['hidden']});
     }
 
-    // The head on screen: an open panel's, else the room's.
+    // The head on screen: an open full-screen panel's, else the room's. A
+    // panel docked beside the chat leaves the room's head on screen.
     function active() {
       const panels = [...document.querySelectorAll('.viewer-panel')]
-        .filter(panel => !panel.hidden);
+        .filter(panel => !panel.hidden && !panel.classList.contains('docked'));
       return panels.at(-1)?.querySelector('.topbar')
         || document.querySelector('body > .topbar');
     }
@@ -130,7 +131,7 @@
     document.querySelectorAll('.topbar').forEach(setup);
     // Opening or closing a panel changes which head is on screen.
     document.querySelectorAll('.viewer-panel').forEach(panel => observer?.observe(
-      panel, {attributes: true, attributeFilter: ['hidden']}));
+      panel, {attributes: true, attributeFilter: ['hidden', 'class']}));
     window.addEventListener('resize', schedule);
     document.addEventListener('pointerdown', event => {
       for (const {more} of heads.values()) {

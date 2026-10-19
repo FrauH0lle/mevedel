@@ -409,7 +409,7 @@ async function testItemConversations() {
     URL, crypto, TextEncoder, TextDecoder, Uint8Array, btoa, atob, setTimeout, clearTimeout,
     localStorage:{length:0,getItem:()=>null},
     document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},querySelectorAll:()=>[]},
-    window:{location:{href:'http://localhost/?shared=doc',hash:''},history:{replaceState(){}},
+    window:{matchMedia:()=>({matches:false,addEventListener(){}}),location:{href:'http://localhost/?shared=doc',hash:''},history:{replaceState(){}},
       mevedelViewerTransport:{parseFragment:()=>null}},
     MessageChannel:class {constructor(){this.port1={postMessage:m=>messages.push(m),close(){}};this.port2={};}},
   };
@@ -474,7 +474,7 @@ async function testEditingAvailability() {
     URL, TextEncoder, TextDecoder, Uint8Array, btoa, atob, setTimeout, clearTimeout,
     localStorage:{length:0,getItem:()=>null},
     document:{getElementById:node,querySelectorAll:()=>creates},
-    window:{location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
+    window:{matchMedia:()=>({matches:false,addEventListener(){}}),location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
   };
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
   api=context.window.mevedelEditingView.create({state,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
@@ -509,6 +509,75 @@ async function testEditingAvailability() {
   assert.equal(node('editing-items').children[0].disabled,true);
 }
 
+// On a wide window an item docks beside the chat in this tab; narrowing the
+// window makes the same editor full screen, and the editor learns of both.
+async function testEditingDock() {
+  const nodes = new Map(), docks = [], fromRoom = [];
+  const node = id => { if (!nodes.has(id)) nodes.set(id,new Element('div')); return nodes.get(id); };
+  const media = {matches:true, listeners:[], addEventListener(type, fn) { this.listeners.push(fn); }};
+  const state = {records:new Map(),ownQueue:[],readOnly:false,sessionName:'Planning'};
+  const document = {title:'Planning · mevedel',getElementById:node,querySelectorAll:()=>[]};
+  let focused = 0, init = null, editorPort = null, api;
+  const context = {
+    URL, crypto, TextEncoder, TextDecoder, Uint8Array, btoa, atob, setTimeout, clearTimeout, MessageChannel,
+    localStorage:{length:0,getItem:()=>null}, document,
+    window:{matchMedia:()=>media, open:()=>assert.fail('A docked item opens no tab'),
+      location:{href:'http://localhost/',hash:''}, history:{replaceState(){}},
+      mevedelViewerTransport:{parseFragment:()=>null}},
+  };
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
+  api=context.window.mevedelEditingView.create({state,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
+    onDock:(on,id)=>docks.push([on,id]), onFocusChat:()=>focused++,
+    send:async frame=>{
+      if (!frame.data) return true;
+      const args=JSON.parse(atob(frame.data));
+      const result=args.action==='list' ? [{id:'doc',kind:'document',title:'Notes'}]
+        : args.action==='read' ? {id:'doc',kind:'document',title:'Notes',conversation:[]} : {available:true};
+      const data=btoa(JSON.stringify({result}));
+      api.receive({t:'editing',reqId:frame.reqId,offset:0,total:data.length,data});
+      return true;
+    }});
+  const tick = () => new Promise(resolve => setTimeout(resolve, 10));
+  await api.welcome();
+  api.attachedItems(['doc']);
+  await node('editing-items').children[0].onclick();
+  const panel = node('editing-panel');
+  assert.equal(panel.hidden,false);
+  assert.equal(panel.classList.contains('docked'),true);
+  assert.equal(node('editing-full').hidden,false);
+  assert.deepEqual(docks,[[true,'doc']]);
+  assert.equal(api.dockedItem(),'doc');
+  // The room keeps the page title while the item shares its page.
+  assert.equal(document.title,'Planning · mevedel');
+  assert.equal(state.editorTitle ?? null,null);
+  const frame = node('editing-body').children[0];
+  frame.contentWindow = {postMessage(message, origin, ports) { init = message; [editorPort] = ports; }};
+  frame.onload();
+  assert.equal(init.docked,true);
+  editorPort.onmessage = ({data}) => fromRoom.push(data);
+  editorPort.postMessage({type:'focus-chat'});
+  await tick();
+  assert.equal(focused,1);
+  // Narrowing the window keeps the same editor, now full screen.
+  media.matches = false;
+  media.listeners.forEach(fn => fn({matches:false}));
+  await tick();
+  assert.equal(panel.hidden,false);
+  assert.equal(panel.classList.contains('docked'),false);
+  assert.equal(node('editing-body').children[0],frame);
+  assert.deepEqual(docks.at(-1),[false,null]);
+  assert.deepEqual(fromRoom.filter(message => message.type === 'docked'),[{type:'docked',docked:false}]);
+  assert.equal(api.dockedItem(),null);
+  assert.equal(document.title,'Notes · mevedel');
+  editorPort.postMessage({type:'focus-chat'});
+  await tick();
+  assert.equal(focused,1);
+  node('editing-close').onclick();
+  assert.equal(panel.hidden,true);
+  assert.equal(document.title,'Planning · mevedel');
+  editorPort.close();
+}
+
 // An item deleted anywhere leaves every list; a browser keeps its local
 // draft only while it holds edits that never reached the host.
 async function testEditingDeletion() {
@@ -524,7 +593,7 @@ async function testEditingDeletion() {
     localStorage:{get length() { return store.size; }, key:i => [...store.keys()][i],
       getItem:k => store.get(k) ?? null, setItem:(k, v) => store.set(k, v), removeItem:k => store.delete(k)},
     document:{getElementById:node,querySelectorAll:()=>[]},
-    window:{location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
+    window:{matchMedia:()=>({matches:false,addEventListener(){}}),location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
   };
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
   let listFails = false;
@@ -590,7 +659,7 @@ async function testItemDiscussionAsk() {
     crypto: require('node:crypto').webcrypto,
     localStorage:{length:0,getItem:()=>null},
     document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},querySelectorAll:()=>[]},
-    window:{location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
+    window:{matchMedia:()=>({matches:false,addEventListener(){}}),location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
   };
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
   api=context.window.mevedelEditingView.create({state,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
@@ -698,6 +767,7 @@ async function main() {
   await runNotificationTests();
   await testItemConversations();
   await testEditingAvailability();
+  await testEditingDock();
   await testEditingDeletion();
   await testItemDiscussionAsk();
   await testTransportLifecycle();
@@ -768,7 +838,7 @@ async function main() {
                'lobby-files', 'files-path', 'files-list',
                'files-status', 'files-upload', 'files-input', 'artifact-ask',
                'editing-status', 'editing-recheck', 'editing-box', 'editing-items', 'editing-panel', 'editing-body',
-               'editing-title', 'editing-saved', 'editing-file', 'editing-import', 'editing-close',
+               'editing-title', 'editing-saved', 'editing-file', 'editing-import', 'editing-close', 'editing-full',
                'room-crumbs', 'room-back', 'agent-crumbs', 'artifact-crumbs'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   // The dock is addressed by class, not id, and its height is what the

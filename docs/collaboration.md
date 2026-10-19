@@ -267,14 +267,21 @@ Selected chips stay highlighted and appear above the composer, each with a
 remove button. Removing a selection preserves the message draft.
 
 At viewport widths of 1100px and above, the navigation occupies an independently
-scrolling right column. At smaller widths and increased browser zoom, it becomes
+scrolling right column at the window's right edge, 304px wide and 360px from
+1600px. The conversation takes the rest, up to a 1100px column: paragraphs,
+lists, quotes and headings keep a 72-character reading measure, while code,
+tables, tool rows, cards, the composer and the status line use the column's
+width. From 1800px, an opened whiteboard or document docks beside the chat
+instead (see [shared editing](shared-editing.md#docked-beside-the-chat)), and
+the navigation becomes a drawer opened by the header's **In this room**
+button. At smaller widths and increased browser zoom, it becomes
 a disclosure above the composer. On a phone (640px or narrower) that disclosure
 is one row with its counts, and it opens as a sheet over the room, closed by ×
 or a tap outside it. On a phone shorter than 700px, such as an iPhone mini in
 Safari, the row leaves the dock for an **In this room** button in the header,
 and the status line under the composer hides while it only says that the room
 is connected. A phone's composer starts at one line and grows with its message. Conversation text and the composer share a
-bounded reading width. The message and name fields have visible labels;
+bounded width. The message and name fields have visible labels;
 keyboard users can skip the header directly to the transcript.
 
 A guest's own chip leads the header's actions on every page. It opens a form

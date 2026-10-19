@@ -267,7 +267,19 @@
   const goal = window.mevedelGoalView.create({el, onChange: renderModeline});
   const editing = window.mevedelEditingView.create({state, send, el, flash: flashNotice, summarize: summarizeSession,
     onVisibility: () => presence.report(),
-    onCatalog: refreshFilter});
+    onCatalog: refreshFilter,
+    // A docked item is the chat's subject: the chat shows and writes to its
+    // discussion, and In this room steps aside behind the header's button.
+    onDock: (on, id) => {
+      sessionBox.open = !on && window.matchMedia('(min-width:1100px)').matches;
+      if (on && id) selectFilter(`item:${id}`);
+    },
+    // The editor's whole-item row leads to the chat, writing to that item.
+    onFocusChat: () => {
+      const id = editing.dockedItem();
+      if (id) selectFilter(`item:${id}`);
+      document.getElementById('composer-input')?.focus();
+    }});
   // The host learns a new name at once; a hello carries the current one.
   const names = window.mevedelGuestName.create({
     initials: window.mevedelPresence.initials,
@@ -753,10 +765,15 @@
 
   function itemTitle(key) {
     const id = key.slice('item:'.length);
+    const clip = title => (title.length > 32 ? `${title.slice(0, 29)}…` : title);
+    // The host's item list names a whiteboard or document as it is now,
+    // including one with no turns yet.
+    const listed = editing.title(id);
+    if (listed) return clip(listed);
     for (const record of state.records.values()) {
       const shared = record.shared;
       if (record.item === id && shared && typeof shared.title === 'string' && shared.title) {
-        return shared.title.length > 32 ? `${shared.title.slice(0, 29)}…` : shared.title;
+        return clip(shared.title);
       }
     }
     return id.startsWith('artifact:') ? id.slice('artifact:'.length) : 'Shared item';
@@ -851,6 +868,12 @@
         }
         return cards;
       };
+      // The docked item is the chat's subject before its first turn, too,
+      // and its tab stays chosen after the item closes.
+      const dockedItem = editing.dockedItem();
+      for (const scope of [dockedItem && `item:${dockedItem}`, itemScope(state.filter) && state.filter]) {
+        if (scope && !ids.includes(scope)) ids.push(scope);
+      }
       const presence = new Map(ids.map(id => [id, scopePresent(id, latestCards)]));
       const deleted = new Set(ids.filter(id => presence.get(id) === false));
       const changed = [...deleted, ...deletedScopes].filter(id => deleted.has(id) !== deletedScopes.has(id));

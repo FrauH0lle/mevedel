@@ -2342,6 +2342,10 @@ async function start(event) {
       if (typeof data.name === 'string' && data.name) participant = data.name;
       return;
     }
+    if (data.type === 'docked') {
+      assistant?.setDocked(data.docked === true);
+      return;
+    }
     if (data.type === 'reply') {
       const r = replies.get(data.reqId);
       if (r) {
@@ -2524,6 +2528,8 @@ async function start(event) {
 
   assistant = new DiscussionPanel({
     capture: captureAttachment, request, save: saveBeforeQuestion,
+    docked: event.data.docked === true,
+    focusChat: () => port.postMessage({type:'focus-chat'}),
     changed: () => {
       draft();
       if (editor) {
@@ -2538,9 +2544,10 @@ async function start(event) {
   });
   assistant.onLibrary = () => loadLibrary?.();
   assistant.resume();
-  if (editor && matchMedia('(min-width:1100px)').matches) {
+  if (event.data.docked === true || (editor && matchMedia('(min-width:1100px)').matches)) {
     assistant.toggle(true, false);
-  } else if (!editor) requestAnimationFrame(() => { frame(bounds(shapeList())); draw(); });
+  }
+  if (!editor) requestAnimationFrame(() => { frame(bounds(shapeList())); draw(); });
   setDiscussions(item.discussions || []);
   if (readOnly) $('discuss-selection').hidden = true;
   $('discuss-selection').onclick = () => assistant.begin();

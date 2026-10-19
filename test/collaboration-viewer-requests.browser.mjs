@@ -408,6 +408,91 @@ test('a pending interaction rises above every open panel', async () => {
   }
 });
 
+// The room's sidebar and conversation with a turn holding a paragraph, a
+// long code line and a table.
+async function wideRoom(browser, width) {
+  const page = await room(browser);
+  await page.setViewportSize({width, height: 1300});
+  await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
+  await page.evaluate(() => {
+    const box = document.getElementById('session-box');
+    box.hidden = false;
+    box.open = true;
+    const turn = document.createElement('article');
+    turn.className = 'turn ai';
+    const rail = document.createElement('div');
+    rail.className = 'rail';
+    const content = document.createElement('div');
+    content.className = 'content';
+    content.append(window.mevedelTranscriptRenderer.renderMarkdown([
+      'A paragraph keeps its reading measure. '.repeat(12), '',
+      '```', 'GET /api/v1/indicators?region=TZ-07&from=2019-01 '.repeat(8), '```', '',
+      '| Block | Before | After |', '| --- | --- | --- |', '| Request context | release_id, region | region |',
+    ].join('\n')));
+    turn.append(rail, content);
+    document.getElementById('transcript').replaceChildren(turn);
+  });
+  return page;
+}
+const box = (page, selector) => page.locator(selector).evaluate(node => {
+  const {left, right, width} = node.getBoundingClientRect();
+  return {left: Math.round(left), right: Math.round(right), width: Math.round(width)};
+});
+
+test('a wide room keeps its sidebar at the edge and gives blocks the column', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [2560, 1400]) {
+      const page = await wideRoom(browser, width);
+      const side = await box(page, '#session-box');
+      const ledger = await box(page, '#transcript');
+      assert.equal(side.right, width, `sidebar at the right edge at ${width}`);
+      assert.equal(side.width, width >= 1600 ? 360 : 304);
+      assert.ok(ledger.right <= side.left, 'the conversation stays left of the sidebar');
+      assert.equal(ledger.width, Math.min(1148, side.left - 64), `column width at ${width}`);
+      const paragraph = await box(page, '.prose p');
+      const code = await box(page, '.codeblock');
+      assert.ok(paragraph.width < 720, 'prose keeps its measure');
+      assert.equal(code.width, ledger.width - 48 - 44, 'code takes the column beside the rail');
+      assert.equal((await box(page, '.tablewrap')).width, code.width);
+      assert.equal((await box(page, '#composer')).width, ledger.width - 48);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('a docked item leaves the chat, its decisions and a room drawer reachable', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await wideRoom(browser, 2560);
+    await page.evaluate(() => {
+      document.getElementById('room-button').hidden = false;
+      const panel = document.getElementById('editing-panel');
+      panel.hidden = false;
+      panel.classList.add('docked');
+      // The room hands In this room to the header's button while docked.
+      document.getElementById('session-box').open = false;
+    });
+    const panel = await box(page, '#editing-panel');
+    assert.deepEqual([panel.left, panel.right], [860, 2560]);
+    assert.ok((await box(page, '#composer')).right <= 860, 'the chat stays beside the item');
+    assert.equal(await reachable(page, '#composer'), true);
+    await ask(page);
+    assert.equal(await reachable(page, '#card button'), true);
+    assert.equal(await page.locator('#session-box').isVisible(), false);
+    assert.equal(await reachable(page, '#room-button'), true);
+    assert.equal(await page.locator('#editing-panel .wordmark').isVisible(), false);
+    await page.evaluate(() => { document.getElementById('session-box').open = true; });
+    const drawer = await box(page, '#session-box');
+    assert.deepEqual([drawer.left, drawer.right], [2200, 2560]);
+    assert.equal(await reachable(page, '#session-box > summary'), true, 'the drawer is over the item');
+    await page.evaluate(() => document.getElementById('editing-panel').classList.remove('docked'));
+    assert.equal(await reachable(page, '#composer'), false, 'undocked, the panel is full screen again');
+    assert.equal(await reachable(page, '#card button'), true, 'its decisions stay above it');
+  } finally { await browser.close(); }
+});
+
 test('store refresh keeps the open artifact menu actionable', async () => {
   const browser = await chromium.launch();
   try {

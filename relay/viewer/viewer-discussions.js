@@ -50,6 +50,8 @@
     let sending = false;
     let foldOpen = false;
     let menuOpen = false;
+    // An adjacent chat can own the whole-item discussion instead of this box.
+    let generalLink = options.generalLink || null;
 
     // -- Skeleton ---------------------------------------------------------
 
@@ -168,6 +170,7 @@
     function markSeen(all) {
       for (const d of discussions) {
         if (all || !seen.has(d.id)
+            || (d.general && generalLink && visible())
             || (current.kind === 'thread' && current.id === d.id && visible())) seen.set(d.id, stamp(d));
       }
     }
@@ -186,7 +189,8 @@
     function rowFor(d) {
       const fresh = unread(d);
       const node = button(`ds-item${d.general ? ' general' : ''}${fresh ? ' unread' : ''}`, '',
-                          `row:${d.id}`, () => show({kind: 'thread', id: d.id}));
+                          `row:${d.id}`, () => d.general && generalLink
+                            ? generalLink.run() : show({kind: 'thread', id: d.id}));
       node.dataset.discussionId = d.id;
       node.setAttribute('role', 'listitem');
       const head = el('span', 'ds-item-head');
@@ -194,7 +198,8 @@
       if (d.kind) head.append(el('span', 'ds-kind', d.kind));
       head.append(el('span', 'ds-title', d.general ? whole : d.title || 'Discussion'));
       const meta = el('span', 'ds-meta');
-      if (fresh) meta.append(el('span', 'ds-dot'), newLabel(d));
+      if (d.general && generalLink) meta.textContent = generalLink.label;
+      else if (fresh) meta.append(el('span', 'ds-dot'), newLabel(d));
       else if (d.messages.length) {
         meta.textContent = String(d.messages.length);
         meta.title = `${d.messages.length} message${d.messages.length === 1 ? '' : 's'}`;
@@ -460,16 +465,19 @@
          transcript records about the item.  SELECTION: {label} Discuss would
          start about, or null.  FRESH: {label, quote, placeholder} of the new
          discussion.  SETTLED: the discussions as loaded are all seen; the
-         first records count as loaded too. */
+         first records count as loaded too. GENERAL-LINK: optional {label, run}
+         destination for the whole-item row, or null to open it here. */
       update(next = {}) {
         if (next.discussions) discussions = next.discussions;
         const first = next.records && records === null;
         if (next.records) records = next.records;
         if ('selection' in next) selection = next.selection;
         if ('fresh' in next) fresh = next.fresh;
+        if ('generalLink' in next) generalLink = next.generalLink;
         if (next.discussions || next.records) place();
         if (first || next.settled) markSeen(true);
-        if (awaiting && find(awaiting)) show({kind: 'thread', id: awaiting, keep: true});
+        if (generalLink && current.kind === 'thread' && find(current.id)?.general) show({kind:'list'});
+        else if (awaiting && find(awaiting)) show({kind: 'thread', id: awaiting, keep: true});
         else render();
       },
       show,

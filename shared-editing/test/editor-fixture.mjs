@@ -64,7 +64,7 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
   const engine = process.env.MEVEDEL_BROWSER === 'firefox' ? firefox : chromium;
   const browser = await engine.launch({ headless: true });
   /* SCENE, .excalidraw text, opens a whiteboard with its image files. */
-  async function open({kind = 'whiteboard', viewport = {width:1000,height:700}, assistantDraft, appearance, content, scene, readOnly = false, actor = 'Guest: Alice', clock = false, hasTouch = false} = {}) {
+  async function open({kind = 'whiteboard', viewport = {width:1000,height:700}, assistantDraft, appearance, content, scene, readOnly = false, docked = false, actor = 'Guest: Alice', clock = false, hasTouch = false} = {}) {
     const page = await browser.newPage({ viewport, hasTouch });
     page.setDefaultTimeout(7000);
     // CLOCK fakes the editor's timers from its start.
@@ -134,7 +134,7 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
     });
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.evaluate(
-      ({item, assistantDraft, appearance, readOnly}) => {
+      ({item, assistantDraft, appearance, readOnly, docked}) => {
         const channel = new MessageChannel();
         window.port = channel.port1;
         window.messages = [];
@@ -159,12 +159,12 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
         document
           .querySelector('iframe')
           .contentWindow.postMessage(
-            { type: 'mevedel-editor', item, draft:{assistant:assistantDraft}, readOnly, name: 'Alice', appearance },
+            { type: 'mevedel-editor', item, draft:{assistant:assistantDraft}, readOnly, docked, name: 'Alice', appearance },
             '*',
             [channel.port2],
           );
       },
-      {item:{ ...state, crdt: state.crdt }, assistantDraft, appearance, readOnly},
+      {item:{ ...state, crdt: state.crdt }, assistantDraft, appearance, readOnly, docked},
     );
     const frame = page.frameLocator('iframe');
     await frame.locator(kind === 'whiteboard' ? '#canvas' : '.tiptap').waitFor();

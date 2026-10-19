@@ -9,8 +9,9 @@ it. The open item and local recoveries stay listed; **Project artifacts**
 lists the rest of the project. Full and
 owner links can create, rename, import, edit and delete them concurrently. View
 links can observe and download. Opening an item affects that browser only;
-other participants get a followable entry. Each editor opens in its own
-browser tab, leaving the room and its composer draft in the original tab.
+other participants get a followable entry. Below a window width of 1800px each
+editor opens in its own browser tab, leaving the room and its composer draft
+in the original tab; from 1800px it docks beside the chat instead (below).
 The editor tab reconnects independently and reopens its item on reload.
 The editor tab's header shows the item's title, editable in place by full and
 owner links, over its save state, such as **Saved on host** or a save failure;
@@ -21,6 +22,35 @@ a browser share link. Browser popup permission is needed to open a new tab.
 An editor tab shows its loading state immediately. If the item cannot be read,
 it keeps the requested item and displays an error with Retry; it does not fall
 back silently to the room. The back button cancels a pending editor opening.
+
+### Docked beside the chat
+
+In a window at least 1800px wide, opening a whiteboard or document from
+Shared work, a card or a link, or creating or importing one, opens it in the
+room's own tab: the chat keeps an 860px column on the left and the editor
+takes the rest, under the room's header. The editor's head is compact: the
+back button, the item's title and save state, presence, and **Open full ↗**,
+which closes the docked editor and opens the item in its own tab. Its
+discussions sidebar starts open, on the right, as in the editor tab.
+
+The chat follows the docked item: opening it selects the item's tab in the
+filter strip, listed even before the item's first turn, so the composer writes
+to the item's [general discussion](collaboration.md#discussions). The sidebar's
+row for the whole item reads **in chat ←** rather than opening a second
+composer for the same discussion; choosing it selects the item's tab again and
+focuses the chat's composer. That discussion's news is read in the chat, so
+the row raises none. Part discussions behave as in the editor tab. The chat's
+dock, including pending requests, stays in place beside the editor. **In this
+room** moves behind the header's room button, which opens it as a drawer over
+the editor's right side; it holds no news of its own, since requests appear in
+the chat. The page keeps the room's title, and presence reports the docked
+item as the page being viewed.
+
+Narrowing the window below 1800px turns the docked editor full screen in the
+same tab, with its state and drafts; the sidebar's whole-item row becomes the
+ordinary discussion again. Widening the window does not dock it again; the
+next opened item docks. Closing the editor returns to the room and keeps the
+item's tab selected. HTML artifacts open in their panel as before.
 
 From Emacs, `o` on an item's row in the artifacts cockpit, or clicking a
 `[title](shared://ID)` link in the transcript, opens that item's editor tab in

@@ -31,9 +31,9 @@ const anchorTerms = () => board()
 const general = () => ({id:GENERAL, target:{kind:'whole'}, quote:'', messages:[], resolved:false,
   anchorStatus:'current'});
 export class DiscussionPanel {
-  constructor({ capture, save, request, changed, reveal, state, stored, restored, onChange }) {
+  constructor({ capture, save, request, changed, reveal, state, stored, restored, onChange, docked, focusChat }) {
     Object.assign(this, { capture, save, request, changed, reveal, state, stored,
-      onChange: onChange || (() => {}) });
+      focusChat, onChange: onChange || (() => {}) });
     const validDrafts = restored?.format === 'discussions' && typeof restored.start?.text === 'string'
       && restored.replies && typeof restored.replies === 'object'
       && restored.requests && typeof restored.requests === 'object';
@@ -150,6 +150,11 @@ export class DiscussionPanel {
         }
       }
     });
+    this.setDocked(docked);
+  }
+  /* The adjacent room chat owns the general discussion only while docked. */
+  setDocked(docked) {
+    this.sidebar.update({generalLink:docked ? {label:'in chat ←', run:this.focusChat} : null});
   }
   /* Show a new discussion restored with the drafts when the sidebar opens. */
   resume() {
