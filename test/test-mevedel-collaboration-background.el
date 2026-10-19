@@ -10,6 +10,7 @@
           (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-guest)
+(require 'mevedel-collaboration-agent)
 (require 'mevedel-agent-control)
 (require 'mevedel-sandbox)
 (require 'mevedel-view-execution)
@@ -357,6 +358,155 @@
       (mevedel-collaboration--publish-background room)
       (should (= 2 (length sent)))
       (should (equal [] (plist-get (car sent) :rows))))))
+
+(mevedel-deftest mevedel-collaboration-background-live-output
+  (:doc "Full output reads real running root/child Bash and Monitor with source-backed authority")
+  (dolist (case '(("/root" bash "tool-root")
+                  ("/root/child" bash "tool-child/0")
+                  ("/root" monitor "tool-monitor")))
+    (let* ((root (make-temp-file "mevedel-background-output-" t))
+           (session (test-mevedel-execution--session root))
+           (foreign (mevedel-session--create :name "foreign"))
+           (parent (generate-new-buffer " *background output parent*"))
+           (child (generate-new-buffer " *background output child*"))
+           (owner (nth 0 case))
+           (kind (nth 1 case))
+           (tool-id (nth 2 case))
+           (source-id (car (split-string tool-id "/")))
+           (buffer (if (equal owner "/root") parent child))
+           (guests (make-hash-table :test #'eql))
+           (room (list :session session :data-buffer parent :transport 'transport
+                       :guests guests))
+           (mevedel-sandbox-mode 'off)
+           (mevedel-execution-mailbox-delivery-function (lambda (&rest _) t))
+           observation id sent)
+      (puthash 1 (list :ready t :writable nil) guests)
+      (setf (mevedel-session-agent-registry session)
+            (list (cons "/root/child"
+                        (mevedel-agent-record--create
+                         :path "/root/child" :conversation-buffer child))))
+      (unwind-protect
+          (progn
+            (dolist (data (list parent child))
+              (with-current-buffer data
+                (setq-local mevedel--session session)))
+            (with-current-buffer buffer
+              (insert (propertize "running source\n" 'gptel (cons 'tool source-id))))
+            (mevedel-execution-start-bash
+             (lambda (value) (setq observation value))
+             :session session :data-buffer buffer :owner owner
+             :command '("sh" "-c" "printf 'first\\nsecond\\nthird\\nlast\\n'; sleep 30")
+             :workdir root :writable-roots (list root)
+             :artifact-directory (file-name-concat (mevedel-session-save-path session)
+                                                 "tool-results" "executions")
+             :tool-use-id tool-id :kind kind :description "Inspect running output"
+             :yield-time-ms 10)
+            (test-mevedel-execution--wait (lambda () observation))
+            (should-not (plist-get observation :error))
+            (setq id (plist-get (plist-get observation :facts) :execution-id))
+            (should (stringp id))
+            (test-mevedel-execution--wait
+             (lambda () (> (or (plist-get (car (mevedel-execution-list-user session))
+                                          :output-bytes) 0) 0)))
+            ;; No terminal breadcrumb exists while the process is still running.
+            (with-current-buffer buffer
+              (should-not (mevedel-transcript-audit-buffer-spans 'execution-breadcrumb)))
+            (should (mevedel-view-audit-locate-source
+                     session buffer tool-id (not (equal owner "/root"))))
+            (let ((local (mevedel-collaboration--local-execution room owner id)))
+              (should (plist-get (car local) :live))
+              (should (string-prefix-p "artifact://executions/"
+                                       (plist-get (plist-get (car local) :facts) :output-path)))
+              (should (equal "first\nsecond\nthird\nlast\n"
+                             (mevedel-collaboration--retained-execution-output
+                              session (plist-get (car local) :facts)))))
+            (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                       (lambda (_transport _peer frame) (setq sent frame) t)))
+              (mevedel-collaboration--handle-execution-result-get
+               room 1 (list :reqId 1 :owner owner :executionId id
+                            :outputPath "artifact://unrelated"))
+              (should (equal "live" (plist-get sent :source)))
+              (should (equal "first\nsecond\nthird\nlast\n" (plist-get sent :output)))
+              (should-not (plist-get sent :error))
+              (should-not (plist-get sent :truncated))
+              ;; Registry membership alone is insufficient without the source row.
+              (with-current-buffer buffer (erase-buffer))
+              (plist-put (gethash 1 guests) :last-execution-result-fetch nil)
+              (mevedel-collaboration--handle-execution-result-get
+               room 1 (list :reqId 2 :owner owner :executionId id))
+              (should (equal "missing" (plist-get sent :source)))
+              (should (equal "" (plist-get sent :output)))
+              (with-current-buffer buffer
+                (insert (propertize "running source\n" 'gptel (cons 'tool source-id))))
+              ;; A different owner, unknown ID, or foreign room cannot read it.
+              ;; Even a matching source tool ID in the other known transcript
+              ;; must not substitute for the execution's registry owner.
+              (with-current-buffer (if (eq buffer parent) child parent)
+                (insert (propertize "other owner's source\n" 'gptel (cons 'tool source-id))))
+              (dolist (request (list (list :owner (if (equal owner "/root") "/root/child" "/root")
+                                          :executionId id)
+                                     (list :owner "/root/unknown" :executionId id)
+                                     (list :owner owner :executionId "unknown")))
+                (plist-put (gethash 1 guests) :last-execution-result-fetch nil)
+                (mevedel-collaboration--handle-execution-result-get
+                 room 1 (append '(:reqId 3) request))
+                (should (equal "missing" (plist-get sent :source)))
+                (should (equal "" (plist-get sent :output))))
+              (plist-put (gethash 1 guests) :last-execution-result-fetch nil)
+              (mevedel-collaboration--handle-execution-result-get
+               (list :session foreign :data-buffer parent :transport 'transport :guests guests)
+               1 (list :reqId 4 :owner owner :executionId id))
+              (should (equal "missing" (plist-get sent :source)))
+              (should (equal "" (plist-get sent :output)))
+              (when (equal owner "/root/child")
+                (setf (mevedel-session-agent-registry session) nil)
+                (plist-put (gethash 1 guests) :last-execution-result-fetch nil)
+                (mevedel-collaboration--handle-execution-result-get
+                 room 1 (list :reqId 5 :owner owner :executionId id))
+                (should (equal "missing" (plist-get sent :source))))))
+        (mevedel-execution-teardown-session session)
+        (kill-buffer parent)
+        (kill-buffer child)
+        (delete-directory root t)))))
+
+(mevedel-deftest mevedel-collaboration-background-retained-output
+  (:doc "Terminal artifact output beats inline fallback, stays bounded and releases resource attempts")
+  (let* ((root (make-temp-file "mevedel-background-retained-" t))
+         (session (test-mevedel-execution--session root))
+         (buffer (generate-new-buffer " *background retained output*"))
+         (directory (file-name-concat (mevedel-session-save-path session) "tool-results" "executions"))
+         (path (file-name-concat directory "execution-retained.log"))
+         (guests (make-hash-table :test #'eql))
+         (room (list :session session :data-buffer buffer :transport 'transport :guests guests))
+         (output (concat "canonical\n" (make-string 60000 ?x)))
+         sent)
+    (puthash 1 (list :ready t :writable nil) guests)
+    (unwind-protect
+        (progn
+          (make-directory directory t)
+          (write-region output nil path nil 'silent)
+          (with-current-buffer buffer
+            (setq-local mevedel--session session)
+            (insert (mevedel--format-hook-audit-record
+                     '(:type execution-breadcrumb :owner "/root"
+                       :execution-id "retained" :tool-use-id "tool-retained"
+                       :facts (:execution-id "retained" :state completed
+                               :output-path "artifact://executions/execution-retained.log"
+                               :execution-output "inline fallback")))))
+          (let ((attempts (hash-table-count mevedel-resource--attempt-table)))
+            (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                       (lambda (_transport _peer frame) (setq sent frame) t)))
+              (mevedel-collaboration--handle-execution-result-get
+               room 1 '(:reqId 1 :owner "/root" :executionId "retained")))
+            (should (= attempts (hash-table-count mevedel-resource--attempt-table))))
+          (should (equal "child" (plist-get sent :source)))
+          (should (= 50000 (string-bytes (plist-get sent :output))))
+          (should (string-prefix-p "canonical\n" (plist-get sent :output)))
+          (should (string-suffix-p "\n[truncated]" (plist-get sent :output)))
+          (should (plist-get sent :truncated))
+          (should-not (plist-get sent :error)))
+      (kill-buffer buffer)
+      (delete-directory root t))))
 
 (provide 'test-mevedel-collaboration-background)
 ;;; test-mevedel-collaboration-background.el ends here

@@ -1060,14 +1060,19 @@ current roster. Their Markdown final answers start folded and retain their
 disclosure choice across updates. Interim messages use a separate `Message
 from /root/name` disclosure. **Open transcript** inspects the retained child
 without changing the parent's composer or workspace.
-**Show result** makes a separate read-only request for retained output; it does
-not duplicate the body in the parent transcript or alter the model-visible
-mailbox. The host validates owner and ID against either the receiving root or
-registered child's trusted local breadcrumb, or a forwarded mailbox in the
-parent's live or archived segments. It prefers the child's trusted terminal
-row or completion audit and retained output when the child transcript is resident. If it is cold,
-the bounded forwarded mailbox output is the fallback. Missing archives or
-evidence are reported explicitly, not resolved from a browser-supplied path.
+**Show result** and the panel's **Full output** make a separate read-only request;
+they do not duplicate the body in the parent transcript or alter the model-visible
+mailbox. For running work, the host requires a yielded execution in this room's
+live registry with the exact owner/ID, a root or registered child's receiving
+transcript, and its readable native tool source, including nested ToolCall sources.
+It reads a bounded request-time snapshot of that execution's artifact output and
+labels the response `source:live`; completion breadcrumbs are not required before
+settlement. Terminal requests validate the receiving root or registered child's
+trusted local breadcrumb, or a forwarded mailbox in the parent's live or archived
+segments. They prefer the child's trusted terminal row or completion audit and
+retained output when the child transcript is resident. If it is cold, the bounded
+forwarded mailbox output is the fallback. Missing archives or evidence are
+reported explicitly, not resolved from a browser-supplied path.
 Each response is capped at 50,000 output bytes and repeated requests from one
 guest are throttled. View-only guests can use the link.
 Nested open and closed choices survive record updates, reconnect snapshots

@@ -86,6 +86,13 @@ native audit lookup as the Emacs action: only a click scans source-backed
 history, and the host returns the receiving transcript's owner and exact segment
 instead of asking the browser to guess or sequentially load archives. Child
 archive fetches are confined to that retained child's canonical history.
+Read-only full-output requests also admit running work through the room's live
+execution registry, exact owner/ID, known receiving transcript and native source
+lookup. Completion breadcrumbs exist only after settlement, so requiring them
+would make the running panel's Full output action unavailable. A `source:live`
+response is a bounded artifact snapshot at request time, not a second output
+consumer or subscription. Terminal and forwarded evidence keep their existing
+source-backed authorization and fallback; browser paths never authorize reads.
 
 The browser replaces separate agent chips and finished-agent rows with this
 single panel. A bounded scroll area and three fixed preview lines keep status
