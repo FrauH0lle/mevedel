@@ -925,7 +925,7 @@ prompt walker does not treat the drawer as a user prompt.  Returns
               (point-min))
           (point-min))))))
 
-(defun mevedel-session-artifacts-collect-prompts (buffer)
+(defun mevedel-session-artifacts-collect-prompts (buffer &optional preview-length)
   "Return indexed user prompt plists for BUFFER.
 
 A user prompt is a nil-`gptel' text-property region with
@@ -938,7 +938,9 @@ Skips the initial org property drawer (via
 `mevedel-session-artifacts-content-start') and any content inside
 `#+begin_summary' / `#+end_summary' blocks (the compaction summary
 has its body stripped of the `gptel' property but is not a user
-prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
+prompt).  Also skips unpropertized gptel org tool/reasoning block glue and
+structural mailbox deliveries using the canonical transcript codec.
+PREVIEW-LENGTH defaults to 80 display characters."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (save-excursion
@@ -987,7 +989,8 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                                               (plist-get directive :start)
                                             prompt-start)
                                      :preview
-                                     (mevedel--truncate-display preview 80 "..."))
+                                     (mevedel--truncate-display
+                                      preview (or preview-length 80) "..."))
                                (and directive
                                     (list
                                      :kind 'directive

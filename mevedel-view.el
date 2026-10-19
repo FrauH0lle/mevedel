@@ -99,7 +99,7 @@
 (declare-function mevedel-session-artifacts--segment-tail-prompt-count
                   "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-collect-prompts
-                  "mevedel-session-artifacts" (buffer))
+                  "mevedel-session-artifacts" (buffer &optional preview-length))
 (declare-function mevedel-session-artifacts-read-segment
                   "mevedel-session-artifacts" (session number))
 (declare-function mevedel-session-artifacts-segment-summary-bounds

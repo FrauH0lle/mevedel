@@ -1369,6 +1369,39 @@
             (kill-buffer buf)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
+  :doc "live sidecar previews exclude first and latest mailbox deliveries"
+  (let* ((tempdir (make-temp-file "mevedel-preview-live-" t))
+         (workspace (test-mevedel-session-persistence--make-workspace tempdir)))
+    (let* ((session (mevedel-session-create "main" workspace))
+           (buffer (generate-new-buffer " *live-delivery-preview*")))
+      (unwind-protect
+          (with-current-buffer buffer
+            (org-mode)
+            (mevedel--insert-user-role-block-at-marker
+             (mevedel-tools--message-delivery-block
+              '(:type MAIL :sender "/root/view" :recipient "/root" :payload "mail")))
+            (goto-char (point-max))
+            (insert "First real prompt\n"
+                    (propertize "Answer\n" 'gptel 'response)
+                    "Latest real prompt\n")
+            (dolist (type '(RESULT EXECUTION))
+              (mevedel--insert-user-role-block-at-marker
+               (mevedel-tools--message-delivery-block
+                (list :type type :sender "/root/view" :recipient "/root"
+                      :outcome 'completed :payload "delivery"))))
+            (mevedel-session-artifacts-save session buffer)
+            (let ((sidecar
+                   (with-temp-buffer
+                     (insert (mevedel-session-artifacts-read-artifact
+                              session "session.meta.el"))
+                     (goto-char (point-min))
+                     (read (current-buffer)))))
+              (should (equal "First real prompt" (plist-get sidecar :first-user-message)))
+              (should (equal "Latest real prompt" (plist-get sidecar :latest-user-message)))
+              (should (= 2 (length (cdr (assoc 1 (plist-get sidecar :prompt-index))))))))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry))))
   :doc "view buffers save through their data buffer without becoming files"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -4208,6 +4241,15 @@ rotation never saves through a rebound temporary visited filename or prompts"
       (should (= 1 (length prompts)))
       (should (string-match-p "Real prompt"
                               (plist-get (car prompts) :preview)))))
+  :doc "allows the first-message preview length without changing index defaults"
+  (with-temp-buffer
+    (insert (make-string 200 ?x))
+    (should (= 80 (length (plist-get
+                          (car (mevedel-session-artifacts-collect-prompts
+                                (current-buffer))) :preview))))
+    (should (= 120 (length (plist-get
+                           (car (mevedel-session-artifacts-collect-prompts
+                                 (current-buffer) 120)) :preview)))))
   :doc "skips indented leading property drawer"
   (with-temp-buffer
     (insert "  :PROPERTIES:\n")

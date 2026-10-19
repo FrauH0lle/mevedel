@@ -88,6 +88,13 @@ are independent of that ID. Unnamed sessions initially display the ID, including
 Conversation and Worktree forks. Chooser labels include IDs so repeated titles
 remain distinguishable.
 
+First/latest user-message previews use the canonical transcript prompt index
+for both live saves and restore repair publications. Harness mailbox deliveries
+(MAIL, RESULT, execution and monitor events) are structural transcript spans,
+not authored prompts, even though providers receive them in the user role.
+The chooser and collaboration lobby consume these sidecar previews; naming uses
+the separately recorded authored input below.
+
 The first accepted model-bound authored prompt starts one asynchronous title
 request using the `naming` workload, which defaults to the `fast` tier. It runs
 as an isolated text request in a private buffer (a short-lived native conversation
