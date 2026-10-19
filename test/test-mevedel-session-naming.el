@@ -1021,7 +1021,9 @@ Each call is a plist of :backend, :model, :effort, :prompt, :callback,
   (test-mevedel-session-naming--with-session
     (let (calls)
       (test-mevedel-session-naming--with-engine calls
-        (setf (mevedel-session-persisted-first-user-message session) "Preview only")
+        (mevedel-session-checkpoint-seed
+         session (plist-put (mevedel-session-checkpoint-project session nil)
+                            :first-user-message "Preview only"))
         (mevedel-session-naming-consider session "  Fix the session chooser\n  ")
         (test-mevedel-session-naming--await calls 1)
         (should (equal "Fix the session chooser" (plist-get (car calls) :prompt)))
@@ -1071,8 +1073,10 @@ Each call is a plist of :backend, :model, :effort, :prompt, :callback,
   :doc "asks for input when none was recorded instead of using the preview"
   (test-mevedel-session-naming--with-session
     (let (calls asked)
-      (setf (mevedel-session-naming-state session) 'attempted
-            (mevedel-session-persisted-first-user-message session) "Preview only")
+      (setf (mevedel-session-naming-state session) 'attempted)
+      (mevedel-session-checkpoint-seed
+       session (plist-put (mevedel-session-checkpoint-project session nil)
+                          :first-user-message "Preview only"))
       (test-mevedel-session-naming--with-engine calls
         (cl-letf (((symbol-function 'read-string)
                    (lambda (&rest _) (setq asked t) "  ")))

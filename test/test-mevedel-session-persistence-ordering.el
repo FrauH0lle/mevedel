@@ -23,8 +23,12 @@
 		     (lambda ()
 		       (should-error (mevedel-session-artifacts-call-with-checkpoint session #'ignore)
 				     :type 'user-error)
-		       (should-error (mevedel-session-publication-publish session nil)
-				     :type 'user-error)
+                               ;; Ordinary sidecars are allowed while preparing
+                               ;; a transcript, but cannot advance its fields.
+                               (should (= 0 (plist-get
+                                             (mevedel-session-checkpoint-project
+                                              session '(:total-turn-count 99))
+                                             :total-turn-count)))
 		       (should (eq 'other (mevedel-session-artifacts-call-with-checkpoint
 					   other (lambda () 'other))))
 		       (error "Injected checkpoint failure"))))
@@ -75,10 +79,9 @@
 			     (should (equal "Durable agent mail"
 					    (plist-get (car (mevedel-session-messages mevedel--session)) :payload)))
 			     (should (string-search "Partial answer" (buffer-string)))
-			     (if (string-search "Final answer tail" (buffer-string))
-				 (should (= 1 (mevedel-session-turn-count mevedel--session)))
-			       (should (= 0 (mevedel-session-turn-count mevedel--session)))
-			       (should (equal old-index (mevedel-session-prompt-index mevedel--session))))))
+                                     (should-not (string-search "Final answer tail" (buffer-string)))
+                                     (should (= 0 (mevedel-session-turn-count mevedel--session)))
+                                     (should (equal old-index (mevedel-session-prompt-index mevedel--session)))))
 		       (test-mevedel-session-persistence--release-and-kill root session)
 		       (test-mevedel-session-persistence--release-and-kill
 			restored (and restored (buffer-local-value 'mevedel--session restored)))
@@ -111,20 +114,27 @@
 						   ('registry (mevedel-session-artifacts-save-agent-registry session root))
 						   ('sidecar (mevedel-session-persistence-write-sidecar-now session root)))
 						 (error "Injected failure after nested sidecar commit")))))
-			   (mevedel-test--with-captured-diagnostics nil
-								    (should-error
-								     (mevedel-tools--handle-message-inject
-								      (gptel-make-fsm :info (list :buffer root :backend nil
-												  :data (list :messages (vector)))))))
+                                   (mevedel-tools--handle-message-inject
+                                    (gptel-make-fsm :info (list :buffer root :backend nil
+                                                               :data (list :messages (vector)))))
+                                   (should-not entered)
+                                   (should-not (mevedel-session-messages session))
+                                   (mevedel-test--with-captured-diagnostics nil
+                                     (should-error (mevedel-session-artifacts-save session root)
+                                                   :type 'error))
 			   (should entered)
 			   (with-current-buffer root (setq-local before-save-hook nil))
 			   (test-mevedel-session-persistence--release-and-kill root session)
 			   (setq root nil restored (mevedel-session-persistence-restore directory))
 			   (with-current-buffer restored
-			     (should (or (seq-some (lambda (mail)
-						     (equal "Captured mail A" (plist-get mail :payload)))
-						   (mevedel-session-messages mevedel--session))
-					 (string-search "Captured mail A" (buffer-string))))))
+                                     (should (seq-some (lambda (mail)
+                                                         (equal "Captured mail A" (plist-get mail :payload)))
+                                                       (mevedel-session-messages mevedel--session)))
+                                     (should-not (string-search "Captured mail A" (buffer-string)))
+                                     (when (eq route 'ack)
+                                       (should (seq-some (lambda (mail)
+                                                           (equal "Later mail B" (plist-get mail :payload)))
+                                                         (mevedel-session-messages mevedel--session))))))
 		       (when (buffer-live-p root)
 			 (with-current-buffer root (setq-local before-save-hook nil)))
 		       (test-mevedel-session-persistence--release-and-kill root session)

@@ -67,7 +67,7 @@ Data model
   mevedel-permissions.el      permission preflight and 8-step decision facade
   mevedel-tool-permission.el permission-step orchestration, hooks, prompts, logging
   mevedel-pipeline.el         tool context, standard steps, sequencing, ordering
-  mevedel-ptc-checkpoint.el  durable ToolCall audit settlement across restart
+  mevedel-ptc-checkpoint.el  conversation-owned ToolCall audit checkpoints and restart recovery
   mevedel-ptc-driver.el      ToolCall orchestration, nested calls, progress
   mevedel-ptc-interpreter.el closed programmatic-tool-call evaluator and machine
   mevedel-resource.el         resource-address grammar and attempt lifecycle
@@ -183,6 +183,7 @@ Chat / view
   mevedel-directive-persistence.el  workspace directive record codec
   mevedel-persistence.el      save/load instructions
   mevedel-session-codec.el    closed session sidecar codec and validation
+  mevedel-session-checkpoint.el committed root projection, conversation consumption, and deferred ToolCall retirement
   mevedel-session-artifacts.el  paths, artifacts, snapshots, and segment writes
   mevedel-artifact-store.el   workspace artifact store: metadata, versions, attachment, conversations
   mevedel-artifact-lease.el   cross-Emacs leases on store whiteboards and documents

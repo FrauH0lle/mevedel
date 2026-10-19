@@ -670,7 +670,7 @@
   (let* ((session
           (mevedel-session--create
            :name "failed-save"
-           :ptc-checkpoints '((:id "ptc" :state settled))))
+           :ptc-checkpoints '((:id "ptc" :conversation "/root" :state settled))))
          (chat-buf (generate-new-buffer " *mevedel-turn-failed-save*"))
          (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
     (unwind-protect
@@ -681,7 +681,7 @@
                      (lambda (&rest _) (error "Disk failed"))))
             (mevedel-test--with-captured-diagnostics nil
               (mevedel--run-turn-steps fsm '(mevedel--turn-save mevedel--turn-checkpoint))))
-          (should (equal '((:id "ptc" :state settled))
+          (should (equal '((:id "ptc" :conversation "/root" :state settled))
                          (mevedel-session-ptc-checkpoints session))))
       (kill-buffer chat-buf)))
   :doc "refreshes settled fork metadata without changing the composer draft"

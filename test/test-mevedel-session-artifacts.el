@@ -3967,7 +3967,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                                (mevedel-session-artifacts-publish-sidecar-state
                                 session buffer)
                              (mevedel-session-artifacts-publish-transcript-state
-                              session buffer segment "queued terminal"))
+                              session buffer segment "queued terminal" nil))
                            :type 'user-error)
                           (should-not (mevedel-session-publication-queue session))
                           (should-not (mevedel-session-pending-publication session)))
@@ -3981,7 +3981,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                     (delete-file sidecar)
                     (should
                      (mevedel-session-artifacts-publish-transcript-state
-                      session buffer segment "archived terminal\n"))
+                      session buffer segment "archived terminal\n" nil))
                     (should-not
                      (equal head-before
                             (plist-get
@@ -4157,9 +4157,9 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (setf (mevedel-session-external-conversations session)
                   (list (list "root" :engine 'claude-code :id "native-id"
                               :host (system-name) :directory root :state 'in-flight)))
-            (let ((build (symbol-function 'mevedel-session-artifacts-build-sidecar))
+            (let ((build (symbol-function 'mevedel-session-artifacts--live-sidecar))
                   (builds 0))
-              (cl-letf (((symbol-function 'mevedel-session-artifacts-build-sidecar)
+              (cl-letf (((symbol-function 'mevedel-session-artifacts--live-sidecar)
                          (lambda (&rest args) (cl-incf builds) (apply build args))))
                 (mevedel-session-artifacts-publish-sidecar-state session buffer))
               (should (= 1 builds)))

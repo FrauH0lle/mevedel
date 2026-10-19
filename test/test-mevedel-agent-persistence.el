@@ -387,18 +387,25 @@
 (mevedel-deftest mevedel-agent-persistence-sanitize-mailbox ()
   ,test
   (test)
+  :doc "rejects absent or malformed durable identities without synthesizing IDs"
+  (dolist (id '(nil "" 12))
+    (should-not
+     (mevedel-agent-persistence-sanitize-mailbox
+      (list (list :id id :type 'MAIL :sender "/root/a" :recipient "/root"
+                  :payload "mail" :timestamp '(1 0 0 0)))
+      "/root")))
   :doc "keeps canonical MAIL, EXECUTION, RESULT, and USER records in stored order"
   (let* ((newer (list 2 0 0 0))
          (older (list 1 0 0 0))
          (raw
           (list
-           (list :type 'RESULT :sender "/root/child" :recipient "/root"
+           (list :id "result" :type 'RESULT :sender "/root/child" :recipient "/root"
                  :outcome 'completed :payload "done" :timestamp newer)
-           (list :type 'EXECUTION :sender "/root" :recipient "/root"
+           (list :id "execution" :type 'EXECUTION :sender "/root" :recipient "/root"
                  :payload "execution" :timestamp newer)
-           (list :type 'MAIL :sender "/root/child" :recipient "/root"
+           (list :id "mail" :type 'MAIL :sender "/root/child" :recipient "/root"
                  :payload "hello" :timestamp older)
-           (list :type 'MAIL :sender "bad" :recipient "/root"
+           (list :id "bad" :type 'MAIL :sender "bad" :recipient "/root"
                  :payload "drop" :timestamp older)))
          (clean (mevedel-agent-persistence-sanitize-mailbox raw "/root")))
     (should (= 3 (length clean)))
@@ -407,15 +414,15 @@
     (should (equal "hello" (plist-get (caddr clean) :payload))))
   :doc "retains child execution deliveries to root and nested spawn parents"
   (dolist (parent '("/root" "/root/parent"))
-    (let ((raw (list (list :type 'EXECUTION :sender (concat parent "/child")
+    (let ((raw (list (list :id "child-execution" :type 'EXECUTION :sender (concat parent "/child")
                            :recipient parent :payload "Bash output"
                            :timestamp '(1 0 0 0)))))
       (should (equal raw (mevedel-agent-persistence-sanitize-mailbox
                          raw parent)))))
   :doc "retains root agent MAIL and RESULT without persisting their wake marks"
-  (let* ((raw (list (list :type 'MAIL :sender "/root/child" :recipient "/root"
+  (let* ((raw (list (list :id "mail" :type 'MAIL :sender "/root/child" :recipient "/root"
                           :payload "report" :timestamp '(1 0 0 0) :wake t)
-                    (list :type 'RESULT :sender "/root/child" :recipient "/root"
+                    (list :id "result" :type 'RESULT :sender "/root/child" :recipient "/root"
                           :payload "done" :outcome 'completed
                           :timestamp '(2 0 0 0) :wake t)))
          (clean (mevedel-agent-persistence-sanitize-mailbox raw "/root")))
@@ -425,24 +432,24 @@
     (should-not (cl-some (lambda (record) (plist-member record :wake)) clean))
     (should (cl-every (lambda (record) (plist-get record :wake)) raw)))
   :doc "keeps root MONITOR records and drops the runtime wake mark"
-  (let* ((raw (list (list :type 'MONITOR :sender "/root" :recipient "/root"
+  (let* ((raw (list (list :id "monitor" :type 'MONITOR :sender "/root" :recipient "/root"
                           :execution-id "exec-1" :description "CI"
                           :payload "line\n" :timestamp '(1 0 0 0) :wake t)
-                    (list :type 'EXECUTION :sender "/root" :recipient "/root"
+                    (list :id "execution" :type 'EXECUTION :sender "/root" :recipient "/root"
                           :execution-id "exec-2" :payload "done"
                           :timestamp '(1 0 0 0) :wake t)))
          (clean (mevedel-agent-persistence-sanitize-mailbox raw "/root")))
-    (should (equal (list :type 'MONITOR :sender "/root" :recipient "/root"
+    (should (equal (list :id "monitor" :type 'MONITOR :sender "/root" :recipient "/root"
                          :payload "line\n" :timestamp '(1 0 0 0)
                          :execution-id "exec-1" :description "CI")
                    (car clean)))
     (should-not (cl-some (lambda (record) (plist-member record :wake)) clean)))
   :doc "keeps structural metadata and the terminal record type"
-  (let* ((raw (list (list :type 'MONITOR_TERMINAL :sender "/root" :recipient "/root"
+  (let* ((raw (list (list :id "terminal" :type 'MONITOR_TERMINAL :sender "/root" :recipient "/root"
                           :execution-id "e" :description "CI"
                           :meta '(:event-count 2 :termination "stopped")
                           :payload "done" :timestamp '(1 0 0 0))
-                    (list :type 'EXECUTION :sender "/root" :recipient "/root"
+                    (list :id "execution" :type 'EXECUTION :sender "/root" :recipient "/root"
                           :meta '(:execution-id "x" :exit-code 1)
                           :payload "p" :timestamp '(1 0 0 0))))
          (clean (mevedel-agent-persistence-sanitize-mailbox raw "/root")))
@@ -453,26 +460,26 @@
                    (plist-get (cadr clean) :meta))))
   :doc "drops MONITOR records without identity or outside the root"
   (dolist (entry
-           (list (list :type 'MONITOR :sender "/root" :recipient "/root"
+           (list (list :id "monitor" :type 'MONITOR :sender "/root" :recipient "/root"
                        :description "CI" :payload "x" :timestamp '(1 0 0 0))
-                 (list :type 'MONITOR :sender "/root" :recipient "/root"
+                 (list :id "monitor" :type 'MONITOR :sender "/root" :recipient "/root"
                        :execution-id "e" :payload "x" :timestamp '(1 0 0 0))
-                 (list :type 'MONITOR :sender "/root/a" :recipient "/root"
+                 (list :id "monitor" :type 'MONITOR :sender "/root/a" :recipient "/root"
                        :execution-id "e" :description "CI" :payload "x"
                        :timestamp '(1 0 0 0))))
     (should-not (mevedel-agent-persistence-sanitize-mailbox (list entry) "/root")))
   :doc "drops wrong recipients, malformed outcomes, payloads, and timestamps"
   (dolist (entry
            (list
-            (list :type 'MAIL :sender "/root/a" :recipient "/root/b"
+            (list :id "mail" :type 'MAIL :sender "/root/a" :recipient "/root/b"
                   :payload "x" :timestamp '(1 0 0 0))
-            (list :type 'RESULT :sender "/root/a" :recipient "/root"
+            (list :id "result" :type 'RESULT :sender "/root/a" :recipient "/root"
                   :outcome 'future :payload "x" :timestamp '(1 0 0 0))
-            (list :type 'EXECUTION :sender "/root/a/b" :recipient "/root"
+            (list :id "execution" :type 'EXECUTION :sender "/root/a/b" :recipient "/root"
                   :payload "x" :timestamp '(1 0 0 0))
-            (list :type 'MAIL :sender "/root/a" :recipient "/root"
+            (list :id "mail" :type 'MAIL :sender "/root/a" :recipient "/root"
                   :payload 4 :timestamp '(1 0 0 0))
-            (list :type 'MAIL :sender "/root/a" :recipient "/root"
+            (list :id "mail" :type 'MAIL :sender "/root/a" :recipient "/root"
                   :payload "x" :timestamp 'bad)))
     (should-not
      (mevedel-agent-persistence-sanitize-mailbox (list entry) "/root"))))
@@ -499,7 +506,7 @@
            :hook-context-pending
            '((:event UserPromptSubmit :body "pending guidance"))
            :mailbox
-           (list (list :type 'MAIL :sender "/root"
+           (list (list :id "mail" :type 'MAIL :sender "/root"
                        :recipient "/root/task" :payload "news"
                        :timestamp '(1 0 0 0))))))
     (unwind-protect

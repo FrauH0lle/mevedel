@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 (require 'mevedel-journal-pins)
+(require 'mevedel-session-checkpoint)
 
 (mevedel-deftest mevedel-session-publication--files-sha256 ()
   ,test
@@ -278,6 +279,742 @@ and its segment path."
       (when (file-directory-p local-root)
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-publication-publish/checkpoint-retry (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-checkpoint-retry" "mevedel-checkpoint-retry-" ?c
+   (lambda (session session-dir _segment)
+     (let* ((raw (mevedel-session-artifacts-build-sidecar session (current-buffer)))
+            (old-head (plist-get (mevedel-session-publication session) :head))
+            (commit (symbol-function 'mevedel-session-durability-commit-publication-head))
+            (attempts 0)
+            collected)
+       (mevedel-session-checkpoint-seed session (plist-put (copy-tree raw) :total-turn-count 1))
+       (setq raw (plist-put raw :total-turn-count 7))
+       (let* ((candidate (mevedel-session-checkpoint-capture session "/root" raw))
+              (artifact (list :path (file-name-concat session-dir "session.meta.el")
+                              :content (mevedel-session-artifacts-printed-value raw)
+                              :commit-marker t :checkpoint candidate)))
+         (cl-letf (((symbol-function 'mevedel-session-durability-commit-publication-head)
+                    (lambda (&rest _) (cl-incf attempts) nil)))
+           (should-error (mevedel-session-publication-publish session (list artifact))))
+         (should (= attempts 1))
+         (should (equal old-head (plist-get (mevedel-session-publication session) :head)))
+         (should (= 1 (plist-get (mevedel-session-checkpoint-project session raw) :total-turn-count)))
+         (should (eq candidate
+                     (plist-get
+                      (mevedel-session-publication--batch-marker
+                       (car (plist-get (mevedel-session-pending-publication session) :batches)))
+                      :checkpoint)))
+         ;; Retry must install the staged capture, not the now-newer live root.
+         (setf (mevedel-session-turn-count session) 99)
+         (cl-letf (((symbol-function 'mevedel-session-durability-commit-publication-head)
+                    (lambda (&rest args) (cl-incf attempts) (apply commit args)))
+                   ((symbol-function 'mevedel-session-collection-schedule)
+                    (lambda (owner)
+                      (push (plist-get (mevedel-session-checkpoint-project owner raw)
+                                       :total-turn-count) collected))))
+           (mevedel-session-publication-retry session))
+         (should (= attempts 2))
+         (should (equal collected '(7)))
+         (should-not (mevedel-session-pending-publication session))
+         (should (= 7 (plist-get (mevedel-session-checkpoint-project session raw) :total-turn-count)))
+         (should (= 7 (plist-get (mevedel-session-codec-read
+                                 (plist-get (mevedel-session-publication session) :sidecar))
+                                :total-turn-count))))))))
+
+(mevedel-deftest mevedel-session-publication-publish/checkpoint-queue (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-checkpoint-queue" "mevedel-checkpoint-queue-" ?c
+   (lambda (session session-dir _segment)
+     (let* ((raw (mevedel-session-artifacts-build-sidecar session (current-buffer)))
+            (first (plist-put (copy-tree raw) :total-turn-count 7))
+            (second (plist-put (copy-tree raw) :total-turn-count 8))
+            (first-candidate (mevedel-session-checkpoint-capture session "/root" first))
+            (second-candidate (mevedel-session-checkpoint-capture session "/root" second))
+            observations)
+       (cl-letf (((symbol-function 'mevedel-session-collection-schedule)
+                  (lambda (owner)
+                    (push (plist-get (mevedel-session-checkpoint-project owner raw)
+                                     :total-turn-count) observations)
+                    (when (= (length observations) 1)
+                      (should
+                       (eq 'queued
+                           (mevedel-session-publication-publish
+                            session
+                            (list (list :path (file-name-concat session-dir "session.meta.el")
+                                        :content (mevedel-session-artifacts-printed-value second)
+                                        :commit-marker t :checkpoint second-candidate)))))
+                      (should (= 7 (plist-get (mevedel-session-checkpoint-project owner raw)
+                                             :total-turn-count)))))))
+         (mevedel-session-publication-publish
+          session (list (list :path (file-name-concat session-dir "session.meta.el")
+                              :content (mevedel-session-artifacts-printed-value first)
+                              :commit-marker t :checkpoint first-candidate))))
+       (should (equal '(8 7) observations))
+       (should-not (mevedel-session-publication-queue session))
+       (should (= 8 (plist-get (mevedel-session-checkpoint-project session raw) :total-turn-count)))))))
+
+(mevedel-deftest mevedel-session-publication-publish/checkpoint-queued-projection (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-queued-projection" "mevedel-queued-projection-" ?c
+   (lambda (session session-dir _segment)
+     (let* ((raw (mevedel-session-artifacts--live-sidecar session (current-buffer)))
+            (old (plist-put (copy-tree raw) :total-turn-count 1))
+            (_ (mevedel-session-checkpoint-seed session old))
+            (root (plist-put (copy-tree raw) :total-turn-count 7))
+            (candidate (mevedel-session-checkpoint-capture session "/root" root))
+            (agent (mevedel-session-checkpoint-capture session "/root/worker"))
+            (path (file-name-concat session-dir "session.meta.el"))
+            (write-generation (symbol-function 'mevedel-session-publication--write-generation))
+            (queued nil)
+            observed)
+       (cl-letf (((symbol-function 'mevedel-session-publication--write-generation)
+                  (lambda (&rest args)
+                    (unless queued
+                      (setq queued t)
+                      ;; Both sidecars freeze while the old root is committed.
+                      (dolist (checkpoint (list nil agent))
+                        (should
+                         (eq 'queued
+                             (mevedel-session-publication-publish
+                              session
+                              (list (list :path path :commit-marker t :checkpoint checkpoint
+                                          :content
+                                          (encode-coding-string
+                                           (mevedel-session-artifacts-printed-value old)
+                                           'utf-8-unix)))))))
+                      (should (= 1 (plist-get (mevedel-session-checkpoint-project session nil)
+                                             :total-turn-count))))
+                    (apply write-generation args)))
+                 ((symbol-function 'mevedel-session-collection-schedule)
+                  (lambda (owner)
+                    (push (plist-get (mevedel-session-codec-read
+                                      (plist-get (mevedel-session-publication owner) :sidecar))
+                                     :total-turn-count) observed))))
+         (mevedel-session-publication-publish
+          session (list (list :path path :commit-marker t :checkpoint candidate
+                              :content (mevedel-session-artifacts-printed-value root)))))
+       ;; Neither ordinary metadata nor the agent commit can regress the root.
+       (should (equal '(7 7 7) observed))
+       (should (= 7 (plist-get (mevedel-session-checkpoint-project session nil) :total-turn-count)))))))
+
+(mevedel-deftest mevedel-session-publication-publish/checkpoint-queue-retry-proofs (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-queue-proofs" "mevedel-queue-proofs-" ?c
+   (lambda (session session-dir _segment)
+     (let* ((raw (mevedel-session-artifacts--live-sidecar session (current-buffer)))
+            (mail (list :id "consumed" :type 'MAIL :sender "/root/worker"
+                        :recipient "/root" :payload "consumed" :timestamp (current-time)))
+            (stale (plist-put (copy-tree raw) :messages (list mail)))
+            (path (file-name-concat session-dir "session.meta.el"))
+            (write-generation (symbol-function 'mevedel-session-publication--write-generation))
+            (calls 0))
+       (mevedel-session-checkpoint-consume session "/root" (list mail))
+       (let ((candidate (mevedel-session-checkpoint-capture session "/root" raw)))
+         (cl-letf (((symbol-function 'mevedel-session-publication--write-generation)
+                    (lambda (&rest args)
+                      (cl-incf calls)
+                      (pcase calls
+                        (1
+                         (should (eq 'queued
+                                     (mevedel-session-publication-publish
+                                      session
+                                      (list (list :path path :commit-marker t
+                                                  :content (mevedel-session-artifacts-printed-value stale)))))))
+                        (2 (error "Injected queued publication failure")))
+                      (apply write-generation args))))
+           (should (equal '(error "Injected queued publication failure")
+                          (should-error
+                           (mevedel-session-publication-publish
+                            session (list (list :path path :commit-marker t :checkpoint candidate
+                                                :content (mevedel-session-artifacts-printed-value raw))))))))
+         (should (= calls 2))
+         (should (mevedel-session-pending-publication session))
+         ;; The first commit retired this id, but the failed successor still
+         ;; owns frozen bytes.  Its suppression proof must survive until retry.
+         (should-not (mevedel-session-checkpoint-release-proofs session))
+         (should-not (plist-get (mevedel-session-checkpoint-project session stale) :messages))
+         (mevedel-session-publication-retry session)
+         (should-not (mevedel-session-pending-publication session))
+         (should-not (plist-get (mevedel-session-codec-read
+                                 (plist-get (mevedel-session-publication session) :sidecar))
+                                :messages))
+         ;; No queued snapshot remains: proofs can be released, not accumulated
+         ;; across the session's lifetime.
+         (should (mevedel-session-checkpoint-release-proofs session)))))))
+
+(mevedel-deftest mevedel-session-publication-publish/checkpoint-rotation-receipt (:quiet t)
+  (let* ((directory (make-temp-file "mevedel-rotation-receipt-" t))
+         (workspace (test-mevedel-session-persistence--make-workspace directory))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *rotation-receipt*"))
+         (commit (symbol-function 'mevedel-session-durability-commit-publication-head))
+         queued restored save-path)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (mevedel-chat-prepare-transcript-buffer)
+            (setq-local mevedel--session session mevedel--workspace workspace)
+            (insert "Question\n\n" (propertize "Answer\n" 'gptel 'response))
+            (mevedel-session-artifacts-save session buffer)
+            (setq save-path (mevedel-session-save-path session))
+            (mevedel-agent-control-send-message session "/root" "Already consumed mail")
+            (mevedel-tools--handle-message-inject
+             (gptel-make-fsm :info (list :buffer buffer :backend nil
+                                        :data (list :messages (vector)))))
+            (should-not (mevedel-session-messages session))
+            (should (mevedel-transcript-audit-buffer-spans 'mailbox-receipt))
+            (cl-letf (((symbol-function 'mevedel-session-durability-commit-publication-head)
+                       (lambda (&rest args)
+                         (unless queued
+                           (setq queued t)
+                           (should (mevedel-session-publication-active-p session))
+                           (should (mevedel-session-persistence-write-sidecar-now session buffer)))
+                         (apply commit args))))
+              (mevedel-session-artifacts-rotate-segment session buffer "Summary without receipt"))
+            (should queued))
+          (test-mevedel-session-persistence--release-and-kill buffer session)
+          (setq buffer nil restored (mevedel-session-persistence-restore save-path))
+          (with-current-buffer restored
+            (should (= 2 (mevedel-session-current-segment mevedel--session)))
+            ;; The receipt now lives only in the predecessor archive, so a
+            ;; resurrected sidecar message would be delivered twice here.
+            (should-not (mevedel-transcript-audit-buffer-spans 'mailbox-receipt))
+            (should-not (mevedel-tools--mailbox-new-messages mevedel--session restored))))
+      (test-mevedel-session-persistence--release-and-kill buffer session)
+      (test-mevedel-session-persistence--release-and-kill
+       restored (and restored (buffer-local-value 'mevedel--session restored)))
+      (mevedel-workspace-clear-registry)
+      (delete-directory directory t))))
+
+(mevedel-deftest mevedel-session-publication-publish/checkpoint-rotation-ptc (:quiet t)
+  (let* ((directory (make-temp-file "mevedel-rotation-ptc-" t))
+         (workspace (test-mevedel-session-persistence--make-workspace directory))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *rotation-ptc*"))
+         (commit (symbol-function 'mevedel-session-durability-commit-publication-head))
+         queued restored save-path)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (mevedel-chat-prepare-transcript-buffer)
+            (setq-local mevedel--session session mevedel--workspace workspace)
+            (insert "Question\n\n" (propertize "Answer\n" 'gptel 'response))
+            (mevedel-session-artifacts-save session buffer)
+            (setq save-path (mevedel-session-save-path session))
+            (should (mevedel-ptc-checkpoint-start session buffer "retired-ptc" "(+ 1 1)"))
+            (should (mevedel-ptc-checkpoint-update
+                     session buffer "retired-ptc"
+                     '(:state settled :result "2" :render-data (:kind ptc :outcome success :calls nil))))
+            (mevedel-ptc-checkpoint--insert (car (mevedel-session-ptc-checkpoints session)))
+            (mevedel-ptc-checkpoint-clear-settled session "/root" buffer)
+            (should-not (mevedel-session-ptc-checkpoints session))
+            (should (mevedel-tool-render-data-segment-bounds "retired-ptc"))
+            (cl-letf (((symbol-function 'mevedel-session-durability-commit-publication-head)
+                       (lambda (&rest args)
+                         (unless queued
+                           (setq queued t)
+                           (should (mevedel-session-publication-active-p session))
+                           (should (mevedel-session-persistence-write-sidecar-now session buffer)))
+                         (apply commit args))))
+              (mevedel-session-artifacts-rotate-segment session buffer "Summary without ToolCall"))
+            (should queued))
+          (test-mevedel-session-persistence--release-and-kill buffer session)
+          (setq buffer nil restored (mevedel-session-persistence-restore save-path))
+          (with-current-buffer restored
+            (should (= 2 (mevedel-session-current-segment mevedel--session)))
+            (should-not (mevedel-tool-render-data-segment-bounds "retired-ptc"))))
+      (test-mevedel-session-persistence--release-and-kill buffer session)
+      (test-mevedel-session-persistence--release-and-kill
+       restored (and restored (buffer-local-value 'mevedel--session restored)))
+      (mevedel-workspace-clear-registry)
+      (delete-directory directory t))))
+
+(mevedel-deftest mevedel-session-publication-publish/transition-late-mail (:quiet t)
+  (dolist (storage '(project file))
+    (dolist (transition '(rotate fresh))
+      (let* ((directory (make-temp-file "mevedel-transition-late-" t))
+             (workspace (if (eq storage 'file)
+                            (test-mevedel-session-persistence--make-file-workspace directory)
+                          (test-mevedel-session-persistence--make-workspace directory)))
+             (session (mevedel-session-create "main" workspace))
+             (buffer (generate-new-buffer " *transition-late*"))
+             (commit (symbol-function 'mevedel-session-durability-commit-publication-head))
+             (write (symbol-function 'mevedel-session-codec-write))
+             entered restored save-path)
+        (unwind-protect
+            (ert-info ((format "%s %s" storage transition))
+              (with-current-buffer buffer
+                (mevedel-chat-prepare-transcript-buffer)
+                (setq-local mevedel--session session mevedel--workspace workspace)
+                (insert "Question\n\n" (propertize "Answer\n" 'gptel 'response))
+                (mevedel-session-artifacts-save session buffer)
+                (setq save-path (mevedel-session-save-path session))
+                (mevedel-agent-control-send-message session "/root" "Late transition mail")
+                (cl-labels
+                    ((inject ()
+                       (unless entered
+                         (setq entered t)
+                         (with-current-buffer buffer
+                           (mevedel-tools--handle-message-inject
+                            (gptel-make-fsm :info
+                                            (list :buffer buffer :backend nil
+                                                  :data (list :messages (vector)))))))))
+                  (cl-letf (((symbol-function 'mevedel-session-durability-commit-publication-head)
+                             (lambda (&rest args) (inject) (apply commit args)))
+                            ((symbol-function 'mevedel-session-codec-write)
+                             (lambda (&rest args)
+                               (when (and (eq storage 'file)
+                                          (equal (car args) (mevedel-session-artifacts-sidecar-path save-path)))
+                                 (inject))
+                               (apply write args))))
+                    (if (eq transition 'rotate)
+                        (mevedel-session-artifacts-rotate-segment session buffer "Summary")
+                      (mevedel-session-artifacts-start-fresh-segment session buffer))))
+                (should entered)
+                (should (buffer-modified-p))
+                (should (string-search "Late transition mail" (buffer-string)))
+                (should (mevedel-transcript-audit-buffer-spans 'mailbox-receipt))
+                ;; The ordinary save must see the dirty late receipt and commit
+                ;; it before the pending consumption proof can retire.
+                (mevedel-session-artifacts-save session buffer))
+              (test-mevedel-session-persistence--release-and-kill buffer session)
+              (setq buffer nil restored
+                    (mevedel-session-persistence-restore save-path nil nil workspace))
+              (with-current-buffer restored
+                (should (= 2 (mevedel-session-current-segment mevedel--session)))
+                (should (string-search "Late transition mail" (buffer-string)))
+                (should-not (mevedel-tools--mailbox-new-messages mevedel--session restored))))
+          (test-mevedel-session-persistence--release-and-kill buffer session)
+          (test-mevedel-session-persistence--release-and-kill
+           restored (and restored (buffer-local-value 'mevedel--session restored)))
+          (mevedel-workspace-clear-registry)
+          (delete-directory directory t))))))
+
+(mevedel-deftest mevedel-session-publication-publish/admission-recovery-unread (:quiet t)
+  (dolist (writer '(sidecar transcript))
+    (let* ((directory (make-temp-file "mevedel-admission-unread-" t))
+           (workspace (test-mevedel-session-persistence--make-workspace directory))
+           (session (mevedel-session-create "main" workspace))
+           (buffer (generate-new-buffer " *admission-unread*"))
+           (read-recovery (symbol-function 'mevedel-session-recovery-read))
+           (sidecar-artifact (symbol-function 'mevedel-session-artifacts--sidecar-publication-artifact))
+           (late-reads 0) (depth 0) frozen early late injecting restored save-path)
+      (unwind-protect
+          (ert-info ((format "Recovery admission for %s writer" writer))
+            (with-current-buffer buffer
+              (mevedel-chat-prepare-transcript-buffer)
+              (setq-local mevedel--session session mevedel--workspace workspace)
+              (insert "Question\n\n" (propertize "Answer\n" 'gptel 'response))
+              (mevedel-session-artifacts-save session buffer)
+              (setq save-path (mevedel-session-save-path session))
+              (cl-letf (((symbol-function 'mevedel-session-artifacts--sidecar-publication-artifact)
+                         (lambda (&rest args)
+                           (cl-incf depth)
+                           (unwind-protect
+                               (prog1 (apply sidecar-artifact args)
+                                 (when (and (= depth 1) (not injecting))
+                                   (setq frozen t)))
+                             (cl-decf depth))))
+                        ((symbol-function 'mevedel-session-recovery-read)
+                         (lambda (&rest args)
+                           (unless injecting
+                             (when (and frozen (not (mevedel-session-publication-active-p session)))
+                               (cl-incf late-reads))
+                             (when (or (and (not frozen) (not early))
+                                       (and frozen (not late)
+                                            (not (mevedel-session-publication-active-p session))))
+                               (setq injecting t)
+                               (unwind-protect
+                                   (progn
+                                     (should-not (mevedel-session-publication-active-p session))
+                                     (if frozen (setq late t) (setq early t))
+                                     (mevedel-agent-control-send-message
+                                      session "/root" (if frozen "Acknowledged after capture"
+                                                        "Acknowledged before capture")))
+                                 (setq injecting nil))))
+                           (apply read-recovery args))))
+                (if (eq writer 'sidecar)
+                    (mevedel-session-artifacts-publish-sidecar-state session buffer)
+                  (mevedel-session-artifacts-publish-transcript-state
+                   session buffer buffer-file-name (buffer-string) nil)))
+              (when late
+                (should (seq-some
+                         (lambda (mail) (equal "Acknowledged after capture" (plist-get mail :payload)))
+                         (plist-get
+                          (mevedel-session-codec-read
+                           (plist-get (mevedel-session-publication session) :sidecar))
+                          :messages)))))
+            (test-mevedel-session-persistence--release-and-kill buffer session)
+            (setq buffer nil restored (mevedel-session-persistence-restore save-path))
+            (with-current-buffer restored
+              ;; Every acknowledged enqueue must survive, including one from
+              ;; a redundant publisher admission read after sidecar capture.
+              (should early)
+              (dolist (payload (append '("Acknowledged before capture")
+                                       (and late '("Acknowledged after capture"))))
+                (should (seq-some
+                         (lambda (mail)
+                           (equal payload (plist-get mail :payload)))
+                         (mevedel-tools--mailbox-new-messages mevedel--session restored)))))
+            ;; Authority, capture and publication share one recovery observation.
+            (should (= late-reads 0)))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (test-mevedel-session-persistence--release-and-kill
+         restored (and restored (buffer-local-value 'mevedel--session restored)))
+        (mevedel-workspace-clear-registry)
+        (delete-directory directory t)))))
+
+(mevedel-deftest mevedel-session-publication-publish/transition-unread-enqueue (:quiet t)
+  (dolist (transition '(rotate fresh))
+    (let* ((directory (make-temp-file "mevedel-transition-unread-" t))
+           (workspace (test-mevedel-session-persistence--make-workspace directory))
+           (session (mevedel-session-create "main" workspace))
+           (buffer (generate-new-buffer " *transition-unread*"))
+           (instructions (symbol-function 'mevedel-session-artifacts--instruction-artifacts))
+           entered restored save-path)
+      (unwind-protect
+          (ert-info ((format "Unread enqueue during %s" transition))
+            (with-current-buffer buffer
+              (mevedel-chat-prepare-transcript-buffer)
+              (setq-local mevedel--session session mevedel--workspace workspace)
+              (insert "Question\n\n" (propertize "Answer\n" 'gptel 'response))
+              (mevedel-session-artifacts-save session buffer)
+              (setq save-path (mevedel-session-save-path session))
+              (cl-letf (((symbol-function 'mevedel-session-artifacts--instruction-artifacts)
+                         (lambda (&rest args)
+                           (unless entered
+                             (setq entered t)
+                             (should-not (mevedel-session-publication-active-p session))
+                             (mevedel-agent-control-send-message
+                              session "/root" "Acknowledged late unread")
+                             ;; The producer actually commits before the outer
+                             ;; transition enters publication, not merely queues.
+                             (should (seq-some
+                                      (lambda (mail)
+                                        (equal "Acknowledged late unread" (plist-get mail :payload)))
+                                      (plist-get
+                                       (mevedel-session-codec-read
+                                        (plist-get (mevedel-session-publication session) :sidecar))
+                                       :messages))))
+                           (apply instructions args))))
+                (if (eq transition 'rotate)
+                    (mevedel-session-artifacts-rotate-segment session buffer "Summary")
+                  (mevedel-session-artifacts-start-fresh-segment session buffer))))
+            (should entered)
+            (test-mevedel-session-persistence--release-and-kill buffer session)
+            (setq buffer nil restored (mevedel-session-persistence-restore save-path))
+            (with-current-buffer restored
+              (should (= 2 (mevedel-session-current-segment mevedel--session)))
+              (should (seq-some
+                       (lambda (mail) (equal "Acknowledged late unread" (plist-get mail :payload)))
+                       (mevedel-tools--mailbox-new-messages mevedel--session restored)))))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (test-mevedel-session-persistence--release-and-kill
+         restored (and restored (buffer-local-value 'mevedel--session restored)))
+        (mevedel-workspace-clear-registry)
+        (delete-directory directory t)))))
+
+(mevedel-deftest mevedel-session-publication-publish/transition-nested-root-save (:quiet t)
+  (dolist (storage '(project file))
+    (dolist (transition '(rotate fresh))
+      (let* ((directory (make-temp-file "mevedel-transition-nested-" t))
+             (workspace (if (eq storage 'file)
+                            (test-mevedel-session-persistence--make-file-workspace directory)
+                          (test-mevedel-session-persistence--make-workspace directory)))
+             (session (mevedel-session-create "main" workspace))
+             (buffer (generate-new-buffer " *transition-nested*"))
+             (instructions (symbol-function 'mevedel-session-artifacts--instruction-artifacts))
+             (save-instructions (symbol-function 'mevedel-session-artifacts-save-instructions))
+             entered restored save-path)
+        (unwind-protect
+            (ert-info ((format "Nested root save during %s %s" storage transition))
+              (with-current-buffer buffer
+                (mevedel-chat-prepare-transcript-buffer)
+                (setq-local mevedel--session session mevedel--workspace workspace)
+                (insert "Question\n\n" (propertize "Answer\n" 'gptel 'response))
+                (mevedel-session-artifacts-save session buffer)
+                (setq save-path (mevedel-session-save-path session))
+                (cl-labels
+                    ((attempt ()
+                       (unless entered
+                         (setq entered t)
+                         (goto-char (point-max))
+                         (insert "Late nested root edit\n")
+                         (let ((head (mevedel-session-publication session)))
+                           (should (equal '(user-error "Session checkpoint is being prepared")
+                                          (should-error
+                                           (mevedel-session-artifacts-save session buffer t))))
+                           (should (eq head (mevedel-session-publication session)))))))
+                  (cl-letf (((symbol-function 'mevedel-session-artifacts--instruction-artifacts)
+                             (lambda (&rest args) (attempt) (apply instructions args)))
+                            ((symbol-function 'mevedel-session-artifacts-save-instructions)
+                             (lambda (&rest args)
+                               (when (eq storage 'file) (attempt))
+                               (apply save-instructions args))))
+                    (if (eq transition 'rotate)
+                        (mevedel-session-artifacts-rotate-segment session buffer "Summary")
+                      (mevedel-session-artifacts-start-fresh-segment session buffer))))
+                (should entered)
+                (should (buffer-modified-p))
+                (should (string-search "Late nested root edit" (buffer-string)))
+                ;; Only the next non-overlapping checkpoint may commit the edit.
+                (mevedel-session-artifacts-save session buffer))
+              (test-mevedel-session-persistence--release-and-kill buffer session)
+              (setq buffer nil restored
+                    (mevedel-session-persistence-restore save-path nil nil workspace))
+              (with-current-buffer restored
+                (should (= 2 (mevedel-session-current-segment mevedel--session)))
+                (should (string-search "Late nested root edit" (buffer-string)))))
+          (test-mevedel-session-persistence--release-and-kill buffer session)
+          (test-mevedel-session-persistence--release-and-kill
+           restored (and restored (buffer-local-value 'mevedel--session restored)))
+          (mevedel-workspace-clear-registry)
+          (delete-directory directory t))))))
+
+(mevedel-deftest mevedel-session-publication-publish/transition-ancillary-commit-before-failure (:quiet t)
+  (dolist (transition '(rotate fresh clear))
+    (let* ((directory (make-temp-file "mevedel-transition-abort-" t))
+           (workspace (test-mevedel-session-persistence--make-workspace directory))
+           (session (mevedel-session-create "main" workspace))
+           (buffer (generate-new-buffer " *transition-abort*"))
+           entered captured sealed restored save-path)
+      (unwind-protect
+          (ert-info ((format "Ancillary commit then %s preparation failure" transition))
+            (with-current-buffer buffer
+              (mevedel-chat-prepare-transcript-buffer)
+              (setq-local mevedel--session session mevedel--workspace workspace)
+              (insert "Original question\n\n" (propertize "Answer\n" 'gptel 'response))
+              (mevedel-session-artifacts-save session buffer)
+              (setq save-path (mevedel-session-save-path session))
+              (let ((head (plist-get (mevedel-session-publication session) :head)))
+                (cl-letf (((symbol-function 'mevedel-session-artifacts--instruction-artifacts)
+                           (lambda (&rest _)
+                             (setq entered t)
+                             (mevedel-agent-control-send-message session "/root" "Surviving unread")
+                             (should-not (equal head (plist-get (mevedel-session-publication session) :head)))
+                             (error "Injected transition preparation failure")))
+                          ((symbol-function 'mevedel-journal-capture-checkpoint)
+                           (lambda (&rest _) (setq captured t) '(:id "unsealed-capture")))
+                          ((symbol-function 'mevedel-journal-capture-seal-and-schedule)
+                           (lambda (&rest _) (setq sealed t))))
+                  (should (equal '(error "Injected transition preparation failure")
+                                 (should-error
+                                  (if (eq transition 'rotate)
+                                      (mevedel-session-artifacts-rotate-segment session buffer "Summary")
+                                    (mevedel-session-artifacts-start-fresh-segment
+                                     session buffer :clear (eq transition 'clear))))))))
+              (should entered)
+              (should (eq captured (eq transition 'clear)))
+              (should-not sealed)
+              (should (= 1 (mevedel-session-current-segment session)))
+              (should-not (mevedel-session-chapters session))
+              (should-not (mevedel-session-pending-publication session))
+              (should (string-search "Original question" (buffer-string))))
+            (test-mevedel-session-persistence--release-and-kill buffer session)
+            (setq buffer nil restored (mevedel-session-persistence-restore save-path))
+            (with-current-buffer restored
+              (should (= 1 (mevedel-session-current-segment mevedel--session)))
+              (should (string-search "Original question" (buffer-string)))
+              (should (seq-some
+                       (lambda (mail) (equal "Surviving unread" (plist-get mail :payload)))
+                       (mevedel-tools--mailbox-new-messages mevedel--session restored)))))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (test-mevedel-session-persistence--release-and-kill
+         restored (and restored (buffer-local-value 'mevedel--session restored)))
+        (mevedel-workspace-clear-registry)
+        (delete-directory directory t)))))
+
+(mevedel-deftest mevedel-session-publication-publish/transition-late-predecessor (:quiet t)
+  (let* ((directory (make-temp-file "mevedel-predecessor-late-" t))
+         (workspace (test-mevedel-session-persistence--make-workspace directory))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *predecessor-late*"))
+         (finalize (symbol-function 'mevedel-session-artifacts-finalized-segment-text))
+         entered)
+    (unwind-protect
+        (with-current-buffer buffer
+          (mevedel-chat-prepare-transcript-buffer)
+          (setq-local mevedel--session session mevedel--workspace workspace)
+          (insert "Question\n\n" (propertize "Answer\n" 'gptel 'response))
+          (mevedel-session-artifacts-save session buffer)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-finalized-segment-text)
+                     (lambda (&rest args)
+                       (prog1 (apply finalize args)
+                         (unless entered
+                           (setq entered t)
+                           (with-current-buffer buffer
+                             (goto-char (point-max))
+                             (insert "Late predecessor edit\n")))))))
+            (should (equal '(error "Transcript changed during segment transition; retry")
+                           (should-error
+                            (mevedel-session-artifacts-rotate-segment session buffer "Summary")))))
+          (should entered)
+          (should (= 1 (mevedel-session-current-segment session)))
+          (should (string-search "Late predecessor edit" (buffer-string)))
+          (should (buffer-modified-p))
+          (should-not (mevedel-session-pending-publication session)))
+      (test-mevedel-session-persistence--release-and-kill buffer session)
+      (mevedel-workspace-clear-registry)
+      (delete-directory directory t))))
+
+(mevedel-deftest mevedel-session-publication-publish/checkpoint-cleanup-error (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-checkpoint-cleanup" "mevedel-checkpoint-cleanup-" ?c
+   (lambda (session session-dir _segment)
+     (dolist (required '(nil t))
+       (let* ((raw (plist-put (mevedel-session-artifacts-build-sidecar session (current-buffer))
+                              :total-turn-count (if required 8 7)))
+              (candidate (mevedel-session-checkpoint-capture session "/root" raw))
+              (artifact (list :path (file-name-concat session-dir "session.meta.el")
+                              :content (mevedel-session-artifacts-printed-value raw)
+                              :commit-marker t :checkpoint candidate))
+              (calls 0))
+         (cl-letf (((symbol-function 'mevedel-session-collection-schedule)
+                    (lambda (owner)
+                      (cl-incf calls)
+                      (should (= (plist-get raw :total-turn-count)
+                                 (plist-get (mevedel-session-checkpoint-project owner raw)
+                                            :total-turn-count)))
+                      (error "Injected postcommit collection failure"))))
+           (if required
+               (should (mevedel-session-publication-publish session (list artifact) t))
+             (should (equal '(error "Injected postcommit collection failure")
+                            (should-error
+                             (mevedel-session-publication-publish session (list artifact))
+                             :type 'error)))))
+         (should (= calls 1))
+         (should-not (mevedel-session-pending-publication session))
+         (should (= (plist-get raw :total-turn-count)
+                    (plist-get (mevedel-session-checkpoint-project session nil) :total-turn-count)))
+         (should (= (plist-get raw :total-turn-count)
+                    (plist-get (mevedel-session-codec-read
+                                (plist-get (mevedel-session-publication session) :sidecar))
+                               :total-turn-count))))))))
+
+(mevedel-deftest mevedel-session-publication-publish/checkpoint-actual-artifact (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-checkpoint-actual" "mevedel-checkpoint-actual-" ?c
+   (lambda (session session-dir _segment)
+     (let* ((raw (mevedel-session-artifacts-build-sidecar session (current-buffer)))
+            (first (plist-put (copy-tree raw) :total-turn-count 7))
+            (last (plist-put (copy-tree raw) :total-turn-count 8))
+            (path (file-name-concat session-dir "session.meta.el")))
+       ;; Last-write-wins chooses the actual sidecar, not the marker object.
+       (mevedel-session-publication-publish
+        session
+        (list (list :path path :commit-marker t
+                    :checkpoint (mevedel-session-checkpoint-capture session "/root" first)
+                    :content (mevedel-session-artifacts-printed-value first))
+              (list :path path
+                    :checkpoint (mevedel-session-checkpoint-capture session "/root" last)
+                    :content (mevedel-session-artifacts-printed-value last))))
+       (should (= 8 (plist-get (mevedel-session-checkpoint-project session raw) :total-turn-count)))
+       (should (= 8 (plist-get (mevedel-session-codec-read
+                               (plist-get (mevedel-session-publication session) :sidecar))
+                              :total-turn-count)))))))
+
+(mevedel-deftest mevedel-session-publication-publish/checkpoint-stale (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-checkpoint-stale" "mevedel-checkpoint-stale-" ?c
+   (lambda (session session-dir _segment)
+     (let* ((raw (mevedel-session-artifacts-build-sidecar session (current-buffer)))
+            (candidate (mevedel-session-checkpoint-capture session "/root" raw))
+            (head (plist-get (mevedel-session-publication session) :head))
+            (commits 0))
+       (mevedel-session-checkpoint-seed session raw)
+       (cl-letf (((symbol-function 'mevedel-session-durability-commit-publication-head)
+                  (lambda (&rest _) (cl-incf commits) t)))
+         (should
+          (equal
+           '(error "Checkpoint candidate belongs to a different owner epoch")
+           (should-error
+            (mevedel-session-publication-publish
+             session
+             (list (list :path (file-name-concat session-dir "session.meta.el")
+                         :commit-marker t :checkpoint candidate
+                         :content (mevedel-session-artifacts-printed-value raw))))))))
+       (should (zerop commits))
+       (should (equal head (plist-get (mevedel-session-publication session) :head)))
+       (mevedel-session-publication-clear-transient session)))))
+
+(mevedel-deftest mevedel-session-publication-publish/checkpoint-replacement (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-checkpoint-replace" "mevedel-checkpoint-replace-" ?c
+   (lambda (session session-dir _segment)
+     (let* ((raw (mevedel-session-artifacts-build-sidecar session (current-buffer)))
+            (path (file-name-concat session-dir "session.meta.el")))
+       (mevedel-session-checkpoint-seed session (plist-put (copy-tree raw) :total-turn-count 1))
+       (setq raw (plist-put raw :total-turn-count 7))
+       ;; A metadata-only commit cannot adopt live, uncheckpointed root state.
+       (mevedel-session-publication-publish
+        session (list (list :path path :commit-marker t
+                            :content (mevedel-session-artifacts-printed-value raw))))
+       (should (= 1 (plist-get (mevedel-session-checkpoint-project session raw) :total-turn-count)))
+       (mevedel-session-publication-publish
+        session (list (list :path path :commit-marker t :replace t
+                            :content (mevedel-session-artifacts-printed-value raw))))
+       (should (= 7 (plist-get (mevedel-session-checkpoint-project session raw) :total-turn-count)))))))
+
+(mevedel-deftest mevedel-session-publication-publish/restore-repair-freeze (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-restore-freeze" "mevedel-restore-freeze-" ?c
+   (lambda (session _session-dir segment)
+     (let ((buffer (generate-new-buffer " *restore-repair-freeze*"))
+           (row '(:id "repaired" :conversation "/root" :state settled
+                  :args (:expression "1") :result "done"))
+           (late (list :id "late-mail" :type 'MAIL :sender "/root/worker"
+                       :recipient "/root" :payload "after freeze" :timestamp (current-time)))
+           checkpoint artifacts)
+       (unwind-protect
+           (progn
+             (mevedel-session-checkpoint-seed session '(:total-turn-count 7))
+             (setf (mevedel-session-turn-count session) 7)
+             (with-current-buffer buffer
+               (org-mode)
+               (insert "Already repaired transcript\n")
+               (setq buffer-file-name segment))
+             (cl-letf (((symbol-function 'mevedel-session-artifacts-check-target-incarnation) #'ignore)
+                       ((symbol-function 'mevedel-ptc-checkpoint-reconcile)
+                        (lambda (owner)
+                          (mevedel-session-checkpoint-defer-ptc owner "/root" (list row))
+                          '(0 . 1)))
+                       ((symbol-function 'mevedel--chat-buffer-init-common)
+                        (lambda (&rest _)
+                          ;; Initialization can run arbitrary hooks after freeze.
+                          (setf (mevedel-session-turn-count session) 99)
+                          (mevedel-session-checkpoint-consume session "/root" (list late))))
+                       ((symbol-function 'mevedel-agent-persistence-restore-tree)
+                        (lambda (&rest _) 0))
+                       ((symbol-function 'mevedel-session-artifacts-load-instructions) #'ignore)
+                       ((symbol-function 'mevedel-session-persistence-notify-session-event) #'ignore))
+               (should (= 1 (mevedel-session-persistence--hydrate-restored-buffer
+                             buffer session (mevedel-session-workspace session) segment t nil "resume"
+                             (lambda (artifact) (push artifact artifacts))
+                             (lambda (candidate) (setq checkpoint candidate)))))
+               (should checkpoint)
+               (should (= 1 (length artifacts)))
+               (mevedel-session-persistence--finish-restored-buffer
+                buffer session nil t artifacts checkpoint))
+             (let ((saved (mevedel-session-codec-read
+                           (plist-get (mevedel-session-publication session) :sidecar))))
+               (should (= 7 (plist-get saved :total-turn-count)))
+               (should-not (plist-get saved :ptc-checkpoints))
+               (should (equal '("late-mail")
+                              (mapcar (lambda (mail) (plist-get mail :id))
+                                      (plist-get saved :messages)))))
+             (let ((projected (mevedel-session-checkpoint-project session nil)))
+               (should (= 7 (plist-get projected :total-turn-count)))
+               (should-not (plist-get projected :ptc-checkpoints))
+               (should (equal '("late-mail")
+                              (mapcar (lambda (mail) (plist-get mail :id))
+                                      (plist-get projected :messages))))))
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (set-buffer-modified-p nil)
+             (setq-local kill-buffer-hook nil))
+           (kill-buffer buffer)))))))
 
 (mevedel-deftest mevedel-session-publication-publish/transaction-scope (:quiet t)
   (test-mevedel-session-publication--with-published

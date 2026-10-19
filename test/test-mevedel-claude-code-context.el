@@ -50,8 +50,10 @@
               (mevedel--send-request "Continue with the retained child")
               (mevedel-test--await 5 "Roster root did not settle"
                 (not (mevedel-turn-busy-p buffer)))
-              (should (eq (if receipt 'success 'error)
-                          (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
+              (ert-info ((format "receipt=%S error=%S" receipt
+                                 (plist-get (mevedel-engine-info request) :error)))
+                (should (eq (if receipt 'success 'error)
+                            (plist-get (mevedel-engine-info request) :mevedel-acp-outcome))))
               (should (= (pcase receipt ('compact 2) ('nil 0) (_ 1))
                          (mevedel-engine-test--count-evidence "<agent-roster>")))
               (when receipt
@@ -410,6 +412,29 @@
          request (mevedel-claude-code-context-test--hook-receipt body)))
       (should (string-search "LATER-RESULT-8821" (buffer-string)))
       (should-not (mevedel-agent-control-wake-pending-p session))))
+
+  :doc "native redelivery skips a received durable ID but keeps distinct equal mail"
+  (mevedel-engine-test--with-session
+    (insert "Question?\n\n")
+    (setf (mevedel-engine-info request) (list :buffer buffer :position (point-max-marker)))
+    (mevedel-claude-code-context-system request "sys")
+    (mevedel-agent-control-send-message session "/root" "SAME-REPORT")
+    (let ((durable (copy-tree (mevedel-session-messages session))))
+      (let ((body (mevedel-claude-code-context-prepare request)))
+        (mevedel-claude-code-context-observe
+         request (mevedel-claude-code-context-test--hook-receipt body)))
+      (setf (mevedel-session-messages session) durable)
+      (mevedel-agent-control-send-message session "/root" "SAME-REPORT")
+      (let ((body (mevedel-claude-code-context-prepare request)))
+        (should (= 1 (length (mevedel-session-messages session))))
+        (should (string-search "SAME-REPORT" body))
+        (mevedel-claude-code-context-observe
+         request (mevedel-claude-code-context-test--hook-receipt body)))
+      (should-not (mevedel-session-messages session))
+      (let ((receipts (mevedel-transcript-audit-records (buffer-string) 'mailbox-receipt)))
+        (should (= 2 (length receipts)))
+        (should-not (equal (plist-get (car receipts) :id)
+                           (plist-get (cadr receipts) :id))))))
 
   :doc "a whole message beyond the hook limit takes the continuation route"
   (mevedel-engine-test--with-session

@@ -33,9 +33,9 @@
 (autoload 'mevedel-reminders-clone-list "mevedel-reminders")
 
 ;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts--live-sidecar "mevedel-session-artifacts" (session &optional data-buffer))
 (declare-function mevedel-session-artifacts-artifact-present-p "mevedel-session-artifacts" (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-assert-mutation-authority "mevedel-session-artifacts" (session &optional buffer))
-(declare-function mevedel-session-artifacts-build-sidecar "mevedel-session-artifacts" (session buffer))
 (declare-function mevedel-session-artifacts-read-artifact "mevedel-session-artifacts" (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-save-buffer-silently "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-save-instructions "mevedel-session-artifacts" (session buffer &optional current-only))
@@ -43,11 +43,11 @@
 (declare-function mevedel-session-artifacts-sessions-dir "mevedel-session-artifacts" (workspace))
 (declare-function mevedel-session-artifacts-sidecar-path "mevedel-session-artifacts" (save-path))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds "mevedel-session-artifacts" ())
+(autoload 'mevedel-session-artifacts--live-sidecar
+  "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-artifact-present-p
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-assert-mutation-authority
-  "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-build-sidecar
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-read-artifact
   "mevedel-session-artifacts")
@@ -266,13 +266,13 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     repair-log-pending permission-log-pending telemetry-pending
     hook-context-pending execution-state audit-session pending-publication
     publication publication-queue publication-uncommitted-batches
-    publication-active-p control-transfer control-transfer-drains root-buffer
+    checkpoint-state publication-active-p control-transfer control-transfer-drains root-buffer
     lease
     lease-renewal-timer save-path session-id created-at updated-at
     current-segment forked-from-session-id forked-from-turn fork-type
     forked-from-fork-point-id worktree-source-root worktree-directory
     worktree-branch worktree-base-commit prompt-index chapters file-snapshots
-    ptc-checkpoints persisted-first-user-message durable-tree-ensured
+    ptc-checkpoints durable-tree-ensured
     agent-transcripts invoked-skills permission-queue permission-absence
     pending-plan-approval
     plan-metadata goal attached-artifacts dedicated-artifact)
@@ -448,6 +448,7 @@ The identity and timestamp keywords describe the new materialized child."
               (mevedel-session-file-snapshots session))
             t)
            :ptc-checkpoints nil
+           :checkpoint-state nil
            :agent-transcripts
            (copy-tree (mevedel-session-agent-transcripts session) t)
            :invoked-skills
@@ -593,7 +594,7 @@ caches never become fork authority."
            source rel-path staging-path))))
     (mevedel-session-codec-write
      (mevedel-session-artifacts-sidecar-path staging-path)
-     (mevedel-session-artifacts-build-sidecar child staging-buffer))
+     (mevedel-session-artifacts--live-sidecar child staging-buffer))
     (mevedel-session-artifacts-save-instructions child buffer)
     (let* ((saved
             (mevedel-session-codec-read
@@ -604,7 +605,9 @@ caches never become fork authority."
       (unless (equal (mevedel-session-session-id
                       (plist-get restored :session))
                      (mevedel-session-session-id child))
-        (error "Fork staging validation failed")))))
+        (error "Fork staging validation failed"))
+      (setf (mevedel-session-checkpoint-state child)
+            (mevedel-session-checkpoint-state (plist-get restored :session))))))
 
 (defun mevedel-session-fork--publish-fork
     (child buffer staging-buffer parent-save-path staging-path new-save-path

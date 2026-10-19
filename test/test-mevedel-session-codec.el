@@ -12,6 +12,22 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 (require 'mevedel-sandbox)
+(require 'mevedel-session-checkpoint)
+
+(mevedel-deftest mevedel-session-codec-deserialize/checkpoint-seed ()
+  (let ((root (make-temp-file "mevedel-checkpoint-restore-" t)))
+    (unwind-protect
+        (let* ((workspace (test-mevedel-session-persistence--make-workspace root))
+               (session (test-mevedel-session-persistence--make-session root))
+               (_ (setf (mevedel-session-turn-count session) 7))
+               (raw (mevedel-session-artifacts--live-sidecar session (current-buffer)))
+               (restored (plist-get (mevedel-session-codec-deserialize raw workspace) :session)))
+          (setf (mevedel-session-turn-count restored) 99)
+          (should (= 7 (plist-get (mevedel-session-checkpoint-project
+                                  restored (plist-put (copy-tree raw) :total-turn-count 99))
+                                 :total-turn-count))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
 
 
 ;;
@@ -346,17 +362,20 @@
   ,test
   (test)
   :doc "keeps only bounded read-safe checkpoint records"
-  (let* ((valid '(:id "p" :state running :args (:expression "(+ 1 2)")
+  (let* ((valid '(:id "p" :conversation "/root/worker" :state running :args (:expression "(+ 1 2)")
                   :result nil :render-data (:kind ptc :calls nil)
                   :unknown "discard me"))
-         (unsafe '(:id "bad" :state running :args (:expression "1")
+         (unsafe '(:id "bad" :conversation "/root" :state running :args (:expression "1")
                    :render-data #s(hash-table)))
-         (wrong-state '(:id "old" :state paused :args (:expression "1")))
+         (wrong-state '(:id "old" :conversation "/root" :state paused :args (:expression "1")))
+         (missing-conversation '(:id "missing" :state running :args (:expression "1")))
+         (bad-conversation '(:id "wrong" :conversation "worker" :state running :args (:expression "1")))
          (result
           (mevedel-session-codec--sanitize-ptc-checkpoints
-           (list valid unsafe wrong-state))))
+           (list valid unsafe wrong-state missing-conversation bad-conversation))))
     (should (= 1 (length result)))
     (should (equal "p" (plist-get (car result) :id)))
+    (should (equal "/root/worker" (plist-get (car result) :conversation)))
     (should (equal "(+ 1 2)"
                    (plist-get (plist-get (car result) :args) :expression)))
     (should-not (plist-member (car result) :unknown))))
@@ -776,10 +795,10 @@
                            :path "agents/one.chat.org"
                            :status completed :parent-turn 3))
                         (mevedel-session-messages source)
-                        '((:type RESULT :sender "/root/worker"
+                        '((:id "result-1" :type RESULT :sender "/root/worker"
                            :recipient "/root" :outcome completed
                            :payload "done" :timestamp (12345 67890 0 0))
-                          (:type MAIL :sender "/root/reviewer"
+                          (:id "mail-1" :type MAIL :sender "/root/reviewer"
                            :recipient "/root" :payload "note"
                            :timestamp (12345 67891 0 0)))))
                (plist (mevedel-session-codec-serialize

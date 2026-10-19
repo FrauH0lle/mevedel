@@ -39,13 +39,17 @@
 
 (defun mevedel-agent-control-test--session ()
   "Return a fresh in-memory session for agent-control tests."
-  (mevedel-session-create
-   "main"
-   (mevedel-workspace--create
-    :type 'project
-    :id "agent-control"
-    :root (mevedel-test--placeholder-root)
-    :name "agent-control")))
+  (let ((session
+         (mevedel-session-create
+          "main"
+          (mevedel-workspace--create
+           :type 'file
+           :id "agent-control"
+           :root (mevedel-test--placeholder-root)
+           :name "agent-control"))))
+    ;; File-workspace fixtures have no portable lease or root conversation.
+    ;; Portable authority and target replacement run in persistence suites.
+    session))
 
 (defun mevedel-agent-control-test--settle
     (session record invocation response &optional event)
@@ -213,6 +217,7 @@
     (setq buffer (find-file-noselect absolute))
     (setf (mevedel-session-save-path session) root)
     (setf (mevedel-agent-invocation-agent-id invocation) "default--worker")
+    (setf (mevedel-agent-invocation-path invocation) "/root/worker")
     (setf (mevedel-agent-invocation-buffer invocation) buffer)
     (setf (mevedel-agent-invocation-parent-session invocation) session)
     (setf (mevedel-agent-invocation-transcript-relative-path invocation)
@@ -699,7 +704,7 @@
                    (lambda (_) (cl-incf commits)))
                   ((symbol-function 'mevedel-pending-inputs-offer-root-event)
                    (lambda (&rest _)
-                     (should (= commits (if handler-mode 3 1)))
+                     (should (= commits 1))
                      (should (memq result (mevedel-session-messages session)))
                      (push t offered))))
           (mevedel-test--with-captured-diagnostics nil
@@ -708,30 +713,35 @@
           (should (eq wakes (mevedel-agent-control-wake-pending-p session)))
           (should (= (if wakes 1 0) (length offered)))))))
 
-  :doc "durably consumes a workflow RESULT before invoking its handler"
-  (let* ((session (mevedel-agent-control-test--session))
-         (result '(:type RESULT :sender "/root/review"
-                   :recipient "/root" :outcome completed :payload "done"))
-         (seen nil)
-         (queued-during-handler nil)
-         (persisted 0)
-         (record
-          (mevedel-agent-record--create
-           :path "/root/review" :parent-path "/root"
-           :result-handler
-           (lambda (value)
-             (setq seen value)
-             (setq queued-during-handler
-                   (memq value (mevedel-session-messages session)))))))
-    (setf (mevedel-session-save-path session) temporary-file-directory)
-    (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
-               (lambda (_session) (cl-incf persisted))))
-      (mevedel-agent-control--publish-result session record result))
-    (should (eq result seen))
-    (should-not queued-during-handler)
-    (should (= 2 persisted))
-    (should-not (mevedel-agent-record-result-handler record))
-    (should-not (mevedel-session-messages session)))
+  :doc "successful workflow delivery records a receipt and defers durable removal"
+  (with-temp-buffer
+    (let* ((session (mevedel-agent-control-test--session))
+           (result '(:type RESULT :sender "/root/review"
+                     :recipient "/root" :outcome completed :payload "done" :timestamp 0))
+           (seen nil)
+           (queued-during-handler nil)
+           (persisted 0)
+           (record
+            (mevedel-agent-record--create
+             :path "/root/review" :parent-path "/root"
+             :result-handler
+             (lambda (value)
+               (setq seen value)
+               (setq queued-during-handler
+                     (memq value (mevedel-session-messages session)))))))
+      (setf (mevedel-session-root-buffer session) (current-buffer))
+      (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
+                 (lambda (_session) (cl-incf persisted))))
+        (mevedel-agent-control--publish-result session record result))
+      (should (eq result seen))
+      (should queued-during-handler)
+      (should (= 1 persisted))
+      (should-not (mevedel-agent-record-result-handler record))
+      (should-not (mevedel-session-messages session))
+      (should (equal (mevedel-agent-persistence-sanitize-mailbox (list result) "/root")
+                     (plist-get (mevedel-session-checkpoint-project session nil) :messages)))
+      (should (equal (list (list :type 'mailbox-receipt :id (plist-get result :id)))
+                     (mevedel-transcript-audit-records (buffer-string) 'mailbox-receipt)))))
 
   :doc "falls back to durable parent mail when the workflow handler fails"
   (let* ((session (mevedel-agent-control-test--session))
@@ -743,6 +753,7 @@
            (lambda (value)
              (setq queued-during-handler
                    (memq value (mevedel-session-messages session)))
+             (mevedel-agent-control-send-message session "/root" "nested arrival")
              (error "Broken workflow"))))
          (result '(:type RESULT :sender "/root/review"
                    :recipient "/root" :outcome completed :payload "done"))
@@ -750,13 +761,15 @@
     (cl-letf (((symbol-function 'display-warning)
                (lambda (&rest args) (setq warning args))))
       (mevedel-agent-control--publish-result session record result))
-    (should-not queued-during-handler)
-    (should (eq result (car (mevedel-session-messages session))))
+    (should queued-during-handler)
+    (should (memq result (mevedel-session-messages session)))
+    (should (equal "nested arrival"
+                   (plist-get (car (mevedel-session-messages session)) :payload)))
     (should-not (mevedel-agent-record-result-handler record))
     (should (string-match-p "result handler failed"
                             (cadr warning))))
 
-  :doc "withholds a successful handler until RESULT consumption commits"
+  :doc "withholds a handler until its RESULT enqueue commits, not consumption"
   (let* ((session (mevedel-agent-control-test--session))
          (result '(:type RESULT :sender "/root/review"
                    :recipient "/root" :outcome completed :payload "done"))
@@ -769,21 +782,60 @@
     (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
                (lambda (_session)
                  (cl-incf commits)
-                 (when (= commits 2)
-                   (error "Consumption commit unavailable")))))
+                 (when (= commits 1)
+                   (error "Enqueue commit unavailable")))))
       (should-error
        (mevedel-agent-control--publish-result session record result))
       (should (zerop calls))
-      (should (memq result (mevedel-session-messages session)))
+      (should-not (mevedel-session-messages session))
       (should (mevedel-agent-record-result-handler record))
-      (mevedel-agent-control--publish-result session record result t))
+      (mevedel-agent-control--publish-result session record result))
     (should (= 1 calls))
     (should-not (mevedel-session-messages session))
     (should-not (mevedel-agent-record-result-handler record))))
 
+(mevedel-deftest mevedel-agent-control--settlement-mail-id ()
+  ,test
+  (test)
+  :doc "producer keys freeze distinct identities within one invocation"
+  (let* ((invocation (mevedel-agent-invocation-create (mevedel-agent-default)))
+         (id (mevedel-agent-control--settlement-mail-id invocation 'result)))
+    (should (equal id (mevedel-agent-control--settlement-mail-id invocation 'result)))
+    (should-not (equal id (mevedel-agent-control--settlement-mail-id invocation 'execution)))))
+
 (mevedel-deftest mevedel-agent-control--settle ()
   ,test
   (test)
+  :doc "authority preflight runs before terminal staging and snapshots nested arrivals"
+  (dolist (failure '(nil t))
+    (let* ((session (mevedel-agent-control-test--session))
+           (invocation (mevedel-agent-invocation-create (mevedel-agent-default)))
+           (record (mevedel-agent-record--create
+                    :path "/root/work" :parent-path "/root"
+                    :activity 'running :invocation invocation))
+           transaction entered)
+      (cl-letf (((symbol-function 'mevedel-session-artifacts-assert-mutation-authority)
+                 (lambda (value &optional _buffer)
+                   (should (eq session value))
+                   (setq entered t)
+                   (should (eq 'running (mevedel-agent-record-activity record)))
+                   (should-not (mevedel-agent-record-settled-result record))
+                   (should-not (mevedel-session-messages session))
+                   (mevedel-agent-control-send-message session "/root" "preflight arrival")
+                   (when failure (error "Target acknowledgement failed"))
+                   t)))
+        (if failure
+            (should-error (mevedel-agent-control--settle session record invocation "answer"))
+          (setq transaction (mevedel-agent-control--settle session record invocation "answer"))))
+      (should entered)
+      (when transaction (funcall (car transaction)))
+      (should (eq 'running (mevedel-agent-record-activity record)))
+      (should (eq invocation (mevedel-agent-record-invocation record)))
+      (should-not (mevedel-agent-record-settled-result record))
+      (should (equal '("preflight arrival")
+                     (mapcar (lambda (message) (plist-get message :payload))
+                             (mevedel-session-messages session))))))
+
   :doc "all terminal outcomes wake the root only after settlement commits"
   (dolist (status '(completed error aborted))
     (let* ((session (mevedel-agent-control-test--session))
@@ -898,6 +950,91 @@
     (should (eq old (mevedel-agent-record-model-metadata record)))
     (should (eq invocation (mevedel-agent-record-invocation record)))
     (should-not (mevedel-session-messages session)))
+
+  :doc "settlement rollback preserves nested arrivals and forwarded execution identity"
+  (let* ((session (mevedel-agent-control-test--session))
+         (invocation (mevedel-agent-invocation--create
+                      :path "/root/work" :parent-session session))
+         (record (mevedel-agent-record--create
+                  :path "/root/work" :parent-path "/root"
+                  :activity 'running :invocation invocation))
+         transaction execution-id)
+    (setf (mevedel-session-agent-registry session) (list (cons "/root/work" record)))
+    (mevedel-agent-control-enqueue-execution-result session "/root/work" "unread execution")
+    (setq execution-id (plist-get (car (mevedel-agent-record-mailbox record)) :id)
+          transaction (mevedel-agent-control--settle session record invocation "answer"))
+    (should (equal execution-id (plist-get (car (mevedel-session-messages session)) :id)))
+    (mevedel-agent-control-send-message session "/root" "new root arrival")
+    (mevedel-agent-control-send-message session "/root/work" "new agent arrival")
+    (funcall (car transaction))
+    (should (equal '("new root arrival")
+                   (mapcar (lambda (message) (plist-get message :payload))
+                           (mevedel-session-messages session))))
+    (should (equal '("new agent arrival" "unread execution")
+                   (mapcar (lambda (message) (plist-get message :payload))
+                           (mevedel-agent-record-mailbox record))))
+    (should (equal execution-id (plist-get (cadr (mevedel-agent-record-mailbox record)) :id))))
+
+  :doc "failed settlement retry preserves IDs but the next turn gets fresh IDs"
+  (let* ((session (mevedel-agent-control-test--session))
+         (invocation (mevedel-agent-invocation--create
+                      :path "/root/work" :parent-session session
+                      :runtime-execution-results '(("completion"))))
+         (record (mevedel-agent-record--create
+                  :path "/root/work" :parent-path "/root"
+                  :activity 'running :invocation invocation))
+         (transaction (mevedel-agent-control--settle session record invocation "answer"))
+         (ids (mapcar (lambda (message) (plist-get message :id))
+                      (mevedel-session-messages session))))
+    (funcall (car transaction))
+    (setq transaction (mevedel-agent-control--settle session record invocation "answer"))
+    (should (equal ids (mapcar (lambda (message) (plist-get message :id))
+                              (mevedel-session-messages session))))
+    (funcall (cdr transaction))
+    (should-not (plist-get (mevedel-engine-info invocation) :mevedel-settlement-mail-ids))
+    ;; Even reusing the same invocation and completion entry cannot retain
+    ;; the previous turn's IDs.  Ordinary FollowupAgent allocates a fresh one.
+    (setf (mevedel-session-messages session) nil
+          (mevedel-agent-record-activity record) 'running
+          (mevedel-agent-record-invocation record) invocation)
+    (setq transaction (mevedel-agent-control--settle session record invocation "next answer"))
+    (should-not (cl-intersection ids
+                                 (mapcar (lambda (message) (plist-get message :id))
+                                         (mevedel-session-messages session))
+                                 :test #'equal))
+    (funcall (car transaction)))
+
+  :doc "parent WAIT cannot consume tentative terminal mail before commit or rollback"
+  (with-temp-buffer
+    (let* ((session (mevedel-agent-control-test--session))
+           (invocation (mevedel-agent-invocation--create
+                        :path "/root/work" :parent-session session
+                        :runtime-execution-results '(("completion"))))
+           (record (mevedel-agent-record--create
+                    :path "/root/work" :parent-path "/root"
+                    :activity 'running :invocation invocation))
+           (data (list :messages []))
+           (fsm (gptel-make-fsm :info (list :buffer (current-buffer) :backend nil :data data)))
+           transaction)
+      (setq-local mevedel--session session)
+      (setf (mevedel-session-root-buffer session) (current-buffer))
+      (setq transaction (mevedel-agent-control--settle session record invocation "answer"))
+      ;; This is the receiving WAIT interleaved with the writer's before-save
+      ;; I/O, while its ordinary raw sidecar still needs the tentative records.
+      (should (= 2 (length (mevedel-session-messages session))))
+      (mevedel-tools--handle-message-inject fsm)
+      (should (= 0 (length (plist-get data :messages))))
+      (should (= 0 (buffer-size)))
+      (should-not (plist-get (mevedel-session-checkpoint-project session nil) :messages))
+      (funcall (car transaction))
+      (should-not (mevedel-session-messages session))
+      (setq transaction (mevedel-agent-control--settle session record invocation "answer"))
+      (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event) #'ignore))
+        (funcall (cdr transaction)))
+      (mevedel-tools--handle-message-inject fsm)
+      (should (= 2 (length (plist-get data :messages))))
+      (should (= 2 (length (mevedel-transcript-audit-records (buffer-string) 'mailbox-receipt))))
+      (should-not (mevedel-session-messages session))))
 
   :doc "reports the child's normalized token usage while its FSM is attached"
   (let* ((session (mevedel-agent-control-test--session))
@@ -2293,30 +2430,97 @@
       (kill-buffer first-buffer)
       (kill-buffer second-buffer))))
 
+(mevedel-deftest mevedel-agent-control--identify-record ()
+  ,test
+  (test)
+  :doc "assigns once and rejects malformed supplied producer identities"
+  (let* ((record (list :type 'MAIL))
+         (identified (mevedel-agent-control--identify-record record))
+         (id (plist-get identified :id)))
+    (should (eq record identified))
+    (should (stringp id))
+    (should (equal id (plist-get (mevedel-agent-control--identify-record record) :id))))
+  (dolist (id '("" 12))
+    (should-error (mevedel-agent-control--identify-record (list :type 'MAIL :id id)))))
+
+(mevedel-deftest mevedel-agent-control-message-receipt ()
+  ,test
+  (test)
+  :doc "workflow and native receipts use the same hidden durable ID representation"
+  (let ((receipt (mevedel-agent-control-message-receipt '(:id "durable" :payload "not copied"))))
+    (should (equal '((:type mailbox-receipt :id "durable"))
+                   (mevedel-transcript-audit-records receipt 'mailbox-receipt)))
+    (should-not (string-search "not copied" receipt))))
+
+(mevedel-deftest mevedel-agent-control--enqueue-records ()
+  ,test
+  (test)
+  :doc "producer identities survive commit retry and remain distinct for equal payloads"
+  (let* ((session (mevedel-agent-control-test--session))
+         (records (cl-loop for type in '(MAIL EXECUTION RESULT USER MONITOR MONITOR_TERMINAL)
+                           collect (list :type type :recipient "/root" :payload "same")))
+         ids)
+    (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
+               (lambda (_) (error "Injected enqueue failure"))))
+      (should-error (mevedel-agent-control--enqueue-records session "/root" records)))
+    (should-not (mevedel-session-messages session))
+    (setq ids (mapcar (lambda (record) (plist-get record :id)) records))
+    (should (cl-every #'stringp ids))
+    (should (= 6 (length (delete-dups (copy-sequence ids)))))
+    (mevedel-agent-control--enqueue-records session "/root" records)
+    (should (equal ids (mapcar (lambda (record) (plist-get record :id))
+                              (mevedel-agent-control-context-mailbox session)))))
+
+  :doc "failed enqueue commit preserves mail produced by a nested hook"
+  (let ((session (mevedel-agent-control-test--session)) nested)
+    (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
+               (lambda (_)
+                 (unless nested
+                   (setq nested t)
+                   (mevedel-agent-control-send-message session "/root" "nested arrival")
+                   (error "Injected outer enqueue failure")))))
+      (should-error (mevedel-agent-control-send-message session "/root" "outer mail")))
+    (should (equal '("nested arrival")
+                   (mapcar (lambda (message) (plist-get message :payload))
+                           (mevedel-session-messages session)))))
+
+  :doc "a receiving WAIT cannot see an ordinary enqueue before its commit"
+  (let ((session (mevedel-agent-control-test--session)) entered)
+    (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
+               (lambda (_)
+                 (setq entered t)
+                 (should (= 1 (length (mevedel-session-messages session))))
+                 (should-not (mevedel-agent-control-context-mailbox session)))))
+      (mevedel-agent-control-send-message session "/root" "committed mail"))
+    (should entered)
+    (should (= 1 (length (mevedel-agent-control-context-mailbox session))))))
+
 (mevedel-deftest mevedel-agent-control-acknowledge-mail ()
   ,test
   (test)
-  :doc "checkpoint failure restores captured mail without losing later arrivals"
-  (dolist (failure '(nil error))
-    (let* ((session (mevedel-agent-control-test--session))
-           (captured (list :type 'MAIL :payload "captured"))
-           (uncaptured (list :type 'MAIL :payload "uncaptured"))
-           (arrival (list :type 'MAIL :payload "arrived during checkpoint"))
-           checkpointed)
-      (setf (mevedel-session-save-path session) temporary-file-directory
-            (mevedel-session-messages session) (list uncaptured captured))
-      (cl-letf (((symbol-function 'mevedel-session-persistence-autosave-buffer)
-                 (lambda (_buffer)
-                   (setq checkpointed t)
-                   (should mevedel-session-artifacts-require-agent-commit-p)
-                   (should (equal (list uncaptured) (mevedel-session-messages session)))
-                   (push arrival (mevedel-session-messages session))
-                   (when failure (error "Injected checkpoint failure"))
-                   nil)))
-        (should-error (mevedel-agent-control-acknowledge-mail session (list captured))))
-      (should checkpointed)
-      (should (equal (list arrival uncaptured captured)
-                     (mevedel-session-messages session))))))
+  :doc "consumption removes live mail without I/O but retains durable redelivery"
+  (let* ((session (mevedel-agent-control-test--session))
+         captured uncaptured)
+    (mevedel-agent-control-send-message session "/root" "captured")
+    (setq captured (car (mevedel-session-messages session)))
+    (mevedel-agent-control-send-message session "/root" "uncaptured")
+    (setq uncaptured (car (mevedel-session-messages session)))
+    (setf (mevedel-session-save-path session) temporary-file-directory)
+    (cl-letf (((symbol-function 'mevedel-session-persistence-autosave-buffer)
+               (lambda (&rest _) (ert-fail "Consumption must not save"))))
+      ;; A detached copy models capture/restore; identity, not object eq, wins.
+      (mevedel-agent-control-acknowledge-mail session (list (copy-tree captured))))
+    (should (equal (list uncaptured) (mevedel-session-messages session)))
+    (should (equal (mevedel-agent-persistence-sanitize-mailbox
+                    (list uncaptured captured) "/root")
+                   (plist-get (mevedel-session-checkpoint-project
+                               session (list :messages (mevedel-session-messages session)))
+                              :messages)))
+    ;; Explicit discard is not a delivery receipt: it only drops live mail.
+    (mevedel-agent-control-clear-context-mailbox session)
+    (should (equal (mevedel-agent-persistence-sanitize-mailbox (list captured) "/root")
+                   (plist-get (mevedel-session-checkpoint-project session nil)
+                              :messages)))))
 
 (mevedel-deftest mevedel-agent-control-send-message ()
   ,test
@@ -2417,8 +2621,9 @@
          :payload "second"))
       (mapcar
        (lambda (record)
+         (should (stringp (plist-get record :id)))
          (cl-loop for (key value) on record by #'cddr
-                  unless (eq key :timestamp)
+                  unless (memq key '(:timestamp :id))
                   append (list key value)))
        (mevedel-agent-control--mailbox session "/root/idle"))))
     (should (= 1 (length

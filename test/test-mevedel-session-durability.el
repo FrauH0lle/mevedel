@@ -3129,6 +3129,7 @@
          (session (test-mevedel-session-durability--local-session local-root))
          (mevedel-session-durability--client-id (make-string 64 ?a)))
     (make-directory session-dir t)
+    (mevedel-workspace-identity-ensure local-root)
     (setf (mevedel-session-save-path session) session-dir)
     (unwind-protect
         (progn
@@ -3145,7 +3146,9 @@
            (mevedel-session-publication-publish
             session
             (list (list :path second :content "new second")
-                  (list :path sidecar :content "new sidecar"
+                  (list :path sidecar :content
+                        (mevedel-session-artifacts-printed-value
+                         (mevedel-session-codec-serialize session))
                         :commit-marker t :replace t))))
           (let ((artifacts
                  (plist-get
@@ -4121,6 +4124,9 @@
           (should
            (mevedel-session-persistence-lock-acquire
             session-dir "*agent-terminal*" session))
+          ;; Establish the real target identity before testing a terminal
+          ;; transaction.  Replacement acknowledgement is a separate commit.
+          (mevedel-session-artifacts-check-target-incarnation session parent)
           (should
            (mevedel-session-publication-publish
             session
@@ -4205,6 +4211,7 @@
           (let ((invocation
                  (mevedel-agent-invocation--create
                   :agent-id "test-agent"
+                  :path "/root/test-agent"
                   :parent-session session
                   :parent-data-buffer parent
                   :buffer child
@@ -4223,8 +4230,9 @@
                    'mevedel-session-artifacts-assert-mutation-authority)
                   (lambda (&rest _) t))
                  ((symbol-function 'mevedel-session-publication-publish)
-                  (lambda (_session artifacts &optional require-commit)
+                  (lambda (_session artifacts &optional require-commit prepared)
                     (should require-commit)
+                    (should prepared)
                     (setq published artifacts)
                     t)))
               (mevedel-test--with-captured-diagnostics nil

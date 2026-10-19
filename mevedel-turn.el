@@ -159,7 +159,7 @@
 
 ;; `mevedel-ptc-checkpoint'
 (declare-function mevedel-ptc-checkpoint-clear-settled
-                  "mevedel-ptc-checkpoint" (session))
+                  "mevedel-ptc-checkpoint" (session &optional conversation buffer))
 (autoload 'mevedel-ptc-checkpoint-clear-settled "mevedel-ptc-checkpoint")
 
 ;; `mevedel-reminders'
@@ -812,7 +812,7 @@ Signal when the request is missing or its reservation is not the next turn."
         (let ((ptc-checkpoints (mevedel-session-ptc-checkpoints mevedel--session)))
           (condition-case err
               (progn
-                (mevedel-ptc-checkpoint-clear-settled mevedel--session)
+                (mevedel-ptc-checkpoint-clear-settled mevedel--session "/root")
                 (unless (mevedel-session-artifacts-save mevedel--session chat-buffer t)
                   (error "Session auto-save did not publish"))
                 (when (bound-and-true-p mevedel-session--save-failed)

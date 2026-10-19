@@ -10,7 +10,11 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-session-checkpoint)
 (require 'mevedel-structs)
+
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-path "mevedel-agents" (cl-x))
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-save
@@ -18,8 +22,12 @@
 (autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-root-buffer-for-session
+                  "mevedel-session-persistence" (session &optional buffer))
 (declare-function mevedel-session-persistence-write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
+(autoload 'mevedel-session-persistence-root-buffer-for-session
+  "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-write-sidecar-now
   "mevedel-session-persistence")
 
@@ -44,6 +52,17 @@
 ;;
 ;;; Checkpoint lifecycle
 
+(defun mevedel-ptc-checkpoint--conversation (buffer)
+  "Return the retained conversation owning BUFFER, or the root path."
+  (let* ((invocation (and (buffer-live-p buffer)
+                          (buffer-local-value 'mevedel--agent-invocation buffer)))
+         (path (if invocation
+                   (mevedel-agent-invocation-path invocation)
+                 "/root")))
+    (unless (mevedel-agent-path-p path)
+      (error "Invalid ToolCall conversation: %S" path))
+    path))
+
 (defun mevedel-ptc-checkpoint--put (session checkpoint)
   "Replace CHECKPOINT in SESSION by its `:id'."
   (let ((id (plist-get checkpoint :id)))
@@ -56,12 +75,16 @@
 (defun mevedel-ptc-checkpoint-start (session buffer id script)
   "Durably start ID for SESSION and BUFFER with SCRIPT."
   (when session
-    (let ((before (mevedel-session-ptc-checkpoints session)))
+    (let ((before (mevedel-session-ptc-checkpoints session))
+          (root-buffer (or (mevedel-session-persistence-root-buffer-for-session
+                            session buffer)
+                           buffer)))
       (condition-case err
           (progn
             (mevedel-ptc-checkpoint--put
              session
-             (list :id id :args (list :expression script) :state 'running
+             (list :id id :conversation (mevedel-ptc-checkpoint--conversation buffer)
+                   :args (list :expression script) :state 'running
                    :render-data
                    (list :kind 'ptc :outcome 'running :calls nil)))
             ;; Record the checkpoint before any nested tool can run.  Restore
@@ -69,8 +92,8 @@
             ;; sidecar is enough; only a fresh session needs the full save
             ;; that materializes it.  That save cost a quarter second per
             ;; call on a long session.
-            (or (mevedel-session-persistence-write-sidecar-now session buffer)
-                (mevedel-session-artifacts-save session buffer nil t)
+            (or (mevedel-session-persistence-write-sidecar-now session root-buffer)
+                (mevedel-session-artifacts-save session root-buffer nil t)
                 (progn
                   (setf (mevedel-session-ptc-checkpoints session) before)
                   nil)))
@@ -108,11 +131,14 @@ checkpoint exists."
 Return non-nil when the checkpoint is durable or SESSION is nil."
   (if (not session)
       t
-    (let ((before (mevedel-session-ptc-checkpoints session)))
+    (let ((before (mevedel-session-ptc-checkpoints session))
+          (root-buffer (or (mevedel-session-persistence-root-buffer-for-session
+                            session buffer)
+                           buffer)))
       (condition-case err
           (when (mevedel-ptc-checkpoint--merge session id updates)
             (or (mevedel-session-persistence-write-sidecar-now
-                 session buffer)
+                 session root-buffer)
                 (progn
                   (setf (mevedel-session-ptc-checkpoints session) before)
                   nil)))
@@ -120,14 +146,28 @@ Return non-nil when the checkpoint is durable or SESSION is nil."
          (setf (mevedel-session-ptc-checkpoints session) before)
          (signal (car err) (cdr err)))))))
 
-(defun mevedel-ptc-checkpoint-clear-settled (session)
-  "Remove settled ToolCall checkpoints from SESSION in memory.
-The completed-turn save commits this change together with the final tool row."
+(defun mevedel-ptc-checkpoint-clear-settled (session &optional conversation buffer)
+  "Defer settled SESSION ToolCalls owned by CONVERSATION, defaulting to root.
+BUFFER defaults to the current transcript.  Only rows already present in
+that transcript may retire; post-tool saves can precede the final tool row.
+Remove live rows in favor of the transcript, retaining their full records in
+the committed checkpoint owner until that transcript actually commits."
   (when session
-    (setf (mevedel-session-ptc-checkpoints session)
-          (seq-remove
-           (lambda (item) (eq 'settled (plist-get item :state)))
-           (mevedel-session-ptc-checkpoints session)))))
+    (let* ((conversation (or conversation "/root"))
+           (buffer (or buffer (current-buffer)))
+           (settled (cl-remove-if-not
+                     (lambda (item)
+                       (and (eq 'settled (plist-get item :state))
+                            (equal conversation (plist-get item :conversation))
+                            (buffer-live-p buffer)
+                            (with-current-buffer buffer
+                              (mevedel-tool-render-data-segment-bounds
+                               (plist-get item :id)))))
+                     (mevedel-session-ptc-checkpoints session))))
+      (mevedel-session-checkpoint-defer-ptc session conversation settled)
+      (setf (mevedel-session-ptc-checkpoints session)
+            (seq-remove (lambda (item) (memq item settled))
+                        (mevedel-session-ptc-checkpoints session))))))
 
 
 ;;
@@ -175,17 +215,26 @@ The completed-turn save commits this change together with the final tool row."
     (insert "#+end_tool\n")
     (put-text-property body-start body-end 'gptel (cons 'tool id))))
 
-(defun mevedel-ptc-checkpoint-reconcile (session)
-  "Settle surviving SESSION ToolCall checkpoints in the current transcript.
+(defun mevedel-ptc-checkpoint-reconcile (session &optional conversation)
+  "Settle SESSION ToolCalls belonging to the current CONVERSATION transcript.
+CONVERSATION defaults to the current buffer's retained agent path or root.
 Return (INSERTED . CONSUMED), counting transcript rows and checkpoints."
-  (let* ((checkpoints (mevedel-session-ptc-checkpoints session))
+  (let* ((conversation (or conversation
+                           (mevedel-ptc-checkpoint--conversation (current-buffer))))
+         (checkpoints
+          (cl-remove-if-not
+           (lambda (item) (equal conversation (plist-get item :conversation)))
+           (mevedel-session-ptc-checkpoints session)))
          (inserted 0))
     (dolist (checkpoint (reverse checkpoints))
       (unless (mevedel-tool-render-data-segment-bounds
                (plist-get checkpoint :id))
         (mevedel-ptc-checkpoint--insert checkpoint)
         (cl-incf inserted)))
-    (setf (mevedel-session-ptc-checkpoints session) nil)
+    (mevedel-session-checkpoint-defer-ptc session conversation checkpoints)
+    (setf (mevedel-session-ptc-checkpoints session)
+          (seq-remove (lambda (item) (memq item checkpoints))
+                      (mevedel-session-ptc-checkpoints session)))
     (cons inserted (length checkpoints))))
 
 (provide 'mevedel-ptc-checkpoint)

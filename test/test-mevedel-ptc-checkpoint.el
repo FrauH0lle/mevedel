@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-ptc-checkpoint)
+(require 'mevedel-agents)
 (require 'mevedel-structs)
 (require 'mevedel-tool-render-data)
 
@@ -55,7 +56,8 @@
               ((symbol-function 'mevedel-session-artifacts-save)
                (lambda (&rest _) (error "Full save for an existing sidecar"))))
       (should (mevedel-ptc-checkpoint-start session nil "p" "(+ 1 2)"))
-      (should (equal '("p") (mapcar (lambda (c) (plist-get c :id)) written)))))
+      (should (equal '("p") (mapcar (lambda (c) (plist-get c :id)) written)))
+      (should (equal "/root" (plist-get (car written) :conversation)))))
   :doc "materializes a fresh session through the full save"
   (let ((session (test-mevedel-ptc-checkpoint--session))
         saved)
@@ -66,6 +68,37 @@
       (should (mevedel-ptc-checkpoint-start session nil "p" "(+ 1 2)"))
       (should (equal (list session nil nil t) saved))
       (should (mevedel-session-ptc-checkpoints session)))))
+
+(mevedel-deftest mevedel-ptc-checkpoint--conversation ()
+  ,test
+  (test)
+  :doc "uses the originating agent path but persists through the root buffer"
+  (let ((session (test-mevedel-ptc-checkpoint--session))
+        (root (generate-new-buffer " *ptc-root*"))
+        (agent (generate-new-buffer " *ptc-agent*"))
+        buffers)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-root-buffer session) root)
+          (with-current-buffer agent
+            (setq-local mevedel--agent-invocation
+                        (mevedel-agent-invocation--create :path "/root/worker")))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-write-sidecar-now)
+                     (lambda (_session buffer) (push buffer buffers) t)))
+            (should (mevedel-ptc-checkpoint-start session agent "p" "1"))
+            (should (equal "/root/worker"
+                           (plist-get (car (mevedel-session-ptc-checkpoints session))
+                                      :conversation)))
+            (should (mevedel-ptc-checkpoint-update
+                     session agent "p" '(:state settled)))
+            (should (equal (list root root) buffers))))
+      (kill-buffer agent)
+      (kill-buffer root)))
+  :doc "rejects an invocation without a canonical retained path"
+  (with-temp-buffer
+    (setq-local mevedel--agent-invocation
+                (mevedel-agent-invocation--create :path "worker"))
+    (should-error (mevedel-ptc-checkpoint--conversation (current-buffer)))))
 
 (mevedel-deftest mevedel-ptc-checkpoint-update ()
   ,test
@@ -112,14 +145,53 @@
 (mevedel-deftest mevedel-ptc-checkpoint-clear-settled ()
   ,test
   (test)
-  :doc "keeps running checkpoints and removes settled ones"
+  :doc "defers only root's settled rows until the root transcript commits"
   (let ((session
          (test-mevedel-ptc-checkpoint--session
-          '((:id "running" :state running)
-            (:id "settled" :state settled)))))
-    (mevedel-ptc-checkpoint-clear-settled session)
-    (should (equal '((:id "running" :state running))
-                   (mevedel-session-ptc-checkpoints session)))))
+          '((:id "running" :conversation "/root" :state running)
+            (:id "settled" :conversation "/root" :state settled)
+            (:id "agent" :conversation "/root/worker" :state settled)))))
+    (with-temp-buffer
+      (insert (propertize "settled root tool" 'gptel '(tool . "settled")))
+      (mevedel-ptc-checkpoint-clear-settled session))
+    (should (equal '("running" "agent")
+                   (mapcar (lambda (row) (plist-get row :id))
+                           (mevedel-session-ptc-checkpoints session))))
+    (let* ((raw (list :ptc-checkpoints (mevedel-session-ptc-checkpoints session)))
+           (ordinary (mevedel-session-checkpoint-project session raw))
+           (candidate (mevedel-session-checkpoint-capture session "/root"))
+           (owned (mevedel-session-checkpoint-project session raw candidate)))
+      (should (= 3 (length (plist-get ordinary :ptc-checkpoints))))
+      (should (= 2 (length (plist-get owned :ptc-checkpoints))))
+      (mevedel-session-checkpoint-install session candidate)
+      (should (equal (plist-get owned :ptc-checkpoints)
+                     (plist-get (mevedel-session-checkpoint-project session raw)
+                                :ptc-checkpoints)))))
+  :doc "an agent's completed turn cannot retire root or sibling checkpoints"
+  (let ((session
+         (test-mevedel-ptc-checkpoint--session
+          '((:id "root" :conversation "/root" :state settled)
+            (:id "agent" :conversation "/root/worker" :state settled)
+            (:id "sibling" :conversation "/root/other" :state settled)))))
+    (with-temp-buffer
+      (insert (propertize "settled agent tool" 'gptel '(tool . "agent")))
+      (mevedel-ptc-checkpoint-clear-settled session "/root/worker"))
+    (should (equal '("root" "sibling")
+                   (mapcar (lambda (row) (plist-get row :id))
+                           (mevedel-session-ptc-checkpoints session)))))
+  :doc "a post-tool save cannot retire a settled row not yet in its transcript"
+  (let* ((row '(:id "agent" :conversation "/root/worker" :state settled))
+         (session (test-mevedel-ptc-checkpoint--session (list row))))
+    (with-temp-buffer
+      (mevedel-ptc-checkpoint-clear-settled session "/root/worker")
+      (should (equal (list row) (mevedel-session-ptc-checkpoints session)))
+      (let ((candidate (mevedel-session-checkpoint-capture session "/root/worker")))
+        (should (equal
+                 (list row)
+                 (plist-get
+                  (mevedel-session-checkpoint-project
+                   session (list :ptc-checkpoints (list row)) candidate)
+                  :ptc-checkpoints)))))))
 
 
 ;;
@@ -178,9 +250,9 @@
   (test)
   :doc "inserts only missing rows and consumes every checkpoint"
   (let* ((checkpoints
-          '((:id "present" :args (:expression "1") :state settled
+          '((:id "present" :conversation "/root" :args (:expression "1") :state settled
              :result "1" :render-data (:kind ptc :outcome completed :calls nil))
-            (:id "missing" :args (:expression "2") :state running
+            (:id "missing" :conversation "/root" :args (:expression "2") :state running
              :render-data (:kind ptc :outcome running :calls nil))))
          (session (test-mevedel-ptc-checkpoint--session checkpoints)))
     (with-temp-buffer
@@ -192,7 +264,31 @@
       (setf (mevedel-session-ptc-checkpoints session) (list (car checkpoints)))
       (should (equal '(0 . 1)
                      (mevedel-ptc-checkpoint-reconcile session)))
-      (should-not (mevedel-session-ptc-checkpoints session)))))
+      (should-not (mevedel-session-ptc-checkpoints session))))
+  :doc "recovery inserts only the receiving conversation and retains until commit"
+  (let* ((root-row '(:id "root" :conversation "/root" :args (:expression "1")
+                       :state running :render-data (:kind ptc :calls nil)))
+         (agent-row '(:id "agent" :conversation "/root/worker" :args (:expression "2")
+                        :state settled :result "2" :render-data (:kind ptc :calls nil)))
+         (session (test-mevedel-ptc-checkpoint--session (list root-row agent-row))))
+    (with-temp-buffer
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create :path "/root/worker"))
+      (should (equal '(1 . 1) (mevedel-ptc-checkpoint-reconcile session)))
+      (should (mevedel-tool-render-data-segment-bounds "agent"))
+      (should-not (mevedel-tool-render-data-segment-bounds "root"))
+      (should (equal (list root-row) (mevedel-session-ptc-checkpoints session)))
+      (let* ((raw (list :ptc-checkpoints (mevedel-session-ptc-checkpoints session)))
+             (ordinary (mevedel-session-checkpoint-project session raw))
+             (candidate (mevedel-session-checkpoint-capture session "/root/worker")))
+        (should (equal (list root-row agent-row) (plist-get ordinary :ptc-checkpoints)))
+        (should (equal (list root-row)
+                       (plist-get (mevedel-session-checkpoint-project session raw candidate)
+                                  :ptc-checkpoints)))
+        (mevedel-session-checkpoint-install session candidate)
+        (should (equal (list root-row)
+                       (plist-get (mevedel-session-checkpoint-project session raw)
+                                  :ptc-checkpoints)))))))
 
 (provide 'test-mevedel-ptc-checkpoint)
 

@@ -66,13 +66,15 @@ fields such as a record's wake mark are not part of the canonical form."
                   (cl-every #'integerp value)))))
     (cl-loop
      for entry in (and (proper-list-p raw) raw)
+     for id = (and (proper-list-p entry) (plist-get entry :id))
      for type = (and (proper-list-p entry) (plist-get entry :type))
      for sender = (and type (plist-get entry :sender))
      for target = (and type (plist-get entry :recipient))
      for payload = (and type (plist-get entry :payload))
      for timestamp = (and type (plist-get entry :timestamp))
      when
-     (and (memq type '(EXECUTION MAIL MONITOR MONITOR_TERMINAL RESULT USER))
+     (and (stringp id) (not (string-empty-p id))
+          (memq type '(EXECUTION MAIL MONITOR MONITOR_TERMINAL RESULT USER))
           (equal target recipient)
           (stringp payload)
           (timestamp-p timestamp)
@@ -96,7 +98,8 @@ fields such as a record's wake mark are not part of the canonical form."
                         '(completed errored interrupted))))))
      collect
      (let ((clean
-            (list :type type
+            (list :id (copy-sequence id)
+                  :type type
                   :sender sender
                   :recipient target
                   :payload payload

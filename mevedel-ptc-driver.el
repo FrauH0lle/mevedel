@@ -81,9 +81,6 @@
 
 ;;;; Nested calls
 
-(defvar mevedel-ptc-driver--next-envelope-id 0
-  "Fallback identity counter for ToolCall calls lacking a tool-use id.")
-
 (defconst mevedel-ptc-driver--preview-length 200
   "Maximum characters of a nested result kept in the audit record.")
 
@@ -371,17 +368,15 @@ ERROR-KIND is the interpreter's typed failure category when available."
          (started-at (float-time))
          (envelope-id
           (or (mevedel-pipeline-active-tool-use-id)
-              (format "ptc-%d"
-                      (cl-incf mevedel-ptc-driver--next-envelope-id))))
+              (concat "ptc-"
+                      (md5 (format "%s:%s:%s"
+                                   (emacs-pid) (current-time) (random))))))
          (session (mevedel-telemetry-current-session data-buffer))
-         ;; A retained-agent buffer resolves to the parent session, whose
-         ;; checkpoint recovery reconciles into the root transcript.  An
-         ;; agent-run script therefore never checkpoints; a restart settles
-         ;; it through the agent's own interrupted-turn handling.
+         ;; The durable root session owns rows for every retained conversation;
+         ;; each row identifies the transcript that can retire it.
          (checkpoint-session
           (and session
                (mevedel-session-execution-target session)
-               (not mevedel--agent-invocation)
                session))
          (telemetry-span
           (when session

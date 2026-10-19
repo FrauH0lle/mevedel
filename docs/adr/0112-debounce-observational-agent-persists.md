@@ -6,32 +6,60 @@ Status: accepted
 
 Acknowledged agent mutations remain synchronous: spawn registration, mailbox
 append, RESULT publication, and settlement return only after their publication
-commits. They refuse reentrant queueing. Observational activity changes and
+commits. They refuse reentrant queueing. Tentative records are hidden from
+delivery until that acknowledgement, so a nested WAIT cannot consume a RESULT
+whose terminal transaction later rolls back. Observational activity changes and
 explicit mailbox discards schedule one sidecar-only registry save per session, with
 a two-second default debounce through the idle-transport scheduler.
 
-Acknowledged registry and mailbox mutations force a full root checkpoint and
-include any retained artifact batches. Root metadata can advance before its
-deferred settlement save, so a sidecar-only acknowledgement is not safe without
-a separate committed-root projection. Terminal agent settlement commits its
-transcript with its metadata.
+Acknowledged registry and mailbox mutations publish only the sidecar once the
+first root snapshot exists. `mevedel-session-checkpoint.el` owns the root fields
+as of the last committed transcript: segment, turn count, prompt index, file
+snapshots, chapters, and first/latest user previews. Ordinary metadata writes
+project those committed fields rather than tentative live values. Terminal
+agent settlement commits its transcript with its metadata.
 
-Delivered mail is consumed only after successful transcript insertion. Queue
-removal checkpoints the receiving conversation through the existing root/agent
-autosave writer, with required publication rather than reentrant queueing. A
-portable head therefore contains both the delivered text and its removal from
-the mailbox; a file-session checkpoint writes text before its sidecar. Failure
-restores consumed records while preserving later arrivals. One nonempty batch
-pays for one checkpoint instead of saving each retained-agent block separately,
-and empty/repeated acknowledgements do no work.
+Goal accounting, Plan decisions, and native-provider conversation identity are
+independently durable control state, not root transcript projections. Goal
+budgets account for incurred work and restore active Goals paused; Plan metadata
+refers to already published hash-bound artifacts; provider conversation metadata
+names external history and restores in-flight state as uncertain. These fields
+may advance without claiming that the local root transcript has advanced.
 
-Root and agent checkpoint preparation excludes nested same-session writers,
-including observational sidecar saves from hooks. The owning writer explicitly
-admits its final prepared publication; failures unwind the exclusion. Otherwise
-a save hook could commit tentative consumption without its transcript and then
-fail, leaving in-memory rollback unable to repair the committed mailbox.
+Delivered mail is consumed in memory after successful transcript insertion,
+without a synchronous save. Every record has a durable ID and its transcript
+has a hidden receipt, allowing repeated delivery to be deduplicated. The owner
+retains consumed records in a per-conversation ledger and merges them back into
+ordinary sidecars until that receiving transcript commits. Transcript writers
+capture an opaque candidate at byte freeze; only actual head adoption installs
+it, including retry. A root checkpoint cannot retire an agent's consumption,
+and arrivals or consumption after capture remain pending. File sessions write
+the transcript before the matching sidecar and install after that sidecar write.
+Settled ToolCall audit rows use the same per-conversation deferred-removal rule.
 
-New retained transcript text and dirty transcript metadata share a strict
+Queued sidecars are reprojected through the current committed owner before
+publication. Retirement proofs survive only while publication work is active,
+queued, or pending retry. This prevents an older queued sidecar from resurrecting
+mail or ToolCall rows after their receipts move to an archived segment, without
+retaining session-lifetime identity history. Restore and intentional replacement
+seed a new owner epoch; stale candidates cannot install into it.
+
+Preparation excludes overlapping transcript serializers, but ordinary sidecar
+writes from save hooks are safe through the projection. Terminal settlement
+still excludes nested writers while its tentative registry and RESULT state
+must commit together. Failures unwind this exclusion. A queued or failed save
+does not install its candidate merely because the save function returned.
+Authority admission, sidecar capture, and publication share the existing
+transaction observations; path and instruction I/O precede ancillary capture.
+Otherwise a nested acknowledged arrival during a second recovery read could
+be overwritten by an already-frozen sidecar. Segment transitions identify
+their own adoption through the committed root projection, not unrelated head
+movement from a nested mailbox publication.
+Writers clear a buffer's modified flag only if its character-change tick still
+matches the frozen bytes; delivery during target I/O remains dirty for the next
+checkpoint rather than losing its unsaved receipt.
+
+New retained transcript text and its transcript metadata share a strict
 publication when the portable sidecar already exists. The session root supplies
 that sidecar even for nested agents. Provider setup reuses the transcript saved
 after frozen configuration was installed, without forcing another write.
@@ -74,19 +102,29 @@ transactional journal.
 
 All revisions belong to ADR 0112:
 
+- **2026-10-19 unified committed checkpoint:** the full-save fallback added
+  120–132 ms to each root delivery batch in compiled private-copy replays.
+  A single owner now projects committed root fields and retains consumed mail
+  and removed ToolCall rows until the receiving transcript actually commits.
+  This replaces both forced root saves on acknowledgement and synchronous
+  consumption checkpoints, without pretending live metadata is committed.
+  Durable identities and hidden transcript receipts support at-least-once
+  delivery; failed callbacks leave mail queued. A workflow callback can
+  checkpoint its effects before returning, so process loss before its receipt
+  becomes durable can still repeat that callback's RESULT as ordinary mail.
 - **Consumption checkpoint ordering:** review found that debounced consumption
   could commit an empty mailbox before the injected transcript text reached disk.
-  A crash then lost both copies. Consumption now reuses the existing conversation
+  A crash then lost both copies. The fallback reused the existing conversation
   checkpoint, preserving native response boundaries and prompt-index updates;
   raw text plus a sidecar would leave those offsets stale. This deliberately
-  spends one synchronous checkpoint per delivered batch to close the loss window.
+  spent one synchronous checkpoint per delivered batch to close the loss window.
   Agent delivery replaces its per-block saves with this one checkpoint.
 - **2026-10-19 acknowledged-save experiment reversed:** a sidecar-only path
   reduced median compiled acknowledgement from 145.2 to 55.2 ms on a private
   1.79 MB/27-agent session copy. A real-disk restore at the synchronous turn
   commit/deferred save seam then reproduced turn 1 metadata against a partial
   turn 0 transcript. The same hole followed failed root-save preparation.
-  Full acknowledged checkpoints are retained rather than adding a separate
+  Full acknowledged checkpoints were retained rather than adding a separate
   committed-root schema and special cases for history and checkpoint writers.
   Speedup measurements from the rejected narrow-save variant are not evidence
   for the current design. Reentrant hook testing additionally reproduced lost

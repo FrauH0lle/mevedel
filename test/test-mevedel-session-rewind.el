@@ -2001,7 +2001,7 @@
                                   session-dir)
                                  :content
                                  (mevedel-session-artifacts-printed-value
-                                  (mevedel-session-artifacts-build-sidecar
+                                  (mevedel-session-artifacts--live-sidecar
                                    session (current-buffer)))
                                  :commit-marker t
                                  :replace t)))
@@ -2089,7 +2089,7 @@
                                   session-dir)
                                  :content
                                  (mevedel-session-artifacts-printed-value
-                                  (mevedel-session-artifacts-build-sidecar
+                                  (mevedel-session-artifacts--live-sidecar
                                    session (current-buffer)))
                                  :commit-marker t
                                  :replace t)))
@@ -2124,6 +2124,9 @@
                         (should-not (equal head rewound))
                         (should-not (equal head restorable)))
                       (should (= 1 (mevedel-session-turn-count session)))
+                      (should (= 1 (plist-get
+                                    (mevedel-session-checkpoint-project session nil)
+                                    :total-turn-count)))
                       (should
                        (equal "Original transcript\n"
                               (mevedel-session-artifacts-read-artifact
@@ -2196,7 +2199,7 @@
                                    session-dir)
                             :content
                             (mevedel-session-artifacts-printed-value
-                             (mevedel-session-artifacts-build-sidecar
+                             (mevedel-session-artifacts--live-sidecar
                               session (current-buffer)))
                             :commit-marker t
                             :replace t)))
@@ -2216,7 +2219,7 @@
                                      session-dir)
                               :content
                               (mevedel-session-artifacts-printed-value
-                               (mevedel-session-artifacts-build-sidecar
+                               (mevedel-session-artifacts--live-sidecar
                                 session (current-buffer)))
                               :commit-marker t
                               :replace t)))

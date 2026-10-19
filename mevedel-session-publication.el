@@ -23,6 +23,18 @@
 ;; `files'
 (defvar remote-file-name-inhibit-cache)
 
+;; `mevedel-session-checkpoint'
+(declare-function mevedel-session-checkpoint-install "mevedel-session-checkpoint" (session candidate))
+(declare-function mevedel-session-checkpoint-project "mevedel-session-checkpoint" (session sidecar &optional candidate))
+(declare-function mevedel-session-checkpoint-release-proofs "mevedel-session-checkpoint" (session))
+(declare-function mevedel-session-checkpoint-seed "mevedel-session-checkpoint" (session sidecar))
+(declare-function mevedel-session-checkpoint-valid-p "mevedel-session-checkpoint" (session candidate))
+(autoload 'mevedel-session-checkpoint-install "mevedel-session-checkpoint")
+(autoload 'mevedel-session-checkpoint-project "mevedel-session-checkpoint")
+(autoload 'mevedel-session-checkpoint-release-proofs "mevedel-session-checkpoint")
+(autoload 'mevedel-session-checkpoint-seed "mevedel-session-checkpoint")
+(autoload 'mevedel-session-checkpoint-valid-p "mevedel-session-checkpoint")
+
 ;; `mevedel-session-collection'
 (declare-function mevedel-session-collection-schedule "mevedel-session-collection" (session))
 (autoload 'mevedel-session-collection-schedule "mevedel-session-collection")
@@ -43,7 +55,13 @@
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-portable-authority-p
                   "mevedel-session-codec" (session))
+(declare-function mevedel-session-codec-read "mevedel-session-codec" (path))
+(declare-function mevedel-session-codec-validate-current-sidecar "mevedel-session-codec" (plist))
+(declare-function mevedel-session-codec-write "mevedel-session-codec" (path plist))
 (autoload 'mevedel-session-codec-portable-authority-p "mevedel-session-codec")
+(autoload 'mevedel-session-codec-read "mevedel-session-codec")
+(autoload 'mevedel-session-codec-validate-current-sidecar "mevedel-session-codec")
+(autoload 'mevedel-session-codec-write "mevedel-session-codec")
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-measure "mevedel-telemetry"
@@ -172,7 +190,8 @@
       (mevedel-session-publication-queue session)))
     (setf (mevedel-session-pending-publication session) nil
           (mevedel-session-publication-uncommitted-batches session) nil
-          (mevedel-session-publication-queue session) nil)))
+          (mevedel-session-publication-queue session) nil)
+    (mevedel-session-checkpoint-release-proofs session)))
 
 (defun mevedel-session-publication--batch-live-p (batch)
   "Return non-nil when BATCH still owns a staged source."
@@ -1336,8 +1355,35 @@ collision simply picks another name."
                   (mapcar
                    (lambda (batch) (plist-get batch :artifacts))
                    batches))))
+         (sidecar (cl-find "session.meta.el" artifacts
+                           :key (lambda (artifact) (plist-get artifact :logical))
+                           :test #'equal))
+         (checkpoint (plist-get sidecar :checkpoint))
+         ;; A replacement without a transcript candidate adopts another
+         ;; history.  Read and validate its frozen bytes before committing,
+         ;; never derive its root projection from the current live session.
+         (replacement
+          (when (and (plist-get marker :replace) (not checkpoint))
+            (mevedel-session-codec-validate-current-sidecar
+             (mevedel-session-codec-read (plist-get sidecar :source)))))
          (root (file-name-concat session-dir ".publications"))
          written directory)
+    (when (and checkpoint
+               (not (mevedel-session-checkpoint-valid-p session checkpoint)))
+      (error "Checkpoint candidate belongs to a different owner epoch"))
+    ;; A queued metadata or agent sidecar can predate a root commit earlier
+    ;; in this drain.  Refresh only its checkpoint projection from the owner,
+    ;; never from live root fields.  Explicit replacements adopt their own
+    ;; history instead.  Blob-only publication has no checkpoint owner.
+    (when (and (not replacement) (not (plist-get marker :replace))
+               (mevedel-session-checkpoint-state session))
+      (let* ((source (plist-get sidecar :source))
+             (raw (mevedel-session-codec-validate-current-sidecar
+                   (mevedel-session-codec-read source)))
+             (projected (mevedel-session-checkpoint-project session raw checkpoint)))
+        (unless (equal raw projected)
+          (mevedel-session-codec-write source projected)
+          (setf (plist-get sidecar :source-sha256) nil))))
     (mevedel-session-control-fs-physical-path root)
     ;; Unchanged entries keep their existing immutable payloads.
     (setq written (mevedel-session-publication--write-generation
@@ -1352,9 +1398,15 @@ collision simply picks another name."
            (captured
             (mevedel-session-publication--capture-publication
              session-dir raw)))
+      (when (and checkpoint
+                 (not (mevedel-session-checkpoint-valid-p session checkpoint)))
+        (error "Checkpoint candidate belongs to a different owner epoch"))
       (unless (mevedel-session-durability-commit-publication-head session head)
         (user-error "Portable session lease was lost before publication commit"))
       (setf (mevedel-session-publication session) captured)
+      (cond
+       (checkpoint (mevedel-session-checkpoint-install session checkpoint))
+       (replacement (mevedel-session-checkpoint-seed session replacement)))
       ;; A first root turn can run for hours while agents checkpoint.  Waiting
       ;; for root settlement lets those superseded transcripts grow unbounded.
       (mevedel-session-collection-schedule session)
@@ -1569,47 +1621,49 @@ as the reservation that opens a publication does."
 
 (defun mevedel-session-publication--publish-critical-batches (session batches)
   "Publish BATCHES and discard recovery only after SESSION becomes active."
-  (let ((publication-before (mevedel-session-publication session))
-        outcome)
-    (condition-case err
-        (setq outcome
-              (mevedel-session-durability-call-with-reserved-lease
-               session
-               (lambda ()
-                 (setf (mevedel-session-pending-publication session) nil)
-                 ;; The reservation that just ran proved ownership.
-                 (mevedel-session-publication--drain session batches t))))
-      (error
-       (unless (mevedel-session-pending-publication session)
-         (let* ((committed-p
-                 (not (equal publication-before
-                             (mevedel-session-publication session))))
-                (recovery
-                 (cl-remove-if-not
-                  #'mevedel-session-publication--batch-live-p
-                  (delete-dups
-                   (append
-                    (mevedel-session-publication-uncommitted-batches session)
-                    (unless committed-p batches)
-                    (mevedel-session-publication-queue session))))))
-           (setf (mevedel-session-publication-uncommitted-batches session)
-                 nil
-                 (mevedel-session-publication-queue session) nil)
-           (when committed-p
-             (mevedel-session-publication--delete-batches batches))
-           (when recovery
-             (mevedel-session-publication--record-pending
-              session recovery err))))
-       ;; A changed captured head proves the marker CAS committed.  Its local
-       ;; sources are terminal even when the final lease normalization failed.
-       (when (and (not (equal publication-before
-                              (mevedel-session-publication session)))
-                  (not (mevedel-session-pending-publication session)))
-         (setf (mevedel-session-publication-uncommitted-batches session) nil))
-       (signal (car err) (cdr err))))
-    (plist-get outcome :result)))
+  (unwind-protect
+      (let ((publication-before (mevedel-session-publication session))
+            outcome)
+        (condition-case err
+            (setq outcome
+                  (mevedel-session-durability-call-with-reserved-lease
+                   session
+                   (lambda ()
+                     (setf (mevedel-session-pending-publication session) nil)
+                     ;; The reservation that just ran proved ownership.
+                     (mevedel-session-publication--drain session batches t))))
+          (error
+           (unless (mevedel-session-pending-publication session)
+             (let* ((committed-p
+                     (not (equal publication-before
+                                 (mevedel-session-publication session))))
+                    (recovery
+                     (cl-remove-if-not
+                      #'mevedel-session-publication--batch-live-p
+                      (delete-dups
+                       (append
+                        (mevedel-session-publication-uncommitted-batches session)
+                        (unless committed-p batches)
+                        (mevedel-session-publication-queue session))))))
+               (setf (mevedel-session-publication-uncommitted-batches session)
+                     nil
+                     (mevedel-session-publication-queue session) nil)
+               (when committed-p
+                 (mevedel-session-publication--delete-batches batches))
+               (when recovery
+                 (mevedel-session-publication--record-pending
+                  session recovery err))))
+           ;; A changed captured head proves the marker CAS committed.  Its local
+           ;; sources are terminal even when final lease normalization failed.
+           (when (and (not (equal publication-before
+                                  (mevedel-session-publication session)))
+                      (not (mevedel-session-pending-publication session)))
+             (setf (mevedel-session-publication-uncommitted-batches session) nil))
+           (signal (car err) (cdr err))))
+        (plist-get outcome :result))
+    (mevedel-session-checkpoint-release-proofs session)))
 
-(defvar mevedel-session-artifacts--preparing-sessions)
+(defvar mevedel-session-artifacts--terminal-sessions)
 
 (defun mevedel-session-publication-publish
     (session artifacts &optional require-commit prepared)
@@ -1624,11 +1678,11 @@ in SESSION and blocks later mutation.  When REQUIRE-COMMIT is non-nil, reject
 reentrant queueing so the caller returns only after its own batch commits, and
 treat a post-commit cleanup error as diagnostic.  Ordinary callers receive
 that error so their lifecycle owner can classify it.
-PREPARED admits the owning checkpoint's final frozen artifacts, never a nested
-writer called while that checkpoint is still preparing its bytes."
-  (when (and (memq session (bound-and-true-p mevedel-session-artifacts--preparing-sessions))
+PREPARED admits the owning terminal checkpoint's final frozen artifacts, never
+a nested writer called while its registry and RESULT are still tentative."
+  (when (and (memq session (bound-and-true-p mevedel-session-artifacts--terminal-sessions))
              (not prepared))
-    (user-error "Session checkpoint is being prepared"))
+    (user-error "Session terminal checkpoint is being prepared"))
   (if (fboundp 'mevedel-telemetry-measure)
       (mevedel-telemetry-measure
        session 'session-publication 0

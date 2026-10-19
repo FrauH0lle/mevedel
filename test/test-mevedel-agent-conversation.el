@@ -917,6 +917,7 @@
 			(invocation
 			 (mevedel-agent-invocation--create
 			  :agent-id "default--save"
+			  :path "/root/save"
 			  :buffer buffer
 			  :parent-session session
 			  :transcript-relative-path relative)))
@@ -987,6 +988,7 @@
 			(invocation
 			 (mevedel-agent-invocation--create
 			  :agent-id "default--busy"
+			  :path "/root/busy"
 			  :buffer buffer
 			  :parent-session session
 			  :transcript-relative-path relative))

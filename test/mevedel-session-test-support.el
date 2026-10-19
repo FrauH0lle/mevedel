@@ -208,7 +208,7 @@ publication."
     (list :path (mevedel-session-artifacts-sidecar-path session-dir)
           :content
           (mevedel-session-artifacts-printed-value
-           (mevedel-session-artifacts-build-sidecar
+           (mevedel-session-artifacts--live-sidecar
             session (current-buffer)))
           :commit-marker t
           :replace t)))
@@ -514,7 +514,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                      :conversation-location idle-relative
                      :mailbox
                      (list
-                      (list :type 'MAIL :sender "/root"
+                      (list :id "child-mail" :type 'MAIL :sender "/root"
                             :recipient "/root/idle" :payload "child mail"
                             :timestamp '(1 0 0 0)))))
                    (active
@@ -557,7 +557,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                           (cons "/root/bad" bad))
                     (mevedel-session-messages session)
                     (list
-                     (list :type 'MAIL :sender "/root/idle"
+                     (list :id "root-mail" :type 'MAIL :sender "/root/idle"
                            :recipient "/root" :payload "root mail"
                            :timestamp '(1 0 0 0))))
               (should
@@ -905,14 +905,14 @@ The result is a plist whose :tempdir owns every created file."
                  :invocation source-invocation
                  :mailbox
                  (list
-                  (list :type 'MAIL :sender "/root"
+                  (list :id "source-mail" :type 'MAIL :sender "/root"
                         :recipient "/root/eligible"
                         :payload "Source-only mail"
                         :timestamp (current-time)))))))
         (setf (mevedel-session-agent-turn-capacity session) 7)
         (setf (mevedel-session-messages session)
               (list
-               (list :type 'RESULT :sender "/root/eligible"
+               (list :id "source-result" :type 'RESULT :sender "/root/eligible"
                      :recipient "/root" :outcome 'completed
                      :payload "Source-only result"
                      :timestamp (current-time))))

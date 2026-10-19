@@ -257,6 +257,7 @@ workspace."
   publication       ; transient captured immutable publication plist
   publication-queue ; transient FIFO of durability publication batches
   publication-uncommitted-batches ; transient staged session-local writes
+  checkpoint-state ; transient committed projection owned by `mevedel-session-checkpoint'
   publication-active-p ; non-nil while this session publishes target state
   control-transfer ; transient cooperative lease-transfer state; never persisted
   control-transfer-drains ; transient predicates that block lease handoff
@@ -281,11 +282,6 @@ workspace."
   chapters          ; closed /clear chats, oldest first: (:segment LAST :title STR-OR-NIL :closed-at ISO)
   file-snapshots    ; alist: (turn-number . file-map alist) for file-history restore
   ptc-checkpoints   ; durable unfinished/settled ToolCall envelopes; never guest state
-  ;; Transient cache of the committed sidecar's `:first-user-message'.  The
-  ;; field never changes once a session has a first turn, and reading it back
-  ;; out of the published sidecar costs a target round trip plus a SHA-256
-  ;; verification on every save.
-  persisted-first-user-message
   ;; Non-nil once this process has ensured the session directory tree and the
   ;; workspace ignore entries.  Re-ensuring them on every save costs target
   ;; round trips for directories that were created by an earlier save in the

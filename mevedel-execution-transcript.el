@@ -23,7 +23,8 @@
                   "mevedel-session-artifacts" (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-publish-transcript-state
                   "mevedel-session-artifacts"
-                  (session root-buffer transcript-path content &optional coding))
+                  (session root-buffer transcript-path content checkpoint
+                           &optional coding prepared-sidecar))
 (declare-function mevedel-session-artifacts-read-artifact
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
@@ -221,7 +222,9 @@ the matching original Bash row; do not publish an unsent in-memory draft."
                 (mevedel-session-artifacts-publish-transcript-state
                  session root-buffer path
                  (buffer-substring-no-properties (point-min) (point-max))
-                 coding)
+                 ;; These are committed bytes plus an audit, not a freeze of
+                 ;; the receiving live conversation.  Retain pending mail.
+                 nil coding)
               (mevedel-session-persistence-write-current-buffer-atomically
                path))))
         (set-visited-file-modtime)
@@ -408,7 +411,9 @@ RENDER-DATA is retained in the hidden transcript audit record."
                     (mevedel-session-artifacts-publish-transcript-state
                      session root-buffer path
                      (buffer-substring-no-properties (point-min) (point-max))
-                     coding)
+                     ;; Only enrich the committed archive; do not checkpoint
+                     ;; unsaved live fields or retire pending consumption.
+                     nil coding)
                   (mevedel-session-persistence-write-current-buffer-atomically
                    path))))
             ;; The atomic rename changed the visited file.  Refresh the

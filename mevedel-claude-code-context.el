@@ -374,7 +374,8 @@ plist of further typed `:entries' and their `:commits'."
                  (overflow (and (not prompt-p)
                                 (or (plist-get steering :images)
                                     (not (mevedel-claude-code-context-hook-fits-p body)))))
-                 (messages (and context (mevedel-agent-control-context-mailbox context)))
+                 (messages (and context (mevedel-tools--mailbox-new-messages
+                                         context (plist-get info :buffer))))
                  selected)
             (while (and messages
                         (let ((block (concat (mevedel-tools--message-delivery-block (car messages)) "\n")))
@@ -384,7 +385,10 @@ plist of further typed `:entries' and their `:commits'."
                                     ;; the continuation prompt, never a preview.
                                     (unless selected (setq overflow t)))
                             (setq body (concat body block)
-                                  transcript (concat transcript block))
+                                  transcript
+                                  (concat transcript
+                                          (mevedel-tools--message-transcript-block
+                                           (car messages) block)))
                             t)))
               (push (pop messages) selected))
             (when (or entries steering selected (plist-get reminders :commits))

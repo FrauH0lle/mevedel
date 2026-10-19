@@ -31,8 +31,8 @@
 (defvar remote-file-name-inhibit-cache)
 
 ;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-build-sidecar
-                  "mevedel-session-artifacts" (session buffer))
+(declare-function mevedel-session-artifacts--live-sidecar
+                  "mevedel-session-artifacts" (session &optional data-buffer))
 (declare-function mevedel-session-artifacts-printed-value
                   "mevedel-session-artifacts" (value))
 (declare-function mevedel-session-artifacts-sidecar-path
@@ -240,7 +240,7 @@ parent identity."
      staging-path)
     (mevedel-session-codec-write
      (mevedel-session-artifacts-sidecar-path staging-path)
-     (mevedel-session-artifacts-build-sidecar child buffer))
+     (mevedel-session-artifacts--live-sidecar child buffer))
     (plist-put transaction :stage 'materialized)))
 
 (defun mevedel-session-save-as--publish-child (transaction)
@@ -356,7 +356,9 @@ parent identity."
                   (mevedel-session-updated-at session)
                   (mevedel-session-updated-at child)
                   (mevedel-session-publication session)
-                  (plist-get transaction :publication))
+                  (plist-get transaction :publication)
+                  (mevedel-session-checkpoint-state session)
+                  (mevedel-session-checkpoint-state child))
             (mevedel-session-naming-adopt-explicit session (plist-get transaction :new-name))
             (with-current-buffer buffer
               (setq buffer-file-name

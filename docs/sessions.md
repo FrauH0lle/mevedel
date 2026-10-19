@@ -220,7 +220,9 @@ use the persistence contracts described in their sections.
 ## Session persistence
 
 Persistence is split by ownership. `mevedel-session-codec.el` owns the closed
-sidecar schema and validation; `mevedel-session-artifacts.el` owns paths,
+sidecar schema and validation; `mevedel-session-checkpoint.el` owns the committed
+root projection, per-conversation mailbox consumption, and deferred ToolCall
+retirement. `mevedel-session-artifacts.el` owns paths,
 artifacts, snapshots, and segment writes; `mevedel-session-rewind.el` owns
 restore plans and the Rewind transaction; and `mevedel-session-fork.el` owns
 Fork/Worktree projection and publication. `mevedel-session-naming.el` owns
@@ -268,6 +270,64 @@ writes in one publication so resume can see them; root auto-save also commits
 outstanding batches
 even when its text is unmodified.
 These checkpoints preserve unfinished text without marking a turn completed.
+
+### Committed conversation checkpoints
+
+Live session state may advance before its corresponding transcript is durable.
+Ordinary sidecar-only writes therefore use the last committed root projection
+for `:current-segment`, `:total-turn-count`, `:prompt-index`, `:file-snapshots`,
+`:chapters`, `:first-user-message`, and `:latest-user-message`. Agent activity,
+mail arrival, or another metadata update cannot publish a newer root turn or
+segment without its matching transcript. The committed first-message preview
+is owned by this same projection, not a second cache or a sidecar readback.
+
+Mailbox records have durable identities, independent of their payload text.
+Delivery removes records from the live root or retained-agent mailbox, but the
+checkpoint owner retains them for that receiving conversation until its
+transcript commits. Ordinary sidecars merge those pending records back into
+the persisted mailbox. Consumption itself does not synchronously save the
+transcript or add an acknowledgement publication. Canonical hidden delivery
+receipts let restore suppress an already represented record without confusing
+two different messages with identical text.
+
+A writer freezes transcript bytes together with an opaque checkpoint candidate:
+the matching root projection, that conversation's captured consumption IDs,
+and its deferred ToolCall retirement IDs. Only that candidate's IDs may be
+excluded from its sidecar. Mail delivered after the freeze remains pending for
+a later checkpoint. Candidates travel with staged sidecar artifacts through
+queueing, failure, and retry; serialization or a queued save's return does not
+install them. Project sessions install the candidate only when its actual
+published head commits. File-backed sessions install after the matching fixed
+transcript and sidecar writes succeed. Restore and committed-state adoption seed
+a new checkpoint epoch, invalidating candidates from the previous owner state.
+
+Before a queued sidecar commits, its frozen data is projected against the
+current committed root, without rereading advanced live fields. This prevents
+an older metadata-only or agent save from rolling back a predecessor's root
+checkpoint. During outstanding publication work, bounded retirement proofs also
+prevent stale queued sidecars from restoring consumed mail or retired ToolCalls
+after a rotation has archived their receipts or tool rows. Proofs survive failed
+publication and retry, and are released when no active, queued, staged, or
+recoverable publication remains; they are not session-lifetime identity history.
+
+Root, ordinary retained-agent, and terminal retained-agent writers mark a buffer
+clean only if its modification tick still matches the frozen bytes. Text or mail
+injected while publication is in progress stays modified, so the next save
+cannot retire its mailbox record without first persisting its transcript.
+
+Terminal retained-agent state and its RESULT remain tentative while the final
+checkpoint is prepared. Mail delivery and native continuation paths cannot
+consume or inject that provisional result. A pre-commit failure keeps the prior
+agent activity and transcript authoritative, without leaking the tentative
+result into a later root checkpoint.
+
+ToolCall audit checkpoints identify their owning root or retained-agent
+conversation. A settled checkpoint may be removed from live state only when
+its canonical tool row already exists in that conversation's transcript; the
+owner retains the full row until the matching transcript checkpoint commits.
+Cold recovery inserts missing rows only into their owning conversation and
+never resumes an interpreter continuation. ToolCall start and settlement
+updates remain durable sidecar writes, rather than transcript-retirement events.
 
 Closing a root data buffer saves it before releasing session ownership. On Emacs
 exit, retained-agent transcripts (including pending debounced saves) flush before
@@ -625,9 +685,10 @@ exists only on the wire. The recipient's transcript records the accepted batch
 once, as the shared [injection record](reminders.md#the-injection-record)
 followed by any delivered mail blocks. Receipt establishes SDK acceptance into
 conversation context, not model understanding or retention through later
-compaction. Unreceived mail stays unread; mailbox consumption checkpoints the
-receiving transcript with queue removal, so process loss before that commit can
-redeliver mail without losing its only copy. Except for a
+compaction. Unreceived mail stays unread; consumed mail remains in the persisted
+mailbox until a matching receiving-transcript checkpoint commits its removal,
+so process loss before that commit can redeliver mail without losing its only
+copy. Except for a
 mail-only hook batch, an unreceived delivery fails the next tool call and turns
 a successful terminal response into an error.
 
@@ -1379,11 +1440,12 @@ sidecar therefore exists before mevedel reports the child publication or wakes
 a mailbox consumer; the root turn's later DONE publication still establishes
 its first stable fork point.
 
-Acknowledged registry and mailbox changes force a full root checkpoint together
-with any retained transcript/artifact batches. Root turn metadata may advance
-before its deferred settlement save; rebuilding only the sidecar here would
-pair that new metadata with older transcript bytes. The full checkpoint keeps
-the acknowledged mutation and matching root state reachable in the same head.
+After that first snapshot, acknowledged registry and mailbox changes publish
+the sidecar with any retained transcript/artifact batches, without copying the
+root transcript. The checkpoint owner supplies the committed root fields even
+when live turn metadata has advanced before its deferred settlement save. The
+acknowledged mutation is therefore reachable without pairing newer root state
+with older transcript bytes.
 
 An acknowledged agent mutation refuses reentrant publication queueing: its
 caller returns only after that batch changes the immutable head.  Once the head
@@ -1396,19 +1458,24 @@ bytes, leaving the caller free to retry after the active publication. A
 post-commit cleanup failure remains diagnostic because the new head is already
 authoritative.
 
-Mailbox delivery consumes records only after inserting their transcript blocks
-successfully and checkpointing the receiving conversation. The existing root or
-retained-agent writer publishes that text with the queue removal, refusing
-reentrant queueing. If the checkpoint fails, consumed records return to the
-mailbox without removing newer arrivals. A crash may redeliver mail but cannot
-leave a committed removal without its delivered text. Empty acknowledgements
-do no work; each nonempty batch checkpoints once.
+Mailbox delivery consumes records after inserting their transcript blocks
+successfully. Acknowledgement itself performs no publication: the owner retains
+the removed records and merges them into ordinary persisted mailboxes until the
+receiving root or retained-agent transcript commits. A failed checkpoint leaves
+that pending consumption intact, without removing newer arrivals. A crash may
+redeliver mail but cannot leave a committed removal without its delivered text.
+Empty acknowledgements do no work.
 
-Checkpoint preparation excludes nested writers for the same session, including
-observational sidecar writes from save hooks. Only the owning writer's final
-prepared publication is admitted. This prevents a hook from committing tentative
-mailbox removal before the outer checkpoint has frozen its delivered text.
-Other sessions remain independent; the exclusion unwinds on failure.
+Transcript-checkpoint preparation excludes nested transcript writers for the
+same session, including segment rotations and fresh chapters. Ordinary
+sidecar-only mutations remain admissible through committed projection.
+Terminal checkpoint preparation additionally excludes other writers,
+including observational sidecar writes from save hooks. Only the owning writer's
+final prepared publication is admitted, so tentative terminal activity and
+RESULT state cannot escape through another sidecar. Other sessions remain
+independent; the exclusion unwinds on failure. Ordinary consumption needs no
+such exclusion: committed root projection and pending records keep sidecar-only
+writes coherent while the live conversation advances.
 
 Observational agent persists are not acknowledged mutations.  Activity
 transitions (blocked/waiting flavors and their release) and explicit mailbox
@@ -1416,8 +1483,8 @@ discards debounce into one sidecar-only registry save
 (`mevedel-session-persistence-save-agent-state-soon`, landing as
 `mevedel-session-artifacts-save-agent-registry`): the sidecar carries the
 agent registry the persist is about, and the transcript segment is committed
-at settlement, so the observational path never saves the segment, scans
-or scans snapshots.  A portable session publishes the
+at settlement, so the observational path never saves the segment or scans
+snapshots. A portable session publishes the
 sidecar alone as a one-artifact commit and the manifest overlay keeps every
 other committed entry; a portable session whose sidecar is not yet committed
 skips the save until the next critical commit.  A synchronous acknowledged

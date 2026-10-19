@@ -14,6 +14,8 @@
   (require 'subr-x))
 
 (require 'mevedel-agents)
+(require 'mevedel-ptc-checkpoint)
+(require 'mevedel-session-checkpoint)
 
 ;; `gptel'
 (declare-function gptel--save-state "ext:gptel" ())
@@ -54,7 +56,7 @@
                   (session path content &optional coding prepared))
 (declare-function mevedel-session-artifacts-publish-transcript-state
                   "mevedel-session-artifacts"
-                  (session root-buffer transcript-path content &optional coding prepared))
+                  (session root-buffer transcript-path content checkpoint &optional coding prepared))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds
                   "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-strip-gptel-config-properties
@@ -85,7 +87,7 @@
 (declare-function mevedel-session-persistence-update-transcript-entry
                   "mevedel-session-persistence" (session agent-id updates))
 (declare-function mevedel-session-persistence-write-sidecar-now
-                  "mevedel-session-persistence" (session buffer &optional prepared))
+                  "mevedel-session-persistence" (session buffer &optional prepared checkpoint))
 (autoload 'mevedel-session-persistence-update-transcript-entry
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-write-sidecar-now
@@ -367,17 +369,22 @@ Return the hydrated conversation buffer."
                invocation parent-data-buffer buffer))
             (setf (mevedel-agent-invocation-buffer invocation) buffer)
             (with-current-buffer buffer
-              (let ((inhibit-read-only t))
+              (let ((inhibit-read-only t)
+                    recovered)
                 (mevedel-transcript-restore-gptel-state)
                 (mevedel-agent-conversation-configure invocation)
                 (mevedel-session-artifacts-strip-gptel-config-properties)
+                (unless inspection
+                  (setq recovered
+                        (mevedel-ptc-checkpoint-reconcile
+                         session (mevedel-agent-invocation-path invocation))))
                 (mevedel-session-artifacts-stabilize-gptel-bounds)
                 ;; Entering the conversation's major mode clears the resolver's
                 ;; buffer locals.  Restore its inspection/no-save contract.
                 (setq-local mevedel-session--inspection-buffer-p inspection
                             buffer-offer-save (not inspection))
                 (setq buffer-read-only inspection)
-                (set-buffer-modified-p nil)))
+                (set-buffer-modified-p (and recovered (> (car recovered) 0)))))
             buffer)
         (error
          (when (buffer-live-p buffer)
@@ -775,7 +782,12 @@ Return nil when INVOCATION has no live conversation buffer."
 			 (expand-file-name
 			  relative (mevedel-session-save-path session))))
                (condition-case err
-                   (progn
+                           (progn
+                             (mevedel-ptc-checkpoint-clear-settled
+                              session (mevedel-agent-invocation-path invocation))
+	                   (let ((checkpoint
+                                    (mevedel-session-checkpoint-capture
+                                     session (mevedel-agent-invocation-path invocation))))
                      (mevedel-session-persistence-update-transcript-entry
                       session
                       (mevedel-agent-invocation-agent-id invocation)
@@ -799,32 +811,44 @@ Return nil when INVOCATION has no live conversation buffer."
 			 (if (mevedel-session-codec-portable-authority-p session)
                              (progn
                                (run-hooks 'before-save-hook)
-                               (let ((content (buffer-substring-no-properties
+                               (let ((frozen-tick (buffer-chars-modified-tick))
+                                     (content (buffer-substring-no-properties
                                                (point-min) (point-max)))
                                      (root (or (mevedel-session-root-buffer session) parent)))
-				 (if (and (mevedel-agent-invocation-sidecar-dirty invocation)
-					  (buffer-live-p root)
+                                         (setq checkpoint
+                                               (mevedel-session-checkpoint-capture
+                                                session (mevedel-agent-invocation-path invocation)))
+					 (if (and (buffer-live-p root)
 					  (mevedel-session-artifacts-artifact-present-p
                                            session "session.meta.el" t))
                                      (progn
                                        (mevedel-session-artifacts-publish-transcript-state
-					session root buffer-file-name content 'utf-8-unix t)
+						session root buffer-file-name content checkpoint 'utf-8-unix t)
+	                                       (setq checkpoint nil)
                                        (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil))
                                    (mevedel-session-artifacts-publish-text
-                                    session buffer-file-name content 'utf-8-unix t)))
+                                    session buffer-file-name content 'utf-8-unix t))
                                (set-visited-file-modtime 0)
-                               (set-buffer-modified-p nil)
+                               (when (= frozen-tick (buffer-chars-modified-tick))
+                                 (set-buffer-modified-p nil)))
                                (run-hooks 'after-save-hook))
                            (mevedel-session-artifacts-assert-not-superseded)
-                           (basic-save-buffer))))
+                                   (let ((before-save-hook
+                                          (append before-save-hook
+                                                  (list (lambda ()
+                                                          (setq checkpoint
+                                                                (mevedel-session-checkpoint-capture
+                                                                 session (mevedel-agent-invocation-path invocation))))))))
+	                             (basic-save-buffer)))))
                      (when (and
-                            (mevedel-agent-invocation-sidecar-dirty invocation)
+	                            (or checkpoint
+                                        (mevedel-agent-invocation-sidecar-dirty invocation))
                             (buffer-live-p parent)
                             (mevedel-session-persistence-write-sidecar-now
-                             session parent t))
+	                             session parent t checkpoint))
                        (setf (mevedel-agent-invocation-sidecar-dirty invocation)
                              nil))
-                     t)
+	                     t))
 		 (mevedel-session-control-fs-busy
 		  ;; Reached from a timer or sentinel inside a remote command:
 		  ;; the control filesystem refused to nest and nothing was

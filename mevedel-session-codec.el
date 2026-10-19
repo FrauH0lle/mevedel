@@ -60,6 +60,10 @@
 ;; `mevedel-sandbox'
 (defvar mevedel-sandbox-mode)
 
+;; `mevedel-session-checkpoint'
+(declare-function mevedel-session-checkpoint-seed "mevedel-session-checkpoint" (session sidecar))
+(autoload 'mevedel-session-checkpoint-seed "mevedel-session-checkpoint")
+
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-path-exists-p "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-physical-path "mevedel-session-control-fs" (path))
@@ -697,6 +701,8 @@ session's sidecar, rewritten by every save."
   (cl-loop
    for checkpoint in (and (proper-list-p raw) raw)
    for id = (and (proper-list-p checkpoint) (plist-get checkpoint :id))
+   for conversation = (and (proper-list-p checkpoint)
+                           (plist-get checkpoint :conversation))
    for args = (and (proper-list-p checkpoint) (plist-get checkpoint :args))
    for script = (and (proper-list-p args) (plist-get args :expression))
    for state = (and (proper-list-p checkpoint)
@@ -706,11 +712,13 @@ session's sidecar, rewritten by every save."
    for render-data = (and (proper-list-p checkpoint)
                           (plist-get checkpoint :render-data))
    when (and (stringp id) (<= (length id) 256)
+             (mevedel-agent-path-p conversation)
              (memq state '(running settled))
              (stringp script) (<= (length script) (* 64 1024))
              (or (null result) (stringp result))
              (or (null render-data) (mevedel--plain-data-p render-data)))
-   collect (list :id id :args (list :expression script) :state state
+   collect (list :id id :conversation conversation
+                 :args (list :expression script) :state state
                  :result result
                  :render-data (copy-tree render-data t))))
 
@@ -1031,6 +1039,7 @@ their hygiene filters."
                      :messages
                      (mevedel-agent-persistence-sanitize-mailbox
                       (plist-get plist :messages) "/root"))))
+    (mevedel-session-checkpoint-seed session plist)
     (when-let* ((goal (mevedel-session-goal session))
                 ((eq (mevedel-goal-status goal) 'active)))
       (setf (mevedel-goal-status goal) 'paused

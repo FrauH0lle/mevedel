@@ -33,6 +33,7 @@
 (require 'mevedel-tool-ptc)
 (require 'mevedel-goal)
 (require 'mevedel-prompt-submission)
+(require 'mevedel-transcript-audit)
 (require 'mevedel-tool-skills)
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-editing)
@@ -618,6 +619,37 @@ META is a plist of structural facts; nil values are omitted."
      (or (plist-get msg :payload) ""))
     (_ (error "Unknown agent mailbox record: %S" (plist-get msg :type)))))
 
+(defun mevedel-tools--message-transcript-block (message block)
+  "Return MESSAGE's transcript form of model-visible BLOCK with its receipt.
+Only the durable identity is retained in hidden metadata; payloads remain in
+their normal user-visible communication blocks."
+  (concat (or (plist-get message :transcript-payload) block)
+          (mapconcat #'mevedel--format-hook-audit-record
+                     (plist-get message :hook-audits) "")
+          (when (memq (plist-get message :type)
+                      '(EXECUTION MAIL MONITOR MONITOR_TERMINAL RESULT USER))
+            (mevedel-agent-control-message-receipt message))))
+
+(defun mevedel-tools--mailbox-new-messages (context buffer)
+  "Return CONTEXT's FIFO mail not already represented in BUFFER.
+Restored durable mail can overlap a receiving transcript that committed before
+its mailbox projection.  Consume that overlap by identity, not payload text."
+  (let ((messages (mevedel-agent-control-context-mailbox context)))
+    (if (not (and messages (buffer-live-p buffer)))
+        messages
+      (let ((delivered (make-hash-table :test #'equal)) repeated fresh)
+        (with-current-buffer buffer
+          (dolist (span (mevedel-transcript-audit-buffer-spans 'mailbox-receipt))
+            (when-let* ((id (plist-get (plist-get span :record) :id)))
+              (puthash id t delivered))))
+        (dolist (message messages)
+          (if (gethash (plist-get message :id) delivered)
+              (push message repeated)
+            (push message fresh)))
+        (when repeated
+          (mevedel-agent-control-acknowledge-mail context repeated))
+        (nreverse fresh)))))
+
 (defun mevedel-tools--insert-session-injected-prompt
     (session fsm message block)
   "Insert injected MESSAGE for SESSION and FSM into the data buffer.
@@ -641,18 +673,11 @@ sync with what the model actually saw.  Return non-nil on successful insertion."
             (let* ((inhibit-read-only t)
                    (marker (mevedel--active-response-marker info buf))
                    (transcript-block
-                    (or (plist-get message :transcript-payload) block)))
+                    (mevedel-tools--message-transcript-block message block)))
               (mevedel--split-open-reasoning-before-user-input info)
-              (when-let* ((range
-                           (mevedel--insert-user-role-block-at-marker
-                            transcript-block marker)))
-                (save-excursion
-                  (goto-char (cdr range))
-                  (dolist (audit (plist-get message :hook-audits))
-                    (insert (mevedel--format-hook-audit-record audit)))
-                  (when marker
-                    (set-marker marker (point))))
-                t)))
+              (and (mevedel--insert-user-role-block-at-marker
+                    transcript-block marker)
+                   t)))
         (error
          (message "mevedel: insert session injected prompt failed: %S"
                   err)
@@ -809,8 +834,9 @@ injected block is also written to the owning transcript, preserving the
 model-visible communication in conversation history."
   (when-let* ((ctx (mevedel-tools--context-for fsm)))
     (let* ((agent-p (mevedel-agent-invocation-p ctx))
-           (messages (mevedel-agent-control-context-mailbox ctx))
            (info (gptel-fsm-info fsm))
+           (messages (mevedel-tools--mailbox-new-messages
+                      ctx (plist-get info :buffer)))
            (data (plist-get info :data))
            (prepend-p
             (and agent-p
@@ -831,7 +857,7 @@ model-visible communication in conversation history."
                   :from sender
                   :summary (format "message from %s" sender)))
            (unless (mevedel-agent-conversation-insert-user-block
-                    ctx block
+                    ctx (mevedel-tools--message-transcript-block message block)
                     (mevedel--active-response-marker
                      info (mevedel-agent-invocation-buffer ctx)))
              (error "Mailbox transcript insertion failed")))

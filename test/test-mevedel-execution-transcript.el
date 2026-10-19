@@ -28,6 +28,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-publication)
 (require 'mevedel-structs)
+(require 'mevedel-tools)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-transcript-restore)
 (require 'mevedel-tool-render-data)
@@ -283,6 +284,49 @@
         (should (string-search "Unsent draft" (buffer-string)))
         (should (buffer-modified-p))
         (should-not (file-exists-p buffer-file-name)))))
+  :doc "committed-byte enrichment never checkpoints live fields or consumed mail"
+  (dolist (archived '(nil t))
+    (mevedel-test--with-captured-diagnostics nil
+      (mevedel-engine-test--with-session
+        (let* ((plan '(:live (("old-call" :execution-id "exec-old"
+                              :state running :live-execution-p t))))
+               (event (list :data-buffer buffer :owner "/root" :tool-use-id "old-call"
+                            :facts '(:execution-id "exec-old" :command "true"
+                                     :state completed :outcome success)))
+               logical id)
+          (insert "Saved input\n")
+          (when archived (insert (mevedel-execution-transcript-archive-text plan)))
+          (mevedel-session-artifacts-save session buffer)
+          (setq logical (file-relative-name buffer-file-name (mevedel-session-save-path session)))
+          (when archived (mevedel-execution-transcript-commit-archive buffer plan))
+          (mevedel-agent-control-send-message session "/root" "pending delivery")
+          (setq id (plist-get (car (mevedel-session-messages session)) :id))
+          (mevedel-tools--handle-message-inject
+           (gptel-make-fsm :info (list :buffer buffer :backend nil :data (list :messages []))))
+          (should-not (mevedel-session-messages session))
+          (setf (mevedel-session-turn-count session) 42)
+          (goto-char (point-max))
+          (insert "Unsent draft\n")
+          (if archived
+              (mevedel-execution-transcript--record-archived-terminal
+               buffer event (mevedel-execution-transcript-terminal-render-data event))
+            (mevedel-execution-transcript--record-breadcrumb event))
+          (let ((published (decode-coding-string
+                            (mevedel-session-artifacts-read-artifact session logical t)
+                            'utf-8-unix))
+                (sidecar (car (read-from-string
+                               (decode-coding-string
+                                (mevedel-session-artifacts-read-artifact session "session.meta.el" t)
+                                'utf-8-unix)))))
+            (should-not (string-search "pending delivery" published))
+            (should-not (string-search "Unsent draft" published))
+            (should (= 0 (plist-get sidecar :total-turn-count)))
+            (should (equal (list id) (mapcar (lambda (mail) (plist-get mail :id))
+                                             (plist-get sidecar :messages))))
+            (should (= 1 (length (mevedel-execution-transcript-test--restored-audit-records
+                                  published (if archived 'execution-completion
+                                              'execution-breadcrumb))))))))))
+
   :doc "persists one completion without writing an unsent in-memory draft"
   (let* ((path (make-temp-file "mevedel-execution-breadcrumb-"))
          (buffer (find-file-noselect path))

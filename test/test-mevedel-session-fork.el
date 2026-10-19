@@ -92,6 +92,7 @@
            :publication-queue '(publication-queue)
            :publication-uncommitted-batches '(uncommitted)
            :publication-active-p t
+           :checkpoint-state 'source-checkpoint
            :control-transfer 'control-transfer
            :control-transfer-drains '(drain)
            :lease 'lease
@@ -127,6 +128,7 @@
            :updated-at "copy-updated"
            :forked-from-session-id "source")))
     (dolist (candidate (list fork save-as))
+      (should-not (mevedel-session-checkpoint-state candidate))
       (should (eq workspace (mevedel-session-workspace candidate)))
       (should (eq target (mevedel-session-execution-target candidate)))
       (should (= 0 (hash-table-count

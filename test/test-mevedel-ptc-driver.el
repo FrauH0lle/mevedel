@@ -666,7 +666,7 @@ With RAW-P, retain the full pipeline result including hidden render data."
         "final audit could not be persisted"
         (test-mevedel-ptc-driver--run buffer "(+ 1 2)")))))
 
-  :doc "never checkpoints a script run from a retained-agent buffer"
+  :doc "checkpoints a retained-agent script in its durable root session"
   (let ((durable-session
          (mevedel-session--create
           :name "ptc" :workspace workspace :save-path save-path
@@ -680,9 +680,38 @@ With RAW-P, retain the full pipeline result including hidden render data."
       (setq-local mevedel--agent-invocation
                   (mevedel-agent-invocation--create :path "/root/worker")))
     (cl-letf (((symbol-function 'mevedel-ptc-checkpoint-start)
-               (lambda (&rest _) (setq started t) t)))
+               (lambda (session source _id _script)
+                 (setq started (list session source)) t))
+              ((symbol-function 'mevedel-ptc-checkpoint-update)
+               (lambda (&rest _) t)))
       (should (equal "3" (test-mevedel-ptc-driver--run buffer "(+ 1 2)")))
-      (should-not started)))
+      (should (equal (list durable-session buffer) started))))
+
+  :doc "fallback envelope identities do not depend on a process-local counter"
+  (let ((durable-session
+         (mevedel-session--create
+          :name "ptc" :workspace workspace :save-path save-path
+          :working-directory root
+          :execution-target (mevedel-execution-target-create root)
+          :permission-mode 'full-auto
+          :touched-files (make-hash-table :test #'equal)))
+        (entropy 0)
+        ids)
+    (with-current-buffer buffer
+      (setq-local mevedel--session durable-session))
+    (cl-letf (((symbol-function 'mevedel-pipeline-active-tool-use-id) (lambda () nil))
+              ((symbol-function 'emacs-pid) (lambda () 11))
+              ((symbol-function 'current-time) (lambda () '(1 2 3 4)))
+              ((symbol-function 'random) (lambda (&optional _) (cl-incf entropy)))
+              ((symbol-function 'mevedel-ptc-checkpoint-start)
+               (lambda (_session _source id _script) (push id ids) t))
+              ((symbol-function 'mevedel-ptc-checkpoint-update) (lambda (&rest _) t)))
+      (should (equal "3" (test-mevedel-ptc-driver--run buffer "(+ 1 2)")))
+      (should (equal "3" (test-mevedel-ptc-driver--run buffer "(+ 1 2)"))))
+    (should (= 2 (length ids)))
+    (should-not (equal (car ids) (cadr ids)))
+    (dolist (id ids)
+      (should (string-match-p "\\`ptc-[[:xdigit:]]\\{32\\}\\'" id))))
 
   :doc "checks the logical serialized size of a shared final value"
   (let ((mevedel-ptc-max-value-bytes 100))

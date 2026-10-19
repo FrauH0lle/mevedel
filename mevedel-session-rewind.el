@@ -60,9 +60,9 @@
 (autoload 'mevedel--restore-preserved-directives "mevedel-persistence")
 
 ;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts--live-sidecar "mevedel-session-artifacts" (session &optional data-buffer))
 (declare-function mevedel-session-artifacts-assert-mutation-authority "mevedel-session-artifacts" (session &optional buffer))
 (declare-function mevedel-session-artifacts-backup-path "mevedel-session-artifacts" (save-path backup-name))
-(declare-function mevedel-session-artifacts-build-sidecar "mevedel-session-artifacts" (session buffer))
 (declare-function mevedel-session-artifacts-collect-prompts "mevedel-session-artifacts" (buffer))
 (declare-function mevedel-session-artifacts-fork-point-spans "mevedel-session-artifacts" (buffer))
 (declare-function mevedel-session-artifacts-instructions-current-path "mevedel-session-artifacts" (save-path))
@@ -82,7 +82,7 @@
 (autoload 'mevedel-session-artifacts-assert-mutation-authority
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-backup-path "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-build-sidecar "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts--live-sidecar "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-collect-prompts
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-fork-point-spans
@@ -1112,7 +1112,9 @@ candidate's surviving turn count."
      (mevedel-session-directive-planning candidate) nil
      (mevedel-session-pending-plan-approval candidate) nil
      (mevedel-session-plan-metadata candidate) nil
-     (mevedel-session-goal candidate) nil)
+     (mevedel-session-goal candidate) nil
+     ;; A reduced history must not share its source's mutable checkpoint epoch.
+     (mevedel-session-checkpoint-state candidate) nil)
     (setf (mevedel-session-agent-transcripts candidate)
           (mevedel-session-rewind-reduce-agent-transcripts
            (mevedel-session-agent-transcripts candidate) turn))
@@ -1127,6 +1129,7 @@ candidate's surviving turn count."
   "Copy Rewind state from FROM into TO without replacing durability runtime."
   (let ((pending (mevedel-session-pending-publication to))
         (publication (mevedel-session-publication to))
+        (checkpoint (mevedel-session-checkpoint-state to))
         (queue (mevedel-session-publication-queue to))
         (uncommitted
          (mevedel-session-publication-uncommitted-batches to))
@@ -1136,6 +1139,7 @@ candidate's surviving turn count."
     (mevedel-session-rewind-copy-session-state from to)
     (setf (mevedel-session-pending-publication to) pending
           (mevedel-session-publication to) publication
+          (mevedel-session-checkpoint-state to) checkpoint
           (mevedel-session-publication-queue to) queue
           (mevedel-session-publication-uncommitted-batches to) uncommitted
           (mevedel-session-publication-active-p to) active
@@ -1290,11 +1294,15 @@ portable lease and publication control directories are never copied."
      candidate target staging-path))
   (mevedel-session-codec-write
    (mevedel-session-artifacts-sidecar-path staging-path)
-   (mevedel-session-artifacts-build-sidecar candidate staging-buffer))
-  (mevedel-session-codec-deserialize
-   (mevedel-session-codec-read
-    (mevedel-session-artifacts-sidecar-path staging-path))
-   (mevedel-session-workspace session)))
+   (mevedel-session-artifacts--live-sidecar candidate staging-buffer))
+  (let ((decoded
+         (mevedel-session-codec-deserialize
+          (mevedel-session-codec-read
+           (mevedel-session-artifacts-sidecar-path staging-path))
+          (mevedel-session-workspace session))))
+    (setf (mevedel-session-checkpoint-state candidate)
+          (mevedel-session-checkpoint-state (plist-get decoded :session)))
+    decoded))
 
 (defun mevedel-session-rewind--backup-restore-files (plan directory)
   "Copy current PLAN file state under DIRECTORY for transaction rollback."
@@ -1356,7 +1364,7 @@ replacing SESSION's live lease runtime."
          :path (mevedel-session-artifacts-sidecar-path save-path)
          :content
          (mevedel-session-artifacts-printed-value
-          (mevedel-session-artifacts-build-sidecar
+          (mevedel-session-artifacts--live-sidecar
            (or state session) buffer))
          :commit-marker t
          :replace t))))))

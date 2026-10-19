@@ -1521,6 +1521,76 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
    (mevedel-tools--message-delivery-block '(:type UNKNOWN :payload "x"))))
 
 
+(mevedel-deftest mevedel-tools--message-transcript-block ()
+  ,test
+  (test)
+  :doc "receipts retain only durable identity and never change visible mail"
+  (let* ((message '(:id "receipt-id" :type MAIL :sender "/root/a"
+                   :recipient "/root" :payload "visible mail"))
+         (block (mevedel-tools--message-delivery-block message))
+         (transcript (mevedel-tools--message-transcript-block message block)))
+    (should (equal block (mevedel--strip-hook-audit-blocks transcript)))
+    (should (equal '((:type mailbox-receipt :id "receipt-id"))
+                   (mevedel-transcript-audit-records transcript 'mailbox-receipt)))))
+
+(mevedel-deftest mevedel-tools--mailbox-new-messages ()
+  ,test
+  (test)
+  :doc "production enqueue and native injection dedup restored IDs, not equal payloads"
+  (dolist (agent-p '(nil t))
+    (let* ((session (mevedel-tools-test--make-session))
+           (buffer (generate-new-buffer " *mail-receipt-live*"))
+           (restored (generate-new-buffer " *mail-receipt-restored*"))
+           (path (if agent-p "/root/worker" "/root"))
+           (invocation (and agent-p (mevedel-agent-invocation--create
+                                    :path path :parent-session session :buffer buffer)))
+           (record (and agent-p (mevedel-agent-record--create
+                                :path path :invocation invocation)))
+           (data (list :messages []))
+           (fsm (gptel-make-fsm :info (list :buffer buffer :data data :backend nil
+                                          :mevedel-agent-invocation invocation)))
+           raw bounds text first-id)
+      (unwind-protect
+          (progn
+            (when record
+              (setf (mevedel-session-agent-registry session) (list (cons path record))))
+            (with-current-buffer buffer
+              (org-mode)
+              (setq-local mevedel--session session mevedel--agent-invocation invocation))
+            (mevedel-agent-control-send-message session path "same payload")
+            (setq raw (mevedel-agent-persistence-sanitize-mailbox
+                       (mevedel-agent-control--mailbox-queue session path) path)
+                  first-id (plist-get (car raw) :id))
+            (mevedel-tools--handle-message-inject fsm)
+            (should (= 1 (length (plist-get data :messages))))
+            (with-current-buffer buffer
+              (setq bounds (gptel--get-buffer-bounds)
+                    text (buffer-substring-no-properties (point-min) (point-max))))
+            ;; Round-trip both durable sources through their actual readers.
+            (with-current-buffer restored
+              (org-mode)
+              (insert text)
+              (gptel--restore-props bounds)
+              (mevedel-transcript-restore-properties t)
+              (setq-local mevedel--session session mevedel--agent-invocation invocation))
+            (when invocation (setf (mevedel-agent-invocation-buffer invocation) restored))
+            (mevedel-agent-control--set-mailbox-queue
+             session path
+             (mevedel-agent-persistence-sanitize-mailbox
+              (car (read-from-string (prin1-to-string raw))) path))
+            (mevedel-agent-control-send-message session path "same payload")
+            (should-not (equal first-id
+                               (plist-get (car (mevedel-agent-control--mailbox-queue
+                                                session path)) :id)))
+            (plist-put (gptel-fsm-info fsm) :buffer restored)
+            (mevedel-tools--handle-message-inject fsm)
+            (should (= 2 (length (plist-get data :messages))))
+            (should-not (mevedel-agent-control--mailbox-queue session path))
+            (with-current-buffer restored
+              (should (= 2 (length (mevedel-transcript-audit-buffer-spans 'mailbox-receipt))))))
+        (kill-buffer buffer)
+        (kill-buffer restored)))))
+
 (mevedel-deftest mevedel-tools--handle-message-inject
   (:after-each (mevedel-workspace-clear-registry))
   ,test
@@ -1532,9 +1602,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
          (data (list :messages (vector)))
          (fsm (gptel-make-fsm
                :info (list :buffer buffer :backend nil :data data)))
-         (first (list :type 'MAIL :sender "/root/worker" :recipient "/root"
+         (first (list :id "first" :type 'MAIL :sender "/root/worker" :recipient "/root"
                       :payload "first report" :wake t))
-         (late (list :type 'MAIL :sender "/root/worker" :recipient "/root"
+         (late (list :id "late" :type 'MAIL :sender "/root/worker" :recipient "/root"
                      :payload "late report" :wake t)))
     (unwind-protect
         (progn
@@ -1572,7 +1642,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (mevedel-agent-record--create
                          :path "/root/worker" :invocation invocation)))
            (context (or invocation session))
-           (mail (list :type 'MAIL :sender "/root" :recipient "/root/worker"
+           (mail (list :id "failed" :type 'MAIL :sender "/root" :recipient "/root/worker"
                        :payload "must not disappear"))
            (data (list :messages (vector)))
            (fsm (gptel-make-fsm :info (list :buffer buffer :backend nil :data data
@@ -1606,7 +1676,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (with-current-buffer buffer
             (setq-local mevedel--session session))
           (setf (mevedel-session-messages session)
-                (list '(:type MAIL
+                (list '(:id "root-mail" :type MAIL
                         :sender "/root/worker"
                         :recipient "/root"
                         :payload "hello root")))
@@ -1718,7 +1788,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (with-current-buffer buffer
             (setq-local mevedel--session session))
           (setf (mevedel-session-messages session)
-                (list (list :type 'USER
+                (list (list :id "user-mail" :type 'USER
                             :sender "user"
                             :recipient "/root"
                             :payload "rewritten model"
@@ -1733,7 +1803,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
               (should (string-match-p "original user" text))
               (should-not (string-match-p "rewritten model" text))
               (should (equal (list audit)
-                             (mevedel-transcript-audit-records text))))))
+                             (mevedel-transcript-audit-records text 'prompt-rewrite)))
+              (should (equal '((:type mailbox-receipt :id "user-mail"))
+                             (mevedel-transcript-audit-records text 'mailbox-receipt))))))
       (kill-buffer buffer)))
 
   :doc "does nothing when the FSM has no owning context"

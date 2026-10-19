@@ -105,9 +105,11 @@
 (defvar mevedel-sandbox-mode)
 
 ;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts--live-sidecar "mevedel-session-artifacts" (session buffer))
+(declare-function mevedel-session-artifacts--sidecar-artifact "mevedel-session-artifacts" (session buffer &optional checkpoint))
 (declare-function mevedel-session-artifacts-artifact-present-p "mevedel-session-artifacts" (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-assert-mutation-authority "mevedel-session-artifacts" (session &optional buffer))
-(declare-function mevedel-session-artifacts-build-sidecar "mevedel-session-artifacts" (session buffer))
+(declare-function mevedel-session-artifacts-build-sidecar "mevedel-session-artifacts" (session buffer &optional checkpoint))
 (declare-function mevedel-session-artifacts-chats "mevedel-session-artifacts" (chapters prompt-index current-segment current-title))
 (declare-function mevedel-session-artifacts-check-target-incarnation "mevedel-session-artifacts" (session buffer))
 (declare-function mevedel-session-artifacts-content-start "mevedel-session-artifacts" (buffer))
@@ -117,6 +119,7 @@
 (declare-function mevedel-session-artifacts-inspect-cold-session "mevedel-session-artifacts" (save-path authority-mode &optional publication))
 (declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session buffer &optional turn directive-records preserve-directives-p))
 (declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
+(declare-function mevedel-session-artifacts-publish-sidecar-state "mevedel-session-artifacts" (session root-buffer))
 (declare-function mevedel-session-artifacts-publish-text "mevedel-session-artifacts" (session path content &optional coding))
 (declare-function mevedel-session-artifacts-reconcile-relocation "mevedel-session-artifacts" (session saved-workspace-plist))
 (declare-function mevedel-session-artifacts-save "mevedel-session-artifacts" (session buffer &optional settled force))
@@ -129,7 +132,15 @@
 (autoload 'mevedel-session-artifacts-inhibit-so-long
   "mevedel-session-artifacts")
 (defvar mevedel-session-artifacts-require-agent-commit-p)
-(defvar mevedel-session-artifacts--preparing-sessions)
+(defvar mevedel-session-artifacts--terminal-sessions)
+
+;; `mevedel-session-checkpoint'
+(declare-function mevedel-session-checkpoint-capture "mevedel-session-checkpoint" (session conversation &optional root-projection))
+(declare-function mevedel-session-checkpoint-install "mevedel-session-checkpoint" (session candidate))
+(declare-function mevedel-session-checkpoint-project "mevedel-session-checkpoint" (session sidecar &optional candidate))
+(autoload 'mevedel-session-checkpoint-capture "mevedel-session-checkpoint")
+(autoload 'mevedel-session-checkpoint-install "mevedel-session-checkpoint")
+(autoload 'mevedel-session-checkpoint-project "mevedel-session-checkpoint")
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-authority-mode-for-path "mevedel-session-codec" (session-dir &optional session explicit-mode))
@@ -672,15 +683,16 @@ The argument UPDATES is the change plist."
                            nil nil #'equal)
                 merged))))))
 
-(defun mevedel-session-persistence-write-sidecar-now (session buffer &optional prepared)
+(defun mevedel-session-persistence-write-sidecar-now (session buffer &optional prepared checkpoint)
   "Best-effort sidecar rewrite for SESSION and BUFFER.
 
 Only writes when the sidecar file already exists on disk -- i.e.
 a full root snapshot has written `session.meta.el'.  Before that, the session
 may be shallowly materialized (directory + lock + agents/ but no sidecar), so
 this observational rewrite remains deferred to the next critical agent commit
-or root autosave.  PREPARED admits the owning checkpoint's final sidecar."
-  (when (and (memq session (bound-and-true-p mevedel-session-artifacts--preparing-sessions))
+or root autosave.  PREPARED admits the owning checkpoint's final sidecar.
+CHECKPOINT captures a matching transcript already written by the caller."
+  (when (and (memq session (bound-and-true-p mevedel-session-artifacts--terminal-sessions))
              (not prepared))
     (user-error "Session checkpoint is being prepared"))
   (when (and session (mevedel-session-save-path session))
@@ -704,18 +716,14 @@ or root autosave.  PREPARED admits the owning checkpoint's final sidecar."
                    session buffer)
                   (mevedel-session-publication-publish
                    session
-                   (list
-                    (list
-                     :path sidecar
-                     :content
-                     (mevedel-session-artifacts-printed-value
-                      (mevedel-session-artifacts-build-sidecar
-                       session buffer))
-                     :commit-marker t))
+                   (list (mevedel-session-artifacts--sidecar-artifact
+                          session buffer checkpoint))
                    nil prepared))
               (mevedel-session-codec-write
                sidecar
-               (mevedel-session-artifacts-build-sidecar session buffer)))
+               (mevedel-session-artifacts-build-sidecar session buffer checkpoint))
+              (when checkpoint
+                (mevedel-session-checkpoint-install session checkpoint)))
           (error
            (message "mevedel: sidecar rewrite failed: %S" err)
            nil)
@@ -723,12 +731,16 @@ or root autosave.  PREPARED admits the owning checkpoint's final sidecar."
 
 (defun mevedel-session-persistence-save-agent-state (session)
   "Commit SESSION's agent state through its authoritative root buffer.
-Checkpoint the root too: its live turn and history metadata may have advanced
-before the deferred root save has published the matching transcript."
+Keep root transcript fields at the last committed checkpoint.  Before the
+first root snapshot, materialize the complete root rather than a bare sidecar."
   (when-let* ((buffer (mevedel-session-root-buffer session))
               ((buffer-live-p buffer)))
     (let ((mevedel-session-artifacts-require-agent-commit-p t))
-      (when (mevedel-session-artifacts-save session buffer nil t)
+      (when (if (and (mevedel-session-save-path session)
+                     (mevedel-session-artifacts-artifact-present-p
+                      session "session.meta.el" t))
+                (mevedel-session-artifacts-publish-sidecar-state session buffer)
+              (mevedel-session-artifacts-save session buffer nil t))
         ;; The committed sidecar already carries the current registry,
         ;; so a pending observational save is absorbed.
         (mevedel-session-persistence-cancel-deferred-agent-save session)
@@ -1504,14 +1516,16 @@ found.  Returns nil; signals `user-error' to abort the restore."
 
 (defun mevedel-session-persistence--hydrate-restored-buffer
     (buf session workspace segment-path acquired additional-roots
-         lifecycle-source &optional artifact-callback)
+         lifecycle-source &optional artifact-callback checkpoint-callback)
   "Hydrate fresh restore buffer BUF and return its durable repair count.
 SESSION and WORKSPACE are planted before mevedel restores persisted state.
 SEGMENT-PATH is reconciled when ACQUIRED owns the session lock.  Additional
 workspace roots and LIFECYCLE-SOURCE restore the saved session environment.
-ARTIFACT-CALLBACK collects remote transcript replacements for one batch."
+ARTIFACT-CALLBACK collects remote transcript replacements for one batch.
+CHECKPOINT-CALLBACK receives the candidate frozen with repaired root bytes."
   (let ((ptc-insertions 0)
-        (ptc-consumptions 0))
+        (ptc-consumptions 0)
+        checkpoint-captured)
     (with-current-buffer buf
       (unless (derived-mode-p 'org-mode)
         (let ((org-agenda-file-menu-enabled nil))
@@ -1534,12 +1548,17 @@ ARTIFACT-CALLBACK collects remote transcript replacements for one batch."
         (let ((transcript-repairs
                (+ ptc-insertions
                   (mevedel-tool-render-data-reconcile-lost-executions buf))))
-          (when (> transcript-repairs 0)
+          (when (or (> transcript-repairs 0) (> ptc-consumptions 0))
             ;; PTC insertions and lost-execution repairs both change transcript
             ;; length; both publication paths need current offsets.  Rewrite
             ;; only bounds: chat setup has not installed the advice that keeps
             ;; `gptel--save-state' from writing request config to the drawer.
             (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (when checkpoint-callback
+              (funcall checkpoint-callback
+                       (mevedel-session-checkpoint-capture
+                        session "/root" (mevedel-session-artifacts--live-sidecar session buf)))
+              (setq checkpoint-captured t))
             (if artifact-callback
                 (funcall
                  artifact-callback
@@ -1552,6 +1571,13 @@ ARTIFACT-CALLBACK collects remote transcript replacements for one batch."
             (set-buffer-modified-p nil))))
       (unless acquired
         (mevedel-session-persistence-apply-read-only-mode buf))
+      ;; PID crash recovery can advance the counter and repair predecessor
+      ;; coordinates without changing the live transcript.  Freeze that
+      ;; disk-proven metadata before initialization hooks can advance it again.
+      (when (and acquired checkpoint-callback (not checkpoint-captured))
+        (funcall checkpoint-callback
+                 (mevedel-session-checkpoint-capture
+                  session "/root" (mevedel-session-artifacts--live-sidecar session buf))))
       (mevedel--chat-buffer-init-common
        buf workspace (or lifecycle-source "resume") (not acquired))
       (+ ptc-consumptions
@@ -1561,12 +1587,12 @@ ARTIFACT-CALLBACK collects remote transcript replacements for one batch."
            (mevedel-session-artifacts-load-instructions session buf))))))
 
 (defun mevedel-session-persistence--finish-restored-buffer
-    (buf session live persist-repairs-p &optional repair-artifacts)
+    (buf session live persist-repairs-p &optional repair-artifacts repair-checkpoint)
   "Finish restoring BUF for SESSION and return BUF.
 LIVE means BUF was already initialized.  When PERSIST-REPAIRS-P is non-nil,
 write repaired sidecar state before rendering the companion view.
 REPAIR-ARTIFACTS are portable transcript replacements published before the
-sidecar commit marker."
+sidecar commit marker.  REPAIR-CHECKPOINT was frozen with the root repair."
   (with-current-buffer buf
     (when persist-repairs-p
       (let ((portable-p
@@ -1588,12 +1614,18 @@ sidecar commit marker."
                         :content
                         (mevedel-session-artifacts-printed-value
                          (mevedel-session-artifacts-build-sidecar
-                          session buf))
+                          session buf repair-checkpoint))
+                        :checkpoint repair-checkpoint
                         :commit-marker t)))))
+                (unless (or (not repair-checkpoint)
+                            (mevedel-session-checkpoint-valid-p session repair-checkpoint))
+                  (error "Checkpoint candidate belongs to a different owner epoch"))
                 (mevedel-session-codec-write
                  (mevedel-session-artifacts-sidecar-path
                   (mevedel-session-save-path session))
-                 (mevedel-session-artifacts-build-sidecar session buf)))
+                 (mevedel-session-artifacts-build-sidecar session buf repair-checkpoint))
+                (when repair-checkpoint
+                  (mevedel-session-checkpoint-install session repair-checkpoint)))
               (setq published-p t))
           (error
            (unless (or (not portable-p)
@@ -1824,6 +1856,7 @@ mentions-shown reset to empty hash tables on load."
                      (segment-path
                       (mevedel-session-artifacts-segment-path
                        session-dir segment-n))
+                     repair-checkpoint
                      (agent-repairs 0))
                 (setq
                  buf
@@ -1866,7 +1899,8 @@ mentions-shown reset to empty hash tables on load."
                   (setq agent-repairs
                         (mevedel-session-persistence--hydrate-restored-buffer
                          buf session workspace segment-path acquired
-                         additional-roots lifecycle-source repair-callback)))
+                         additional-roots lifecycle-source repair-callback
+                         (lambda (candidate) (setq repair-checkpoint candidate)))))
                 (mevedel-session-persistence--finish-restored-buffer
                  buf session live
                  (and acquired
@@ -1878,7 +1912,7 @@ mentions-shown reset to empty hash tables on load."
                                (> agent-repairs 0)
                                (and sidecar-current-n
                                     (not (= sidecar-current-n segment-n)))))))
-                 (nreverse repair-artifacts))
+                 (nreverse repair-artifacts) repair-checkpoint)
                 ;; A crash may leave generations no settled turn reclaimed.
                 ;; Schedule their scan without delaying the restored view.
                 (when (and acquired (not live))
