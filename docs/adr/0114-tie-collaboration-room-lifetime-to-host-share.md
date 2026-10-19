@@ -8,7 +8,9 @@ Supersedes the host TTL and relay maximum-age decisions in ADR 0099.
 
 A browser collaboration room follows one unambiguous lifecycle: the
 logical host share. It remains valid until the user stops sharing, the owning
-session or data buffer ends, or Emacs exits. Temporary network loss does not
+session or data buffer ends, the host hands its work to a successor session
+(such as a Worktree plan fork, whose own room then starts with fresh
+credentials), or Emacs exits. Temporary network loss does not
 end the share; the host transport reconnects and guests may rejoin with the
 same bearer link. Starting a later share after teardown generates fresh
 credentials.

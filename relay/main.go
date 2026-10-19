@@ -85,8 +85,11 @@ type guest struct {
 	queue chan []byte
 	done  <-chan struct{}
 	stop  context.CancelFunc
-	mu    sync.Mutex
-	bytes int
+	// stopped closes when writeLoop has returned, so nothing else writes
+	// to the connection concurrently or out of order.
+	stopped chan struct{}
+	mu      sync.Mutex
+	bytes   int
 }
 
 func (g *guest) enqueue(data []byte) {
@@ -105,6 +108,7 @@ func (g *guest) enqueue(data []byte) {
 }
 
 func (g *guest) writeLoop() {
+	defer close(g.stopped)
 	for {
 		select {
 		case <-g.done:
@@ -117,6 +121,22 @@ func (g *guest) writeLoop() {
 			g.mu.Lock()
 			g.bytes -= len(data)
 			g.mu.Unlock()
+		}
+	}
+}
+
+// flush sends what is still queued once writeLoop has stopped. It reports
+// whether the connection is still writable.
+func (g *guest) flush() bool {
+	<-g.stopped
+	for {
+		select {
+		case data := <-g.queue:
+			if send(g.Conn, websocket.MessageBinary, data) != nil {
+				return false
+			}
+		default:
+			return true
 		}
 	}
 }
@@ -286,7 +306,8 @@ func (rl *relay) runGuest(id string, c *websocket.Conn) {
 	peer := rm.nextPeer
 	rm.nextPeer++
 	ctx, cancel := context.WithCancel(context.Background())
-	g := &guest{Conn: c, queue: make(chan []byte, 64), done: ctx.Done(), stop: cancel}
+	g := &guest{Conn: c, queue: make(chan []byte, 64), done: ctx.Done(), stop: cancel,
+		stopped: make(chan struct{})}
 	rm.guests[peer] = g
 	host := rm.host
 	rl.mu.Unlock()
@@ -325,7 +346,8 @@ func (rl *relay) runGuest(id string, c *websocket.Conn) {
 	}
 }
 
-// closeRoom garbage-collects RM once its host is gone: every guest gets the
+// closeRoom garbage-collects RM once its host is gone: every guest gets
+// what the host sent before leaving -- typically its goodbye -- then the
 // room-closed control message and close 4001.
 func (rl *relay) closeRoom(id string, rm *room) {
 	rl.mu.Lock()
@@ -346,7 +368,9 @@ func (rl *relay) closeRoom(id string, rm *room) {
 		closing.Add(1)
 		go func() {
 			defer closing.Done()
-			send(g.Conn, websocket.MessageText, roomClosedMsg)
+			if g.flush() {
+				send(g.Conn, websocket.MessageText, roomClosedMsg)
+			}
 			g.Close(closeRoomClosed, "room closed")
 		}()
 	}

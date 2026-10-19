@@ -43,8 +43,10 @@ When the host moves a shared session's work into a new session, such as a
 plan accepted with Worktree, the room hands off instead of just ending: the
 host shares the new session without asking again, since its guests were
 already following this work, and tells each guest "Continued in NAME" with an
-**Open** action linking the new room at the tier that guest already holds.
-The browser also keeps the room under the project menu's Rooms. When the new
+**Open** action linking the new room at the tier that guest already holds. A
+successor not yet titled, such as a fresh fork known only by its ID, is "a new
+session". The browser also keeps the room under the project menu's Rooms,
+without a second dock notice for it. When the new
 session cannot be shared, the host gets a warning and guests are told the
 work continues in Emacs; the host's own handoff is never held up.
 

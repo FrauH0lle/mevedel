@@ -24,6 +24,7 @@
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-collaboration-lobby)
 (require 'mevedel-pending-inputs)
+(require 'mevedel-permission-queue)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-artifact-store)
 (require 'mevedel-session-artifacts)
@@ -1448,29 +1449,60 @@ Remove the global hooks a started room installs afterwards."
      (remove-hook 'mevedel-interaction-prompt-settled-hook
                   #'mevedel-collaboration--on-prompt-settled)))
 
-(mevedel-deftest mevedel-collaboration--adopt-prompts
-  (:doc "shows guests an interaction raised before the session was shared")
+(defun mevedel-test--adopted-bodies (data-buf)
+  "Share DATA-BUF and return the ui-request bodies a joining guest receives."
+  (let ((mevedel-collaboration-relay-url "ws://127.0.0.1:1")
+        (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+        sent)
+    (mevedel-test--with-stub-relay sent
+      (let ((room (mevedel-collaboration--start
+                   (mevedel-session--create :name "late-share") data-buf)))
+        (puthash 7 (list :name "g" :writable t :ready t)
+                 (plist-get room :guests))
+        (setq sent nil)
+        (mevedel-collaboration--send-ui-requests room 7)
+        (mapcar (lambda (entry)
+                  (should (equal "ui-request" (plist-get (cdr entry) :t)))
+                  (plist-get (cdr entry) :body))
+                (reverse sent))))))
+
+(mevedel-deftest mevedel-collaboration--adopt-prompts ()
+  ,test
+  (test)
+
+  :doc "shows guests a request raised before the session was shared"
   (mevedel-view-test--with-buffers
-    (let ((mevedel-collaboration-relay-url "ws://127.0.0.1:1")
-          (mevedel-collaboration--rooms (make-hash-table :test #'eq))
-          (session (mevedel-session--create :name "late-share"))
-          sent)
+    (with-current-buffer data-buf
+      (mevedel--prompt-user-with-overlay
+       "Confirm" "Raised before sharing" "Proceed?" nil #'ignore))
+    (let ((bodies (mevedel-test--adopted-bodies data-buf)))
+      (should (= 1 (length bodies)))
+      (should (string-match-p "Raised before sharing" (car bodies)))))
+
+  :doc "shows guests a queued tool permission raised before the session was shared"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :permission-mode 'ask)))
       (with-current-buffer data-buf
-        (mevedel--prompt-user-with-overlay
-         "Confirm" "Raised before sharing" "Proceed?" nil #'ignore))
-      (mevedel-test--with-stub-relay sent
-        (let ((room (mevedel-collaboration--start session data-buf)))
-          ;; A guest joining afterwards is replayed the waiting decision.
-          (puthash 7 (list :name "g" :writable t :ready t)
-                   (plist-get room :guests))
-          (mevedel-collaboration--send-ui-requests room 7)
-          (let ((frames (mapcar #'cdr (seq-filter (lambda (entry)
-                                                    (eql 7 (car entry)))
-                                                  sent))))
-            (should (= 1 (length frames)))
-            (should (equal "ui-request" (plist-get (car frames) :t)))
-            (should (string-match-p "Raised before sharing"
-                                    (plist-get (car frames) :body)))))))))
+        (setq-local mevedel--session session)
+        (mevedel-permission--enqueue
+         (list :kind 'generic :tool-name "EarlyTool" :origin "/root"
+               :data-buffer data-buf :callback #'ignore)
+         session))
+      (let ((bodies (mevedel-test--adopted-bodies data-buf)))
+        (should (= 1 (length bodies)))
+        (should (string-match-p "EarlyTool" (car bodies))))))
+
+  :doc "adopts waiting interactions in the order they opened"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (mevedel--prompt-user-with-overlay
+       "Confirm" "First request" "Proceed?" nil #'ignore)
+      (mevedel--prompt-user-with-overlay
+       "Confirm" "Second request" "Proceed?" nil #'ignore))
+    (let ((bodies (mevedel-test--adopted-bodies data-buf)))
+      (should (= 2 (length bodies)))
+      (should (string-match-p "First request" (nth 0 bodies)))
+      (should (string-match-p "Second request" (nth 1 bodies))))))
 
 (mevedel-deftest mevedel-collaboration-hand-off ()
   ,test
@@ -1509,6 +1541,32 @@ Remove the global hooks a started room installs afterwards."
                   (should (equal link (plist-get frame :link)))))
               ;; Per-guest farewells replace the room-wide broadcast.
               (should-not (assq 0 sent)))))
+      (kill-buffer source)
+      (kill-buffer target)))
+
+  :doc "names an unnamed successor by nothing rather than its ID"
+  (let ((source (generate-new-buffer " *collab-handoff-source*"))
+        (target (generate-new-buffer " *collab-handoff-target*"))
+        (mevedel-collaboration-relay-url "ws://127.0.0.1:1")
+        (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+        sent)
+    (unwind-protect
+        (mevedel-test--with-stub-relay sent
+          (with-current-buffer target
+            ;; A fork is named by its ID until its first prompt titles it.
+            (setq-local mevedel--session
+                        (mevedel-session--create :name "20261019T0800-fork"
+                                                 :session-id "20261019T0800-fork"
+                                                 :naming-state 'pending)))
+          (let ((room (mevedel-collaboration--start
+                       (mevedel-session--create :name "plan") source)))
+            (puthash 2 (list :name "writer" :writable t)
+                     (plist-get room :guests))
+            (should (mevedel-collaboration-hand-off source target))
+            (let ((frame (cdr (assq 2 sent))))
+              (should (equal "handoff" (plist-get frame :reason)))
+              (should-not (plist-get frame :name))
+              (should (stringp (plist-get frame :link))))))
       (kill-buffer source)
       (kill-buffer target)))
 
