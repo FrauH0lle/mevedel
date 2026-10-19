@@ -180,9 +180,6 @@
 (autoload 'mevedel-collaboration--transport-send "mevedel-collaboration-transport")
 (autoload 'mevedel-collaboration--transport-stop "mevedel-collaboration-transport")
 
-;; `mevedel-interaction-prompt'
-(defvar mevedel--prompt-overlays)
-
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective
                   "mevedel-permission-mode"
@@ -229,6 +226,10 @@
 
 ;; `mevedel-turn'
 (defvar mevedel--current-request)
+
+;; `mevedel-view-interaction'
+(defvar mevedel-view--interaction-lifecycle)
+(defvar mevedel-view--interaction-overlays)
 
 ;;
 ;;; Customization and state
@@ -1124,17 +1125,34 @@ returning the live room."
   "Register the interactions ROOM's session raised before ROOM started.
 A prompt announces itself once, when it is created, so a session
 shared while a question, approval or review waits would otherwise never
-show it to guests.  Prompts are adopted oldest first, the order they
-arrived in."
-  (when (boundp 'mevedel--prompt-overlays)
-    (dolist (buffer (buffer-list))
-      (dolist (overlay (reverse (buffer-local-value 'mevedel--prompt-overlays
-                                                    buffer)))
-        (when (and (overlay-buffer overlay)
-                   (not (overlay-get overlay 'mevedel-settled))
-                   (overlay-get overlay 'mevedel--remote)
-                   (eq room (mevedel-collaboration--room-for-overlay overlay)))
-          (mevedel-collaboration--on-prompt-created overlay))))))
+show it to guests.  Every prompt a guest can answer is registered in its
+view's interaction zone; prompts are adopted in the order they opened."
+  (when (boundp 'mevedel-view--interaction-overlays)
+    (let (pending)
+      (dolist (buffer (buffer-list))
+        (let ((overlays (buffer-local-value 'mevedel-view--interaction-overlays
+                                            buffer))
+              (lifecycle (buffer-local-value 'mevedel-view--interaction-lifecycle
+                                             buffer)))
+          (when (hash-table-p overlays)
+            (maphash
+             (lambda (id overlay)
+               (when (and (overlay-buffer overlay)
+                          (not (overlay-get overlay 'mevedel-settled))
+                          (overlay-get overlay 'mevedel--remote)
+                          (eq room (mevedel-collaboration--room-for-overlay
+                                    overlay)))
+                 (let ((opened (and (hash-table-p lifecycle)
+                                    (gethash id lifecycle))))
+                   ;; Arrival orders one view's prompts even within one
+                   ;; clock tick; the time orders different views'.
+                   (push (cons (list (or (plist-get opened :opened-at) 0)
+                                     (or (plist-get opened :arrival) 0))
+                               overlay)
+                         pending))))
+             overlays))))
+      (dolist (entry (sort pending :key #'car))
+        (mevedel-collaboration--on-prompt-created (cdr entry))))))
 
 (defun mevedel-collaboration--load-room-modules ()
   "Load the modules a room needs before one starts."
