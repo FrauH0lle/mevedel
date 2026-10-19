@@ -955,6 +955,15 @@ rows, parallel groups and returned output. Skill bodies render as safe
 Markdown, with delivered dependencies in separate collapsed foldouts. Missing
 historical dependency bodies are labelled unavailable rather than reread from
 current files. Raw model-facing reminder wrappers are not the display body.
+Plain activity runs over the native grouping threshold fold into one browser
+disclosure with the native semantic summary. Running counts and failed tool
+names stay in its one-line heading; the full summary is available on hover.
+Opening the group exposes the original tool/message/completion rows, with
+their own disclosure choices intact. Newly grouped rows already being read
+remain open; an explicit group fold wins thereafter. Scope changes, compound
+tools, artifact cards and background result notices split runs. Ordinary
+agent messages and a command's own completion can join them. Main, earlier
+conversation and agent transcripts share this grouping renderer.
 Noteworthy sandbox boundaries use the host's formatted, bounded disclosure in
 the collapsed tool header, including nested Bash rows. Raw sandbox facts and
 grant details are not sent as presentation metadata.

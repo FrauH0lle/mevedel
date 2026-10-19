@@ -73,6 +73,7 @@ window.mevedelHistoryView = Object.freeze({
         row.body.replaceChildren(el('p', 'history-note', 'Archived conversation. New messages go to the live session.'));
         const ledger = el('div', 'ledger history-ledger');
         row.records.forEach(record => ledger.append(renderRecord(record)));
+        window.mevedelTranscriptRenderer.groupActivity(ledger);
         window.mevedelTranscriptRenderer.markContinuations(ledger);
         row.body.append(ledger);
         row.records = [];

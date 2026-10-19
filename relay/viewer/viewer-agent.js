@@ -59,6 +59,7 @@
           path => open({path}));
         transcript.append(turn);
       });
+      renderer.groupActivity(transcript);
       renderer.markContinuations(transcript);
       if (records.length === 0) {
         transcript.append(el('p', 'panel-note',

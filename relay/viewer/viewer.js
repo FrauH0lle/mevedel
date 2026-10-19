@@ -835,6 +835,7 @@
       const turn = state.elements.get(record.id);
       if (turn) turn.hidden = !recordVisible(record);
     });
+    window.mevedelTranscriptRenderer.groupActivity(transcript);
     artifacts.render([...history.artifacts(), ...state.records.values()]);
     editing.conversation();
     // The composer follows the filter, so say where a prompt will land.

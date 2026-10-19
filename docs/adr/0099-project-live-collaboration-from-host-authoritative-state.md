@@ -59,6 +59,10 @@ Agent messages and final reports are projected from structural mailbox
 envelopes as inspectable notices in the receiving transcript. Outcome labels
 come from the saved envelope, not optimistic body prose or mutable roster
 state; folded final answers do not require opening the child's transcript.
+Activity grouping metadata reuses native eligibility, semantic summaries and
+failure names. Original records and IDs remain independently addressable;
+the browser moves their existing elements into local disclosures instead of
+creating a second transcript or replacing records with group envelopes.
 Nested invocation events update host facts immediately but coalesce tree
 construction and publication through the room's existing stream timer. Every
 projection read refreshes dirty pending trees; top-level events publish immediately,

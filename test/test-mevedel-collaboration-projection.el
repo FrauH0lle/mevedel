@@ -66,6 +66,40 @@
       (should (equal "failed" (plist-get presentation :status)))
       (should-not (string-match-p "Safe inspection" (plist-get record :result))))))
 
+(mevedel-deftest mevedel-collaboration--activity-records ()
+  (let* ((records
+          (cl-loop for name in '("Read" "Grep" "Read" "Eval") for n from 1
+                   collect (list :id (format "tool-%s" n) :kind "tool"
+                                 :status (if (= n 2) "failed" "completed")
+                                 :presentation (list :name name :groupable t))))
+         (grouped (mevedel-collaboration--activity-records records))
+         (activity (plist-get (car grouped) :activity)))
+    (should (equal "tool-1" (plist-get activity :id)))
+    (should (equal "Read 2 files, searched 1 pattern, evaluated 1 form"
+                   (plist-get activity :summary)))
+    (should (equal "1 failed: Grep" (plist-get activity :failures)))
+    (should (equal "failed" (plist-get activity :status)))
+    (should (cl-every (lambda (record) (equal activity (plist-get record :activity))) grouped))
+    (should-not (plist-get (car (mevedel-collaboration--activity-records (cl-subseq records 0 3)))
+                           :activity))
+    (should-not (plist-get (car (mevedel-collaboration--activity-records
+                                (append (cl-subseq records 0 2)
+                                        (list '(:id "result" :kind "agent-notice" :mailType "result"))
+                                        (cl-subseq records 2)))) :activity))
+    (let* ((completion (list :id "completion" :kind "execution" :status "completed"
+                             :execution '(:owner "/root" :ownPath "/root" :id "bash-1")))
+           (message (list :id "message" :kind "agent-notice" :mailType "message"))
+           (with-notices (mevedel-collaboration--activity-records
+                          (append records (list completion message))))
+           (activity (plist-get (car with-notices) :activity)))
+      (should (string-match-p "1 command completed, received 1 message" (plist-get activity :summary)))
+      (should (equal activity (plist-get completion :activity)))
+      (setf (plist-get (car records) :status) "running")
+      (let ((running (plist-get (car (mevedel-collaboration--activity-records records)) :activity)))
+        (should (= 1 (plist-get running :running)))
+        (should (equal "running" (plist-get running :status)))
+        (should (equal "1 failed: Grep" (plist-get running :failures)))))))
+
 (mevedel-deftest mevedel-collaboration-tool-presentation/approval ()
   ,test
   (test)

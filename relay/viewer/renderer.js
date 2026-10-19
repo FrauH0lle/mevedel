@@ -671,10 +671,75 @@
     }
   }
 
+  // Group the original record elements, rather than rendering a second copy.
+  // IDs, result links, filters and per-tool disclosure state stay addressable.
+  function groupActivity(transcript) {
+    const groups = new Map();
+    const turns = [];
+    for (const node of transcript.children) {
+      if (node.groupDetails) {
+        groups.set(node.groupId, node);
+        turns.push(...[...node.groupDetails.children].filter(child => child.dataset.recordId));
+      } else turns.push(node);
+    }
+    const desired = [];
+    for (let index = 0; index < turns.length;) {
+      const first = turns[index];
+      const activity = !first.hidden && first.activity;
+      if (!activity) { desired.push(first); index++; continue; }
+      let end = index + 1;
+      while (end < turns.length && !turns[end].hidden && turns[end].activity?.id === activity.id) end++;
+      const members = turns.slice(index, end);
+      let group = groups.get(activity.id);
+      if (!group) {
+        group = el('article', 'turn ai');
+        group.dataset.role = 'ai';
+        group.groupId = activity.id;
+        const content = el('div', 'content');
+        const details = el('details', 'activity-group');
+        const summary = el('summary');
+        const marker = el('span');
+        const label = el('span', 'activity-label');
+        const counts = el('span', 'activity-counts');
+        summary.append(marker, label, counts);
+        details.append(summary);
+        content.append(details);
+        group.append(el('div', 'rail'), content);
+        group.groupDetails = details;
+        group.groupLabel = label;
+        group.groupCounts = counts;
+        group.groupMarker = marker;
+        details.open = members.some(node => [...(node.disclosures?.values() || [])].some(d => d.open)
+          || node.contains(document.activeElement)
+          || window.getSelection()?.containsNode(node, true));
+      }
+      group.groupLabel.textContent = activity.summary;
+      group.groupLabel.title = activity.summary;
+      group.groupCounts.textContent = [activity.running ? `${activity.running} running` : '',
+        activity.failures || ''].filter(Boolean).join(' · ');
+      group.groupCounts.title = group.groupCounts.textContent;
+      group.groupMarker.className = `st ${activity.status}`;
+      group.groupMarker.textContent = {running: '●', failed: '✕', warning: '!'}[activity.status] || '✓';
+      group.groupMarker.setAttribute('aria-label', activity.status);
+      members.forEach((node, n) => {
+        const at = group.groupDetails.children[n + 1];
+        if (at !== node) group.groupDetails.insertBefore(node, at || null);
+      });
+      while (group.groupDetails.children.length > members.length + 1) group.groupDetails.lastElementChild.remove();
+      desired.push(group);
+      index = end;
+    }
+    desired.forEach((node, index) => {
+      if (transcript.children[index] !== node) transcript.insertBefore(node, transcript.children[index] || null);
+    });
+    while (transcript.children.length > desired.length) transcript.lastElementChild.remove();
+  }
+
   function renderRecord(record, scopeChip, onArtifactOpen, previous, onExecutionOpen, onAgentOpen) {
     const turn = el('article', `turn ${roleOf(record)}`);
     turn.dataset.recordId = record.id;
     turn.dataset.role = roleOf(record);
+    turn.activity = record.activity;
     const rail = el('div', 'rail');
     const glyphText = roleOf(record) === 'ai' ? 'm'
       : (record.guest || (roleOf(record) === 'you' ? 'H' : 'G')).slice(0, 1).toUpperCase();
@@ -696,5 +761,5 @@
   }
 
   window.mevedelTranscriptRenderer = Object.freeze(
-    {renderRecord, markContinuations, renderDiff, renderMarkdown, formatBytes, scopeKey});
+    {renderRecord, markContinuations, groupActivity, renderDiff, renderMarkdown, formatBytes, scopeKey});
 })();

@@ -76,8 +76,12 @@
 (declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
 
 ;; `mevedel-view-render'
+(declare-function mevedel-view--failed-label
+                  "mevedel-view-render" (count names))
 (declare-function mevedel-view--generic-tool-rendering
                   "mevedel-view-render" (name args result &optional collapsed-only render-data))
+(declare-function mevedel-view--group-completions
+                  "mevedel-view-render" (children))
 (declare-function mevedel-view--invoke-renderer
                   "mevedel-view-render" (tool render-data args result))
 (declare-function mevedel-view--mail-attribute
@@ -88,10 +92,15 @@
                   "mevedel-view-render" (summary))
 (declare-function mevedel-view--tool-call-parse
                   "mevedel-view-render" (data-buf start end &optional raw))
+(declare-function mevedel-view--tool-group-entry-p
+                  "mevedel-view-render" (entry))
+(declare-function mevedel-view--tool-group-header
+                  "mevedel-view-render" (children &optional completions))
 (declare-function mevedel-view--user-turn-text
                   "mevedel-view-render" (segments data-buf))
 (declare-function mevedel-view--visible-response-text
                   "mevedel-view-render" (text))
+(defvar mevedel-view-tool-group-collapse-threshold)
 
 (require 'mevedel-collaboration-artifact-projection)
 (require 'xml)
@@ -234,7 +243,7 @@ an artifact only by its record id, never by a filesystem path."
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
                        :truncated :guest :directive :item :detail :diff
                        :artifact :store :size :missing :presentation :shared
-                       :execution :description :sender :mailType :outcome))
+                       :execution :description :sender :mailType :outcome :activity))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -557,6 +566,10 @@ are exported, with one shared text/structure budget across the entire tree."
                        ('error "failed") ('denied "denied") ('cancelled "cancelled")
                        ('running "running") ('warning "warning") (_ "completed")))
                     (row (list :id (text id 200) :name (text name 200)
+                               :groupable (if (and (not (plist-get rendering :coalesce-key))
+                                                    (mevedel-view--tool-group-entry-p
+                                                     (list :kind 'tool :count 1 :rendering rendering)))
+                                              t :json-false)
                                :detail (text (mevedel-collaboration--tool-detail args) 200)
                                :header (text header 1000)
                                :status status
@@ -1331,7 +1344,71 @@ owner; omitted means the root transcript."
                   (mevedel-collaboration--projection-cache-segments cache) segments
                   (mevedel-collaboration--projection-cache-entries cache)
                   (if current entries (make-hash-table :test #'equal)))))
-        (nreverse records))))))
+        (mevedel-collaboration--activity-records (nreverse records)))))))
+
+(defun mevedel-collaboration--activity-records (records)
+  "Annotate plain activity runs in RECORDS with native-derived summaries.
+Keep each original record and ID independently addressable; the browser owns
+only grouping disclosures.  Scope changes and background notices split runs."
+  (let (run scope)
+    (cl-labels
+        ((child (record)
+           (pcase (plist-get record :kind)
+             ("agent-notice" '(:kind mailbox))
+             ("execution"
+              (let ((facts (plist-get record :execution)))
+                (list :kind 'completion :rendering
+                      (list :completion-record
+                            (list :execution-id (plist-get facts :id)
+                                  :owner (plist-get facts :owner)
+                                  :facts (list :outcome (if (equal (plist-get record :status) "completed")
+                                                           'success 'failure)
+                                               :termination (pcase (plist-get record :status)
+                                                              ("cancelled" 'stopped)
+                                                              ("timed-out" 'timeout))))))))
+             (_ (list :tool (plist-get (plist-get record :presentation) :name)))))
+         (finish ()
+           (when (> (cl-count "tool" run :key (lambda (r) (plist-get r :kind)) :test #'equal)
+                    (max 0 mevedel-view-tool-group-collapse-threshold))
+             (when (> mevedel-view-tool-group-collapse-threshold 0)
+               (let* ((ordered (reverse run))
+                      (tools (cl-remove-if-not (lambda (r) (equal (plist-get r :kind) "tool")) ordered))
+                      (failed (cl-remove-if-not (lambda (r) (equal (plist-get r :status) "failed")) tools))
+                      (running (cl-count "running" tools :key (lambda (r) (plist-get r :status)) :test #'equal))
+                      (names (mapcar (lambda (r) (plist-get (plist-get r :presentation) :name)) failed))
+                      (children (mapcar #'child ordered))
+                      (activity
+                       (list :id (plist-get (car ordered) :id)
+                             :summary (mevedel-collaboration--truncate-bytes
+                                       (mevedel-view--tool-group-header
+                                        children (mevedel-view--group-completions children)) 600)
+                             :running running
+                             :failures (and failed (mevedel-view--failed-label (length failed) names))
+                             :status (cond ((> running 0) "running") (failed "failed")
+                                           ((cl-find "warning" tools :key (lambda (r) (plist-get r :status)) :test #'equal) "warning")
+                                           (t "completed")))))
+                 (dolist (record ordered)
+                   (if (plist-member record :activity)
+                       (setf (plist-get record :activity) activity)
+                     (nconc record (list :activity activity)))))))
+           (setq run nil)))
+      (dolist (record records)
+        (when (plist-member record :activity)
+          (setf (plist-get record :activity) nil))
+        (let* ((kind (plist-get record :kind))
+               (next-scope (list (plist-get record :directive) (plist-get record :item)))
+               (groupable (or (and (equal kind "tool") (not (plist-get record :artifact))
+                                   (eq t (plist-get (plist-get record :presentation) :groupable)))
+                              (and (equal kind "agent-notice")
+                                   (equal (plist-get record :mailType) "message"))
+                              (and (equal kind "execution")
+                                   (let ((facts (plist-get record :execution)))
+                                     (equal (plist-get facts :owner) (plist-get facts :ownPath)))))))
+          (when (or (not groupable) (not (equal scope next-scope))) (finish))
+          (setq scope next-scope)
+          (when groupable (push record run))))
+      (finish))
+    records))
 
 (defun mevedel-collaboration--tool-records (records)
   "Return the tool records in RECORDS, preserving their order."
@@ -1533,7 +1610,7 @@ completion instead of seeing a duplicate tool card."
           (push (copy-sequence entry) output))
         (when (< index length)
           (push (pop canonical) output)))
-      (nreverse output))))
+      (mevedel-collaboration--activity-records (nreverse output)))))
 
 
 (provide 'mevedel-collaboration-projection)
