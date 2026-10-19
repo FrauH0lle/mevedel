@@ -176,6 +176,27 @@ temporary one."
                              (push symbol stale))))
                (ert-info ((format "Autoloads their file does not define: %S" stale))
                  (should-not stale))))
+            ('request-progress
+             (require 'gptel-request)
+             (require 'mevedel-view-stream)
+             (should-not (featurep 'mevedel-view-composer))
+             (should-not (featurep 'mevedel-agents))
+             (with-temp-buffer
+               (let ((fsm (gptel-make-fsm :info (list :buffer (current-buffer)))))
+                 (should-not (mevedel-view-stream-ensure-progress-for-fsm fsm))
+                 (should (featurep 'mevedel-view-composer))
+                 (should-not (featurep 'mevedel-agents))
+                 (should (autoloadp (symbol-function 'mevedel-agent-invocation-p)))
+                 ;; The same predicate must recognize agents after first use,
+                 ;; whether identified by request info or buffer-local state.
+                 (require 'mevedel-agents)
+                 (let ((invocation (mevedel-agent-invocation--create)))
+                   (should (mevedel-view--agent-fsm-p
+                            (list :mevedel-agent-invocation invocation) nil))
+                   (should-not (mevedel-view--agent-fsm-p
+                                '(:mevedel-agent-invocation invalid) nil))
+                   (setq-local mevedel--agent-invocation invocation)
+                   (should (mevedel-view--agent-fsm-p nil (current-buffer)))))))
             ('stop-shares
              (should (commandp 'mevedel-collaboration-stop-all))
              (should-not (featurep 'mevedel-collaboration-lobby))
