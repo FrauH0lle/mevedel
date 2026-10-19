@@ -332,6 +332,15 @@
       <dialog id="settings" class="sheet settings" aria-labelledby="settings-title">
         <form method="dialog" class="sheet-form">
           <h2 id="settings-title" class="sheet-title">Session settings</h2>
+          <section class="settings-group">
+            <label class="settings-heading" for="settings-name">Session name</label>
+            <div class="settings-row">
+              <input id="settings-name" class="sheet-input" type="text"
+                     title="A manual name replaces automatic session titles">
+              <button id="settings-rename" class="btn quiet" type="button">Rename</button>
+            </div>
+            <p class="settings-help">A manual name stays across clears. The session and its links stay the same.</p>
+          </section>
           <section id="settings-attention" class="settings-attention" hidden>
             <h3 class="settings-heading">Needs attention</h3>
             <div id="settings-issues"></div>
@@ -348,6 +357,7 @@
             <div id="settings-mode" class="settings-actions" role="group"
                  aria-labelledby="settings-mode-title"></div>
             <p id="settings-mode-help" class="settings-help"></p>
+            <p id="settings-plan" class="settings-help" hidden></p>
           </section>
           <section class="settings-group">
             <label class="settings-heading" for="settings-preset">Preset</label>

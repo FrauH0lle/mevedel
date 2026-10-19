@@ -383,6 +383,34 @@ MESSAGE, when non-nil, is the refusal the guest must receive."
       (kill-buffer live-buffer)
       (kill-buffer shared-buffer))))
 
+(mevedel-deftest mevedel-collaboration-lobby-hidden-session
+  (:quiet t :doc "dedicated live sessions cannot be opened, renamed or deleted by guessed id")
+  (let* ((buffer (generate-new-buffer " *lobby-hidden*"))
+         (session (mevedel-collaboration-lobby-test--session "hidden"))
+         (lobby (list :workspace 'workspace :guests (make-hash-table :test #'eql)))
+         reply)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-dedicated-artifact session) "board")
+          (with-current-buffer buffer (setq-local mevedel--session session))
+          (puthash 1 '(:owner t :writable t) (plist-get lobby :guests))
+          (cl-letf (((symbol-function 'mevedel--workspace-sessions)
+                     (lambda (_) `(("hidden" . ,buffer))))
+                    ((symbol-function 'mevedel-session-persistence-list-sessions)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'mevedel-collaboration--transport-send)
+                     (lambda (_transport _peer frame) (setq reply frame))))
+            (should (equal "No such session"
+                           (mevedel-collaboration-lobby--delete-failure
+                            lobby '(:owner t) "hidden")))
+            (should (buffer-live-p buffer))
+            (should-error (mevedel-collaboration-lobby--session-buffer lobby "hidden"))
+            (mevedel-collaboration-lobby--handle-rename
+             lobby 1 '(:reqId 1 :id "hidden" :name "forged"))
+            (should (eq :json-false (plist-get reply :ok)))
+            (should (equal "hidden" (mevedel-session-name session)))))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
 (mevedel-deftest mevedel-collaboration-lobby--frame
   (:doc "caps the listing and reports how many rows it left out")
   (let ((mevedel-collaboration-lobby--max-sessions 2))

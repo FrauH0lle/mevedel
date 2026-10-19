@@ -89,7 +89,7 @@ than through the command allowlist:
   says which of the two it is doing before the guest presses anything.
 
 - `recovery` exposes selection among the offered models and registered presets,
-  native-history recovery, retained-input retry, reviewed input requeue/discard,
+  session rename, native-history recovery, retained-input retry, reviewed input requeue/discard,
   provider login and, in Claude Code sessions, runtime update checks. Login
   challenges go only to owner peers viewing that provider's credential store;
   each owner keeps the provider it last selected. Codex uses device authorization
@@ -105,10 +105,14 @@ than through the command allowlist:
   buffer's permission and sandbox modes. The frame names the current model as
   the same `BACKEND:MODEL` label the offered models use. Only providers with a
   browser login (Codex and Claude Code) are offered for sign-in, defaulting to
-  the session's own. Queue retry is offered only while a failed turn paused
+  the session's own when it supports browser login. Account remains available
+  when the current session uses an API key but other login providers exist.
+  A refused sign-in action leaves the owner's previous selection unchanged.
+  Queue retry is offered only while a failed turn paused
   delivery, and native-history recovery only for a history Claude cannot or did
   not resume: one edited after Claude received it, one another machine or
-  installation retained, or one whose resume failed to start. Choices refresh
+  installation retained, or one whose resume failed to start. The host rechecks
+  that the scope is still offered before detaching native history. Choices refresh
   when session status or retained input changes and are sent only when they
   changed; unchanged updates preserve an in-progress login code and the
   composer draft.
@@ -120,6 +124,9 @@ than through the command allowlist:
   recoverable history is pending; those actions head the sheet. Model and
   mode apply on pick, a preset after confirmation. Every control carries a
   tooltip and, since phones have no hover, a visible explanation.
+  An active Plan restriction is shown separately from permission mode: changing
+  permission mode does not lift Plan. Rename uses the native readable-Unicode
+  naming rules and updates the room heading, browser title and lobby listings.
 
 Owner authority is never granted alone: the owner link contains the write
 token, so a peer claiming the owner token without it is a forgery and is
@@ -511,7 +518,7 @@ ordinary rooms with the ordinary share lifetime
 Link tiers keep their meaning. A view link lists sessions and the
 workspace's [artifacts](#artifact-viewing), and opens artifacts; a full link
 can also open sessions, change artifacts, and use the
-[project files](#project-files); an owner link can also create and delete
+[project files](#project-files); an owner link can also create, rename and delete
 sessions. Opening a session resumes
 it when it is not live, shares it when it is not already shared, and returns
 its room's link at the requester's own tier, so the lobby never grants more
@@ -533,7 +540,8 @@ receives a fresh listing.
 Each row carries the session id, display name, last save time, a prompt
 preview of at most 160 characters, and whether the session is live in Emacs
 and shared. An artifact's dedicated session is not listed; it is reached from
-its artifact. Live sessions that were never saved come first, then saved ones,
+its artifact. Lobby open, rename and delete reject those sessions even if a
+caller supplies their ID. Live sessions that were never saved come first, then saved ones,
 newest first; a listing holds at most 200 rows and reports how many it left
 out. The listing is sent on join and on request; the browser asks again on
 Refresh and whenever the lobby tab returns to the foreground.
@@ -559,7 +567,12 @@ protected, including locks written without that evidence. See
 In the browser, a lobby link renders the session list in place of the
 conversation and composer. Open shows the session's room in the same tab, as
 a new history entry;
-an owner's rows also carry Delete, which asks for confirmation first.
+an owner's rows also carry Rename and Delete. Rename asks for the new display
+name and uses the native naming path (including readable Unicode); it preserves
+the session ID and room. Renaming a saved, closed session restores it into Emacs
+first, with the same lock checks and no-prompt rules as Open; it does not share
+the session. It refreshes all connected lobby listings, including when Emacs or
+a room's Settings performs the rename. Delete asks for confirmation first.
 The lobby stores itself in the browser's room list, marked as the lobby, so
 every room it opens leads back to it
 ([navigation and history](#navigation-and-history)). An **Artifacts** tab beside

@@ -52,6 +52,9 @@
 (defvar-local mevedel-session-naming--cancel nil
   "Cancellation thunk for this root buffer's pending title operation.")
 
+(defvar mevedel-session-naming-renamed-hook nil
+  "Hook run with the session after a display name has been published.")
+
 (defun mevedel-session-naming-cancel ()
   "Cancel the current root buffer's pending title operation."
   (when mevedel-session-naming--cancel
@@ -124,6 +127,7 @@ Either kind resolves a retained naming-failure notice."
                       name (mevedel-session-workspace session)) t)
       (mevedel-session-persistence-notify-session-event
        session 'rename (buffer-name)))
+    (run-hook-with-args 'mevedel-session-naming-renamed-hook session)
     (when failure (signal (car failure) (cdr failure)))))
 
 (defun mevedel-session-naming-adopt-explicit (session name)

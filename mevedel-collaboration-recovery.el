@@ -31,8 +31,20 @@
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-send "mevedel-collaboration-transport" (transport peer frame))
 
+;; `mevedel-session-naming'
+(declare-function mevedel-session-naming-rename "mevedel-session-naming" (session buffer name &optional current-p))
+(autoload 'mevedel-session-naming-rename "mevedel-session-naming")
+
 ;; `mevedel-turn'
 (declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
+
+(defun mevedel-collaboration-recovery--recoverable-histories (session)
+  "Return SESSION's retained native history scopes offered for recovery."
+  (cl-loop for (scope . record) in (mevedel-session-external-conversations session)
+           when (and (or (equal scope "root")
+                         (assoc scope (mevedel-session-agent-registry session)))
+                     (mevedel-claude-code-history-unresumable-p record))
+           collect scope))
 
 ;; Frames are sent only when they change; installation state is cached in
 ;; the room and refreshed by maintenance events instead of read per frame.
@@ -71,11 +83,7 @@ The selected provider is the one this owner last chose, else the session's."
                                                    (mevedel-session-pending-follow-ups session)))))
                ;; Only histories `mevedel-claude-code-recover-history' accepts,
                ;; and only once Claude cannot or did not resume them.
-               :histories (vconcat (cl-loop for (scope . record) in (mevedel-session-external-conversations session)
-                                            when (and (or (equal scope "root")
-                                                          (assoc scope (mevedel-session-agent-registry session)))
-                                                      (mevedel-claude-code-history-unresumable-p record))
-                                            collect scope))
+               :histories (vconcat (mevedel-collaboration-recovery--recoverable-histories session))
                ;; Runtime maintenance and its update check exist only for Claude.
                :runtime (when (mevedel-claude-code-backend-p gptel-backend)
                           (let ((state (if (plist-member room :recovery-runtime)
@@ -154,7 +162,7 @@ bindings, including the absence of one."
          (session (plist-get room :session))
          (action (plist-get frame :action))
          (value (plist-get frame :value))
-         (session-action (not (member action '("status" "login" "login-code" "cancel-login" "update")))))
+         (session-action (not (member action '("status" "login" "login-code" "cancel-login" "update" "rename")))))
     (unless (and session (buffer-live-p buffer)) (user-error "Session is unavailable"))
     (with-current-buffer buffer
       (let ((backend (if (plist-get frame :provider)
@@ -166,9 +174,14 @@ bindings, including the absence of one."
           (mevedel-session-artifacts-assert-new-mutation-authority session))
         (when (and (plist-get frame :provider)
                    (member action '("status" "login" "login-code" "cancel-login")))
-          (plist-put (mevedel-collaboration--owner room peer) :recovery-backend backend))
+          (unless (and backend (mevedel-auth-supported-p backend))
+            (user-error "Provider does not support browser sign-in")))
         (pcase action
           ("status" nil)
+          ("rename"
+           (mevedel-session-naming-rename
+            session buffer (or (mevedel-collaboration--guest-text value)
+                               (user-error "Empty session name"))))
           ("model"
            (mevedel-model-set-session-provider
             session (or (cdr (assoc value (mevedel-model-candidates)))
@@ -180,7 +193,11 @@ bindings, including the absence of one."
            (let ((name (and (stringp value) (intern-soft value))))
              (unless (assq name mevedel-preset--registry) (user-error "Preset is unavailable"))
              (mevedel-collaboration-recovery--apply-preset name buffer session)))
-          ("history" (mevedel-claude-code-recover-history (or value "root")))
+          ("history"
+           (unless (member (or value "root")
+                           (mevedel-collaboration-recovery--recoverable-histories session))
+             (user-error "This native history is not awaiting recovery"))
+           (mevedel-claude-code-recover-history (or value "root")))
           ((or "input-discard" "input-requeue")
            (let ((entry (cl-find value (append (mevedel-session-pending-steering session)
                                                (mevedel-session-pending-follow-ups session))
@@ -218,6 +235,9 @@ bindings, including the absence of one."
                       (eq 'failed (plist-get mevedel-readiness--claude :state)))
              (mevedel-readiness-check)))
           (_ (user-error "Unknown recovery action")))
+        (when (and (plist-get frame :provider)
+                   (member action '("status" "login" "login-code" "cancel-login")))
+          (plist-put (mevedel-collaboration--owner room peer) :recovery-backend backend))
         (when session-action
           (mevedel-recovery-save session)
           (when (buffer-live-p mevedel--view-buffer)

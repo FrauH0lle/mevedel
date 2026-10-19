@@ -43,6 +43,7 @@
     let requestSequence = 0;
     const opening = new Map();
     const deleting = new Map();
+    const renaming = new Map();
     // How many browsers are in each live session, by session id.
     let here = new Map();
     let shown = [];
@@ -121,6 +122,18 @@
         item.append(button);
       }
       if (state.owner) {
+        const rename = el('button', 'btn quiet', 'Rename');
+        rename.type = 'button';
+        rename.setAttribute('aria-label', `Rename ${row.name || 'session'}`);
+        rename.addEventListener('click', () => {
+          const name = window.prompt('Session name', row.name || '');
+          if (!name?.trim()) return;
+          const reqId = ++requestSequence;
+          renaming.set(reqId, rename);
+          rename.disabled = true;
+          send({t: 'rename-session', reqId, id: row.id, name: name.trim()});
+        });
+        item.append(rename);
         const button = el('button', 'btn quiet danger', 'Delete');
         button.type = 'button';
         button.setAttribute('aria-label', `Delete ${row.name || 'session'}`);
@@ -180,6 +193,14 @@
              : 'The session could not be deleted.');
     }
 
+    function renamed(frame) {
+      const button = renaming.get(frame.reqId);
+      if (!button) return;
+      renaming.delete(frame.reqId);
+      button.disabled = false;
+      if (frame.ok !== true) notice(frame.message || 'The session could not be renamed.');
+    }
+
     // A session created from the lobby is joined straight away; its
     // refusal is already reported by the request notice.
     function created(frame) {
@@ -208,7 +229,7 @@
       if (active) list.replaceChildren(...shown.map(renderRow));
     }
 
-    return Object.freeze({show, opened, deleted, created, counts, select,
+    return Object.freeze({show, opened, deleted, renamed, created, counts, select,
                           tab: () => tab, active: () => active});
   }
 

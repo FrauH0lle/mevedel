@@ -18,7 +18,11 @@ Credentials never enter relay payloads; notification wakeups remain generic.
 
 Session creation sheets refresh offered `BACKEND:MODEL` labels with
 `{"t":"session-models"}`; the host replies with `models` to writable session
-guests or lobby owners only.
+guests or lobby owners only. Session owners rename through
+`{"t":"recovery","action":"rename","value":"New name"}`. Lobby owners use
+`{"t":"rename-session","reqId":N,"id":"session-id","name":"New name"}`;
+the reply repeats `reqId` with `ok` and, on refusal, `message`. Successful names
+propagate through room status and fresh lobby listings.
 
 The bounded `history-index` records stream contains artifact metadata and
 canonical chat descriptors: `{kind:"chat",number,firstSegment,lastSegment,title}`.

@@ -701,7 +701,8 @@ async function main() {
                'composer', 'composer-input', 'composer-identity',
                'you-menu', 'you-form', 'you-name', 'you-random', 'you-initials', 'you-label',
                'settings', 'settings-attention', 'settings-issues', 'settings-model', 'settings-mode',
-               'settings-mode-help', 'settings-preset', 'settings-preset-apply', 'settings-account',
+               'settings-mode-help', 'settings-plan', 'settings-name', 'settings-rename',
+               'settings-preset', 'settings-preset-apply', 'settings-account',
                'settings-account-title', 'settings-account-actions',
                'recovery-actions', 'recovery-auth', 'recovery-issues',
                'send-button', 'stop-button', 'filter', 'requests',
@@ -1971,6 +1972,11 @@ async function main() {
   assert.equal(modeButton('Edits').attributes['aria-pressed'], 'true');
   assert.match(modeButton('Full auto').title, /No sandbox/);
   assert.match(nodes['settings-mode-help'].textContent, /sandboxed/);
+  await deliver({t: 'status', mode: 'edits', plan: true});
+  assert.equal(nodes['settings-plan'].hidden, false);
+  assert.match(nodes['settings-plan'].textContent, /Plan.*read.only/i);
+  await deliver({t: 'status', mode: 'edits', plan: false});
+  assert.equal(nodes['settings-plan'].hidden, true);
   const modeBefore = first.sent.length;
   modeButton('Full auto').dispatch('click');
   assert.equal(modeButton('Edits').attributes['aria-pressed'], 'true');
@@ -1996,6 +2002,33 @@ async function main() {
   assert.equal(settingsButton().textContent, 'Needs attention');
   assert.equal(nodes['settings-attention'].hidden, false);
   assert.deepEqual(attention(), ['Resume queue', 'Continue from transcript']);
+  nodes.settings.close('close');
+
+  // API-key sessions can sign in to an offered subscription provider without
+  // changing their model first, including when there is just one provider.
+  await deliver({...settled, providers: ['Claude Code']});
+  assert.equal(nodes['settings-account'].hidden, false);
+  assert.equal(loginProvider().value, 'Claude Code');
+  const accountBefore = first.sent.length;
+  nodes['settings-account-actions'].children.find(node => node.textContent === 'Sign in').dispatch('click');
+  await waitFor(() => first.sent.length === accountBefore + 1, 'alternative provider login');
+  assert.deepEqual(await unseal(key, first.sent[accountBefore]),
+                   {t: 'recovery', action: 'login', value: null, provider: 'Claude Code'});
+  await deliver(settled);
+
+  // Renaming is explicit; background status preserves the name and composer drafts.
+  await deliver({t: 'status', name: 'Current session', mode: 'edits'});
+  settingsButton().dispatch('click');
+  assert.equal(nodes['settings-name'].value, 'Current session');
+  nodes['settings-name'].value = 'Révision du projet';
+  await deliver({t: 'status', name: 'Automatic title', mode: 'edits'});
+  assert.equal(nodes['settings-name'].value, 'Révision du projet');
+  const renameBefore = first.sent.length;
+  nodes['settings-rename'].dispatch('click');
+  await waitFor(() => first.sent.length === renameBefore + 1, 'owner rename');
+  assert.deepEqual(await unseal(key, first.sent[renameBefore]),
+                   {t: 'recovery', action: 'rename', value: 'Révision du projet'});
+  assert.equal(nodes['composer-input'].value, '> retained\nmultiline');
   nodes.settings.close('close');
 
 
