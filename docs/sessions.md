@@ -1683,6 +1683,15 @@ path, branch, base commit, and fork type remain origin metadata while its
 current working directory changes. The picker labels the original path as
 missing or the session as retargeted.
 
+A live session whose local working directory disappears, such as a worktree
+removed with `git worktree remove` outside mevedel, moves to its workspace root
+at the next durable mutation (save, publication, turn start, or execution arm)
+or publication retry. Every live buffer whose `default-directory` still names
+the missing directory moves with it, and one warning names both paths.
+Otherwise processes started from those buffers fail, leaving publication
+pending with no way to retry it. Remote directories are not probed on this
+path; they rely on the resume-time prompt above.
+
 The prompt-index is rebuilt from `mevedel-transcript-segments`
 over the live segment. Only shared `user` spans whose real prompt text
 starts outside gptel-owned org tool/reasoning/summary scaffolding become

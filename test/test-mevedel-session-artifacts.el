@@ -3585,6 +3585,104 @@ rotation never saves through a rebound temporary visited filename or prompts"
       (mevedel-workspace-clear-registry))))
 
 
+(mevedel-deftest mevedel-session-artifacts-recover-working-directory ()
+  ,test
+  (test)
+  :doc "moves a session and its stranded buffers to the workspace root"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-vanished-cwd-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (root (file-name-as-directory (mevedel-workspace-root workspace)))
+         (worktree (file-name-as-directory
+                    (file-name-concat root ".worktrees" "gone")))
+         (session (mevedel-session-create "main" workspace worktree))
+         (stranded (generate-new-buffer " *stranded*"))
+         (unrelated (generate-new-buffer " *unrelated*"))
+         diagnostics)
+    (unwind-protect
+        (progn
+          (make-directory worktree t)
+          (with-current-buffer stranded (setq default-directory worktree))
+          (with-current-buffer unrelated
+            (setq default-directory temporary-file-directory))
+          (should-not
+           (mevedel-session-artifacts-recover-working-directory session))
+          (should (equal worktree
+                         (mevedel-session-working-directory session)))
+          (delete-directory worktree)
+          (mevedel-test--with-captured-diagnostics diagnostics
+            (should (equal root
+                           (mevedel-session-artifacts-recover-working-directory
+                            session))))
+          (should (string-search "no longer exists" diagnostics))
+          (should (equal root (mevedel-session-working-directory session)))
+          (should (equal root (buffer-local-value 'default-directory stranded)))
+          (should (equal temporary-file-directory
+                         (buffer-local-value 'default-directory unrelated)))
+          (should-not
+           (mevedel-session-artifacts-recover-working-directory session)))
+      (kill-buffer stranded)
+      (kill-buffer unrelated)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+
+  :doc "remote working directories are never probed"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-vanished-cwd-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session (mevedel-session-create "main" workspace))
+         (remote "/ssh:nowhere.invalid:/gone/"))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-working-directory session) remote)
+          (cl-letf (((symbol-function 'file-directory-p)
+                     (lambda (&rest _) (error "Probed a directory"))))
+            (should-not
+             (mevedel-session-artifacts-recover-working-directory session)))
+          (should (equal remote (mevedel-session-working-directory session))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+
+  :doc "a save from a buffer in a deleted worktree succeeds from the workspace root"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-vanished-cwd-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (root (file-name-as-directory (mevedel-workspace-root workspace)))
+         (worktree (file-name-as-directory
+                    (file-name-concat root ".worktrees" "gone")))
+         (session nil)
+         (buffer (generate-new-buffer " *vanished-worktree-session*"))
+         diagnostics)
+    (unwind-protect
+        (progn
+          (make-directory worktree t)
+          (setq session (mevedel-session-create "main" workspace worktree))
+          (with-current-buffer buffer
+            (org-mode)
+            (setq-local mevedel--workspace workspace
+                        mevedel--session session)
+            (setq default-directory worktree)
+            (insert "Worktree session\n")
+            (should (mevedel-session-artifacts-save session buffer t))
+            (set-buffer-modified-p nil)
+            (delete-directory worktree)
+            (insert "After removal\n")
+            (mevedel-test--with-captured-diagnostics diagnostics
+              (should (mevedel-session-artifacts-save session buffer t)))
+            (should (string-search "no longer exists" diagnostics))
+            (should (equal root default-directory))
+            (should-not (mevedel-session-pending-publication session))))
+      (when (and session (mevedel-session-save-path session))
+        (ignore-errors
+          (mevedel-session-persistence-lock-release
+           (mevedel-session-save-path session) session)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
+
 (mevedel-deftest mevedel-session-artifacts-mixed-authority-controls ()
   ,test
   (test)

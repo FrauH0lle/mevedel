@@ -23,6 +23,10 @@
 ;; `files'
 (defvar remote-file-name-inhibit-cache)
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-recover-working-directory "mevedel-session-artifacts" (session))
+(autoload 'mevedel-session-artifacts-recover-working-directory "mevedel-session-artifacts")
+
 ;; `mevedel-session-checkpoint'
 (declare-function mevedel-session-checkpoint-install "mevedel-session-checkpoint" (session candidate))
 (declare-function mevedel-session-checkpoint-project "mevedel-session-checkpoint" (session sidecar &optional candidate))
@@ -1763,6 +1767,8 @@ REQUIRE-COMMIT is its commit requirement."
   (interactive)
   (setq session (or session
                     (mevedel-session-publication--current-session)))
+  ;; A failure caused by a vanished working directory must be retryable.
+  (mevedel-session-artifacts-recover-working-directory session)
   (mevedel-session-recovery-refresh session)
   (let* ((pending (or (mevedel-session-pending-publication session)
                       (user-error "Session has no pending publication")))

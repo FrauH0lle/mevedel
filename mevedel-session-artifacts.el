@@ -1437,14 +1437,52 @@ every durable mutation boundary; unchanged targets take no durability I/O."
                         session root-buffer))))))
               (mevedel-execution-target-acknowledge-incarnation target))))))))
 
+(defun mevedel-session-artifacts-recover-working-directory (session)
+  "Move SESSION to its workspace root when its working directory vanished.
+
+A worktree removed outside mevedel leaves the session, its buffers, and any
+buffer created from them with a `default-directory' that no longer exists.
+Every process started from such a buffer then fails, including publication,
+so the session would be stuck behind a pending publication it cannot retry.
+Retarget the session and every live buffer still naming the missing
+directory, then report the move once.  Remote directories are not probed:
+this runs on every mutation and must not add a target round trip.  Return
+the new directory when SESSION was moved, nil otherwise."
+  (let ((old (mevedel-session-working-directory session))
+        (workspace (mevedel-session-workspace session)))
+    (when (and (stringp old)
+               (not (file-remote-p old))
+               (not (file-directory-p old))
+               workspace)
+      (let ((root (file-name-as-directory
+                   (expand-file-name (mevedel-workspace-root workspace))))
+            (old (file-name-as-directory (expand-file-name old))))
+        (when (and (not (equal old root)) (file-directory-p root))
+          (setf (mevedel-session-working-directory session) root)
+          (dolist (buffer (buffer-list))
+            (with-current-buffer buffer
+              (when (and (stringp default-directory)
+                         (equal (file-name-as-directory
+                                 (expand-file-name default-directory))
+                                old))
+                (setq default-directory root))))
+          (display-warning
+           'mevedel
+           (format "Working directory %s no longer exists; session %s moved to %s"
+                   old (mevedel-session-name session) root)
+           :warning)
+          root)))))
+
 (defun mevedel-session-artifacts-assert-mutation-authority
     (session &optional buffer)
   "Return non-nil when SESSION may start durable mutation from BUFFER.
 
+A session whose working directory vanished first moves to its workspace root.
 Pending critical publication blocks every session.  A portable project session
 also materializes its directory when necessary and must own its live lease.
 Every execution target is incarnation-fenced before mutation.  Shallow
 materialization always uses SESSION's root buffer."
+  (mevedel-session-artifacts-recover-working-directory session)
   (let ((buffer
          (or buffer
              (and (boundp 'mevedel--session)
