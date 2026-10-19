@@ -511,15 +511,18 @@ fails validation, its repair audit is marked abandoned and the handler is not
 called. Both audit states contain only rule IDs, schema paths, and before/after
 shape names.
 
-Every raw model call records a redacted event on its root session with
-the actual backend, model, tool, canonical origin (`/root` or an agent path), outcome
+Repairs, validation failures, and abandoned candidates record a redacted event
+on their root session with the actual backend, model, tool, canonical origin
+(`/root` or an agent path), outcome
 (`valid`, `repaired`, `invalid`, or `abandoned`), rule IDs, schema paths,
 execution state, and result classification. Argument values, paths, commands,
 prompts, schemas, validation messages, and results are excluded. The in-memory
-`mevedel-session-repair-log` is bounded by
+and persistent repair logs omit unchanged valid inputs, even during profiling.
+The in-memory `mevedel-session-repair-log` is bounded by
 `mevedel-tool-repair-log-limit` (default 200). When
 `mevedel-tool-repair-persist-log` is non-nil, materialized sessions also append
-events to `<session>/repair-log.el`; bounded events recorded before first
+events to `<session>/repair-log.el` in UTF-8 without rereading prior entries or
+checking an already-existing parent directory; bounded events recorded before first
 materialization are backfilled when the session directory is created.
 Remote callback entries wait for session settlement and append only their
 queued delta. A crash may tear the final line; failed appends warn, remain

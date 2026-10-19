@@ -3058,14 +3058,14 @@ cover, so the permission step's warning about it is captured here."
 			      (string-match "Note: Repaired tool input"
 					    result (1+ first))))))
 		     (mevedel-tool-clear-registry)))
-		 :doc "records valid main-session execution with actual backend and model"
+			 :doc "records repaired main-session execution with actual backend and model"
 		 (let* ((session (mevedel-session--create :name "main"))
 			(tool (mevedel-tool--create
 			       :name "TelemetryEcho"
 			       :category "mevedel"
 			       :handler (lambda (_args)
 					  '(:result "sentinel tool result"))
-			       :args '((message string :required "Message"))
+				       :args '((message array :required "Message" :items (:type string)))
 			       :read-only-p t
 			       :async-p nil))
 			result)
@@ -3073,17 +3073,18 @@ cover, so the permission step's warning about it is captured here."
 		   (unwind-protect
 		       (with-temp-buffer
 			 (setq-local mevedel--session session)
-			 (should-not
-			  (mevedel-tool-repair-pre-tool-call
-			   '(:name "TelemetryEcho" :args (:message "sentinel input")
-			     :backend main-backend :model main-model)))
-			 (mevedel-pipeline-run-tool
-			  tool (lambda (value) (setq result value))
-			  '(:message "sentinel input"))
-			 (should (equal "sentinel tool result" result)))
+				 (let ((adapted
+				        (mevedel-tool-repair-pre-tool-call
+				         '(:name "TelemetryEcho" :args (:message "sentinel input")
+				           :backend main-backend :model main-model))))
+				   (should adapted)
+				   (mevedel-pipeline-run-tool
+				    tool (lambda (value) (setq result value))
+				    (plist-get adapted :args)))
+				 (should (string-prefix-p "sentinel tool result" result)))
 		     (mevedel-tool-clear-registry))
 		   (let ((event (car (mevedel-session-repair-log session))))
-		     (should (eq 'valid (plist-get event :outcome)))
+			     (should (eq 'repaired (plist-get event :outcome)))
 		     (should (equal "/root" (plist-get event :origin)))
 		     (should (eq 'main-backend (plist-get event :backend)))
 		     (should (eq 'main-model (plist-get event :model)))
@@ -3101,17 +3102,17 @@ cover, so the permission step's warning about it is captured here."
            :category "mevedel"
            :handler (lambda (_args)
                       '(:result "plain failure" :status error))
-           :args '((message string :required "Message"))
+           :args '((message array :required "Message" :items (:type string)))
            :read-only-p t))
          result)
     (mevedel-tool-register tool)
     (with-temp-buffer
       (setq-local mevedel--session session)
-      (should-not
-       (mevedel-tool-repair-pre-tool-call
-        '(:name "StructuredFailure" :args (:message "hello"))))
-      (mevedel-pipeline-run-tool
-       tool (lambda (value) (setq result value)) '(:message "hello")))
+      (let ((adapted (mevedel-tool-repair-pre-tool-call
+                      '(:name "StructuredFailure" :args (:message "hello")))))
+        (should adapted)
+        (mevedel-pipeline-run-tool
+         tool (lambda (value) (setq result value)) (plist-get adapted :args))))
     (should-not (string-prefix-p "Error:" result))
     (let ((finished
            (cl-find 'tool-finished
@@ -3126,6 +3127,7 @@ cover, so the permission step's warning about it is captured here."
          (mevedel-tool--registry (make-hash-table :test #'equal))
          handler-callback
          post-callback
+         repaired-args
          result
          (tool
           (mevedel-tool--create
@@ -3133,22 +3135,23 @@ cover, so the permission step's warning about it is captured here."
            :category "mevedel"
            :handler (lambda (callback _args)
                       (setq handler-callback callback))
-           :args '((message string :required "Message"))
+           :args '((message array :required "Message" :items (:type string)))
            :read-only-p t
            :async-p t)))
     (mevedel-tool-register tool)
     (with-temp-buffer
       (setq-local mevedel--session session)
-      (should-not
-       (mevedel-tool-repair-pre-tool-call
-        '(:name "SettledStatus" :args (:message "hello"))))
+      (let ((adapted (mevedel-tool-repair-pre-tool-call
+                      '(:name "SettledStatus" :args (:message "hello")))))
+        (should adapted)
+        (setq repaired-args (plist-get adapted :args)))
       (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                  (lambda (event _payload callback &rest _)
                    (if (memq event '(PostToolUse PostToolUseFailure))
                        (setq post-callback callback)
                      (funcall callback nil)))))
         (mevedel-pipeline-run-tool
-         tool (lambda (value) (setq result value)) '(:message "hello"))
+         tool (lambda (value) (setq result value)) repaired-args)
         (funcall handler-callback '(:result "accepted" :status success))
         (should post-callback)
         (mevedel-test--with-captured-diagnostics nil
@@ -3173,17 +3176,21 @@ cover, so the permission step's warning about it is captured here."
 				       :name "TelemetryFailure"
 				       :category "mevedel"
 				       :handler (lambda (_args) '(:result "delivered"))
-				       :args '((message string :required "Message"))
+					       :args '((message array :required "Message" :items (:type string)))
 				       :read-only-p t
 				       :async-p nil))
-				result
-				warning)
-			   (mevedel-tool-register tool)
-			   (unwind-protect
-			       (with-temp-buffer
-				 (setq-local mevedel--session session)
-				 (mevedel-tool-repair-pre-tool-call
-				  '(:name "TelemetryFailure" :args (:message "hello")))
+					result
+					repaired-args
+					warning)
+				   (mevedel-tool-register tool)
+				   (unwind-protect
+				       (with-temp-buffer
+					 (setq-local mevedel--session session)
+					 (setq repaired-args
+					       (plist-get
+					        (mevedel-tool-repair-pre-tool-call
+					         '(:name "TelemetryFailure" :args (:message "hello")))
+					        :args))
 				 (cl-letf (((symbol-function 'mevedel-tool-repair--event)
 					    (lambda (&rest _)
 					      (error "private telemetry sentinel")))
@@ -3192,8 +3199,8 @@ cover, so the permission step's warning about it is captured here."
 					      (setq warning message))))
 				   (mevedel-pipeline-run-tool
 				    tool (lambda (value) (setq result value))
-				    '(:message "hello")))
-				 (should (equal "delivered" result))
+						    repaired-args))
+				 (should (string-prefix-p "delivered" result))
 				 (should warning)
 				 (should-not (string-match-p "private\|sentinel" warning))
 				 (should-not mevedel-tool-repair--in-flight))

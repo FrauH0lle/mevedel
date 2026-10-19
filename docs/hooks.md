@@ -628,7 +628,8 @@ the hook audit surface includes the system message as supporting detail.
 
 When the session has been materialized on disk, the same entries are also
 appended to `<session>/hook-log.el` as one sanitized plist per line.  Local
-sessions append when each entry is recorded; remote process callbacks enqueue
+sessions append each entry in UTF-8, without rereading the log or checking an
+already-existing parent directory; remote process callbacks enqueue
 and the next successful session settlement publishes the append atomically.
 Bounded entries created before the session has a save path are backfilled when
 it first materializes.  Non-readable runtime values such as closures are
