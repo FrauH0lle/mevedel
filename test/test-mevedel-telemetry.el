@@ -953,6 +953,10 @@
                  (mevedel-telemetry--safe-props
                   '(:outcome nil :duration-ms 0
                     :modes (:status nil :exit-code 0) :skill-names (nil t)))))
+  (should-not (mevedel-telemetry--safe-props '(:modes (:status nil))))
+  (should (equal [nil t 0]
+                 (plist-get (mevedel-telemetry--safe-props
+                             '(:skill-names [nil t 0])) :skill-names)))
 
   :doc "bounds vectors at thirty-two values without inspecting their tail"
   (dolist (size '(0 1 31 32 33 10000))

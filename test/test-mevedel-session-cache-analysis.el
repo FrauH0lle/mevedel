@@ -94,6 +94,16 @@
         (should-not (alist-get 'output_tokens call))
         (should (= (length (alist-get 'issues report)) 0)))))
 
+  :doc "directory identity is authoritative even for old rows with a session field"
+  (test-mevedel-session-cache-analysis--with-log (root file)
+    (test-mevedel-session-cache-analysis--write
+     file (list (test-mevedel-session-cache-analysis--event
+                 "old-row" 'finish :session-id "stale-row-identity")))
+    (let* ((report (mevedel-analyze-session-cache (list file)))
+           (call (aref (alist-get 'calls report) 0)))
+      (should (equal (alist-get 'session_id call) "session-1"))
+      (should (= (length (alist-get 'issues report)) 0))))
+
   :doc "totals and paired token-weighted ratios exclude cumulative settlements"
   (test-mevedel-session-cache-analysis--with-log (root file)
     (test-mevedel-session-cache-analysis--write
