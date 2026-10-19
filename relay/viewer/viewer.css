@@ -557,6 +557,9 @@ code, pre { font-family: var(--font-mono); }
   padding: .4rem 0;
 }
 .request-card .diff .line { white-space: pre-wrap; }
+.request-card .request-body.prose { white-space: normal; }
+.request-option-label { display: grid; gap: .25rem; width: 100%; font-size: .8rem; }
+.request-option-input { min-width: 0; width: 100%; box-sizing: border-box; }
 .request-controls {
   display: flex;
   gap: .5rem;

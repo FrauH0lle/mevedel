@@ -567,6 +567,41 @@ window draws there."
                              cut)
         cut))))
 
+(defun mevedel-plan-mode--remote-body (entry warning)
+  "Return read-only Markdown for approval ENTRY, including WARNING.
+Unlike the compact native card this discloses all implementation instructions."
+  (let* ((selection (plist-get entry :selection))
+         (execution (plist-get selection :execution))
+         (worktree (eq (plist-get selection :location) 'worktree)))
+    (concat
+     (plist-get entry :body)
+     (if (plist-get entry :directive)
+         "\n\n## Directive implementation\n\n"
+       (format
+        (concat "\n\n## Implementation\n\n"
+                "- **Location:** %s\n- **Context:** %s — %s\n"
+                "- **Execution:** %s — %s\n- **Budget:** %s\n")
+        (capitalize (symbol-name (plist-get selection :location)))
+        (capitalize (symbol-name (plist-get selection :context)))
+        (mevedel-plan-mode--context-description (plist-get selection :context))
+        (capitalize (symbol-name execution))
+        (mevedel-plan-mode--execution-description execution)
+        (if (eq execution 'goal)
+            (if-let* ((budget (plist-get selection :goal-token-budget)))
+                (format "%d tokens" budget) "Unlimited")
+          "Goal execution only")))
+     (format "- **Mode:** %s\n- **Model:** %s · effort %s\n- **Skills:** %s\n"
+             (capitalize (symbol-name (plist-get selection :mode)))
+             (plist-get selection :model-provider)
+             (or (plist-get selection :reasoning-effort) "default")
+             (mevedel-plan-mode--skills-label selection))
+     "\n### Instructions\n\n"
+     (or (plist-get selection :instructions) "None")
+     "\n\nSettings are read-only here; change them in Emacs.\n"
+     (when worktree
+       "\nWorktree acceptance requires an owner link. Full-link guests can send feedback but cannot accept this Worktree plan.\n")
+     (when warning (concat "\n" warning "\n")))))
+
 (defun mevedel-plan-mode--render-approval (entry)
   "Render standalone Plan approval ENTRY in the interaction zone."
   (let ((chat-buffer (plist-get entry :chat-buffer))
@@ -578,7 +613,7 @@ window draws there."
            (mevedel-plan-approval-settle entry outcome))
          (settle (outcome)
            (when overlay (mevedel--prompt--settle overlay outcome)))
-         (accept ()
+         (accept (&optional branch remote-p)
            (interactive)
            (let ((accepted (copy-tree selection))
                  (provider (plist-get selection :model-provider)))
@@ -586,7 +621,13 @@ window draws there."
                (mevedel-plan-handoff-assert-worktree-ready
                 (plist-get entry :session) chat-buffer)
                (plist-put accepted :branch
-                          (mevedel-plan-mode--read-worktree-branch entry)))
+                          (if remote-p
+                              (progn
+                                (mevedel-worktree-validate-branch-name
+                                 branch (mevedel-session-working-directory
+                                         (plist-get entry :session)))
+                                branch)
+                            (mevedel-plan-mode--read-worktree-branch entry))))
              (unless (string-match-p "\\`[^:]+:.+\\'" provider)
                (user-error "Select a registered model before implementing"))
              (unless (mevedel-model-resolve-provider provider t)
@@ -672,9 +713,8 @@ window draws there."
                                (mevedel-plan-mode--worktree-warning entry)))
                  (execution (plist-get selection :execution))
                  (budget (plist-get selection :goal-token-budget))
-                 ;; Semantic rows are built once.  Only the local body
-                 ;; cuts them to one screen row; the remote descriptor keeps
-                 ;; every setting and notice whole, independent of host splits.
+                 ;; Native rows keep a stable one-screen-row geometry.
+                 ;; The remote body discloses settings without keyboard hints.
                  (rows
                   (append
                    (unless directive-p
@@ -783,7 +823,11 @@ window draws there."
                       " cancel\n")
                      'mevedel-view-plan-mode)))
                  (body (funcall frame #'mevedel-plan-mode--fit-row))
-                 (remote-body (funcall frame #'identity)))
+                 (remote-body (mevedel-plan-mode--remote-body entry warning))
+                 ;; Full disclosure is a condition of browser acceptance.
+                 ;; Include JSON escaping and UTF-8 in the sealed-frame budget.
+                 (remote-oversized
+                  (> (string-bytes (json-serialize (vector remote-body))) 57000)))
             (define-key keymap (kbd "RET") #'accept)
             (define-key keymap (kbd "<return>") #'accept)
             (define-key keymap (kbd "C-c C-c") #'accept)
@@ -816,23 +860,36 @@ window draws there."
             (overlay-put overlay 'mevedel-user-request t)
             (overlay-put overlay 'mevedel--callback #'deliver)
             (overlay-put overlay 'keymap keymap)
-            ;; Remote acceptance uses the host-configured axes verbatim;
-            ;; axis editing and Worktree acceptance (which prompts for a
-            ;; branch) stay in Emacs, so a Worktree proposal offers no
-            ;; remote accept at all instead of a dead button.  Remote
-            ;; feedback demotes the proposal and queues the same revision
-            ;; request the Emacs feedback draft composes.
+            ;; Remote acceptance uses the host-configured axes verbatim.
+            ;; Worktree accepts a branch input only from owner links; the
+            ;; dispatcher enforces that authority before invoking the closure.
             (overlay-put overlay 'mevedel--remote
                          (append
-                          (list :body (substring-no-properties remote-body)
+                          (list :body
+                                (if remote-oversized
+                                    (concat "## Full review in Emacs\n\n"
+                                            "The complete plan and implementation instructions exceed the browser card limit. "
+                                            "Nothing has been approved. Review and accept the full plan in Emacs; "
+                                            "you can still send feedback here.")
+                                  (substring-no-properties remote-body))
+                                :body-kind "markdown"
+                                :options
+                                (unless remote-oversized
+                                  (list (cons (lambda (&optional branch)
+                                                (accept branch t))
+                                              "Accept plan")))
                                 :feedback
                                 (lambda (text)
                                   (settle (list :remote-feedback text))))
-                          (unless (eq (plist-get selection :location)
-                                      'worktree)
-                            (list :options
-                                  (list (cons (lambda () (accept))
-                                              "Accept plan"))))))
+                          (when (and (not remote-oversized)
+                                     (eq (plist-get selection :location) 'worktree))
+                            (list :options-owner-only t
+                                  :option-input
+                                  (list :label "Worktree branch"
+                                        :value
+                                        (mevedel-worktree-default-branch-name
+                                         (plist-get entry :session)
+                                         "accepted-plan"))))))
             (mevedel--prompt-announce overlay)))))))
 
 (defun mevedel-plan-mode--post-response (start end)

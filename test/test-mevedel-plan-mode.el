@@ -816,6 +816,7 @@
          (selection (list :location 'here :context 'current
                           :execution 'direct :mode 'ask
                           :model-provider model
+                          :instructions "Preserve the first requirement.\nAlso verify recovery."
                           :skills (mapcar (lambda (name) (list :name name))
                                           skills)))
          (entry (mevedel-plan-mode--approval-entry
@@ -852,10 +853,16 @@
           ;; Remote: complete semantic text, independent of the split.
           (let ((remote (plist-get (overlay-get overlay 'mevedel--remote)
                                    :body)))
+            (should (equal "markdown"
+                           (plist-get (overlay-get overlay 'mevedel--remote)
+                                      :body-kind)))
             (dolist (text (list model (string-join skills ", ") notice
-                                context execution))
+                                context execution (plist-get selection :instructions)))
               (should (string-search text remote)))
-            (should-not (string-search "…" remote))))
+            (should-not (string-search "…" remote))
+            (should-not (string-search "RET" remote))
+            (should-not (string-search "q hide" remote))
+            (should (string-search "Settings are read-only" remote))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
 

@@ -901,8 +901,8 @@ Full-link guests are also presented pending interactions as `ui-request`
 frames — generic requests (approve/deny/feedback), permission prompts
 (one-shot allow-once/deny-once/feedback; session, workspace, and always
 authority is never mintable remotely), plan approval (accept with the
-host-configured axes; Worktree acceptance and feedback drafts stay in
-Emacs), ApplyPatch review (apply the staged selection or request a
+host-configured axes; Worktree acceptance requires an owner link and an explicit
+branch name), ApplyPatch review (apply the staged selection or request a
 revision with whole-patch feedback; side-by-side editing stays in
 Emacs), and Ask questionnaires (the frame carries questions, option
 descriptions and samples, and current answers; the guest answers atomically,
@@ -915,8 +915,20 @@ A session shared while an interaction already waits presents that one too:
 starting a room adopts the session's pending prompts in the order they
 arrived, since each announces itself only once, when it is raised.
 `mevedel-collaboration-remote-interactions` gates that surface. Lease
-transfer, save, rewind, fork, publication, and execution-target changes are
-impossible from the browser regardless of link strength.
+transfer, save, rewind, arbitrary forks, publication, and execution-target
+changes remain host operations. Owner acceptance of a Worktree plan is the typed,
+host-validated exception, not a general browser fork command.
+
+Plan cards render Markdown with the full implementation instructions and
+read-only settings, without native keyboard hints that a browser cannot use.
+Full-link guests may accept Here plans and send feedback, but Worktree acceptance
+is owner-only. Owners supply the branch name through a prefilled text input;
+the host applies the same Git branch validation as the native workflow and never
+opens a minibuffer for a browser response. The host rechecks owner authority on
+receipt, independently of which controls the browser shows.
+If the complete plan, instructions and settings exceed the bounded card payload,
+the card explicitly requires full review in Emacs and offers feedback only. It
+never offers browser acceptance of an undisclosed truncated plan.
 
 Ask shows one open question and single-line summaries of the others. For a
 single-select question, choosing an option or pressing Enter in a custom answer

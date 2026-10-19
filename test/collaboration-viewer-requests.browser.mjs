@@ -65,10 +65,57 @@ async function requestRenderer(page) {
       node.className = className; node.textContent = text; return node;
     };
     window.requestSent = [];
+    window.requestState = {owner: false};
     const send = frame => window.requestSent.push(frame);
-    window.requestView = window.mevedelRequestView.create({requests, el, send});
+    window.requestView = window.mevedelRequestView.create({requests, el, send, state: window.requestState});
   })();`});
 }
+
+test('plan cards render Markdown and expose full implementation instructions', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await room(browser);
+    await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
+    await requestRenderer(page);
+    await page.evaluate(() => requestView.render({reqId: 1, bodyKind: 'markdown',
+      body: '# Implementation plan\n\n## Instructions\n\nKeep **all checks** enabled.\n\n<script>unsafe()</script>', options: []}));
+    assert.equal(await page.getByRole('heading', {name: 'Implementation plan', exact: true}).count(), 1);
+    assert.equal(await page.locator('.request-card strong').innerText(), 'all checks');
+    assert.equal(await page.locator('.request-card script').count(), 0);
+  } finally { await browser.close(); }
+});
+
+test('only owners receive Worktree acceptance with a retained branch input', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 1200]) {
+      const page = await room(browser);
+      await page.setViewportSize({width, height: 812});
+      await requestRenderer(page);
+      await page.evaluate(() => {
+        window.planFrame = {reqId: 1, body: 'Worktree plan', optionsOwnerOnly: true,
+          optionInput: {label: 'Worktree branch', value: 'plan/default'},
+          options: [{id: 0, label: 'Implement plan'}], allowFeedback: true};
+        requestView.render(planFrame);
+      });
+      assert.equal(await page.getByRole('button', {name: 'Implement plan', exact: true}).count(), 0);
+      assert.equal(await page.getByRole('textbox', {name: 'Worktree branch', exact: true}).count(), 0);
+      assert.equal(await page.getByText('Suggest a change', {exact: true}).count(), 1);
+      await page.evaluate(() => { requestState.owner = true; requestView.render(planFrame); });
+      const branch = page.getByRole('textbox', {name: 'Worktree branch', exact: true});
+      assert.equal(await branch.inputValue(), 'plan/default');
+      await branch.fill('plan/phone-choice');
+      await page.evaluate(() => requestView.render({...planFrame, body: 'Updated settings'}));
+      assert.equal(await branch.inputValue(), 'plan/phone-choice');
+      assert.equal(await branch.evaluate(node => document.activeElement === node), true);
+      await page.getByRole('button', {name: 'Implement plan', exact: true}).click();
+      assert.deepEqual(await page.evaluate(() => requestSent.at(-1)),
+        {t: 'ui-response', reqId: 1, option: 0, value: 'plan/phone-choice'});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
 
 test('changed pending cards keep their original arrival order', async () => {
   const browser = await chromium.launch();

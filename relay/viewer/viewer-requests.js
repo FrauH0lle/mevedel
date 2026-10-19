@@ -2,7 +2,7 @@
 (() => {
   'use strict';
 
-  function create({requests, el, send}) {
+  function create({requests, el, send, state}) {
     function remove(reqId) {
       const card = [...requests.children].find(c => c.dataset.reqId === String(reqId));
       if (card) {
@@ -233,12 +233,15 @@
 
     function render(frame) {
       const key = JSON.stringify([frame.body, frame.bodyKind, frame.notice, frame.options,
-        frame.questions, frame.allowFeedback, frame.allowCancel]);
+        frame.questions, frame.allowFeedback, frame.allowCancel,
+        frame.optionsOwnerOnly, frame.optionInput, state.owner]);
       const existing = [...requests.children].find(c => c.dataset.reqId === String(frame.reqId));
       if (existing && existing.frameKey === key) return;
       const scrolled = existing && existing.bodyEl ? existing.bodyEl.scrollTop : 0;
       const previousFeedback = existing && existing.feedbackEl;
       const feedbackFocused = previousFeedback && document.activeElement === previousFeedback;
+      const previousInput = existing && existing.optionInputEl;
+      const inputFocused = previousInput && document.activeElement === previousInput;
       const card = el('section', 'request-card');
       card.frameKey = key;
       card.dataset.reqId = String(frame.reqId);
@@ -249,6 +252,10 @@
       if (frame.bodyKind === 'diff') {
         card.bodyEl = window.mevedelTranscriptRenderer.renderDiff(frame.body || '');
         card.append(card.bodyEl);
+      } else if (frame.bodyKind === 'markdown') {
+        card.bodyEl = window.mevedelTranscriptRenderer.renderMarkdown(frame.body || '');
+        card.bodyEl.classList.add('request-body');
+        card.append(card.bodyEl);
       } else if (frame.body) {
         card.bodyEl = el('div', 'request-body', typeof frame.body === 'string' ? frame.body : '');
         card.append(card.bodyEl);
@@ -257,11 +264,30 @@
         questionnaire(card, frame, existing && existing.questionDraft && existing.questionDraft());
       } else {
         const controls = el('div', 'request-controls');
-        (Array.isArray(frame.options) ? frame.options : []).forEach(option => {
+        const mayChoose = !frame.optionsOwnerOnly || state.owner;
+        if (mayChoose && frame.optionInput) {
+          const label = el('label', 'request-option-label', frame.optionInput.label);
+          const input = el('input', 'request-option-input');
+          input.type = 'text';
+          input.autocomplete = 'off';
+          input.required = true;
+          input.value = previousInput ? previousInput.value : frame.optionInput.value;
+          card.optionInputEl = input;
+          label.append(input);
+          controls.append(label);
+        }
+        (mayChoose && Array.isArray(frame.options) ? frame.options : []).forEach(option => {
           const button = el('button', 'btn', option.label);
           button.type = 'button';
           button.title = `Answer with "${option.label}"`;
-          button.addEventListener('click', () => send({t: 'ui-response', reqId: frame.reqId, option: option.id}));
+          button.addEventListener('click', () => {
+            const response = {t: 'ui-response', reqId: frame.reqId, option: option.id};
+            if (card.optionInputEl) {
+              if (!card.optionInputEl.reportValidity()) return;
+              response.value = card.optionInputEl.value;
+            }
+            send(response);
+          });
           controls.append(button);
         });
         card.append(controls);
@@ -298,6 +324,10 @@
         card.feedbackEl.focus({preventScroll: true});
         card.feedbackEl.setSelectionRange(previousFeedback.selectionStart,
           previousFeedback.selectionEnd, previousFeedback.selectionDirection);
+      } else if (inputFocused && card.optionInputEl) {
+        card.optionInputEl.focus({preventScroll: true});
+        card.optionInputEl.setSelectionRange(previousInput.selectionStart,
+          previousInput.selectionEnd, previousInput.selectionDirection);
       }
     }
 

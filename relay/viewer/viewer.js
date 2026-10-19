@@ -886,7 +886,7 @@
   // The host presents permission/patch/plan prompts to full-link guests;
   // the first answer (here or in Emacs) settles them everywhere.
 
-  const requestView = window.mevedelRequestView.create({requests, el, send});
+  const requestView = window.mevedelRequestView.create({requests, el, send, state});
   const renderRequest = requestView.render;
   const removeRequest = requestView.remove;
   const clearRequests = requestView.clear;
