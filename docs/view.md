@@ -1260,8 +1260,10 @@ row stays reserved (empty when the original prompt header is visible), so
 scrolling never shifts the transcript vertically. The preview
 follows the exchange at the top of each window independently, not the buffer
 point or the most recent submission. A visible prompt header does not pin
-itself; scrolling to a different exchange changes the preview. In tight
-windows, the prompt preview truncates to its own row's width, without taking
+itself; scrolling to a different exchange changes the preview. The preview
+is at most `mevedel-view-sticky-prompt-max-width` columns (80 by default; nil
+uses the window width), so a long prompt does not run across a wide window. In
+tight windows, it truncates to its own row's width, without taking
 space from the operational controls. Its stored text is capped at 512 characters,
 including an ellipsis, after filtering and whitespace normalization. This bounds
 the width measurement performed on every header-line evaluation. Clicking it reveals the original prompt,

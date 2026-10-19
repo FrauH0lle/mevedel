@@ -280,6 +280,7 @@
 (declare-function mevedel-view--start-spinner-timer
                   "mevedel-view-stream" (&optional resumed))
 (declare-function mevedel-view--recheck-spinner-after-redisplay "mevedel-view-stream" ())
+(declare-function mevedel-view--render-request-progress "mevedel-view-stream" ())
 (declare-function mevedel-view--spinner-active-p "mevedel-view-stream" ())
 (declare-function mevedel-view-stream--schedule-execution-row-recovery
                   "mevedel-view-stream" (data-buffer tool-use-id))
@@ -314,6 +315,14 @@ and re-scales it when the window changes."
                  (and (floatp value)
                       (< 0.0 value)
                       (<= value 1.0))))))
+  :group 'mevedel)
+
+(defcustom mevedel-view-sticky-prompt-max-width 80
+  "Maximum width in columns of the sticky prompt preview.
+The preview also never exceeds its window.  nil uses the full window
+width."
+  :type '(choice (const :tag "Window width" nil)
+                 (natnum :tag "Columns"))
   :group 'mevedel)
 
 (defvar-local mevedel-view--side-conversation-p nil
@@ -1339,8 +1348,13 @@ text layout changes: size, wrapping, text scale, line spacing or font."
                         continuation))
          (pinned (or local archived)))
     (when pinned
-      (let* ((width (max 0 (1- (window-body-width window))))
-             (label (if (> width 8) "Prompt  " "")))
+      (let* ((window-width (max 0 (1- (window-body-width window))))
+             (label (if (> window-width 8) "Prompt  " ""))
+             (width (if mevedel-view-sticky-prompt-max-width
+                        (min window-width
+                             (+ (string-width label)
+                                mevedel-view-sticky-prompt-max-width))
+                      window-width)))
         (concat (propertize label 'face 'shadow)
                 (mevedel-view--pinned-prompt-button
                  (if local (cdr pinned) (plist-get pinned :preview))

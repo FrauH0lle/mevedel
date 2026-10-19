@@ -664,6 +664,32 @@
 (mevedel-deftest mevedel-view--sticky-prompt-line ()
   ,test
   (test)
+  :doc "caps a long preview at the configured width, or the window when nil"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (mevedel-view-test--insert-data
+       data-buf (concat (mapconcat #'identity (make-list 40 "long") " ") "\n")
+       nil)
+      (mevedel-view-test--insert-data
+       data-buf (apply #'concat (make-list 100 "answer\n")) 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (set-window-buffer (selected-window) view-buf)
+        (goto-char (point-min))
+        (search-forward "answer")
+        (set-window-start nil (line-beginning-position) t)
+        (let ((mevedel-view-sticky-prompt-max-width 20))
+          (let ((line (mevedel-view--sticky-prompt-line)))
+            (should (string-prefix-p "Prompt  long" line))
+            (should (string-suffix-p "…" line))
+            (should (= (string-width line) (+ 8 20)))))
+        (let ((mevedel-view-sticky-prompt-max-width nil))
+          (should (= (string-width (mevedel-view--sticky-prompt-line))
+                     (1- (window-body-width)))))
+        (let ((mevedel-view-sticky-prompt-max-width 10000))
+          (should (= (string-width (mevedel-view--sticky-prompt-line))
+                     (1- (window-body-width))))))))
+
   :doc "graphical redisplay measures archived prompt visibility without recursion"
   (let ((process-environment (copy-sequence process-environment)))
     (skip-unless (mevedel-test--wayland-available-p))
