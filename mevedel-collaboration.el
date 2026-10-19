@@ -918,9 +918,7 @@ request or prompt transaction."
     (when-let* ((transport (plist-get room :transport)))
       (unless (eq reason 'emacs-exit)
         (condition-case nil
-            (when (> (hash-table-count (plist-get room :guests)) 0)
-              (mevedel-collaboration--transport-send
-               transport 0 (list :t "bye" :reason (format "%s" reason))))
+            (mevedel-collaboration--farewell room reason)
           (error nil)))
       (condition-case nil
           (mevedel-collaboration--transport-stop transport)
@@ -930,6 +928,67 @@ request or prompt transaction."
       (condition-case nil
           (mevedel-collaboration-presence-publish room)
         (error nil)))))
+
+(defun mevedel-collaboration--farewell (room reason)
+  "Tell ROOM's guests that it ends for REASON.
+A room handed off to a successor tells each guest where the work went,
+with a link at the tier that guest already holds; otherwise one
+broadcast says why the room ended."
+  (let ((transport (plist-get room :transport))
+        (guests (plist-get room :guests))
+        (successor (plist-get room :successor)))
+    (when (> (hash-table-count guests) 0)
+      (if (null successor)
+          (mevedel-collaboration--transport-send
+           transport 0 (list :t "bye" :reason (format "%s" reason)))
+        (let ((name (mevedel-collaboration--room-name successor)))
+          (maphash (lambda (peer guest)
+                     (mevedel-collaboration--transport-send
+                      transport peer
+                      (list :t "bye" :reason (format "%s" reason)
+                            :name name
+                            :link (mevedel-collaboration--guest-link
+                                   successor guest))))
+                   guests))))))
+
+(defun mevedel-collaboration--room-name (room)
+  "Return the name ROOM's guests know its session by."
+  (or (when-let* ((session (plist-get room :session)))
+        (mevedel-session-name session))
+      (plist-get room :session-label)))
+
+(defun mevedel-collaboration-hand-off (source target)
+  "Move the guests of SOURCE's room to a room for TARGET.
+SOURCE and TARGET are data buffers.  When SOURCE is not shared, do
+nothing and return nil.  Otherwise share TARGET, end SOURCE's room
+telling each guest where the work continues, with a link to TARGET's
+room at the tier that guest already holds, and return TARGET's room.
+
+The guests already follow this work, so TARGET is shared without the
+consent question `/collab' asks.  Its relay connection completes
+asynchronously; the links are valid at once and a guest joining early
+waits for the host.  This never signals: when TARGET cannot be shared,
+the host is warned and SOURCE's guests are told the work continues in
+Emacs, so a failed share never blocks the caller's own handoff."
+  (when-let* ((room (mevedel-collaboration--room-for-buffer source)))
+    (let ((successor
+           (condition-case err
+               (progn
+                 (mevedel-collaboration--load-room-modules)
+                 (mevedel-collaboration--start
+                  (mevedel-collaboration--data-buffer-session target)
+                  target))
+             (error
+              (display-warning
+               'mevedel
+               (format "Could not share %s for its predecessor's guests: %s"
+                       (if (buffer-live-p target) (buffer-name target) target)
+                       (error-message-string err)))
+              nil))))
+      (plist-put room :successor successor)
+      (mevedel-collaboration--stop-internal
+       room (if successor 'handoff 'handoff-failed))
+      successor)))
 
 (defvar mevedel-collaboration-stop-reason nil
   "Why a data buffer is being killed, told to its room's guests.

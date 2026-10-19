@@ -1472,6 +1472,83 @@ Remove the global hooks a started room installs afterwards."
             (should (string-match-p "Raised before sharing"
                                     (plist-get (car frames) :body)))))))))
 
+(mevedel-deftest mevedel-collaboration-hand-off ()
+  ,test
+  (test)
+
+  :doc "hands each guest the successor room at its own tier"
+  (let ((source (generate-new-buffer " *collab-handoff-source*"))
+        (target (generate-new-buffer " *collab-handoff-target*"))
+        (mevedel-collaboration-relay-url "ws://127.0.0.1:1")
+        (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+        sent)
+    (unwind-protect
+        (mevedel-test--with-stub-relay sent
+          (with-current-buffer target
+            (setq-local mevedel--session
+                        (mevedel-session--create :name "implement-plan")))
+          (let ((room (mevedel-collaboration--start
+                       (mevedel-session--create :name "plan") source))
+                (guests '((1 :name "viewer")
+                          (2 :name "writer" :writable t)
+                          (3 :name "owner" :writable t :owner t))))
+            (pcase-dolist (`(,peer . ,guest) guests)
+              (puthash peer guest (plist-get room :guests)))
+            (let ((successor (mevedel-collaboration-hand-off source target)))
+              (should (eq successor
+                          (mevedel-collaboration--room-for-buffer target)))
+              (should-not (mevedel-collaboration--room-for-buffer source))
+              (pcase-dolist (`(,peer . ,link)
+                             `((1 . ,(plist-get successor :link-view))
+                               (2 . ,(plist-get successor :link-full))
+                               (3 . ,(plist-get successor :link-owner))))
+                (let ((frame (cdr (assq peer sent))))
+                  (should (equal "bye" (plist-get frame :t)))
+                  (should (equal "handoff" (plist-get frame :reason)))
+                  (should (equal "implement-plan" (plist-get frame :name)))
+                  (should (equal link (plist-get frame :link)))))
+              ;; Per-guest farewells replace the room-wide broadcast.
+              (should-not (assq 0 sent)))))
+      (kill-buffer source)
+      (kill-buffer target)))
+
+  :doc "does nothing for a session that is not shared"
+  (let ((source (generate-new-buffer " *collab-handoff-source*"))
+        (target (generate-new-buffer " *collab-handoff-target*"))
+        (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+        sent)
+    (unwind-protect
+        (mevedel-test--with-stub-relay sent
+          (with-current-buffer target
+            (setq-local mevedel--session (mevedel-session--create :name "x")))
+          (should-not (mevedel-collaboration-hand-off source target))
+          (should-not (mevedel-collaboration--room-list))
+          (should-not sent))
+      (kill-buffer source)
+      (kill-buffer target)))
+
+  :doc "tells guests the work continues in Emacs when the successor cannot be shared"
+  (let ((source (generate-new-buffer " *collab-handoff-source*"))
+        (target (generate-new-buffer " *collab-handoff-target*"))
+        (mevedel-collaboration-relay-url "ws://127.0.0.1:1")
+        (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+        sent warning)
+    (unwind-protect
+        (mevedel-test--with-stub-relay sent
+          (let ((room (mevedel-collaboration--start
+                       (mevedel-session--create :name "plan") source)))
+            (puthash 2 (list :name "writer" :writable t)
+                     (plist-get room :guests))
+            ;; TARGET has no session, so sharing it fails.
+            (cl-letf (((symbol-function 'display-warning)
+                       (lambda (_type message &rest _) (setq warning message))))
+              (should-not (mevedel-collaboration-hand-off source target)))
+            (should (string-match-p "Could not share" warning))
+            (should-not (mevedel-collaboration--room-list))
+            (should (equal '((0 :t "bye" :reason "handoff-failed")) sent))))
+      (kill-buffer source)
+      (kill-buffer target))))
+
 (mevedel-deftest mevedel-collaboration--multi-room
   (:doc "gives each shared session its own independent room")
   (let ((data-a (generate-new-buffer " *collab-multi-a*"))
