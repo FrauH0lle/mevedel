@@ -875,7 +875,10 @@ collapsed; collapse starts a fresh ten-second grace. Mouse hover or keyboard
 focus freezes the currently shown row set and holds its finished rows; new work
 is counted until the pointer and focus leave, which restarts their grace. Touch
 does not acquire a synthetic hover hold: expansion and focus provide the hold,
-and tapping elsewhere releases focus. The panel's collapse control hides its
+and tapping elsewhere releases focus. In narrow-screen reading mode, focusing
+work controls keeps the dock compact rather than expanding the composer and
+moving the tap target; other dock controls retain their ordinary focus behavior.
+The panel's collapse control hides its
 rows without discarding durable transcript completion notices.
 
 **Open transcript** reads an active retained agent in its existing sheet.

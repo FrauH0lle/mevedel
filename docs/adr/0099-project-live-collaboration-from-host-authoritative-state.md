@@ -99,6 +99,9 @@ single panel. A bounded scroll area and three fixed preview lines keep status
 growth away from the composer. Expansion retains completed rows until collapse;
 collapse starts a fresh ten-second grace. Mouse hover and keyboard focus hold
 the displayed row set, but touch does not acquire a synthetic hover hold.
+In compact reading mode, work focus preserves dock geometry: expanding the
+composer on work focus moved a row between pointer-up and click on phones.
+Other dock controls retain their own focus behavior.
 Disclosure and hold state belong to the inspecting browser, not shared native
 view state. Original tool IDs also reveal the source inside folded activity
 groups without replacing records or disturbing a draft.
