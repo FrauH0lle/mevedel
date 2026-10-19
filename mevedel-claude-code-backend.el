@@ -28,6 +28,20 @@ See https://code.claude.com/docs/en/model-config.")
   "Installed, unmodified Claude Code executable."
   :type 'string :group 'mevedel)
 
+(defconst mevedel-claude-code--context-windows
+  '(("claude-sonnet-5-5" . 1000) ("claude-sonnet-5" . 1000)
+    ("claude-opus-5-5" . 1000) ("claude-opus-5" . 1000)
+    ("claude-opus-4-8" . 1000) ("claude-opus-4-7" . 1000)
+    ("claude-fable-5-1" . 1000) ("claude-fable-5" . 1000)
+    ("claude-haiku-5-5" . 1000)
+    ("claude-sonnet-4-6" . 200) ("claude-sonnet-4-5" . 200)
+    ("claude-opus-4-6" . 200) ("claude-opus-4-5" . 200)
+    ("claude-haiku-4-5-20251001" . 200))
+  "Documented native model windows in thousands of tokens, without [1m].
+See https://code.claude.com/docs/en/model-config#extended-context and
+https://platform.claude.com/docs/en/about-claude/models/overview.
+Unknown custom IDs deliberately retain the generic model fallback.")
+
 (defcustom mevedel-claude-code-adapter-executable nil
   "ACP adapter executable, or nil for the managed installation and PATH."
   :type '(choice (const :tag "Find installed adapter" nil) file)
@@ -68,6 +82,26 @@ Keep this location stable to resume the installed CLI's retained histories."
 (cl-defmethod mevedel-engine-text-unavailable ((_backend mevedel-claude-code-backend))
   (mevedel-claude-code-unavailable-reason))
 
+(defun mevedel-claude-code--context-window (name)
+  "Return NAME's native context budget in thousands of tokens, or nil.
+Honor explicit extended-context opt-out and alias environment overrides."
+  (let* ((alias (assoc (string-remove-suffix "[1m]" name)
+                       mevedel-claude-code--aliases))
+         (override (and alias
+                        (getenv (format "ANTHROPIC_DEFAULT_%s_MODEL"
+                                        (upcase (car alias))))))
+         (override (and override (not (string-empty-p override)) override))
+         (resolved (or override name))
+         (window
+          (cond
+           ((or (string-suffix-p "[1m]" name)
+                (string-suffix-p "[1m]" resolved)) 1000)
+           ((and alias (not override)) 1000)
+           (t (cdr (assoc resolved mevedel-claude-code--context-windows))))))
+    (if (and window (equal (getenv "CLAUDE_CODE_DISABLE_1M_CONTEXT") "1"))
+        (min window 200)
+      window)))
+
 (defun mevedel-claude-code--model (name &optional existing)
   "Return a backend-owned model named NAME, reusing EXISTING when possible.
 Uninterned symbols keep native capabilities separate from API model metadata.
@@ -76,6 +110,9 @@ Other model IDs accept configured symbols pending capability discovery."
   (or (cl-find name existing :key #'gptel--model-name :test #'equal)
       (car (gptel--process-models
             (list (list (make-symbol name) :description "Claude Code subscription"
+                        ;; Current native aliases default to 1M.  The CLI's
+                        ;; explicit opt-out keeps even these models at 200K.
+                        :context-window (mevedel-claude-code--context-window name)
                         :capabilities '(tool-use media)
                         :mime-types '("image/jpeg" "image/png" "image/gif" "image/webp")
                         :reasoning-effort

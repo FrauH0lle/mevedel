@@ -44,6 +44,58 @@
 (defvar gptel-model)
 (defvar gptel-reasoning-effort)
 
+(mevedel-deftest mevedel-compact-run--label ()
+  (with-temp-buffer
+    (let* ((session (mevedel-session--create :name "UI work"))
+           (target-backend (gptel--make-backend :name "Codex"))
+           (summary-backend (gptel--make-backend :name "Claude Code"))
+           (state (mevedel-compact-run--state-create
+                   :session session :chat-buffer (current-buffer)
+                   :target '(:origin "/root/partner")
+                   :target-policy (list :backend target-backend :model 'target-model)
+                   :policy (list :backend summary-backend :model (make-symbol "sonnet")))))
+      (should (equal "[UI work /root/partner; target Codex:target-model; summary Claude Code:sonnet]"
+                     (mevedel-compact-run--label state)))
+      (setf (mevedel-compact-run--state-target state) nil)
+      (should (string-prefix-p "[UI work /root;" (mevedel-compact-run--label state)))
+      (setf (mevedel-compact-run--state-session state) nil)
+      (should (string-prefix-p (format "[%s /root;" (buffer-name))
+                               (mevedel-compact-run--label state))))))
+
+(mevedel-deftest mevedel-compact-run/model-messages ()
+  (with-temp-buffer
+    (let* ((state (mevedel-compact-run--state-create
+                   :chat-buffer (current-buffer) :aggressive t
+                   :target '(:origin "/root/partner" :start ignore :complete ignore)
+                   :target-policy (list :backend (gptel--make-backend :name "Codex")
+                                        :model 'target-model)
+                   :policy (list :backend (gptel--make-backend :name "Claude Code")
+                                 :model (make-symbol "sonnet"))
+                   :tokens-before 80000))
+           (mevedel-compact-run-warn-on-completion nil)
+           messages)
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback nil)))
+                ((symbol-function 'mevedel-compact-run--send-request) #'ignore)
+                ((symbol-function 'mevedel-compact-estimation-estimate-tokens)
+                 (lambda () 16000))
+                ((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (push (apply #'format format-string args) messages))))
+        (mevedel-compact-run--begin-attempt state)
+        (mevedel-compact-run--finish-success state "summary"))
+      (should (= 2 (length messages)))
+      (dolist (text messages)
+        (should (string-match-p
+                 (regexp-quote "/root/partner; target Codex:target-model; summary Claude Code:sonnet]")
+                 text)))
+      (should (string-prefix-p "mevedel: compacting [" (cadr messages)))
+      (should (string-suffix-p "(buffer 80k -> ...)" (cadr messages)))
+      (should (string-prefix-p "mevedel: compaction complete [" (car messages)))
+      (should (string-suffix-p "(buffer 80k -> 16k tokens, 0 turns preserved)"
+                               (car messages))))))
+
 (mevedel-deftest mevedel-compact-run--finish ()
   ,test
   (test)
@@ -919,6 +971,7 @@
 
   :doc "uses the summarization workload tier for the request"
   (let ((chat-buf (generate-new-buffer " *mevedel-compact-workload*"))
+        (workload-backend (gptel--make-backend :name "workload-backend"))
         (captured-workload nil)
         captured-policy)
     (unwind-protect
@@ -933,8 +986,8 @@
                     ((symbol-function 'mevedel-model-resolve-workload)
                      (lambda (workload &rest _)
                        (setq captured-workload workload)
-                       '(:backend workload-backend :model workload-model
-                         :effort high)))
+                       (list :backend workload-backend :model 'workload-model
+                             :effort 'high)))
                     ((symbol-function 'message)
                      #'ignore)
                     ((symbol-function 'display-warning)
@@ -947,7 +1000,7 @@
             (mevedel-compact-run-start :aggressive t :pending-start (point-max)))
           (should (eq captured-workload 'summarization))
           (should (eq (plist-get captured-policy :backend)
-                      'workload-backend))
+                      workload-backend))
           (should (eq (plist-get captured-policy :model) 'workload-model))
           (should (eq (plist-get captured-policy :effort) 'high))
           (should-not mevedel-compact-run-in-flight))

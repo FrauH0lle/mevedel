@@ -147,6 +147,26 @@ Automatic admission resolves both the realized target model and the
 `summarization` workload model.  It triggers when the estimate reaches the
 smaller model's ratio-derived threshold.
 
+Claude Code's backend-owned Sonnet, Opus, Fable and Haiku aliases declare
+the current models' documented 1000000-token context window rather than
+falling through to the generic 128000-token fallback. Explicit `[1m]` model
+selectors declare the same window. `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` reduces
+both to 200000 tokens, matching the CLI's extended-context opt-out. Unknown
+custom IDs without the suffix still use the generic fallback. Known full
+model IDs carry their documented windows too. `ANTHROPIC_DEFAULT_*_MODEL`
+environment overrides are resolved before assigning alias metadata: pinning
+an older known model uses its window, and an unknown custom mapping retains
+the generic fallback rather than assuming 1M. These budgets also apply to
+the isolated summary request's size preflight; native summary
+generation is not exempt from input limits. See Claude Code's
+[model configuration](https://code.claude.com/docs/en/model-config#extended-context).
+
+With the default 20000-token reserve and 80% ratio, a current Claude summary
+alias therefore contributes a 784000-token threshold, instead of 86400.
+The target model's threshold still wins if it is smaller: a 272000-token
+target compacts at 201600 tokens. With extended context disabled, the Claude
+summary threshold is 144000 tokens.
+
 `mevedel--compact-should-compact-p` also checks eligibility:
 
 - `mevedel-compact-auto` must be non-nil.
@@ -186,6 +206,13 @@ rescanning the transcript at every check. Reminder bodies are counted in their
 wrapped provider shape without building that text.
 `info :tokens-full` is retained only as cumulative usage telemetry; it
 is never used to decide whether to compact.
+
+Start and completion messages identify the conversation, root/agent path,
+target backend/model, and summary backend/model. Their token counts are
+labelled `buffer`: continuation admission estimates the complete realized
+request, whereas these counts use the transcript's provider baseline and
+local additions. A message can therefore report a buffer count below the
+admission threshold. Values displayed with `k` are truncated to thousands.
 
 Telemetry keeps the provider model, raw provider-context and cumulative usage plists,
 their normalized counts, the provider baseline status, the fresh
