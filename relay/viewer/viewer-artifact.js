@@ -53,7 +53,7 @@
     // KIND is 'artifact' for an artifact card or 'file' for a project file,
     // which has no discussions and is removed from the file tree instead.
     // STORE is the artifact store id discussions belong to, if any.
-    const view = {id: null, name: null, store: null, kind: 'artifact', record: null, reqId: 0,
+    const view = {id: null, name: null, filename: null, store: null, kind: 'artifact', record: null, reqId: 0,
                   staging: null, meta: null, bytes: null, urls: [], frames: []};
     let requestSequence = 0;
     let theme = null;
@@ -111,6 +111,7 @@
     function close() {
       view.id = null;
       view.name = null;
+      view.filename = null;
       view.store = null;
       view.record = null;
       view.staging = null;
@@ -137,7 +138,7 @@
       remove.addEventListener('click', async () => {
         if (!view.id || !window.confirm(`Delete ${view.name} for everyone, with its versions and discussions? This cannot be undone.`)) return;
         const reqId = ++deleteSequence;
-        deletions.set(reqId, view.name);
+        deletions.set(reqId, {identity: view.store || view.filename, name: view.name});
         if (!await send({t: 'artifact-delete', reqId, id: view.id})) {
           deletions.delete(reqId);
           flash('Connection lost; nothing was deleted.');
@@ -145,21 +146,22 @@
       });
     }
     function handleDelete(frame) {
-      const name = deletions.get(frame.reqId);
-      if (!name) return;
+      const deleted = deletions.get(frame.reqId);
+      if (!deleted) return;
       deletions.delete(frame.reqId);
       if (typeof frame.error === 'string') {
         flash(frame.error);
         return;
       }
-      if (view.name === name) close();
-      flash(`${name} deleted.`);
+      if ((view.store || view.filename) === deleted.identity) close();
+      flash(`${deleted.name} deleted.`);
     }
 
     function fetch(kind, id, name, frame) {
       close();
       view.id = id;
       view.name = name;
+      view.filename = name;
       view.kind = kind;
       view.reqId = ++requestSequence;
       view.staging = [];
@@ -179,12 +181,13 @@
       if (!panel || !record || typeof record.id !== 'string') return;
       const version = Number.isSafeInteger(record.version) && record.version > 0;
       fetch(version ? 'version' : 'artifact', record.id,
-            (record.artifact || 'artifact') + (version ? ` · Version ${record.version}` : ''),
+            (record.title || record.artifact || 'artifact') + (version ? ` · Version ${record.version}` : ''),
             {t: 'artifact-get', id: record.id, ...(version ? {version: record.version} : {})});
+      view.filename = record.artifact || 'artifact';
       view.store = typeof record.store === 'string' ? record.store : null;
       // What reopens this page after Back, Forward or a reload.
       view.record = {id: record.id};
-      for (const key of ['artifact', 'store', 'version', 'size', 'item']) {
+      for (const key of ['artifact', 'title', 'store', 'version', 'size', 'item']) {
         if (record[key] !== undefined) view.record[key] = record[key];
       }
       onPage();
@@ -307,7 +310,7 @@
       view.urls.push(url);
       const link = document.createElement('a');
       link.href = url;
-      link.download = view.name.split('/').pop();
+      link.download = view.filename.split('/').pop();
       if (typeof link.click === 'function') link.click();
     }
 
@@ -332,7 +335,7 @@
       if (!nav) return;
       const byName = new Map();
       attached.forEach(row => byName.set(row.artifact, {
-        id: `artifact:${row.id}`, artifact: row.artifact, store: row.id,
+        id: `artifact:${row.id}`, artifact: row.artifact, title: row.title, store: row.id,
         size: row.size, missing: row.missing === true,
       }));
       published.forEach(record => {
@@ -350,8 +353,8 @@
         chip.disabled = missing;
         chip.title = missing
           ? `${record.artifact} was deleted on the host`
-          : `Open ${record.artifact}`;
-        chip.append(el('span', 'dock-chip-name', record.artifact));
+          : `Open ${record.title || record.artifact}`;
+        chip.append(el('span', 'dock-chip-name', record.title || record.artifact));
         const size = missing ? 'deleted'
           : typeof record.size === 'number'
             ? window.mevedelTranscriptRenderer.formatBytes(record.size) : '';

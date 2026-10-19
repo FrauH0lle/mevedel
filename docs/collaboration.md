@@ -988,13 +988,16 @@ Artifacts are files in the [workspace artifact store](view.md#artifact-store),
 authored through the normal patch workflow.
 
 In a room, the projection turns each selected applied artifact destination
-into a card carrying name, size and the id of the store artifact it belongs
+into a card carrying its readable title, size and the id of the store artifact it belongs
 to -- never the bytes, and never the host-side path, which stays in the
 unserialized `:artifact-path` field. A multi-file
 patch produces one card per artifact destination; rejected changes produce
 none, and a mixed code/artifact patch retains its ordinary tool row.
-File stats are memoized against per-publish-tick target round trips and
-invalidated when ApplyPatch settles. A deleted artifact still
+Cards, attached-item chips and the artifact panel display the store title;
+a secondary file adds its relative filename so files stay distinguishable.
+Browser history retains that title, while downloads keep the actual filename.
+File stats and title metadata are memoized against per-publish-tick target round
+trips and invalidated when ApplyPatch settles or the store changes. A deleted artifact still
 projects, marked missing, so it reads as deleted rather than as a gap
 in the log. The sidebar combines live and archived artifact records with
 the store artifacts attached to the room's session (last record per name

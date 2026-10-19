@@ -107,6 +107,34 @@
       (mevedel-collaboration--artifact-stat-invalidate)
       (delete-directory directory t))))
 
+(mevedel-deftest mevedel-collaboration--history-artifacts
+  (:doc "refreshes archived titles without rereading transcripts or warm metadata")
+  (let* ((directory (make-temp-file "mevedel-history-titles-" t))
+         (workspace (mevedel-workspace--create :type 'file :id "w" :root directory))
+         (session (mevedel-session--create :save-path directory :workspace workspace :current-segment 2))
+         (path (file-name-concat (mevedel-artifact-store-directory workspace) "page" "index.html"))
+         (room (list :session session :history-source (cons directory 2)
+                     :history-archives (list (cons 1 (list (list :id "history-1-card"
+                                                               :artifact "page/index.html"
+                                                               :artifact-path path :store "page"))))))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory path) t)
+          (write-region "hello" nil path nil 'silent)
+          (mevedel-artifact-store-create-meta workspace "page" "index.html" 'html "Initial")
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-read-segment)
+                     (lambda (&rest _) (ert-fail "Archive reread during title publication"))))
+            (should (equal "Initial" (plist-get (car (mevedel-collaboration--history-artifacts room)) :title)))
+            (mevedel-collaboration--artifact-stat-invalidate)
+            (cl-letf (((symbol-function 'mevedel-artifact-store-meta)
+                       (lambda (&rest _) (cl-incf calls) '(:title "Renamed" :file "index.html"))))
+              (dotimes (_ 2)
+                (should (equal "Renamed" (plist-get (car (mevedel-collaboration--history-artifacts room)) :title))))
+              (should (= calls 1)))))
+      (mevedel-collaboration--artifact-stat-invalidate)
+      (delete-directory directory t))))
+
 (mevedel-deftest mevedel-collaboration--handle-history-get
   (:doc "remote callback reads wait for transport and recheck room and guest authority")
   (dolist (revocation '(nil guest room))

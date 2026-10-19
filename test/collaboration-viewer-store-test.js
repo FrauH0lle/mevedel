@@ -70,7 +70,8 @@ const press = (row, label) => {
                    ['Open', 'Versions', 'Attach', 'Duplicate', 'Conversation', 'Delete']);
   press(list.children[0], 'Open');
   assert.deepEqual(plain(opened), [{id: 'artifact:flow', artifact: 'flow/index.html',
-                                    store: 'flow', size: 9, missing: false, item: false}]);
+                                    title: 'index.html', store: 'flow', size: 9,
+                                    missing: false, item: false}]);
 }
 
 // A view link lists and opens; the lobby never attaches.

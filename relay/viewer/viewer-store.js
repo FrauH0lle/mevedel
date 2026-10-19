@@ -40,7 +40,7 @@
     }
 
     function record(row) {
-      return {id: `artifact:${row.id}`, artifact: row.artifact, store: row.id,
+      return {id: `artifact:${row.id}`, artifact: row.artifact, title: row.title, store: row.id,
               size: row.size, missing: row.missing === true, item: row.item === true};
     }
 

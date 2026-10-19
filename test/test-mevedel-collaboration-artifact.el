@@ -33,6 +33,32 @@
 (require 'mevedel-collaboration-artifact-projection)
 (require 'mevedel-collaboration-artifact)
 
+(mevedel-deftest mevedel-collaboration--artifact-title
+  (:doc "caches readable primary and secondary titles until invalidated")
+  (let* ((root (make-temp-file "mevedel-artifact-titles-" t))
+         (workspace (mevedel-workspace--create :type 'project :id "w"
+                                               :root root :name "w"))
+         (session (mevedel-session--create :name "s" :workspace workspace)))
+    (unwind-protect
+        (progn
+          (mevedel-artifact-store-create-meta workspace "page" "index.html" 'html "Review")
+          (should (equal "Review" (mevedel-collaboration--artifact-title session "page/index.html")))
+          (should (equal "Review · assets/data.json"
+                         (mevedel-collaboration--artifact-title session "page/assets/data.json")))
+          (cl-letf (((symbol-function 'mevedel-artifact-store-meta)
+                     (lambda (&rest _) (error "Unexpected metadata I/O"))))
+            (should (equal "Review" (mevedel-collaboration--artifact-title session "page/index.html"))))
+          (should-not (mevedel-collaboration--artifact-title session "absent/index.html"))
+          (cl-letf (((symbol-function 'mevedel-artifact-store-meta)
+                     (lambda (&rest _) (error "Unexpected metadata I/O"))))
+            (should-not (mevedel-collaboration--artifact-title session "absent/index.html")))
+          (mevedel-collaboration--artifact-stat-invalidate)
+          (cl-letf (((symbol-function 'mevedel-artifact-store-meta)
+                     (lambda (&rest _) '(:title "Changed" :file "index.html"))))
+            (should (equal "Changed" (mevedel-collaboration--artifact-title session "page/index.html")))))
+      (mevedel-collaboration--artifact-stat-invalidate)
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-collaboration--artifact-fields
   (:doc "projects selected ApplyPatch render data inside the artifact store")
   (let* ((save-path (make-temp-file "mevedel-collab-artifacts-" t))
@@ -46,10 +72,13 @@
           (setq-local mevedel--session session)
           (make-directory (file-name-directory path) t)
           (write-region "<h1>hi</h1>" nil path nil 'silent)
+          (mevedel-artifact-store-create-meta workspace "mockup" "index.html"
+                                              'html "Architecture review")
           (let ((fields (car (mevedel-collaboration--artifact-fields
                               `(:kind patch
                                 :files ((:kind add :path ,path)))))))
             (should (equal "mockup/index.html" (plist-get fields :artifact)))
+            (should (equal "Architecture review" (plist-get fields :title)))
             (should (= 11 (plist-get fields :size)))
             (should (equal (expand-file-name path)
                            (plist-get fields :artifact-path)))
@@ -101,7 +130,9 @@
                          :workspace (mevedel-workspace--create
                                      :type 'project :id "r"
                                      :root "/ssh:example:/base/" :name "r")))
-            (cl-letf (((symbol-function
+            (cl-letf (((symbol-function 'mevedel-artifact-store-meta)
+                       (lambda (_workspace _id) nil))
+                      ((symbol-function
                         'mevedel-collaboration--artifact-stat)
                        (lambda (seen)
                          (should (equal "/ssh:example:/base/.mevedel/artifacts/m/m.html"
