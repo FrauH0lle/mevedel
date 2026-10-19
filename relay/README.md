@@ -16,6 +16,12 @@ safe ephemeral login state, and submit closed `recovery` actions. Shared `status
 frames include persistent operational `issues` and the last turn `outcome`.
 Credentials never enter relay payloads; notification wakeups remain generic.
 
+The bounded `history-index` records stream contains artifact metadata and
+canonical chat descriptors: `{kind:"chat",number,firstSegment,lastSegment,title}`.
+The viewer groups lazy segment disclosures by those descriptors, rather than
+inferring `/clear` boundaries from compaction segments. The live chat title is
+republished after rename; `currentSegment` remains frame metadata.
+
 ## Wire contract
 
 - `GET /` — the bundled viewer (`viewer/`, embedded via `go:embed`).

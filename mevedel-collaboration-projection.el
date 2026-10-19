@@ -232,7 +232,7 @@ an artifact only by its record id, never by a filesystem path."
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
                        :truncated :guest :directive :item :detail :diff
                        :artifact :store :size :missing :presentation :shared
-                       :execution :description))
+                       :execution :description :title :number :firstSegment :lastSegment))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))

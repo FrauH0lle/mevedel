@@ -68,6 +68,10 @@ Artifacts live in the workspace artifact store, not in relay file storage. See
 
 Compaction reduces model context without withdrawing browser history. Earlier
 segments load as read-only disclosures through the existing session reader.
+Canonical chat descriptors group those segments across `/clear` boundaries;
+compaction is continuation within a chat, not a new chat. The host publishes
+chat numbers, segment ranges and titles in bounded history-index chunks, without
+reading transcript files just to recover chat identity.
 The room caches only their published artifact metadata, keeping sidebar access
 independent of the current context segment; transcript bodies load on demand.
 

@@ -20,6 +20,42 @@
 (require 'mevedel-execution-transcript)
 (require 'org)
 
+(mevedel-deftest mevedel-collaboration-history-rename-notification
+  (:doc "rename schedules the current chat heading as well as room status")
+  (let (status history)
+    (cl-letf (((symbol-function 'mevedel-collaboration-notify-request-changed)
+               (lambda (buffer) (setq status buffer)))
+              ((symbol-function 'mevedel-collaboration-notify-history-changed)
+               (lambda (buffer) (setq history buffer))))
+      (mevedel-collaboration--on-session-event 'data 'rename)
+      (should (eq status 'data))
+      (should (eq history 'data)))))
+
+(mevedel-deftest mevedel-collaboration--publish-history
+  (:doc "projects canonical clear-separated chats and refreshes their titles")
+  (let* ((session (mevedel-session--create
+                   :name "Current work" :current-segment 4
+                   :chapters '((:segment 2 :title "Earlier work" :closed-at 1))))
+         (room (list :session session :transport 'test))
+         sent)
+    (cl-letf (((symbol-function 'mevedel-collaboration--broadcast)
+               (lambda (_room frame) (push (mevedel-test--frame frame) sent))))
+      (mevedel-collaboration--publish-history room)
+      (let ((chats (append (plist-get (car sent) :records) nil)))
+        (should (= 2 (length chats)))
+        (should (equal "chat" (plist-get (car chats) :kind)))
+        (should (equal "Earlier work" (plist-get (car chats) :title)))
+        (should (= 1 (plist-get (car chats) :firstSegment)))
+        (should (= 2 (plist-get (car chats) :lastSegment)))
+        (should (= 3 (plist-get (cadr chats) :firstSegment))))
+      (setq sent nil)
+      (mevedel-collaboration--publish-history room)
+      (should-not sent)
+      (setf (mevedel-session-name session) "Renamed work")
+      (mevedel-collaboration--publish-history room)
+      (should (equal "Renamed work"
+                     (plist-get (aref (plist-get (car sent) :records) 1) :title))))))
+
 (mevedel-deftest mevedel-collaboration-archived-artifacts
   (:doc "publishes and serves archived artifacts after compaction and a cold room start")
   (let* ((directory (make-temp-file "mevedel-history-" t))

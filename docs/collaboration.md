@@ -768,8 +768,10 @@ discussions, deleting the item deletes them, and exports leave them out.
 ## Transcript, agent, and task projection
 
 Compaction and clearing model context retain earlier conversation segments.
-The browser lists them in expandable **Earlier conversation** rows above the
-live transcript. Opening a row loads the host's canonical archived projection
+The browser groups expandable **Earlier conversation** segment rows under the
+canonical chat number and title above the live transcript. `/clear` starts a new
+chat; compaction segments stay within their chat. The current chat is marked
+**Live conversation · New messages go here.** Opening a row loads the host's canonical archived projection
 on demand; it does not restore that segment into model context or change where
 new prompts are sent. Loaded disclosures remain open across live updates, and
 unavailable archives show a retry action. Rejoining a room reconstructs the

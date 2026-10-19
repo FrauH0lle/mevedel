@@ -31,7 +31,8 @@ window.mevedelHistoryView = Object.freeze({
         if (!staging || staging.current !== frame.currentSegment) staging = {current:frame.currentSegment, records:[]};
         if (Array.isArray(frame.records)) staging.records.push(...frame.records);
         if (frame.final !== true) return;
-        catalog = staging.records;
+        const chats = staging.records.filter(record => record.kind === 'chat');
+        catalog = staging.records.filter(record => record.kind !== 'chat');
         staging = null;
         for (const [number, row] of rows) {
           if (number >= frame.currentSegment) { row.node.remove(); rows.delete(number); }
@@ -59,9 +60,23 @@ window.mevedelHistoryView = Object.freeze({
           const row = {number, node, body, loaded:false, reqId:null, records:[]};
           rows.set(number, row);
           node.addEventListener('toggle', () => { if (node.open) load(row); });
-          root.append(node);
         }
-        root.hidden = rows.size === 0;
+        // The host's native chat descriptors distinguish /clear from a
+        // compaction. Move existing disclosure nodes, preserving loaded bodies
+        // and open state, rather than rebuilding them on every live update.
+        const groups = chats.map(chat => {
+          const group = el('section', 'history-chat');
+          group.append(el('h2', 'history-chat-title', `Chat ${chat.number} · ${chat.title}`));
+          for (let number = chat.firstSegment; number <= chat.lastSegment; number++) {
+            if (rows.has(number)) group.append(rows.get(number).node);
+          }
+          if (chat.lastSegment === frame.currentSegment) {
+            group.append(el('p', 'history-note', 'Live conversation · New messages go here.'));
+          }
+          return group;
+        });
+        root.replaceChildren(...groups);
+        root.hidden = rows.size === 0 && chats.length < 2;
         onArtifacts();
       } else if (frame.t === 'history') {
         const row = [...rows.values()].find(value => value.reqId !== null && value.reqId === frame.reqId);

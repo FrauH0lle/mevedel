@@ -839,7 +839,8 @@ room, and follows a rename, including an automatic title."
   "Publish DATA-BUFFER's status when its session EVENT changes it.
 A rename, manual or automatic, changes the name the room is headed by."
   (when (eq event 'rename)
-    (mevedel-collaboration-notify-request-changed data-buffer)))
+    (mevedel-collaboration-notify-request-changed data-buffer)
+    (mevedel-collaboration-notify-history-changed data-buffer)))
 
 (defun mevedel-collaboration-notify-history-changed (data-buffer)
   "Refresh DATA-BUFFER's browser history after a segment transition commits."

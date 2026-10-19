@@ -151,6 +151,8 @@ segment, so a later clear appends in order; Save As keeps all, and restoring
 an earlier published head restores the record with the rest of its sidecar. The resume
 picker counts chats rather than segments and names the earlier ones, newest
 first, from the sidecar alone; it reads no segment files.
+The collaboration viewer uses these same chat descriptors to group lazy
+archived-segment disclosures and mark the live conversation.
 Compaction does not rearm naming. A failed clear leaves naming eligibility
 unchanged; failures after a committed transition do not roll it back.
 Keyboard quit is deferred during clear publication and recovery so it cannot
