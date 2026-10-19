@@ -41,12 +41,12 @@
 ;; Steering is queued at a hook or prompt boundary so its moment is exact.
 ;; Image steering cannot ride hook text, so it continues the native turn.
 (mevedel-deftest mevedel--send-request/claude-steering (:quiet t)
-  (dolist (mode '(hook mismatch final held image image-final image-mismatch))
+  (dolist (mode '(hook mismatch final held image image-final image-resized image-missing))
     (mevedel-engine-test--with-claude-session
       (let* ((file (file-name-concat root "evidence.txt"))
              (image (file-name-concat root "steer.png"))
              (data "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=")
-             (input (if (memq mode '(image image-final image-mismatch))
+             (input (if (memq mode '(image image-final image-resized image-missing))
                         (format "STEER-4417 @file:{%s}" image)
                       "STEER-4417"))
              (final (memq mode '(final image-final)))
@@ -84,7 +84,9 @@
                                       (continuationPrompts
                                        . [((responseText . "Steered reply")
                                            (promptAcknowledgement
-                                            . ,(if (eq mode 'image-mismatch) "image-mismatch" t)))])
+                                            . ,(if (memq mode '(image-resized image-missing))
+                                                   (symbol-name mode)
+                                                 t)))])
                                       (toolBatches
                                        . ,(apply #'vector
                                                  (mapcar (lambda (id)
@@ -97,19 +99,19 @@
             (mevedel-test--await 5 "Steering turn did not settle"
               (not (mevedel-turn-busy-p buffer)))))
         (ert-info ((format "mode=%S" mode))
-          (should (eq (if (memq mode '(mismatch image-mismatch)) 'error 'success)
+          (should (eq (if (memq mode '(mismatch image-missing)) 'error 'success)
                       (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
-          (should (= (if (memq mode '(hook final image image-final)) 1 0)
+          (should (= (if (memq mode '(hook final image image-final image-resized)) 1 0)
                      (how-many "STEER-4417" (point-min) (point-max))))
           ;; Hook steering continues the first prompt; images need a second.
-          (should (eq (and (memq mode '(final image image-final image-mismatch)) t)
+          (should (eq (and (memq mode '(final image image-final image-resized image-missing)) t)
                       (and (string-search "Steered reply" (buffer-string)) t)))
           (should-not (string-search data (buffer-string)))
           (pcase mode
-            ((or 'hook 'final 'image 'image-final)
+            ((or 'hook 'final 'image 'image-final 'image-resized)
              (should-not (mevedel-session-pending-steering session))
              (should-not (mevedel-session-pending-follow-ups session)))
-            ((or 'mismatch 'image-mismatch)
+            ((or 'mismatch 'image-missing)
              (should (eq 'failed-turn
                          (plist-get (car (mevedel-session-pending-steering session)) :state))))
             ('held
@@ -187,8 +189,8 @@
             (advice-remove 'gptel-send #'mevedel-skills--gptel-send-advice)))))))
 
 (mevedel-deftest mevedel-view--forward-input-now/claude-image (:quiet t)
-		 (pcase-dolist (`(,acknowledgement ,attachment) '((t mention) (:false mention) ("image-mismatch" mention)
-								  (t context) (t both)))
+		 (pcase-dolist (`(,acknowledgement ,attachment) '((t mention) (:false mention) ("image-missing" mention)
+								  ("image-resized" mention) (t context) (t both)))
 		   (mevedel-engine-test--with-claude-session
 		    (mevedel-request-end)
 		    (let ((view (generate-new-buffer " *claude-image-composer*"))
@@ -220,10 +222,12 @@
 			      (mevedel-test--await 5 "Image request did not settle"
                                 (not (mevedel-turn-busy-p buffer))))
 			    (should (string-search "Image accepted" (buffer-string)))
-			    (should (eq (if (eq acknowledgement t) 'ready 'uncertain)
+			    (should (eq (if (member acknowledgement '(t "image-resized")) 'ready 'uncertain)
 					(plist-get (alist-get "root" (mevedel-session-external-conversations session)
 							      nil nil #'equal) :state)))
-			    (should (= (if (eq acknowledgement t) (if (eq attachment 'both) 2 1) 0)
+			    (should (= (if (member acknowledgement '(t "image-resized"))
+					   (if (eq attachment 'both) 2 1)
+					 0)
 				       (hash-table-count (mevedel-session-mentions-shown session))))
 			    (should (= 1 (mevedel-session-turn-count session)))
 			    (should-not (string-search data (buffer-string)))

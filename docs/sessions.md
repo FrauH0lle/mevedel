@@ -688,8 +688,10 @@ completion, a hook preview or an offloaded file never counts as delivery.
   and its selected images are sent once per native conversation and content
   hash; a changed selection or new conversation sends them again. A block is
   received only when the SDK's top-level user-message echo for that
-  conversation contains its exact text; images also need their complete bytes,
-  MIME types and order. Text receipts alone do not establish image delivery.
+  conversation contains its exact text; images also need one echoed image each.
+  Claude Code resizes and may re-encode an image beyond its dimension or size
+  limits before echoing it, so an echoed image is matched by presence, not by
+  bytes or MIME type. Text receipts alone do not establish image delivery.
 - **Tool-batch hook.** After each native tool batch, a `PostToolBatch` hook
   carries selected observations changed since the last accepted snapshot,
   queued turn events, newly available direct children, the root turn's
@@ -721,8 +723,8 @@ when a native prompt ends successfully, with no continuation pending, is sent as
 a further prompt in the same turn and received by its exact echo, so the turn
 settles once. Steering that carries images cannot ride hook text: it takes the
 continuation prompt below at its tool batch, with the images after the body
-text. Receipt then also requires those images, in order, with their complete
-bytes and MIME types; the echo of the text alone delivers nothing.
+text. Receipt then also requires at least one echoed image per steering image;
+the echo of the text alone delivers nothing.
 
 Claude's inline hook output limit is 10,000 UTF-16 code units. A hook update
 beyond it, including a single mail message, or one carrying steering images,

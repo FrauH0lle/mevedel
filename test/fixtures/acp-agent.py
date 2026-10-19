@@ -199,10 +199,16 @@ for line in sys.stdin:
                     receipt["params"]["message"]["message"]["content"] = [{"type": "text", "text": "truncated"}]
                 elif prompt_acknowledgement == "nested":
                     receipt["params"]["message"]["parent_tool_use_id"] = "nested-agent"
-                elif prompt_acknowledgement == "image-mismatch":
+                elif prompt_acknowledgement == "image-resized":
+                    # Claude Code resizes and may re-encode large images.
                     for block in receipt["params"]["message"]["message"]["content"]:
                         if block["type"] == "image":
-                            block["source"]["data"] = "truncated"
+                            block["source"]["data"] = "UkVTSVpFRA=="
+                            block["source"]["media_type"] = "image/jpeg"
+                elif prompt_acknowledgement == "image-missing":
+                    content = receipt["params"]["message"]["message"]["content"]
+                    receipt["params"]["message"]["message"]["content"] = [
+                        block for block in content if block["type"] != "image"]
                 if prompt_acknowledgement != "late":
                     # Receipts and terminal replies are sent twice throughout:
                     # observation and settlement must be idempotent.

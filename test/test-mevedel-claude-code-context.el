@@ -599,25 +599,51 @@
     (setf (mevedel-engine-info owner) nil)
     (should-not (mevedel-claude-code-context--pending-images owner))))
 
-(mevedel-deftest mevedel-claude-code-context--image-echo-p ()
+(mevedel-deftest mevedel-claude-code-context--echoed-images ()
   ,test
   (test)
-  :doc "requires the echoed image's exact bytes and MIME type"
-  (let ((sent '((type . "image") (mimeType . "image/png") (data . "QUJD"))))
-    (should (mevedel-claude-code-context--image-echo-p
-             sent (car (mevedel-claude-code-context-test--echo (list sent)))))
-    (dolist (field '((data . "QUI=") (mimeType . "image/jpeg")))
-      (should-not (mevedel-claude-code-context--image-echo-p
-                   sent (car (mevedel-claude-code-context-test--echo
-                              (list (cons field sent)))))))))
+  :doc "keeps base64 image parts whatever their bytes or image MIME type"
+  (let ((png '((type . "image") (mimeType . "image/png") (data . "QUJD")))
+        (jpeg '((type . "image") (mimeType . "image/jpeg") (data . "QUI="))))
+    (should (= 2 (length (mevedel-claude-code-context--echoed-images
+                          (mevedel-claude-code-context-test--echo
+                           (list '((type . "text") (text . "t")) png jpeg))))))
+    (should-not (mevedel-claude-code-context--echoed-images
+                 (mevedel-claude-code-context-test--echo
+                  (list '((type . "image") (mimeType . "image/png") (data . ""))
+                        '((type . "image") (mimeType . "text/plain") (data . "QUJD"))))))
+    (should-not (mevedel-claude-code-context--echoed-images
+                 '(((type . "image") (source (type . "url") (url . "x"))))))))
+
+(mevedel-deftest mevedel-claude-code-context--input-received-p ()
+  ,test
+  (test)
+  :doc "accepts an image Claude Code resized and re-encoded before echoing"
+  (let* ((text '((type . "text") (text . "look")))
+         (sent '((type . "image") (mimeType . "image/png") (data . "T1JJRw==")))
+         (resized '((type . "image") (mimeType . "image/jpeg") (data . "U01BTEw=")))
+         (content (vector text sent)))
+    (cl-flet ((received (parts)
+                (mevedel-claude-code-context--input-received-p
+                 content `((type . "user")
+                           (message (role . "user")
+                                    (content . ,(mevedel-claude-code-context-test--echo
+                                                 parts)))))))
+      (should (received (list text sent)))
+      (should (received (list text resized)))
+      ;; Text alone does not establish image delivery.
+      (should-not (received (list text)))
+      (should-not (received (list text sent resized)))
+      (should-not (received (list '((type . "text") (text . "loo")) sent))))))
 
 (mevedel-deftest mevedel-claude-code-context--prompt-received-p ()
   ,test
   (test)
-  :doc "matches the exact body and the pending images in order among other parts"
+  :doc "matches the exact body and at least the pending images among other parts"
   (let* ((one '((type . "image") (mimeType . "image/png") (data . "T05F")))
          (two '((type . "image") (mimeType . "image/png") (data . "VFdP")))
          (user '((type . "image") (mimeType . "image/png") (data . "VVNFUg==")))
+         (resized '((type . "image") (mimeType . "image/jpeg") (data . "U01BTEw=")))
          (text '((type . "text") (text . "BODY")))
          (pending (list :body "BODY" :images (list one two))))
     (cl-flet ((received (parts &optional (pending pending))
@@ -626,7 +652,7 @@
                                                     (content . ,(mevedel-claude-code-context-test--echo
                                                                  parts)))))))
       (should (received (list text user one two)))
-      (should-not (received (list text two one)))
+      (should (received (list text one resized)))
       (should-not (received (list text one)))
       (should-not (received (list '((type . "text") (text . "BOD")) one two)))
       ;; A text-only delivery may share its prompt with user images.

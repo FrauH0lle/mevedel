@@ -93,24 +93,30 @@ Tool-result messages cannot acknowledge submitted input."
          (sequencep parts) (not (stringp parts))
          parts)))
 
-(defun mevedel-claude-code-context--image-echo-p (expected actual)
-  "Return non-nil when echoed image part ACTUAL carries submitted EXPECTED."
-  (let ((source (alist-get 'source actual)))
-    (and (equal "image" (alist-get 'type actual))
-         (equal "base64" (alist-get 'type source))
-         (equal (alist-get 'data expected) (alist-get 'data source))
-         (equal (alist-get 'mimeType expected) (alist-get 'media_type source)))))
+(defun mevedel-claude-code-context--echoed-images (parts)
+  "Return the base64 image parts among echoed user message PARTS.
+Claude Code resizes and may re-encode an image beyond its dimension or
+size limits before echoing it, so neither bytes nor MIME type identify a
+submitted image; only its presence does."
+  (seq-filter (lambda (part)
+                (let ((source (alist-get 'source part)))
+                  (and (equal "image" (alist-get 'type part))
+                       (equal "base64" (alist-get 'type source))
+                       (stringp (alist-get 'data source))
+                       (not (string-empty-p (alist-get 'data source)))
+                       (string-prefix-p "image/" (alist-get 'media_type source)))))
+              parts))
 
 (defun mevedel-claude-code-context--input-received-p (content message)
   "Return non-nil when native user MESSAGE echoes all required CONTENT.
-Image order, MIME types and complete base64 bytes must match the submitted
-images; tool-result messages cannot acknowledge a submitted user attachment."
+Every text part must be echoed exactly and the echo must carry one image
+per submitted image; tool-result messages cannot acknowledge a submitted
+user attachment."
   (let* ((parts (mevedel-claude-code-context--user-parts message))
-         (images (seq-filter (lambda (part) (equal "image" (alist-get 'type part))) content))
-         (received (seq-filter (lambda (part) (equal "image" (alist-get 'type part))) parts)))
+         (images (seq-filter (lambda (part) (equal "image" (alist-get 'type part))) content)))
     (and parts
-         (= (length images) (length received))
-         (cl-every #'mevedel-claude-code-context--image-echo-p images received)
+         (= (length images)
+            (length (mevedel-claude-code-context--echoed-images parts)))
          (seq-every-p
           (lambda (part)
             (or (equal "image" (alist-get 'type part))
@@ -122,22 +128,15 @@ images; tool-result messages cannot acknowledge a submitted user attachment."
 
 (defun mevedel-claude-code-context--prompt-received-p (pending message)
   "Return non-nil when native user MESSAGE echoes PENDING prompt delivery.
-Its body is one exact text block.  Its images appear in order with complete
-bytes and MIME types; the prompt may carry other parts around them."
-  (let* ((parts (mevedel-claude-code-context--user-parts message))
-         (received (seq-filter (lambda (part) (equal "image" (alist-get 'type part))) parts)))
+Its body is one exact text block, and the echo carries at least one image
+per pending image; the prompt may carry other parts around them."
+  (let ((parts (mevedel-claude-code-context--user-parts message)))
     (and (seq-some (lambda (block)
                      (and (equal "text" (alist-get 'type block))
                           (equal (plist-get pending :body) (alist-get 'text block))))
                    parts)
-         (cl-every (lambda (expected)
-                     (setq received
-                           (seq-drop-while
-                            (lambda (actual)
-                              (not (mevedel-claude-code-context--image-echo-p expected actual)))
-                            received))
-                     (when received (pop received) t))
-                   (plist-get pending :images)))))
+         (>= (length (mevedel-claude-code-context--echoed-images parts))
+             (length (plist-get pending :images))))))
 
 (defun mevedel-claude-code-context--observations (owner)
   "Render OWNER's currently selected observations through their shared owner."
