@@ -1053,9 +1053,21 @@ section grows or settles."
 
 (defun mevedel-view--render-anchor-run-end (pos limit)
   "Return the next source or section boundary after POS, up to LIMIT."
-  (min (next-single-property-change pos 'mevedel-view-source nil limit)
-       (next-single-property-change pos 'mevedel-view-type nil limit)
-       (next-single-property-change pos 'mevedel-view-source-key nil limit)))
+  (let ((span 64) (scan pos) boundary)
+    ;; Unbounded independent searches revisit the remaining suffix for a
+    ;; constant property at every changing source row.  Probe nearby first;
+    ;; keep interval traversal in C even across dense unrelated formatting.
+    (while (not boundary)
+      (let* ((probe (min limit (+ pos span)))
+             (end (next-single-property-change scan 'mevedel-view-source nil probe)))
+        (setq end (next-single-property-change scan 'mevedel-view-type nil end)
+              end (next-single-property-change scan 'mevedel-view-source-key nil end))
+        (if (or (< end probe) (= probe limit))
+            (setq boundary end)
+          ;; The prefix is constant.  Overlap its last character so the
+          ;; next pass includes a boundary exactly at the old probe.
+          (setq scan (1- probe) span (* 2 span)))))
+    boundary))
 
 (defun mevedel-view--position-render-anchor (pos &optional window)
   "Return a semantic anchor for POS that survives a re-render, or nil.

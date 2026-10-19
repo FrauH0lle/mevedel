@@ -2776,7 +2776,100 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (put-text-property 5 9 property 'second)
       (should (= 5 (mevedel-view--render-anchor-run-end 1 9)))
       (should (= 3 (mevedel-view--render-anchor-run-end 1 3)))
-      (should (= 9 (mevedel-view--render-anchor-run-end 5 9))))))
+      (should (= 9 (mevedel-view--render-anchor-run-end 5 9)))))
+
+  :doc "unrelated formatting does not split source runs or their ordinals"
+  (with-temp-buffer
+    (let ((source (cons 40 90)))
+      (insert (propertize "aaaa" 'mevedel-view-source source
+                          'mevedel-view-type 'response))
+      (insert " ")
+      (insert (propertize "bbbb" 'mevedel-view-source source
+                          'mevedel-view-type 'response))
+      (put-text-property 2 3 'face 'bold)
+      (put-text-property 3 4 'keymap (make-sparse-keymap))
+      (put-text-property 7 8 'face 'italic)
+      (should (= 5 (mevedel-view--render-anchor-run-end 1 (point-max))))
+      (let ((anchor (mevedel-view--position-render-anchor 8)))
+        (should (equal '(source (40 response nil) 1 2) anchor))
+        (should (= 8 (mevedel-view--render-anchor-position anchor))))))
+
+  :doc "equal but distinct source and child keys still split a run"
+  (dolist (property '(mevedel-view-source mevedel-view-source-key))
+    (with-temp-buffer
+      (insert "aaaabbbb")
+      (put-text-property 1 5 property (list 'same))
+      (put-text-property 5 9 property (list 'same))
+      (should-not (eq (get-text-property 1 property)
+                      (get-text-property 5 property)))
+      (should (= 5 (mevedel-view--render-anchor-run-end 1 9)))))
+
+  :doc "constant or absent tracked values respect narrowing and marker limits"
+  (with-temp-buffer
+    (insert "abcdefghij")
+    (put-text-property 4 6 'face 'bold)
+    (narrow-to-region 3 9)
+    (let ((limit (copy-marker 7)))
+      (unwind-protect
+          (progn
+            (should (= 7 (mevedel-view--render-anchor-run-end 3 limit)))
+            (should (= 9 (mevedel-view--render-anchor-run-end 3 (point-max)))))
+        (set-marker limit nil))))
+
+  :doc "probe boundaries and distant runs resolve without truncation"
+  (dolist (property '(mevedel-view-source mevedel-view-type mevedel-view-source-key))
+    (dolist (size '(63 64 65 127 128 129 5000))
+      (with-temp-buffer
+        (insert (make-string size ?a) "b")
+        (put-text-property 1 (1+ size) property 'first)
+        (put-text-property (1+ size) (point-max) property 'second)
+        (should (= (1+ size) (mevedel-view--render-anchor-run-end 1 (point-max)))))))
+
+  :doc "the closest child boundary wins over later source and role boundaries"
+  (with-temp-buffer
+    (insert (make-string 200 ?x))
+    (put-text-property 1 151 'mevedel-view-source 'first)
+    (put-text-property 1 81 'mevedel-view-type 'response)
+    (put-text-property 1 65 'mevedel-view-source-key 'child)
+    (should (= 65 (mevedel-view--render-anchor-run-end 1 (point-max)))))
+
+  :doc "growing probes do not revisit a dense formatting prefix"
+  (with-temp-buffer
+    (dotimes (i 1000)
+      (insert (propertize "x" 'face (if (cl-evenp i) 'bold 'italic))))
+    (let ((single (symbol-function 'next-single-property-change))
+          (searched 0) boundary)
+      (cl-letf (((symbol-function 'next-single-property-change)
+                 (lambda (pos property &optional object limit)
+                   (let ((end (funcall single pos property object limit)))
+                     (cl-incf searched (- end pos))
+                     end))))
+        (setq boundary (mevedel-view--render-anchor-run-end 1 (point-max))))
+      (should (= (point-max) boundary))
+      ;; Three searches per chunk, with only a one-character overlap.
+      (should (<= searched (* 4 (buffer-size))))))
+
+  :doc "a nearby source boundary does not search constant properties to the end"
+  (with-temp-buffer
+    (dotimes (i 100)
+      (insert (propertize "x" 'mevedel-view-source i
+                          'mevedel-view-type 'response)))
+    (let ((single (symbol-function 'next-single-property-change))
+          (any (symbol-function 'next-property-change))
+          (searched 0) boundary)
+      (cl-letf (((symbol-function 'next-single-property-change)
+                 (lambda (pos property &optional object limit)
+                   (let ((end (funcall single pos property object limit)))
+                     (cl-incf searched (- end pos))
+                     end)))
+                ((symbol-function 'next-property-change)
+                 (lambda (pos &optional object limit)
+                   (let ((end (funcall any pos object limit)))
+                     (cl-incf searched (- end pos))
+                     end))))
+        (setq boundary (mevedel-view--render-anchor-run-end 1 (point-max))))
+      (should (= 2 boundary))
+      (should (<= searched 3)))))
 
 (mevedel-deftest mevedel-view--position-render-anchor ()
   ,test

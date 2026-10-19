@@ -12,6 +12,12 @@ identify disclosures and reader positions across projection changes. Reader
 anchors distinguish section roles and compound-child discriminators, retaining
 ordinals only among runs of the same section identity. Grouped rows reuse their
 standalone disclosure roles; neighboring separators cannot shift their anchors.
+Anchor traversal probes nearby source, role and child-key boundaries, narrowing
+each search to the closest boundary already found and growing the horizon
+geometrically only when no boundary is found. A constant property's search must
+not scan the remaining suffix again at every changing source boundary. C owns
+interval traversal across unrelated formatting; it does not create reader runs,
+and values retain `eq` boundary semantics.
 
 Managed Bash output remains on its initiating source-backed row. Routine
 successful empty-input polling rows are suppressed in the view, without removing
@@ -2094,3 +2100,56 @@ through `next-single-property-change`. Cleanup accounted for practically none
 of those steady samples. That remaining cost was not redesigned here. Batch
 replays exclude graphical redisplay and a larger live heap; they do not identify
 the original recurring scheduled-render stall's exact trigger.
+
+### October 19, 2026: bound reader-anchor property searches
+
+The inspector's steady profile put about 60% of CPU samples in
+`next-single-property-change`, reached through reader-anchor capture and
+restoration. Both walk from the buffer beginning to count matching semantic
+runs. That scan is not itself quadratic, but the boundary helper independently
+searched source, role and child-key changes to the remaining history limit before
+taking their minimum. If a source changes on every row while role or key stays
+constant, each row repeats a suffix scan: doubling rows approximately quadrupled
+the compiled capture-and-restore cost. The same helper runs in root views when
+the reader is in transcript history, not only agent inspectors. A point in the
+composer uses the separate input-offset path instead.
+
+An initial combined `next-property-change` walk removed the repeated suffix
+searches and improved the inspector, but iterating irrelevant fontification
+intervals in Lisp made root reader updates regress from 4.34 to 6.73 ms in the
+replay. It was rejected. The boundary helper instead probes a short character
+horizon, caps successive C property searches at the closest boundary already
+found, and grows the horizon geometrically only when all three are constant.
+A proven constant prefix is not rescanned: the next chunk overlaps only its
+last character to preserve a boundary exactly at the old horizon. The anchor
+format, occurrence counting, fold fallback and strict offset rules are unchanged;
+there is no new cache or source index.
+
+Two alternating compiled observations per size measured capture plus resolution
+of the last row, with a constant role and absent child key. At 500, 1000, 2000
+and 4000 source rows the old medians were 3.81, 14.82, 60.16 and 273.79 ms;
+bounded probes took 0.40, 0.84, 1.73 and 3.56 ms. This isolates property-run
+scaling, not transcript parsing or redisplay.
+
+Four alternating compiled runs per variant used the restored private session,
+120 updates per run and a collection after fixture setup to remove load/setup GC
+debt. The inspector projected 377,246 characters with 6,868 property intervals;
+the root view had 164,824 characters and 4,589 intervals. Medians over 476 steady
+updates per variant were:
+
+| Reader/workload | Before ms | After ms |
+| --- | ---: | ---: |
+| Expanded inspector | 13.040 | 8.346 |
+| Root text, composer point | 2.667 | 2.479 |
+| Root activity, composer point | 17.736 | 17.939 |
+| Root text, history point | 5.904 | 6.213 |
+| Root activity, history point | 17.772 | 17.808 |
+
+Root differences are small and do not establish a general root speedup. History
+text had overlapping per-run medians, 4.91-7.28 / 5.09-7.70 ms; an earlier sweep
+of the same final implementation instead measured 6.09 / 5.54 ms. The steady
+composer-text path made zero anchor-boundary calls in all instrumented runs.
+Allocation remained unchanged for each workload. History hashes, point positions
+and root multiline `>` drafts matched throughout. These batch measurements
+exclude graphical redisplay and do not identify the original 647 ms callback's
+reader state or establish that anchor recovery caused that particular stall.
