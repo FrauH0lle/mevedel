@@ -321,11 +321,17 @@ test('editor interaction regressions', async (t) => {
         await images.nth(1).waitFor({state:'hidden'});
         await frame.locator('#redo').click();
         await images.nth(1).waitFor();
-        await surface.evaluate((element,data)=>{
+        const pasted = await surface.evaluate((element,data)=>{
           const transfer=new DataTransfer();
           transfer.items.add(new File([Uint8Array.from(atob(data),c=>c.charCodeAt(0))],'pasted.png',{type:'image/png'}));
-          element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:transfer}));
+          // Supply the payload explicitly: ClipboardEventInit does not retain
+          // clipboardData in every engine. Still exercise the real paste listener.
+          const event=new ClipboardEvent('paste',{bubbles:true,cancelable:true});
+          Object.defineProperty(event,'clipboardData',{value:transfer});
+          const files=[...event.clipboardData.files].map(file=>file.type);
+          return {files,handled:!element.dispatchEvent(event)};
         },data);
+        assert.deepEqual(pasted,{files:['image/png'],handled:true});
         await images.nth(2).waitFor();
         await frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
         const saved = await page.evaluate(async()=>window.apply({action:'read'}));
@@ -348,11 +354,14 @@ test('editor interaction regressions', async (t) => {
           await surface.click();
           await surface.evaluate(element=>element.editor.commands.focus('end'));
           await page.frames()[1].waitForFunction(()=>{const e=document.querySelector('.tiptap').editor;return e.state.selection.empty&&e.state.selection.from===e.state.doc.content.size-1;});
-          await surface.evaluate((element,data)=>{
+          const copiedHTML = await surface.evaluate((element,data)=>{
             const transfer=new DataTransfer();
             transfer.setData('text/html',`<img src="data:image/png;base64,${data}" width="80" height="40" alt="Copied">`);
-            element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:transfer}));
+            const event=new ClipboardEvent('paste',{bubbles:true,cancelable:true});
+            Object.defineProperty(event,'clipboardData',{value:transfer});
+            return {html:event.clipboardData.getData('text/html'),handled:!element.dispatchEvent(event)};
           },data);
+          assert.deepEqual(copiedHTML,{html:`<img src="data:image/png;base64,${data}" width="80" height="40" alt="Copied">`,handled:true});
           await images.nth(3).waitFor();
           await frame.locator('html[data-save-state=saved]').waitFor({state:'attached'});
           const copied = await page.evaluate(async()=>window.apply({action:'read'}));
@@ -1033,17 +1042,57 @@ test('editor interaction regressions', async (t) => {
       assert.ok(Math.abs(after.width - before.width) < .1, 'label size stays in screen pixels');
       await page.close();
     });
-    await t.test('reduced motion and touch pointing retain useful tips without drawing', async () => {
+    await t.test('reduced motion retains a moving laser tip without trails or content edits', async () => {
       const { page, frame } = await open();
       await page.emulateMedia({reducedMotion:'reduce'});
       await frame.locator('[data-tool="laser"]').click();
-      for (const [type, x] of [['pointerdown',200], ['pointermove',260]])
-        await frame.locator('#canvas').dispatchEvent(type, {pointerId:1, pointerType:'touch', clientX:x, clientY:250, button:0, buttons:1});
-      await frame.locator('#presence text').waitFor();
+      const box = await frame.locator('#canvas').boundingBox();
+      await page.mouse.move(box.x + 200, box.y + 250);
+      await frame.locator('#presence text').waitFor({state:'visible'});
+      const before = await frame.locator('.pointer-tip').getAttribute('transform');
+      await page.mouse.down();
+      for (let i = 1; i <= 4; i++) {
+        await page.mouse.move(box.x + 200 + 15 * i, box.y + 250);
+        await page.waitForTimeout(16);
+      }
+      const after = await frame.locator('.pointer-tip').evaluate(async tip => {
+        await new Promise(requestAnimationFrame);
+        return tip.getAttribute('transform');
+      });
+      assert.notEqual(after, before, 'the visible tip follows held movement');
+      assert.equal(await frame.locator('#presence text').textContent(), 'Alice');
       assert.equal(await frame.locator('.pointer-trail path').count(), 0);
-      await frame.locator('#canvas').dispatchEvent('pointerup', {pointerId:1, pointerType:'touch', clientX:260, clientY:250, button:0});
+      await page.mouse.up();
+      assert.equal(await frame.locator('#scene [data-shape]').count(), 1);
+      assert.equal(await page.evaluate(() => window.messages.filter(m => m.type === 'request').length), 0);
+      await page.close();
+    });
+    await t.test('native touch captures the pointer and clears laser presence on release', async () => {
+      const { page, frame } = await open({hasTouch:true});
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      await frame.locator('[data-tool="laser"]').click();
+      await frame.locator('#canvas').dispatchEvent('pointermove', {pointerType:'touch', clientX:200, clientY:250});
+      assert.equal(await frame.locator('#presence > g').count(), 0, 'touch does not point without contact');
+      await frame.locator('#canvas').evaluate(canvas => {
+        window.touchEvents = [];
+        for (const type of ['pointerdown', 'pointerup']) canvas.addEventListener(type, event => {
+          // These listeners run after the editor's handlers. Playwright's native
+          // tap releases before rendering, so test visible movement separately.
+          window.touchEvents.push({type, pointerType:event.pointerType, trusted:event.isTrusted,
+            captured:canvas.hasPointerCapture(event.pointerId), label:canvas.querySelector('#presence text')?.textContent ?? null});
+        });
+      });
+      const box = await frame.locator('#canvas').boundingBox();
+      await page.touchscreen.tap(box.x + 200, box.y + 250);
+      assert.deepEqual(await frame.locator('#canvas').evaluate(() => window.touchEvents), [
+        {type:'pointerdown', pointerType:'touch', trusted:true, captured:true, label:'Alice'},
+        {type:'pointerup', pointerType:'touch', trusted:true, captured:true, label:null},
+      ]);
       await frame.locator('#presence > g').waitFor({state:'detached'});
       assert.equal(await frame.locator('#scene [data-shape]').count(), 1);
+      assert.equal(await page.evaluate(() => window.messages.filter(m => m.type === 'request').length), 0);
+      assert.deepEqual(errors, []);
       await page.close();
     });
     for (const kind of ['whiteboard', 'document']) {

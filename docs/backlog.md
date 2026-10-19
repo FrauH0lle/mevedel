@@ -10,13 +10,11 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Inbox
 
-- Investigate Firefox shared-editor test failures for synthetic image paste
-  and touch presence; both reproduce with the previous save behavior.
-  Sync and retry checks pass. Evidence: `.scratch/whiteboard-sync-latency/`.
 - Consider making mevedel's data buffers hidden
 - Add optional cached container/VM/WSL detection to environment context for
   local and SSH targets; TRAMP execution targets are already reported.
 - Check if memory and journal processing could be async
+
 
 ## Execution
 

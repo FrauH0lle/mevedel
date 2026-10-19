@@ -64,8 +64,8 @@ export async function editorFixture(t, { library = libraryHost() } = {}) {
   const engine = process.env.MEVEDEL_BROWSER === 'firefox' ? firefox : chromium;
   const browser = await engine.launch({ headless: true });
   /* SCENE, .excalidraw text, opens a whiteboard with its image files. */
-  async function open({kind = 'whiteboard', viewport = {width:1000,height:700}, assistantDraft, appearance, content, scene, readOnly = false, actor = 'Guest: Alice', clock = false} = {}) {
-    const page = await browser.newPage({ viewport });
+  async function open({kind = 'whiteboard', viewport = {width:1000,height:700}, assistantDraft, appearance, content, scene, readOnly = false, actor = 'Guest: Alice', clock = false, hasTouch = false} = {}) {
+    const page = await browser.newPage({ viewport, hasTouch });
     page.setDefaultTimeout(7000);
     // CLOCK fakes the editor's timers from its start.
     if (clock) await page.clock.install();
