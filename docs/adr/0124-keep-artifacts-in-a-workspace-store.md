@@ -21,6 +21,13 @@ carry that list, so a fork points at the same artifacts, and **Duplicate** is
 the explicit way to get an independent copy. Deleting a session leaves its
 artifacts.
 
+**Display identity.** Browser cards, attached-item chips and panels use the
+store title, not the store id or primary file path. Secondary files append
+their relative filename. Navigation retains the title, while transfer and
+deletion use stable identities and downloads retain the actual filename;
+two items with the same title remain independent. Projection caches display
+metadata until the store changes, avoiding metadata reads per streaming tick.
+
 **Attaching.** A session is attached when its model creates or edits the
 artifact, when someone in its room creates or edits a whiteboard or document,
 when a discussion message reaches it (from its room, or as the dedicated session), when

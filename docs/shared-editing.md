@@ -317,6 +317,9 @@ the host's Emacs, not to a session or board: every writable participant in
 every room, and the assistant, sees the same libraries. Inserted items are
 ordinary elements, so a board carries them without its libraries, as an
 Excalidraw scene does. View links have no library.
+An invalid or unsupported installed file reports its own error in the browser
+and at `shared://library`; other libraries remain available, with the same
+item numbering in the model's listing and preview sheet.
 
 **Browse public libraries** lists the collection at
 [libraries.excalidraw.com](https://libraries.excalidraw.com) with a search
@@ -372,7 +375,7 @@ whiteboard finds `SharedCreate`. The prompt's resource roster lists
 | --- | --- |
 | `shared://` | the project's items with kind and title, marking those attached to the session, and `shared://library` |
 | `shared://ID` | a header with kind, title, revision and the related addresses, then one line per element in drawing order or per top-level block in document order |
-| `shared://ID/elements/ELEMENT` | one element or block in full, with each stroke point on its own line |
+| `shared://ID/elements/ELEMENT` | one element or block in full, structurally formatted with lossless long-string chunks |
 | `shared://ID/view.png` | the board rendered, long edge at most 2048 px |
 | `shared://ID/images/KEY` | an embedded image: a board file by its `fileId`, a document image by the key its `src` shows |
 | `shared://ID/discussions` | the item's discussions, the general one first, with their status, target, live quote and messages |
@@ -384,11 +387,20 @@ An overview line is `HASH JSON`: a 12-character content hash of the element or
 block, then its JSON. The hash is computed over sorted keys, so writers' key
 order does not matter. Lines stay within Read's 2,000-character cap: past
 1,800 characters a stroke's `points` and `pressures` become a count with the
-element's address. Document images appear as `shared://ID/images/KEY`, never as
-image data. Text pages through Read's ordinary `offset` and `limit` and its
+element's address; other oversized entries become explicitly abbreviated
+summaries pointing there. An abbreviated entry is not replacement JSON.
+The full-element view formats nested structure and stroke points across lines.
+Long string values or keys use the output-only `string-chunks(...)` notation:
+decode its ordered JSON string lines and join them without separators before
+passing the value to SharedEdit. Its header explains this notation; it never
+changes stored content, image addresses or the hash. Long discussion and
+contribution lines use the same lossless chunks. Document images appear as
+`shared://ID/images/KEY`, never as image data. Text pages through Read's ordinary `offset` and `limit` and its
 50 KiB output bound, so an item of any size can be read in parts. Grep searches
-the text views: an item's overview, discussions or history, or every item's
-overview under bare `shared://`. Images go through Read's ordinary media
+expanded text at the same addresses: an item's complete overview, element,
+discussions or history, or every item's overview under bare `shared://`.
+It uses neither overview previews nor string chunks, so matches beyond previews
+and across display chunk boundaries remain searchable. Images go through Read's ordinary media
 delivery, so models without image support get its explicit refusal. Glob and
 ApplyPatch do not accept `shared://`. Views are computed by the workspace's
 editing host from committed state, without a browser.

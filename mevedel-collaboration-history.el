@@ -16,6 +16,9 @@
 (declare-function mevedel-collaboration--broadcast "mevedel-collaboration" (room frame))
 (declare-function mevedel-collaboration--guest "mevedel-collaboration" (room peer))
 (declare-function mevedel-collaboration--room-for-session "mevedel-collaboration" (session))
+;; `mevedel-collaboration-artifact-projection'
+(declare-function mevedel-collaboration--artifact-title
+                  "mevedel-collaboration-artifact-projection" (session relative))
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--request-id-p "mevedel-collaboration-guest" (value))
 (declare-function mevedel-collaboration--snapshot-chunks "mevedel-collaboration-guest" (records &optional overhead))
@@ -75,7 +78,11 @@ Cache immutable segment metadata, never a second transcript store."
                 (lambda (record)
                   (let ((stat (mevedel-collaboration--artifact-stat
                                (plist-get record :artifact-path))))
-                    (append record (if (cdr stat) '(:missing t) (list :size (car stat))))))
+                    (append record
+                            (when-let* ((title (mevedel-collaboration--artifact-title
+                                               session (plist-get record :artifact))))
+                              (list :title title))
+                            (if (cdr stat) '(:missing t) (list :size (car stat))))))
                 (cdr (assq number archives)))))))
 
 (defun mevedel-collaboration--history-catalog-records (records)

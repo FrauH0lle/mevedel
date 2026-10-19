@@ -31,7 +31,7 @@
 (autoload 'mevedel-shared-editing-ids "mevedel-shared-editing")
 
 ;; `mevedel-tool-editing'
-(declare-function mevedel-tool-editing-view "mevedel-tool-editing" (components callback))
+(declare-function mevedel-tool-editing-view "mevedel-tool-editing" (components callback &optional search))
 (autoload 'mevedel-tool-editing-view "mevedel-tool-editing")
 
 ;; `mevedel-history-search'
@@ -123,7 +123,7 @@ remote media conversion, this processes an already transferred copy locally."
 
 (defun mevedel-tool-fs-search--shared (callback args descriptor operation)
   "Grep the shared item text views DESCRIPTOR names with OPERATION and ARGS.
-A bare `shared://' searches every item's overview.  The editing host
+A bare `shared://' searches every item's expanded overview.  The editing host
 answers asynchronously, so the views are fetched first, one at a time, and
 then searched as virtual documents whose results CALLBACK receives."
   (let* ((components (plist-get descriptor :shared-view))
@@ -158,7 +158,7 @@ then searched as virtual documents whose results CALLBACK receives."
                                                        address message)
                                        :status 'error))
                       (push (cons name (plist-get view :text)) documents)
-                      (funcall next)))))))))
+                      (funcall next))) t))))))
     (if views
         (funcall next)
       (funcall callback (list :result (format "No shared items to search under %s" address))))))

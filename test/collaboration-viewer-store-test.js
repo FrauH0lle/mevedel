@@ -70,7 +70,8 @@ const press = (row, label) => {
                    ['Open', 'Versions', 'Attach', 'Duplicate', 'Conversation', 'Delete']);
   press(list.children[0], 'Open');
   assert.deepEqual(plain(opened), [{id: 'artifact:flow', artifact: 'flow/index.html',
-                                    store: 'flow', size: 9, missing: false, item: false}]);
+                                    title: 'index.html', store: 'flow', size: 9,
+                                    missing: false, item: false}]);
 }
 
 // A view link lists and opens; the lobby never attaches.
@@ -238,6 +239,19 @@ const press = (row, label) => {
   store.show({artifacts: [listing.artifacts[0]]});
   assert.notEqual(menu(list.children[0]).popoverOpen, true,
                   'deleting the open row must not open another row menu');
+}
+
+// The artifact decision sidebar uses the same explicit Conversation action,
+// request identity and navigation response as the store's menu.
+{
+  const {store, sent, followed} = build();
+  store.show(listing);
+  assert.equal(sent.length, 0, 'listing never shares or opens a conversation');
+  store.conversation('flow');
+  assert.deepEqual(plain(sent), [{t: 'store-action', reqId: 1, action: 'conversation', id: 'flow'}]);
+  assert.deepEqual(followed, [], 'the action waits for an authorized host response');
+  store.handle({t: 'store-action', reqId: 1, ok: true, link: 'requester-tier-conversation-link'});
+  assert.deepEqual(followed, ['requester-tier-conversation-link']);
 }
 
 // A deleted artifact that was expanded is forgotten, not asked about again;

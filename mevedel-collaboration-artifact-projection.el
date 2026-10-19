@@ -10,6 +10,19 @@
 
 ;;; Code:
 
+(require 'subr-x)
+
+;; `mevedel-artifact-store'
+(declare-function mevedel-artifact-store-directory
+                  "mevedel-artifact-store" (workspace))
+(declare-function mevedel-artifact-store-meta
+                  "mevedel-artifact-store" (workspace id))
+(declare-function mevedel-artifact-store-relative
+                  "mevedel-artifact-store" (workspace path))
+(autoload 'mevedel-artifact-store-directory "mevedel-artifact-store")
+(autoload 'mevedel-artifact-store-meta "mevedel-artifact-store")
+(autoload 'mevedel-artifact-store-relative "mevedel-artifact-store")
+
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
                   "mevedel-execution-target" (workspace-root))
@@ -17,14 +30,6 @@
                   "mevedel-execution-target" (target path &optional directory))
 (autoload 'mevedel-execution-target-create "mevedel-execution-target")
 (autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
-
-;; `mevedel-artifact-store'
-(declare-function mevedel-artifact-store-directory
-                  "mevedel-artifact-store" (workspace))
-(autoload 'mevedel-artifact-store-directory "mevedel-artifact-store")
-(declare-function mevedel-artifact-store-relative
-                  "mevedel-artifact-store" (workspace path))
-(autoload 'mevedel-artifact-store-relative "mevedel-artifact-store")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
@@ -44,6 +49,10 @@ would otherwise pay one target round trip per artifact per tick.  The
 small cache is cleared when ApplyPatch settles and whenever the artifact
 store changes.")
 
+(defvar mevedel-collaboration--artifact-metadata (make-hash-table :test #'equal)
+  "Cached metadata per qualified store item directory, or `absent'.
+Titles change on store notifications, not on streaming projection ticks.")
+
 (defun mevedel-collaboration--artifact-stat (path)
   "Return cached (SIZE . MISSING-P) for the artifact at qualified PATH."
   (or (gethash path mevedel-collaboration--artifact-stats)
@@ -54,8 +63,30 @@ store changes.")
                mevedel-collaboration--artifact-stats)))
 
 (defun mevedel-collaboration--artifact-stat-invalidate ()
-  "Drop every cached artifact stat."
-  (clrhash mevedel-collaboration--artifact-stats))
+  "Drop every cached artifact stat and display metadata record."
+  (clrhash mevedel-collaboration--artifact-stats)
+  (clrhash mevedel-collaboration--artifact-metadata))
+
+(defun mevedel-collaboration--artifact-title (session relative)
+  "Return the current display title of SESSION's RELATIVE artifact file.
+A secondary file adds its relative filename.  Cache metadata, including
+absence, until the store changes, so live and archived cards share titles
+without target I/O on streaming projection ticks."
+  (when-let* ((slash (string-search "/" relative))
+              (store (substring relative 0 slash))
+              (dir (mevedel-collaboration--artifacts-dir session))
+              (key (file-name-concat dir store)))
+    (let* ((meta (or (gethash key mevedel-collaboration--artifact-metadata)
+                     (puthash key
+                              (or (mevedel-artifact-store-meta
+                                   (mevedel-session-workspace session) store)
+                                  'absent)
+                              mevedel-collaboration--artifact-metadata)))
+           (title (and (listp meta) (plist-get meta :title)))
+           (file (substring relative (1+ slash))))
+      (when (and title (not (string-blank-p title)))
+        (if (equal file (plist-get meta :file)) title
+          (format "%s · %s" title file))))))
 
 (defun mevedel-collaboration--artifact-field (session file base-directory)
   "Return artifact fields for settled ApplyPatch FILE, or nil.
@@ -79,11 +110,14 @@ for the deleted path will re-project as missing."
                 ((and (not (string-empty-p relative))
                       ;; Host bookkeeping is not an artifact.
                       (not (string-prefix-p ".state/" relative)))))
-      (let ((stat (mevedel-collaboration--artifact-stat full))
-            (slash (string-search "/" relative)))
+      (let* ((stat (mevedel-collaboration--artifact-stat full))
+             (slash (string-search "/" relative))
+             (store (and slash (substring relative 0 slash)))
+             (title (mevedel-collaboration--artifact-title session relative)))
         (append (list :artifact relative :artifact-path full)
                 ;; The store artifact the card belongs to.
-                (when slash (list :store (substring relative 0 slash)))
+                (when store (list :store store))
+                (when title (list :title title))
                 (if (cdr stat)
                     (list :missing t)
                   (list :size (car stat))))))))

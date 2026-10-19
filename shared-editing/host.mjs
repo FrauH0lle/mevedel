@@ -144,17 +144,26 @@ const SHEET_ITEMS = 60;
 async function libraryView(libraries, part, at) {
   check(Array.isArray(libraries) && libraries.length <= 100, 'Invalid libraries');
   check(['list', 'sheet'].includes(part), 'Unknown library view');
-  const items = libraries.flatMap(({ name, text }) => parseLibrary(text).map((item) => {
-    const [, , width, height] = extent(item.elements);
-    return { ref: `${name}/${item.id}`, name: item.name || '', library: name,
-      elements: item.elements.length, size: [Math.round(width), Math.round(height)], item };
-  }));
+  const errors = [];
+  const items = libraries.flatMap(({ name, text }) => {
+    try {
+      return parseLibrary(text).map((item) => {
+        const [, , width, height] = extent(item.elements);
+        return { ref: `${name}/${item.id}`, name: item.name || '', library: name,
+          elements: item.elements.length, size: [Math.round(width), Math.round(height)], item };
+      });
+    } catch (error) {
+      errors.push(`Library ${JSON.stringify(name)} unavailable: ${error.message}`);
+      return [];
+    }
+  });
+  const warnings = errors.length ? errors.join('\n') + '\n' : '';
   if (part === 'list') {
-    if (!items.length) return { text: 'No library items.\n' };
+    if (!items.length) return { text: 'No library items.\n' + warnings };
     return { text: `${items.length} library item${items.length === 1 ? '' : 's'}; insert one with SharedEdit insert and its ref. ` +
       `The sheet ${at}/sheet.png numbers items 1-${Math.min(SHEET_ITEMS, items.length)}.\n` +
       items.map(({ ref, name, library, elements, size }, i) =>
-        `${i + 1}. ${ref} · ${JSON.stringify(name)} · ${library} · ${elements} element${elements === 1 ? '' : 's'} · ${size[0]}×${size[1]}`).join('\n') + '\n' };
+        `${i + 1}. ${ref} · ${JSON.stringify(name)} · ${library} · ${elements} element${elements === 1 ? '' : 's'} · ${size[0]}×${size[1]}`).join('\n') + '\n' + warnings };
   }
   const sheet = items.slice(0, SHEET_ITEMS), cell = [200, 170], columns = 6;
   const cells = sheet.map(({ item, name }, i) => {
@@ -224,7 +233,8 @@ const MAX_DISCUSSIONS = 200, MAX_DISCUSSION_MESSAGES = 200, MAX_MESSAGE_CHARS = 
 function questionPrompt(state, before, snapshot) {
   const { kind } = before, id = state.id, noun = kind === 'whiteboard' ? 'ELEMENT' : 'BLOCK';
   const byId = new Map(nodesOf(kind, before.content).map((n) => [nodeId(kind, n), n]));
-  const lines = (nodes) => nodes.filter(Boolean).map((n) => line(id, kind, n));
+  // Questions carry reviewed content within their own budget, not Read summaries.
+  const lines = (nodes) => nodes.filter(Boolean).map((n) => line(id, kind, n, false));
   const scope = snapshot.scope === 'whole' ? `the whole ${kind}` : snapshot.region ? 'an area of it' : 'a selection';
   const head = [`${kind} ${JSON.stringify(before.title)} at ${address(id)}, revision ${state.revision}; the question is about ${scope}.`];
   if (snapshot.region) head.push(`Area: x ${snapshot.region[0]}, y ${snapshot.region[1]}, ${snapshot.region[2]} × ${snapshot.region[3]}`);
@@ -437,15 +447,15 @@ export async function handle(request) {
       };
     }
     if (action === 'view') {
-      const { part } = request;
+      const { part, search } = request;
       const nodes = nodesOf(before.kind, before.content);
-      if (part === 'overview') return { result: { text: overview(state.id, state, before, state.discussions || []) } };
-      if (part === 'discussions') return { result: { text: discussionsView(readDiscussions(doc, state.discussions)) } };
-      if (part === 'history') return { result: { text: historyView(state) } };
+      if (part === 'overview') return { result: { text: overview(state.id, state, before, state.discussions || [], search) } };
+      if (part === 'discussions') return { result: { text: discussionsView(readDiscussions(doc, state.discussions), search) } };
+      if (part === 'history') return { result: { text: historyView(state, search) } };
       if (part === 'element') {
         const node = nodes.find((n) => nodeId(before.kind, n) === request.element);
         check(node, `No ${before.kind === 'whiteboard' ? 'element' : 'block'} ${request.element}; Read ${address(state.id)} for current ids`);
-        return { result: { text: element(state.id, before.kind, node) } };
+        return { result: { text: element(state.id, before.kind, node, search) } };
       }
       if (part === 'png') {
         check(before.kind === 'whiteboard', `A document has no rendering; Read ${address(state.id)}`);

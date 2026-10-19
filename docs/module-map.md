@@ -148,6 +148,7 @@ Chat / view
   mevedel-collaboration-goal.el   read-only durable Goal status and accounting
   mevedel-collaboration-artifact-projection.el ApplyPatch artifact projection
   mevedel-collaboration-artifact.el browser artifact fetch and notifications
+  mevedel-collaboration-artifact-history.el bounded read-only HTML discussion answers from canonical history
   mevedel-collaboration-files.el  browser project files: list, read, upload, trash
   mevedel-collaboration-discussions.el discussions about store items: actions, routing, requests, auto-resolve
   mevedel-collaboration-history.el archived browser segments and artifact metadata

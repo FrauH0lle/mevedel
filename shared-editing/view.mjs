@@ -73,10 +73,49 @@ export function restoreImages(node, images) {
   });
 }
 
-/* A line stays readable at Read's 2000-character cap; past that, a stroke's
-   samples move to the element's own address. */
+/* Keep physical lines below Read's cap, including JSON escape expansion. */
 const LINE = 1800;
-export function line(id, kind, node) {
+const STRING = 800;
+
+/* Structural JSON with an explicit output-only notation for long strings.
+   Stored content and hashes never use this notation. */
+export function readable(value) {
+  let chunked = false;
+  const indent = depth => '  '.repeat(Math.min(depth, 20));
+  function string(value, depth) {
+    const encoded = JSON.stringify(value);
+    if (encoded.length <= STRING) return encoded;
+    chunked = true;
+    const chunks = [];
+    let part = '', size = 2;
+    for (const char of value) {
+      const cost = JSON.stringify(char).length - 2;
+      if (size + cost > STRING) { chunks.push(JSON.stringify(part)); part = ''; size = 2; }
+      part += char;
+      size += cost;
+    }
+    if (part) chunks.push(JSON.stringify(part));
+    return `string-chunks(\n${chunks.map(chunk => indent(depth + 1) + chunk).join('\n')}\n${indent(depth)})`;
+  }
+  function format(value, depth) {
+    if (typeof value === 'string') return string(value, depth);
+    if (!value || typeof value !== 'object') return JSON.stringify(value ?? null);
+    if (Array.isArray(value)) {
+      if (!value.length) return '[]';
+      if (value.every(v => !v || typeof v !== 'object') && JSON.stringify(value).length <= STRING)
+        return JSON.stringify(value);
+      return `[\n${value.map(v => indent(depth + 1) + format(v, depth + 1)).join(',\n')}\n${indent(depth)}]`;
+    }
+    const fields = Object.entries(value).filter(([, v]) => v !== undefined);
+    if (!fields.length) return '{}';
+    return `{\n${fields.map(([key, v]) => `${indent(depth + 1)}${string(key, depth + 1)}: ${format(v, depth + 1)}`).join(',\n')}\n${indent(depth)}}`;
+  }
+  const text = format(value, 0);
+  return (chunked ? 'Output notation: string-chunks(...) is one string. Decode each ordered JSON string line and join without separators before SharedEdit.\n' : '') + text;
+}
+
+/* Short values stay on one line; longer ones advertise their lossless view. */
+export function line(id, kind, node, summarize = true) {
   const value = shown(id, kind, node);
   let json = JSON.stringify(value);
   if (json.length > LINE && Array.isArray(value.points)) {
@@ -84,40 +123,41 @@ export function line(id, kind, node) {
     const { pressures, ...rest } = value;
     json = JSON.stringify({ ...rest, points: elsewhere, ...(pressures ? { pressures: `${pressures.length} pressures` } : {}) });
   }
+  if (summarize && json.length > LINE) json = JSON.stringify({
+    id: nodeId(kind, node), type: value.type,
+    abbreviated: `Read ${address(id, 'elements', nodeId(kind, node))}`,
+    preview: json.slice(0, 320),
+  });
   return `${contentHash(node)} ${json}`;
 }
 
-/* One element or block in full: its hash, then JSON with each point on a
-   line, so even a long stroke pages. */
-export function element(id, kind, node) {
+/* One element or block in full, structured and lossless even for long text. */
+export function element(id, kind, node, search = false) {
   const value = shown(id, kind, node);
-  const fields = Object.entries(value).map(([key, v]) => {
-    const text = key === 'points' || key === 'pressures'
-      ? `[\n${v.map((p) => `    ${JSON.stringify(p)}`).join(',\n')}\n  ]`
-      : JSON.stringify(v);
-    return `  ${JSON.stringify(key)}: ${text}`;
-  });
-  return `hash ${contentHash(node)}\n{\n${fields.join(',\n')}\n}\n`;
+  return `hash ${contentHash(node)}\n${search ? JSON.stringify(value) : readable(value)}\n`;
 }
 
-export function overview(id, state, inspected, discussions) {
+export function overview(id, state, inspected, discussions, search = false) {
   const { kind, title, background, content } = inspected;
   const nodes = nodesOf(kind, content);
   const noun = kind === 'whiteboard' ? 'element' : 'block';
   const head = [
     `${kind} ${JSON.stringify(title)} · revision ${state.revision} · ${nodes.length} ${noun}${nodes.length === 1 ? '' : 's'}`
       + (background ? ` · background ${background}` : ''),
-    `Lines are HASH ${noun.toUpperCase()}-JSON in ${kind === 'whiteboard' ? 'drawing' : 'document'} order. ` +
+    `Lines are HASH ${noun.toUpperCase()}-JSON in ${kind === 'whiteboard' ? 'drawing' : 'document'} order; abbreviated entries are summaries, not replacement JSON. ` +
       `${noun[0].toUpperCase() + noun.slice(1)}: ${address(id, 'elements', 'ID')}` +
       (kind === 'whiteboard' ? ` · Rendering: ${address(id, 'view.png')}` : '') +
       ` · Discussions (${discussions.length}): ${address(id, 'discussions')} · History: ${address(id, 'history')}`,
   ];
-  return `${[...head, ...nodes.map((node) => line(id, kind, node))].join('\n')}\n`;
+  // Search receives original strings, never preview or artificial chunk boundaries.
+  const lines = nodes.map(node => search
+    ? `${contentHash(node)} ${JSON.stringify(shown(id, kind, node))}` : line(id, kind, node));
+  return `${[...head, ...lines].join('\n')}\n`;
 }
 
 /* Discussions, the one about the whole item first: each with its target's
    live state, then its messages in order. */
-export function discussionsView(discussions) {
+export function discussionsView(discussions, search = false) {
   if (!discussions.length) return 'No discussions.\n';
   const ordered = [...discussions].sort((a, b) =>
     (b.id === GENERAL_DISCUSSION) - (a.id === GENERAL_DISCUSSION));
@@ -129,12 +169,12 @@ export function discussionsView(discussions) {
     const lines = [`discussion ${d.id} · ${d.resolved ? 'resolved' : 'open'}${status} · ${target}${area}`,
       ...(d.target.kind === 'whole' ? [] : [`  quote: ${JSON.stringify(d.liveQuote ?? d.quote ?? '')}`]),
       ...d.messages.map((m) => `  ${m.actor}: ${m.alone ? '(sent the selection as the request)' : JSON.stringify(m.text)}`)];
-    return lines.join('\n');
+    return lines.map(line => !search && line.length > LINE ? readable(line) : line).join('\n');
   }).join('\n')}\n`;
 }
 
 /* Contributions newest first; Revert takes a contribution id. */
-export function historyView(state) {
+export function historyView(state, search = false) {
   if (!state.transactions.length) return `No retained contributions at revision ${state.revision}.\n`;
   const describe = (c) => `${c.id} (${!c.before ? 'added' : !c.after ? 'deleted' : 'changed'})`;
   return `${state.transactions.map((tx) => [
@@ -142,5 +182,5 @@ export function historyView(state) {
     tx.changes.length ? ` · ${tx.changes.map(describe).join(', ')}` : '',
     tx.title ? ` · title ${JSON.stringify(tx.title.before)} → ${JSON.stringify(tx.title.after)}` : '',
     tx.background ? ` · background ${tx.background.before ?? 'theme'} → ${tx.background.after ?? 'theme'}` : '',
-  ].join('')).join('\n')}\n`;
+  ].join('')).map(line => !search && line.length > LINE ? readable(line) : line).join('\n')}\n`;
 }

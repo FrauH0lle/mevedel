@@ -415,7 +415,12 @@ Preparation, authorization and availability are synchronous. The content is
 computed by the session's editing host, which answers asynchronously: the
 resolver returns a descriptor naming the components, and Read and Grep fetch
 the view through `mevedel-tool-editing-view` before paging or searching it.
-Text follows the ordinary virtual-text Read bounds; images are written to a
+Text follows the ordinary virtual-text Read bounds. Oversized overview entries
+explicitly point to their full-element address instead of hiding a truncated
+suffix. Full elements are structurally formatted; long strings, discussion
+messages and contribution lines use self-described ordered JSON string chunks
+that reconstruct losslessly without changing hashes or stored content.
+Images are written to a
 private temporary copy and delivered through ordinary Read media handling.
 Grep accepts text views only. Writes go through `SharedEdit`, never through a
 resource address. [Shared editing](shared-editing.md) owns the view formats.

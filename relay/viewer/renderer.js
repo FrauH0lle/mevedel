@@ -477,7 +477,7 @@
     // The badge names the file's type, from its extension.
     const extension = /\.([A-Za-z0-9]{1,5})$/.exec(record.artifact || '')?.[1];
     card.dataset.type = extension ? extension.toUpperCase() : 'FILE';
-    card.append(el('span', 'artifact-name', record.artifact || 'artifact'));
+    card.append(el('span', 'artifact-name', record.title || record.artifact || 'artifact'));
     if (record.missing === true) {
       card.append(el('span', 'artifact-size', 'deleted on the host'));
     } else if (typeof record.size === 'number') {
@@ -490,7 +490,7 @@
       'title',
       record.missing === true
         ? 'This artifact was deleted on the host'
-        : `Open ${record.artifact || 'this artifact'}`);
+        : `Open ${record.title || record.artifact || 'this artifact'}`);
     if (onArtifactOpen && record.missing !== true) {
       open.addEventListener('click', () => onArtifactOpen(record));
     }

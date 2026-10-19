@@ -61,6 +61,10 @@
 (defconst mevedel-collaboration-files--max-upload-bytes (* 16 1024 1024)
   "Largest file a guest may upload into the project.")
 
+(defconst mevedel-collaboration-files--private-path-regexp
+  "\\(?:\\`\\|/\\)\\.mevedel\\(?:/\\|\\'\\)"
+  "Workspace state component excluded from every project file path.")
+
 (defun mevedel-collaboration-files--listing (root)
   "Return the project files under ROOT as sorted names relative to ROOT.
 A Git repository nested untracked in ROOT contributes its own listing.
@@ -77,8 +81,7 @@ The workspace state under `.mevedel/' is never listed, at any depth."
            (cl-loop for file in (project-files project (list root))
                     for name = (file-relative-name file root)
                     unless (or (string-prefix-p "../" name)
-                               (string-match-p
-                                "\\`\\.mevedel\\(?:/\\|\\'\\)" name))
+                               (string-match-p mevedel-collaboration-files--private-path-regexp name))
                     collect name)
            (cl-loop for nested in (mevedel-collaboration-files--nested-repositories
                                    project root)
@@ -103,6 +106,7 @@ when `project-vc-include-untracked' allows it."
                                  "--exclude-standard"))
         (cl-loop for name in (split-string (buffer-string) "\0" t)
                  when (and (directory-name-p name)
+                           (not (string-match-p mevedel-collaboration-files--private-path-regexp name))
                            (file-exists-p (file-name-concat name ".git")))
                  collect name)))))
 

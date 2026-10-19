@@ -602,8 +602,10 @@ session list. The host owns this in `mevedel-collaboration-files.el`.
 The project's own listing is the authority. It is `project-files` for the
 lobby's workspace root -- the VC backend's tracked and untracked files minus
 ignored ones in a repository, the transient project's ignores elsewhere --
-with the workspace state under `.mevedel/` removed, because it holds the
-lobby credentials, permissions and memory. A Git repository cloned inside a
+with workspace state under every `.mevedel/` component removed, including
+nested projects and submodules, because it holds lobby credentials, permissions
+and memory. Private directories are not descended into for reference clones.
+A Git repository cloned inside a
 Git project without being tracked or ignored there, such as a reference
 repository, contributes the same listing of its own root by its own rules;
 Git reports it as a single directory entry, which `project-files` drops
@@ -716,7 +718,8 @@ Whiteboards, documents and HTML artifacts share one discussions sidebar
 (`relay/viewer/viewer-discussions.js`). It shows either the list of the item's
 discussions or one discussion. The list puts the whole item first, then the
 open discussions with their marker number, latest message or answer and any
-state that needs attention, then the resolved ones folded into one row. Its
+state that needs attention (including queued and running assistant work), then
+the resolved ones folded into one row. Its
 foot offers **Discuss** for the current selection. A discussion fills the
 sidebar: its subject and a link that shows the target, its messages with the
 assistant's answers beneath the messages they answer, and one box at the foot
@@ -775,7 +778,33 @@ reaches the rest of the conversation. The request's audit data names the
 discussion and the message it answers, so every view places the answer
 beneath that message.
 
-Each guest action is a `discussion` request with an action of `list`, `post`,
+The HTML sidebar reads canonical item history, including archived answers,
+through the read-only `history` discussion action. A room reads only that
+session's turns about the item. In the lobby, the selected discussion chooses
+its recorded answering session, or the item's existing dedicated session;
+reading never creates or resumes a session. It does not combine project chats.
+History keeps newest complete turns within 128,000 characters, reports omitted
+older turns and unavailable archives, and places answers by their recorded
+discussion/message identities. Live copies replace preserved compaction tails.
+An open artifact polls every five seconds; source identities cache up to four
+bounded projections per room, and a matching digest returns only an unchanged
+reply rather than reading and projecting archives again. Source checks stay
+constant-size: the live buffer tick/current segment identity, portable
+publication head and session-directory timestamp cover immutable archives and
+their atomic replacement, addition or deletion. Closing the panel stops
+polling. View links can read this history just as they can open the artifact.
+
+If a lobby discussion's dedicated conversation is waiting for an Ask answer or
+approval, its sidebar says **Waiting for a decision in NAME**. The history
+snapshot carries only that pending flag and the bounded conversation title,
+not the question, approval body or a room link. Interaction identities also
+participate in the history digest independently of transcript edits, without
+reprojecting its records. Nothing shares or opens the dedicated conversation
+automatically. Full and owner links can explicitly **Open conversation**, using
+the store's existing Conversation action and the requester's existing link tier;
+view links see the waiting notice without a new action or decision authority.
+
+Each guest action is a `discussion` request with an action of `list`, `history`, `post`,
 `reply`, `resolve` or `ask` naming its item as `artifact:ID` or by a card's
 record id. The artifact panel sends it as a room frame; the editor sends it
 through its editing channel, which also carries the message's attachments.
@@ -1044,13 +1073,16 @@ Artifacts are files in the [workspace artifact store](view.md#artifact-store),
 authored through the normal patch workflow.
 
 In a room, the projection turns each selected applied artifact destination
-into a card carrying name, size and the id of the store artifact it belongs
+into a card carrying its readable title, size and the id of the store artifact it belongs
 to -- never the bytes, and never the host-side path, which stays in the
 unserialized `:artifact-path` field. A multi-file
 patch produces one card per artifact destination; rejected changes produce
 none, and a mixed code/artifact patch retains its ordinary tool row.
-File stats are memoized against per-publish-tick target round trips and
-invalidated when ApplyPatch settles. A deleted artifact still
+Cards, attached-item chips and the artifact panel display the store title;
+a secondary file adds its relative filename so files stay distinguishable.
+Browser history retains that title, while downloads keep the actual filename.
+File stats and title metadata are memoized against per-publish-tick target round
+trips and invalidated when ApplyPatch settles or the store changes. A deleted artifact still
 projects, marked missing, so it reads as deleted rather than as a gap
 in the log. The sidebar combines live and archived artifact records with
 the store artifacts attached to the room's session (last record per name

@@ -1604,12 +1604,16 @@ async function main() {
   await deliver({t: 'record', record: {
     id: 'art-1', kind: 'tool', revision: 0, name: 'ApplyPatch',
     status: 'completed', summary: 'ApplyPatch',
-    artifact: 'mockup.html', size: 20,
+    artifact: 'mockup.html', title: 'Architecture review', size: 20,
   }});
   assert.equal(nodes['artifacts-box'].hidden, false);
   assert.equal(nodes['artifacts-summary'].textContent, '1 artifact');
+  assert.equal(findByClass(findByRecordId(nodes.transcript, 'art-1'), 'artifact-name').textContent,
+               'Architecture review');
+  assert.match(textOf(nodes.artifacts), /Architecture review/);
   const artifactBefore = first.sent.length;
   nodes.artifacts.children[0].dispatch('click');
+  assert.equal(nodes['artifact-title'].textContent, 'Architecture review');
   await waitFor(() => first.sent.length === artifactBefore + 1, 'artifact-get');
   const artifactGet = await unseal(key, first.sent[artifactBefore]);
   const artifactText = 'mockup';

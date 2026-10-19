@@ -77,32 +77,34 @@ const controller = window.mevedelArtifactView.create({
 
 controller.render([
   {id: 'old', artifact: 'mockup.html', size: 10},
-  {id: 'new', artifact: 'mockup.html', size: 20},
+  {id: 'new', artifact: 'mockup.html', title: 'Architecture review', size: 20},
   {id: 'gone', artifact: 'gone.txt', missing: true},
 ]);
 assert.equal(nodes['artifacts-box'].hidden, false);
 assert.equal(nodes['artifacts-summary'].textContent, '2 artifacts');
 assert.deepEqual(summary, {key: 'artifacts', text: '2 artifacts'});
 assert.equal(nodes.artifacts.children.length, 2);
-assert.match(textOf(nodes.artifacts), /mockup\.html20 B/);
+assert.match(textOf(nodes.artifacts), /Architecture review20 B/);
 assert.equal(nodes.artifacts.children[1].disabled, true);
 assert.match(textOf(nodes.artifacts.children[1]), /deleted/);
 
 // Attached store artifacts join the chips; whiteboards and documents
 // stay under Shared work.
 controller.attachedRows([
-  {id: 'flow', artifact: 'flow/index.html', size: 5, attached: true},
+  {id: 'flow', artifact: 'flow/index.html', title: 'Flow diagram', size: 5, attached: true},
   {id: 'other', artifact: 'other/a.md', size: 1, attached: false},
   {id: 'board', artifact: 'board/state.json', size: 9, attached: true, item: true},
 ]);
 assert.equal(nodes.artifacts.children.length, 3);
-assert.match(textOf(nodes.artifacts), /flow\/index\.html/);
+assert.match(textOf(nodes.artifacts), /Flow diagram/);
 assert.doesNotMatch(textOf(nodes.artifacts), /state\.json|other/);
 controller.attachedRows([]);
 
 nodes.artifacts.children[0].dispatch('click');
 assert.deepEqual({...sent[0]}, {t: 'artifact-get', reqId: 1, id: 'new'});
 assert.equal(nodes['artifact-panel'].hidden, false);
+assert.equal(nodes['artifact-title'].textContent, 'Architecture review');
+assert.equal(controller.describe().artifact.title, 'Architecture review', 'history keeps the title');
 const html = '<h1>Mockup</h1><script>document.title=1</script>';
 const encoded = Buffer.from(html).toString('base64');
 controller.handle({reqId: 1, mime: 'text/html', size: html.length,
@@ -132,7 +134,7 @@ assert.equal(nodes['artifact-tab'].hidden, false);
 assert.equal(nodes['artifact-download'].hidden, false);
 
 nodes['artifact-tab'].dispatch('click');
-assert.equal(opened[0].document.title, 'mockup.html');
+assert.equal(opened[0].document.title, 'Architecture review');
 assert.equal(opened[0].document.body.children[0].attributes.sandbox,
              'allow-scripts');
 controller.setTheme('dark');
@@ -246,6 +248,28 @@ assert.equal(textOf(nodes['artifact-body']), 'Please wait a moment');
 controller.handle({reqId: 10, mime: 'text/html', data: Buffer.from('late').toString('base64'), final: true});
 assert.equal(textOf(nodes['artifact-body']), 'Please wait a moment');
 controller.close();
+
+// Two artifacts may share a title; a delayed deletion still names an identity.
+controller.open({id: 'artifact:first', artifact: 'first/index.html', title: 'Review'});
+controller.handle({reqId: 11, mime: 'text/html', data: encoded, final: true});
+nodes['artifact-delete'].dispatch('click');
+await new Promise(resolve => setImmediate(resolve));
+const deleteId = sent.at(-1).reqId;
+controller.open({id: 'artifact:second', artifact: 'second/index.html', title: 'Review'});
+controller.handleDelete({reqId: deleteId, ok: true});
+assert.equal(nodes['artifact-panel'].hidden, false);
+assert.equal(controller.describe().artifact.id, 'artifact:second');
+controller.close();
+
+// A tool card and store row are aliases for the same deleted artifact.
+controller.open({id: 'tool-card', store: 'first', artifact: 'first/index.html', title: 'Review'});
+controller.handle({reqId: sent.at(-1).reqId, mime: 'text/html', data: encoded, final: true});
+nodes['artifact-delete'].dispatch('click');
+await new Promise(resolve => setImmediate(resolve));
+const aliasDeleteId = sent.at(-1).reqId;
+controller.open({id: 'artifact:first', store: 'first', artifact: 'first/index.html', title: 'Review'});
+controller.handleDelete({reqId: aliasDeleteId, ok: true});
+assert.equal(nodes['artifact-panel'].hidden, true);
 
 console.log('viewer artifact passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

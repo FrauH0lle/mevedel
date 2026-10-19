@@ -71,7 +71,7 @@
                                                   &optional committed-only))
 
 ;; `mevedel-tool-editing'
-(declare-function mevedel-tool-editing-view "mevedel-tool-editing" (components callback))
+(declare-function mevedel-tool-editing-view "mevedel-tool-editing" (components callback &optional search))
 (autoload 'mevedel-tool-editing-view "mevedel-tool-editing")
 
 ;; `mevedel-structs'
