@@ -2381,9 +2381,11 @@ transaction wrote the whole segment and scanned snapshots on every
 debounced tick, which dominated a profiled multi-agent session's
 allocation and produced a visible segment write every few seconds.
 
-A portable session publishes the sidecar as a one-artifact commit: the
-manifest overlay keeps every other committed entry, so the segment and
-instruction entries are neither read nor rewritten.
+A portable session publishes the sidecar with any retained artifact batches:
+the manifest overlay keeps every other committed entry, so the root segment
+and instruction entries are neither read nor rewritten.  When
+`mevedel-session-artifacts-require-agent-commit-p' is non-nil, publication
+must commit synchronously and refuses reentrant queueing.
 The full save was kept for portable sessions on the assumption that its
 byte comparison made an unchanged save free; it did not, because the
 segment copy and instruction serialization run
@@ -2428,12 +2430,11 @@ materialized or has no committed sidecar."
             (setf (mevedel-session-updated-at session)
                   (format-time-string "%FT%H-%M-%S"))
             (if portable-p
-                ;; A `queued' result is success here: the deferred caller
-                ;; re-arms while a critical publication is active.
                 (mevedel-session-publication-publish
                  session
                  (list (mevedel-session-artifacts--sidecar-artifact
-                        session buffer)))
+                        session buffer))
+                 mevedel-session-artifacts-require-agent-commit-p)
               (mevedel-session-codec-write
                (mevedel-session-artifacts-sidecar-path save-path)
                (mevedel-session-artifacts-build-sidecar session buffer)))

@@ -40,6 +40,17 @@
 (mevedel-deftest mevedel-session-collection-schedule (:quiet t)
   ,test
   (test)
+  :doc "publication schedules collection before the first root turn settles"
+  (test-mevedel-collection--with-session
+    (should (= 0 (mevedel-session-turn-count session)))
+    (should (gethash session mevedel-session-collection--jobs))
+    (let ((job (gethash session mevedel-session-collection--jobs))
+          (steps 0))
+      (while (gethash session mevedel-session-collection--jobs)
+        (mevedel-session-collection--step session job)
+        (should (< (cl-incf steps) 100))))
+    (should (= 1 (length (mevedel-session-publication--generation-names
+                         (mevedel-session-save-path session))))))
   :doc "coalesces work without scanning or touching the target"
   (test-mevedel-collection--with-session
     (cl-letf (((symbol-function 'process-file)
@@ -215,6 +226,21 @@
 (mevedel-deftest mevedel-session-collection--step (:quiet t)
   ,test
   (test)
+  :doc "cheap marking and sweep steps share one bounded idle slice"
+  (test-mevedel-collection--with-session
+    (let ((job (gethash session mevedel-session-collection--jobs))
+          (mevedel-session-collection--slice-seconds 10)
+          (calls 0))
+      (plist-put job :plan '(prepared t))
+      (cl-letf (((symbol-function 'mevedel-session-publication-collect-step)
+                 (lambda (&rest _) (cl-incf calls) t)))
+        (mevedel-session-collection--step session job)
+        (should (= 8 calls))
+        ;; Input arriving between steps stops the slice, not just the next one.
+        (cl-letf (((symbol-function 'input-pending-p) (lambda () (>= calls 10))))
+          (mevedel-session-collection--step session job))
+        (should (= 10 calls))
+        (should (timerp (plist-get job :timer))))))
   :doc "yields between reads and deletes only after the complete retention scan"
   (test-mevedel-collection--with-session
     (let* ((mevedel-session-collection--slice-seconds 0)

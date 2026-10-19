@@ -52,7 +52,8 @@ pre-commit failure rolls files back. The picker groups heads by settled turn
 count and fork-point identity, offering the newest generation of each state and
 excluding the current state and incomplete turns.
 
-Publication collection is scheduled at turn settlement and lease-acquiring restore.
+Publication collection is scheduled at every committed head, turn settlement,
+and lease-acquiring restore.
 It keeps the current head, journal capture pins, settled-turn representatives,
 a recent-generation grace window, and
 their exact referenced artifact files. A retained artifact does not keep its
@@ -62,8 +63,9 @@ Deletions are batched into one target control program per slice.
 Ordinary transcript readers have no read-pin protocol: an old non-boundary reader outside the grace
 window can receive an absence or hash failure.
 
-Resume and settlement schedule collection in bounded idle slices. A scan must
-cover all generations before deletion, and a changed head restarts it. Retention
+Resume and publication schedule collection in bounded idle slices. A scan must
+cover all generations before deletion; a changed head adds immutable observations
+and retained-file marking rather than restarting completed work. Retention
 criteria remain unchanged; deletion reserves ownership and is capped per batch.
 Repeated saves within a turn reuse checkpoint versions and timestamps. Snapshot
 names address raw contents, so equal before/after images across paths and turns
@@ -94,6 +96,22 @@ manifests can retain bytes in older generation directories.
 All revisions below belong to ADR 0072. Directive transcript representation was
 subsequently replaced by [ADR 0091](0091-render-directive-turns-in-the-shared-session-view.md);
 its shared chronology and workspace-owned identity constraints remain.
+
+- **Publication-driven collection, 2026-10-19:** a 2.5-hour session retained
+  2,850 generations, about 7.3 GB, with 2,819 published before its first root
+  turn settled. Scheduling only on settlement/restore never started cleanup
+  during that long turn. Every committed head now coalesces a cleanup job.
+  Marking and sweeping use the same eight-step/50 ms idle budget as scanning
+  rather than waiting one second per small step. Retention still preserves
+  settled-turn Redo representatives and journal pins. Of the immutable payloads,
+  224 MB were byte-identical to the preceding manifest's logical artifact;
+  generation assembly now reuses those files after queued-write deduplication,
+  including equal sidecars. Replacement snapshots do not reuse omitted entries.
+  After collection, the real session still had about a hundred artifact-only
+  directories referenced by its four retained heads. Separate directory-listing
+  processes cost 0.53 seconds per collection job even without a backlog.
+  Listing up to eight retained directories in one control program removes those
+  redundant launches without caching mutable collection state.
 
 - **Initial choice:** Rewind was in-place, discarded the selected turn, and
   offered no redo variant. This avoided misleading parallel conversations over

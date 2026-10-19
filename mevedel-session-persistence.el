@@ -717,11 +717,18 @@ or root autosave."
           (:success t))))))
 
 (defun mevedel-session-persistence-save-agent-state (session)
-  "Commit SESSION's agent state through its authoritative root buffer."
+  "Commit SESSION's agent state through its authoritative root buffer.
+An existing portable publication needs only its sidecar and retained
+artifact batches.  Initial materialization still takes a full snapshot."
   (when-let* ((buffer (mevedel-session-root-buffer session))
               ((buffer-live-p buffer)))
     (let ((mevedel-session-artifacts-require-agent-commit-p t))
-      (when (mevedel-session-artifacts-save session buffer nil t)
+      (when (if (and (mevedel-session-codec-portable-authority-p session)
+                     (assoc "session.meta.el"
+                            (plist-get (mevedel-session-publication session)
+                                       :artifacts)))
+                (mevedel-session-artifacts-save-agent-registry session buffer)
+              (mevedel-session-artifacts-save session buffer nil t))
         ;; The committed sidecar already carries the current registry,
         ;; so a pending observational save is absorbed.
         (mevedel-session-persistence-cancel-deferred-agent-save session)

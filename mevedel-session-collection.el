@@ -2,9 +2,9 @@
 
 ;;; Commentary:
 
-;; Session startup and settlement only schedule reclamation.  Immutable history
-;; is scanned in idle slices; a changed publication restarts the scan before
-;; any deletion.  Publication owns retention and the final mutation authority.
+;; Session startup and publication only schedule reclamation.  Immutable history
+;; is scanned in idle slices; new heads join the scan and retained-file marking.
+;; Publication owns retention and the final mutation authority.
 
 ;;; Code:
 
@@ -63,7 +63,7 @@ from one that did."
 
 (defconst mevedel-session-collection--slice-interval 1.0
   "Idle seconds between collection slices.
-Collection follows every settled turn.  At 0.2 s, a job deleting a few
+Collection coalesces published heads.  At 0.2 s, a job deleting a few
 old files took about fifty slices over fifteen seconds, three or four
 wakeups a second; every wakeup repaints a pgtk frame, and old generations
 are not urgent.")
@@ -249,8 +249,17 @@ Cache observations only; the editor still checks authority and pins at deletion.
                                                  (gethash (plist-get generation :head)
                                                           summaries))
                                                (plist-get job :names)))))))
-                  (let (failure)
-                    (pcase (mevedel-session-publication-collect-step
+                  (let ((count 0) failure)
+                    ;; Marking and directory enumeration are often cheaper
+                    ;; than reading sidecars.  Give them the same bounded
+                    ;; slice, rather than waiting a second per tiny step.
+                    (while (and (eq job (gethash session mevedel-session-collection--jobs))
+                                (not (plist-get job :pending))
+                                (< count 8)
+                                (or (zerop count) (< (float-time) deadline))
+                                (not (input-pending-p)))
+                      (cl-incf count)
+                      (pcase (mevedel-session-publication-collect-step
                             session (plist-get job :plan)
                             (lambda (error)
                               ;; A background program reports from a sentinel,
@@ -261,8 +270,10 @@ Cache observations only; the editor still checks authority and pins at deletion.
                                 (setq failure error))))
                       ('pending (plist-put job :pending t))
                       ('nil (mevedel-session-collection--finish session job 'completed))
-                      (_ (when failure (signal (car failure) (cdr failure)))
-                         (mevedel-session-collection--arm session job)))))))))))
+                        (_ (when failure (signal (car failure) (cdr failure))))))
+                    (when (and (eq job (gethash session mevedel-session-collection--jobs))
+                               (not (plist-get job :pending)))
+                      (mevedel-session-collection--arm session job))))))))))
 
       (error
        (mevedel-session-collection--finish session job 'failed)
