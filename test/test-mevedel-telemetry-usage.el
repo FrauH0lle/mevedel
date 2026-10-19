@@ -265,7 +265,7 @@ reached TOOL and could dispatch the next call from inside the cleanup."
        call 'start :command "SECRET" :response "SECRET")
       (let ((event (car (test-mevedel-usage--events session))))
         (should (= 8 (plist-get event :turn)))
-        (should (equal "usage-session" (plist-get event :session-id)))
+        (should-not (plist-member event :session-id))
         (should (equal "call-1" (plist-get event :call-id)))
         (should (eq 'start (plist-get event :stage)))
         (should-not (string-match-p "SECRET" (prin1-to-string event))))))

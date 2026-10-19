@@ -52,6 +52,7 @@ Data model
   mevedel-execution-grants.el protected-boundary-aware child authority coverage
   mevedel-execution.el        managed execution registry, admission, and facade
   mevedel-execution-process.el opaque child, process-group, and spool lifecycle
+  mevedel-execution-spool.el  asynchronous retired-output compression and disposable logical resource views
   mevedel-execution-transcript.el durable execution render data and archive reconciliation
   mevedel-execution-scheduler.el fair session-scoped Bash admission
   mevedel-execution-telemetry.el safe execution facts and profiler adaptation

@@ -738,6 +738,9 @@ without a terminal record; that is an unrecorded outcome, not an approval.
 The permission log retains `:resource-originals` and `:selected-resources`,
 including path, read/write access, and `:recursive` extent (nil means exact),
 plus `:approval-lifetime` for invocation, session, or workspace approval.
+Local permission-log entries append in UTF-8 without rereading the log or
+checking an already-existing parent directory. Remote entries remain queued
+until session settlement publishes their delta.
 Unified telemetry retains the categorical identity, mode, cause, outcome, and
 lifetime fields, while its allowlist drops resource paths and capability
 payloads. Forwarded side-conversation events use the same categorical fields;

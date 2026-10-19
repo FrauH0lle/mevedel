@@ -14,6 +14,7 @@
 (require 'gptel)
 (require 'gptel-org)
 (require 'gptel-openai-responses)
+(require 'mevedel-execution-transcript)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-restore)
@@ -159,7 +160,51 @@
             (user-error "Insertion failed"))
           (list (list tool nil "a") (list tool nil "b")) info)
          :type 'user-error)
-        (should (eq calls (plist-get info :tool-use)))))))
+        (should (eq calls (plist-get info :tool-use))))))
+
+  :doc "settles more than 64 early terminals at insertion without a view or DONE"
+  (dolist (callback '(gptel--insert-response gptel-curl--stream-insert-response))
+    (with-temp-buffer
+      (mevedel--transcript-org-mode)
+      (setq-local mevedel--session (mevedel-session--create)
+                  gptel-mode t)
+      (let* ((tool (gptel-make-tool :name "Bash" :function #'ignore
+                                    :description "Fixture." :args nil))
+             (calls
+              (cl-loop for n below 80 for id = (format "terminal-%s" n)
+                       collect
+                       (progn
+                         (mevedel-execution-transcript-handle-event
+                          (list :type 'terminal :data-buffer (current-buffer)
+                                :tool-use-id id
+                                :facts '(:state completed :outcome success :exit-code 0)
+                                :whole-output "terminal output"))
+                         (list :name "Bash" :id id :args nil
+                               :result (concat "initial output"
+                                               (mevedel-tool-render-data-format
+                                                '(:kind bash :state running)
+                                                id))))))
+             (info (list :buffer (current-buffer) :position (point-marker)
+                         :callback callback :tools (list tool) :tool-use calls)))
+        (should (= 80 (hash-table-count
+                       mevedel-execution-transcript--pending-terminals)))
+        (mevedel-tool-render-data--display-results-advice
+         #'gptel--display-tool-results
+         (mapcar (lambda (call) (list tool nil (plist-get call :result))) calls)
+         info)
+        (should (= 0 (hash-table-count
+                      mevedel-execution-transcript--pending-terminals)))
+        (dolist (call calls)
+          (let ((data (mevedel-tool-render-data-for-tool
+                       (current-buffer) (plist-get call :id))))
+            (should (eq 'completed (plist-get data :state)))
+            (should (eq 'success (plist-get data :status)))
+            (should (equal "terminal output" (plist-get data :execution-output)))))
+        ;; Compaction sees terminal truth, not the stale inserted snapshot.
+        (should-not (plist-get
+                     (mevedel-execution-transcript-prepare-archive
+                      (current-buffer) (mapcar (lambda (call) (plist-get call :id)) calls))
+                     :live))))))
 
 (provide 'test-mevedel-tool-render-data-identity)
 ;;; test-mevedel-tool-render-data-identity.el ends here

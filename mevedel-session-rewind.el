@@ -63,7 +63,7 @@
 (declare-function mevedel-session-artifacts--live-sidecar "mevedel-session-artifacts" (session &optional data-buffer))
 (declare-function mevedel-session-artifacts-assert-mutation-authority "mevedel-session-artifacts" (session &optional buffer))
 (declare-function mevedel-session-artifacts-backup-path "mevedel-session-artifacts" (save-path backup-name))
-(declare-function mevedel-session-artifacts-collect-prompts "mevedel-session-artifacts" (buffer))
+(declare-function mevedel-session-artifacts-collect-prompts "mevedel-session-artifacts" (buffer &optional preview-length))
 (declare-function mevedel-session-artifacts-fork-point-spans "mevedel-session-artifacts" (buffer))
 (declare-function mevedel-session-artifacts-instructions-current-path "mevedel-session-artifacts" (save-path))
 (declare-function mevedel-session-artifacts-instructions-dir "mevedel-session-artifacts" (save-path))

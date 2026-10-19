@@ -221,6 +221,10 @@ Cache observations only; the editor still checks authority and pins at deletion.
                               (not (and (gethash key mevedel-session-publication--generation-cache)
                                         (gethash key mevedel-session-publication--facts-cache)))))
                           (plist-get job :remaining))))
+                    ;; Check eligibility once per head, even when too few cold
+                    ;; generations need a worker.  Do not rescan the whole
+                    ;; remaining history on every bounded slice.
+                    (plist-put job :worker-scanned head)
                     (when (> (length cold) 16)
                       (plist-put job :worker
                                  (mevedel-journal-worker-start

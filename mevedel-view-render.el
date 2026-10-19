@@ -493,9 +493,9 @@ individual tool rows.  Zero disables grouping."
   :group 'mevedel)
 
 (defcustom mevedel-view-render-cache-max-entries 256
-  "Maximum number of view-local cached render entries before clearing.
-The cache is disposable and keyed by data-buffer positions plus modification
-tick, so clearing it only affects rendering speed."
+  "Maximum number of response-fontification and source-bounds cache entries.
+Tool renderings instead retain the working set used by the last full
+projection; a fixed entry limit made long activity runs reparse every tool."
   :type 'integer
   :group 'mevedel)
 
@@ -697,9 +697,6 @@ interaction zones instead of inside them.")
 (defvar mevedel-view-render--prepared-responses nil
   "Dynamically bound response cache owned by a scheduled full projection.")
 
-(defvar-local mevedel-view--render-cache-entries 0
-  "Approximate number of entries in view-local render caches.")
-
 (defvar-local mevedel-view--response-cache-entries 0
   "Approximate number of entries in `mevedel-view--response-fontify-cache'.")
 
@@ -775,7 +772,6 @@ expansion to a later turn starting at the same data position.")
               (make-hash-table :test #'equal))
   (setq-local mevedel-view--response-fontify-cache
               (make-hash-table :test #'equal))
-  (setq-local mevedel-view--render-cache-entries 0)
   (setq-local mevedel-view--response-cache-entries 0)
   (setq-local mevedel-view--user-pre-rendered nil)
   (setq-local mevedel-view--live-data-tail-start nil)
@@ -931,8 +927,7 @@ otherwise an advancing start marker could accept a replaced unit's suffix."
               (setcar (nthcdr 2 key) (+ (nth 2 key) delta))))
           (setq pos next))))
     (when (hash-table-p mevedel-view--tool-rendering-cache)
-      (clrhash mevedel-view--tool-rendering-cache)
-      (setq mevedel-view--render-cache-entries 0))))
+      (clrhash mevedel-view--tool-rendering-cache))))
 
 
 (defun mevedel-view--debug-buffer ()
@@ -1191,8 +1186,7 @@ session restarted."
               (clrhash mevedel-view--response-fontify-cache)
               (setq-local mevedel-view--response-cache-entries 0))
             (when (hash-table-p mevedel-view--tool-rendering-cache)
-              (clrhash mevedel-view--tool-rendering-cache)
-              (setq-local mevedel-view--render-cache-entries 0))
+              (clrhash mevedel-view--tool-rendering-cache))
             (when (buffer-live-p mevedel--data-buffer)
               (mevedel-view--full-rerender))))))))
 
@@ -1366,14 +1360,18 @@ without NEXT returns the complete turns."
              (seg-render-kind
               (and (consp seg-render-data)
                    (plist-get seg-render-data :kind)))
-             (seg-scaffolding-only-p
-              (and (memq type '(user ignored))
-                   seg-text
-                   (mevedel-view--scaffolding-only-text-p seg-text)))
              (hook-audit-only-p
               (and (eq type 'ignored)
                    seg-text
                    (mevedel-transcript-audit-only-p seg-text)))
+             (seg-scaffolding-only-p
+              (and (memq type '(user ignored))
+                   seg-text
+                   ;; Audit-only segments already preserve the preceding
+                   ;; type below.  Their scaffolding verdict is never used;
+                   ;; do not clean the encoded payload to compute it.
+                   (not hook-audit-only-p)
+                   (mevedel-view--scaffolding-only-text-p seg-text)))
              (scaffolding-before-hook-audit-p
               (and (eq type 'user)
                    seg-scaffolding-only-p
@@ -2850,12 +2848,8 @@ Property provenance is checked separately by the rendering key."
     (add-hook 'after-change-functions #'mevedel-view--source-after-change nil t))
   (let ((range (cons start end)))
     (or (gethash range mevedel-view--source-revisions)
-        (progn
-          (when (>= (hash-table-count mevedel-view--source-revisions)
-                    mevedel-view-render-cache-max-entries)
-            (clrhash mevedel-view--source-revisions))
-          (puthash range (make-symbol "source-revision")
-                   mevedel-view--source-revisions)))))
+        (puthash range (make-symbol "source-revision")
+                 mevedel-view--source-revisions))))
 
 (defun mevedel-view--tool-source-properties (start end)
   "Return relevant provenance intervals in the source range START..END.
@@ -2873,6 +2867,33 @@ Inspect buffer properties directly without copying the payload."
         (setq pos next)))
     (nreverse intervals)))
 
+(defvar mevedel-view--tool-cache-used nil
+  "Tool keys visited by the current complete projection, or nil.
+Staged projection jobs retain this table across their callbacks.")
+
+(defun mevedel-view--sweep-tool-rendering-cache (used)
+  "Retain only the current projection's USED tool keys and source identities.
+Call after a successful complete projection, never for an incremental tail."
+  (when (hash-table-p mevedel-view--tool-rendering-cache)
+    (maphash (lambda (key _rendering)
+               (unless (gethash key used)
+                 (remhash key mevedel-view--tool-rendering-cache)))
+             mevedel-view--tool-rendering-cache))
+  (let ((sources (make-hash-table :test #'eq)))
+    (maphash (lambda (key _)
+               (let* ((data (car key))
+                      (ranges (or (gethash data sources)
+                                  (puthash data (make-hash-table :test #'equal) sources))))
+                 (puthash (cons (nth 1 key) (nth 2 key)) t ranges))) used)
+    (maphash (lambda (data ranges)
+               (when (buffer-live-p data)
+                 (with-current-buffer data
+                   (when (hash-table-p mevedel-view--source-revisions)
+                     (maphash (lambda (range _identity)
+                                (unless (gethash range ranges)
+                                  (remhash range mevedel-view--source-revisions)))
+                              mevedel-view--source-revisions))))) sources)))
+
 (defun mevedel-view--tool-cache-key
     (data-buf seg-start seg-end collapsed-only)
   "Return a source-tracked key for DATA-BUF SEG-START..SEG-END rendering.
@@ -2881,12 +2902,15 @@ characters and provenance reuse the key without copying or hashing payloads."
   (with-current-buffer data-buf
     (let ((start (mevedel-view--source-position seg-start))
           (end (mevedel-view--source-position seg-end)))
-      (list data-buf start end
-            (mevedel-view--source-revision start end)
-            (and (boundp 'mevedel--session)
-                 (mevedel-view--session-render-state-fingerprint mevedel--session))
-            (and collapsed-only t)
-            (mevedel-view--tool-source-properties start end)))))
+      (let ((key (list data-buf start end
+                       (mevedel-view--source-revision start end)
+                       (and (boundp 'mevedel--session)
+                            (mevedel-view--session-render-state-fingerprint mevedel--session))
+                       (and collapsed-only t)
+                       (mevedel-view--tool-source-properties start end))))
+        (when mevedel-view--tool-cache-used
+          (puthash key t mevedel-view--tool-cache-used))
+        key))))
 
 (defun mevedel-view--collapsed-rendering-p (rendering)
   "Return non-nil when RENDERING initially renders as a collapsed header."
@@ -3161,6 +3185,18 @@ DATA-BUF supplies live execution metadata; COLLAPSED-ONLY requests summaries."
          :initially-collapsed-p nil))
     (mevedel-view--render-tool-call (plist-get prepared :call) data-buf collapsed-only)))
 
+(defun mevedel-view--retire-tool-renderings (data-buf start end)
+  "Discard renderings overlapping DATA-BUF START..END before a local refresh.
+Local refreshes need this too: a full projection may not run again for a long
+conversation, and patched agent handles otherwise retain every old body."
+  (when (hash-table-p mevedel-view--tool-rendering-cache)
+    (maphash
+     (lambda (key _rendering)
+       (when (and (eq (car-safe key) data-buf)
+                  (< (nth 1 key) end) (> (nth 2 key) start))
+         (remhash key mevedel-view--tool-rendering-cache)))
+     mevedel-view--tool-rendering-cache)))
+
 (defun mevedel-view--segment-rendering (data-buf seg-start seg-end
                                                  &optional collapsed-only)
   "Return rendering for DATA-BUF's SEG-START..SEG-END.
@@ -3178,9 +3214,7 @@ COLLAPSED-ONLY requests a cached summary without retaining large bodies."
                (rendering (or (plist-get prepared :pending)
                               (mevedel-view--render-prepared-tool prepared data-buf collapsed-only))))
           (when (and key rendering (plist-get prepared :cacheable))
-            (mevedel-view--cache-put
-             cache key (plist-put (copy-sequence rendering) :group-child nil)
-             'mevedel-view--render-cache-entries))
+            (puthash key (plist-put (copy-sequence rendering) :group-child nil) cache))
           rendering))))
 
 (defun mevedel-view--tool-row-region (data-buffer tool-use-id)
@@ -3241,18 +3275,8 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
            (previously-forced-p
             (get-text-property start 'mevedel-view-force-expanded))
            (turn-id (get-text-property start 'mevedel-view-turn-id)))
-      (when (hash-table-p mevedel-view--tool-rendering-cache)
-        ;; Progress changes this call's rendering without changing its text.
-        ;; Keep completed calls cached across frequent Bash output updates.
-        (maphash
-         (lambda (key _rendering)
-           (when (and (eq (car-safe key) data-buffer)
-                      (< (nth 1 key) (cdr source))
-                      (> (nth 2 key) (car source)))
-             (remhash key mevedel-view--tool-rendering-cache)))
-         mevedel-view--tool-rendering-cache)
-        (setq mevedel-view--render-cache-entries
-              (hash-table-count mevedel-view--tool-rendering-cache)))
+      ;; Progress changes rendering even when its source text stays unchanged.
+      (mevedel-view--retire-tool-renderings data-buffer (car source) (cdr source))
       (when-let* ((rendering
                   (mevedel-view--segment-rendering
                    data-buffer (car source) (cdr source))))
@@ -3313,15 +3337,19 @@ summary does not include preceding agent-result or tool output text."
 
 (defun mevedel-view--strip-tool-blocks-from-reasoning (text)
   "Return reasoning TEXT with nested org tool blocks removed."
-  (with-temp-buffer
-    (insert (or text ""))
-    (goto-char (point-min))
-    (while (re-search-forward "^#\\+begin_tool\\b" nil t)
-      (let ((start (match-beginning 0)))
-        (if (re-search-forward "^#\\+end_tool[^\n]*\n?" nil t)
-            (delete-region start (point))
-          (delete-region start (point-max)))))
-    (buffer-string)))
+  (let ((text (or text ""))
+        (case-fold-search (default-value 'case-fold-search)))
+    (if (not (string-match-p "^#\\+begin_tool\\b" text))
+        text
+      (with-temp-buffer
+        (insert text)
+        (goto-char (point-min))
+        (while (re-search-forward "^#\\+begin_tool\\b" nil t)
+          (let ((start (match-beginning 0)))
+            (if (re-search-forward "^#\\+end_tool[^\n]*\n?" nil t)
+                (delete-region start (point))
+              (delete-region start (point-max)))))
+        (buffer-string)))))
 
 (defconst mevedel-view--clean-reasoning-cache-size 24
   "Reasoning-text cleanings retained by `mevedel-view--clean-reasoning-cache'.
@@ -3374,8 +3402,10 @@ Completed blocks are cached globally; see
     ;; One pass over the marker lines rather than three.  Each
     ;; `replace-regexp-in-string' copies the whole string, and reasoning
     ;; text runs to thousands of lines while every redraw re-cleans it.
-    (replace-regexp-in-string
-     "#\\+\\(?:begin\\|end\\)_\\(?:reasoning\\|tool\\)[^\n]*\n?" "" cleaned)))
+    (let ((markers "#\\+\\(?:begin\\|end\\)_\\(?:reasoning\\|tool\\)[^\n]*\n?"))
+      (if (string-match-p markers cleaned)
+          (replace-regexp-in-string markers "" cleaned)
+        cleaned))))
 
 (defun mevedel-view--strip-render-data-display-text (text)
   "Return TEXT without hidden render-data side-channel scaffolding."
@@ -3414,17 +3444,21 @@ as generated control markup."
 
 (defun mevedel-view--strip-system-reminder-blocks (text)
   "Return TEXT without generated `<system-reminder>' blocks."
-  (with-temp-buffer
-    (insert (or text ""))
-    (goto-char (point-min))
-    (while (search-forward "<system-reminder>" nil t)
-      (let ((start (match-beginning 0)))
-        (if (search-forward "</system-reminder>" nil t)
-            (progn
-              (delete-region start (point))
-              (goto-char start))
-          (goto-char (point-max)))))
-    (buffer-string)))
+  (let ((text (or text ""))
+        (case-fold-search (default-value 'case-fold-search)))
+    (if (not (string-match-p "<system-reminder>" text))
+        text
+      (with-temp-buffer
+        (insert text)
+        (goto-char (point-min))
+        (while (search-forward "<system-reminder>" nil t)
+          (let ((start (match-beginning 0)))
+            (if (search-forward "</system-reminder>" nil t)
+                (progn
+                  (delete-region start (point))
+                  (goto-char start))
+              (goto-char (point-max)))))
+        (buffer-string)))))
 
 (defun mevedel-view--system-reminder-line-count (body)
   "Return the non-empty line count for system reminder BODY."
@@ -4792,41 +4826,47 @@ Empty string when the turn contains only whitespace or markers."
               ;; rerender that didn't pre-narrow past the drawer.
               (when (string-match "\\`[ \t\n]*:PROPERTIES:\n\\(?:.*\n\\)*?:END:\n?" text)
                 (setq text (replace-match "" t t text)))
-              ;; Strip reasoning block markers
-              (setq text (replace-regexp-in-string
-                          "#\\+\\(?:begin\\|end\\)_reasoning[^\n]*\n?" "" text))
-              ;; Strip tool block markers.  gptel emits `#+begin_tool ...'
+              ;; Strip reasoning and tool markers only when present:
+              ;; replacement otherwise copies the whole delivery.
+              ;; gptel emits `#+begin_tool ...'
               ;; and `#+end_tool' without the `gptel' text property, so the
               ;; separator text around a tool block appears here as a user
               ;; segment -- skip it, otherwise the raw header would render
               ;; as a spurious "You" turn.
-              (setq text (replace-regexp-in-string
-                          "#\\+begin_tool[^\n]*\n?" "" text))
-              (setq text (replace-regexp-in-string
-                          "#\\+end_tool[^\n]*\n?" "" text))
+              (dolist (markers '("#\\+\\(?:begin\\|end\\)_reasoning[^\n]*\n?"
+                                 "#\\+begin_tool[^\n]*\n?"
+                                 "#\\+end_tool[^\n]*\n?"))
+                (when (string-match-p markers text)
+                  (setq text (replace-regexp-in-string markers "" text))))
               (let ((trimmed (string-trim text)))
                 (unless (string-empty-p trimmed)
                   (push trimmed parts)))))
-          (string-join (nreverse parts) "\n")))))
+          (if (cdr parts)
+              (string-join (nreverse parts) "\n")
+            (or (car parts) ""))))))
 
 (defun mevedel-view--strip-model-context-blocks (text)
   "Return TEXT without generated hook or Goal context blocks."
-  (with-temp-buffer
-    (insert text)
-    (goto-char (point-min))
-    (while (re-search-forward
-            "<\\(hook\\|goal\\)-context\\(?:[ \\t][^>]*\\)?>" nil t)
-      (let ((start (match-beginning 0))
-            (close (format "</%s-context>" (match-string 1))))
-        (if (search-forward close nil t)
-            (progn
-              (delete-region start (point))
-              (goto-char start))
-          (goto-char (point-max)))))
-    (goto-char (point-min))
-    (while (re-search-forward "\n\\{3,\\}" nil t)
-      (replace-match "\n\n" t t))
-    (buffer-string)))
+  (let ((case-fold-search (default-value 'case-fold-search)))
+    (if (not (or (string-match-p "<\\(hook\\|goal\\)-context\\(?:[ \\t][^>]*\\)?>" text)
+                 (string-search "\n\n\n" text)))
+        text
+      (with-temp-buffer
+        (insert text)
+        (goto-char (point-min))
+        (while (re-search-forward
+                "<\\(hook\\|goal\\)-context\\(?:[ \\t][^>]*\\)?>" nil t)
+          (let ((start (match-beginning 0))
+                (close (format "</%s-context>" (match-string 1))))
+            (if (search-forward close nil t)
+                (progn
+                  (delete-region start (point))
+                  (goto-char start))
+              (goto-char (point-max)))))
+        (goto-char (point-min))
+        (while (re-search-forward "\n\\{3,\\}" nil t)
+          (replace-match "\n\n" t t))
+        (buffer-string)))))
 
 (autoload 'mevedel-view--hook-audit-records-from-text "mevedel-view-audit")
 (autoload 'mevedel-view--hook-audit-key "mevedel-view-audit")
@@ -6086,7 +6126,7 @@ added when the text before point does not already end with a blank line
             data-buf (cadr seg) (caddr seg)))))
 
 (defvar mevedel-view--activity-entry-cache nil
-  "Tool entries shared by classification and insertion of one activity run.")
+  "Entries shared by classification and insertion of one activity run.")
 
 (defun mevedel-view--tool-segment-entry (seg data-buf)
   "Return SEG's normalized tool or standalone audit entry in DATA-BUF.
@@ -6176,25 +6216,38 @@ stay unchanged.  Each caller owns the returned entry's coalescing count."
   "Return the activity entry for mailbox SEG in DATA-BUF.
 Keep the canonical card text so grouped and standalone deliveries use
 one renderer, including execution summaries and sender links.  Return nil
-for this transcript's own completion delivery, which renders nothing."
-  (let* ((text (mevedel-view--user-turn-text (list seg) data-buf))
-         (opener (and (string-match
-                       "\\`[ \t\n]*<\\(agent-result\\|agent-message\\)\\s-[^>]*>" text)
-                      (match-string 0 text)))
-         (result-p (and opener (equal (match-string 1 text) "agent-result")))
-         (notice
-          (and opener
-               (or result-p
-                   (member (mevedel-view--mail-attribute opener "type")
-                           '("EXECUTION" "MONITOR" "MONITOR_TERMINAL"))))))
-    (unless (and notice (not result-p)
-                 (mevedel-view--own-completion-mail-p
-                  opener (mevedel-view--mail-attribute opener "sender")))
-      (list :kind 'mailbox :start (cadr seg) :end (caddr seg)
-            :notice-p notice
-            :group-child
-            (list :kind 'mailbox :status 'success
-                  :rendering (list :mailbox-text text))))))
+for this transcript's own completion delivery, which renders nothing.
+Classification and insertion reuse this entry within one activity run."
+  (let* ((key (and mevedel-view--activity-entry-cache
+                   (let ((agent mevedel-view--agent-path))
+                     (with-current-buffer data-buf
+                       (list 'mailbox data-buf seg (buffer-modified-tick)
+                             (point-min) (point-max) agent)))))
+         (cached (and key (gethash key mevedel-view--activity-entry-cache))))
+    (if cached
+        (copy-sequence (cdr cached))
+      (let* ((text (mevedel-view--user-turn-text (list seg) data-buf))
+             (opener (and (string-match
+                           "\\`[ \t\n]*<\\(agent-result\\|agent-message\\)\\s-[^>]*>" text)
+                          (match-string 0 text)))
+             (result-p (and opener (equal (match-string 1 text) "agent-result")))
+             (notice
+              (and opener
+                   (or result-p
+                       (member (mevedel-view--mail-attribute opener "type")
+                               '("EXECUTION" "MONITOR" "MONITOR_TERMINAL")))))
+             (entry
+              (unless (and notice (not result-p)
+                           (mevedel-view--own-completion-mail-p
+                            opener (mevedel-view--mail-attribute opener "sender")))
+                (list :kind 'mailbox :start (cadr seg) :end (caddr seg)
+                      :notice-p notice
+                      :group-child
+                      (list :kind 'mailbox :status 'success
+                            :rendering (list :mailbox-text text))))))
+        (when key
+          (puthash key (cons t (copy-sequence entry)) mevedel-view--activity-entry-cache))
+        entry))))
 
 (defun mevedel-view--completion-record-p (record)
   "Return non-nil when hook audit RECORD is an execution breadcrumb."
@@ -8823,7 +8876,8 @@ to DATA's tail, schedule a full projection instead."
         (mevedel-view-render-mutate
          'full-batch
          (lambda ()
-           (let ((mevedel-view-prepare-enabled t))
+           (let ((mevedel-view-prepare-enabled t)
+                 (mevedel-view--tool-cache-used (plist-get job :cache-used)))
              ;; Timers can fire inside a yielding writer.  Validate and consume
              ;; the job only after acquiring ownership, never when merely queued.
              (when (eq job mevedel-view-render--batch)
@@ -8870,6 +8924,8 @@ to DATA's tail, schedule a full projection instead."
                        (set-marker (nth 2 entry) nil))
                      (if (plist-get job :pending)
 			 (mevedel-view-render-resume-batch)
+                       (mevedel-view--sweep-tool-rendering-cache
+                        (plist-get job :cache-used))
                        (mevedel-view-render-cancel-batch))))))))))))))
 
 (defun mevedel-view-render-batched-full ()
@@ -8898,6 +8954,7 @@ In-flight streaming retains synchronous reconciliation of view-only live text."
                       :fontified (make-hash-table :test #'equal)
                       :tools-turns nil :tools-segments nil :tool-states nil
                       :tool-cache (make-hash-table :test #'equal)
+                      :cache-used (make-hash-table :test #'equal)
                       :plan nil :states nil :pending nil :timer nil
                       :settled-until nil
                       :tick (with-current-buffer data (buffer-modified-tick))
@@ -8984,6 +9041,7 @@ Until the complete plan is ready, keep the previous view in place."
             (setf (plist-get job :phase) 'project)
             (if (plist-get job :pending)
                 (mevedel-view-render-resume-batch)
+              (mevedel-view--sweep-tool-rendering-cache (plist-get job :cache-used))
               (mevedel-view-render-cancel-batch))
             (setq installed t))
         (unless installed (mevedel-view-render-cancel-batch)))))
@@ -9146,7 +9204,8 @@ view chrome."
     (mevedel-view-render--preserving-window-state
      (mevedel-view--call-preserving-input-text
       (lambda ()
-      (let* ((mevedel-transcript--tool-block-index (make-hash-table :test #'eq))
+      (let* ((mevedel-view--tool-cache-used (make-hash-table :test #'equal))
+             (mevedel-transcript--tool-block-index (make-hash-table :test #'eq))
              (mevedel-view--path-link-memo (make-hash-table :test #'equal))
              (mevedel-transcript-audit--decode-cache (make-hash-table :test #'equal))
              (start-time (float-time))
@@ -9209,8 +9268,11 @@ view chrome."
           (mevedel-view--full-rerender-reanchor
            data-buf rendering in-flight-was
            data-turn-start-pos preserved-live-tail)
-            (mevedel-view--full-rerender-finish
-             data-buf live-data-buf rendering historical-p start-time))))))))
+          (prog1
+              (mevedel-view--full-rerender-finish
+               data-buf live-data-buf rendering historical-p start-time)
+            (mevedel-view--sweep-tool-rendering-cache
+             mevedel-view--tool-cache-used)))))))))
 
 ;;
 ;;; Optimistic user turn rendering

@@ -18,6 +18,7 @@
           "mevedel-engine-test-support"))
 (require 'gptel)
 (require 'mevedel-agents)
+(require 'mevedel-agent-conversation)
 (require 'mevedel-execution-target)
 (require 'mevedel-execution)
 (require 'mevedel-execution-transcript)
@@ -60,6 +61,79 @@
     (insert-file-contents path)
     (mevedel-execution-transcript-test--restored-audit-records
      (buffer-string) type)))
+
+(mevedel-deftest mevedel-execution-transcript--update-archived-render-data ()
+  ,test
+  (test)
+  :doc "retained Agent summary reaches its own archived row through refresh"
+  (dolist (nested '(nil t))
+    (let* ((directory (make-temp-file "mevedel-summary-archive-" t))
+           (parent (generate-new-buffer " *summary-parent*"))
+           (session (mevedel-session--create :authority-mode 'pid-lock
+                                             :save-path directory))
+           (archive (file-name-concat directory "agents/parent.compact-0001.chat.org"))
+           (id (if nested "outer/1" "outer"))
+           (summary '(:attempt-count 3 :started-count 3 :refused-count 0
+                      :sandbox off :filesystem unrestricted :network unrestricted))
+           (invocation (mevedel-agent-invocation--create
+                        :agent-id "retained" :path "/root/retained"
+                        :parent-data-buffer parent :parent-tool-use-id id
+                        :sandbox-summary-cell (list summary))))
+      (unwind-protect
+          (progn
+            (make-directory (file-name-directory archive) t)
+            (with-temp-file archive
+              (mevedel--transcript-org-mode)
+              (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+              (insert "#+begin_tool (Agent)\n")
+              (insert (propertize
+                       (concat "(:name \"Agent\" :args nil)\n\nstarted\n"
+                               (mevedel-tool-render-data-format
+                                (if nested
+                                    '(:kind ptc :calls
+                                      ((:id "outer/1" :tool "Agent"
+                                        :render-data (:kind collaboration-event :agent-id "retained"))))
+                                  '(:kind collaboration-event :agent-id "retained"))
+                                "outer"))
+                       'gptel '(tool . "outer")))
+              (insert "#+end_tool\n")
+              (mevedel-session-artifacts-stabilize-gptel-bounds))
+            (with-current-buffer parent
+              (setq-local mevedel--session session
+                          mevedel--agent-invocation invocation
+                          buffer-file-name (file-name-concat directory "agents/parent.chat.org"))
+              (insert "unsent draft must stay here\n"))
+            (cl-letf (((symbol-function 'mevedel-agent-conversation--sync-entry) #'ignore)
+                      ((symbol-function 'mevedel-agent-conversation--render-data-bounds)
+                       (lambda (&rest _) nil)))
+              (let (diagnostics)
+                (mevedel-test--with-captured-diagnostics diagnostics
+                  (cl-letf (((symbol-function 'mevedel-session-persistence-write-current-buffer-atomically)
+                             (lambda (&rest _) (error "Injected archive failure"))))
+                    (mevedel-agent-conversation-refresh invocation)))
+                (should (string-match-p "Injected archive failure" diagnostics)))
+              (with-current-buffer parent
+                (should (gethash id mevedel-execution-transcript--pending-terminals)))
+              (mevedel-agent-conversation-refresh invocation)
+              ;; Identical refreshes must not parse/rewrite the archived file.
+              (cl-letf (((symbol-function 'mevedel-session-artifacts-read-transcript-segment)
+                         (lambda (&rest _) (error "Redundant archive read"))))
+                (mevedel-agent-conversation-refresh invocation)))
+            (with-current-buffer parent
+              (should (= 0 (hash-table-count mevedel-execution-transcript--pending-terminals)))
+              (should (equal "unsent draft must stay here\n" (buffer-string))))
+            (with-temp-buffer
+              (insert-file-contents archive)
+              (mevedel--transcript-org-mode)
+              (mevedel-transcript-restore-properties)
+              (should (equal summary (plist-get
+                                      (mevedel-tool-render-data-for-tool (current-buffer) id)
+                                      :sandbox-summary)))
+              (should-not (string-search "unsent draft" (buffer-string)))))
+        (when (buffer-live-p parent)
+          (with-current-buffer parent (set-buffer-modified-p nil))
+          (kill-buffer parent))
+        (delete-directory directory t)))))
 
 (mevedel-deftest mevedel-execution-transcript-terminal-render-data ()
   ,test
@@ -1382,7 +1456,50 @@
                                                   (should (= 1
                                                              (length
                                                               (mevedel-transcript-audit-records
-                                                               (buffer-string) 'execution-completion))))))
+                                                               (buffer-string) 'execution-completion)))))
+                                                ;; A late Agent summary must update its published
+                                                ;; compaction archive, not the poisoned fixed cache.
+                                                (let* ((logical "agents/remote-call.compact-0001.chat.org")
+                                                       (path (file-name-concat session-dir logical))
+                                                       (text
+                                                        (with-temp-buffer
+                                                          (mevedel--transcript-org-mode)
+                                                          (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+                                                          (insert "#+begin_tool (Agent)\n")
+                                                          (insert (propertize
+                                                                   (concat "(:name \"Agent\")\nstarted\n"
+                                                                           (mevedel-tool-render-data-format
+                                                                            '(:kind collaboration-event :agent-id "child")
+                                                                            "agent-call"))
+                                                                   'gptel '(tool . "agent-call")))
+                                                          (insert "#+end_tool\n")
+                                                          (mevedel-session-artifacts-stabilize-gptel-bounds)
+                                                          (buffer-string)))
+                                                       (updates '(:sandbox-summary
+                                                                  (:attempt-count 1 :started-count 1
+                                                                   :sandbox off))))
+                                                  (mevedel-session-artifacts-publish-transcript-state
+                                                   session root-buffer path text nil)
+                                                  (write-region "poisoned archive cache" nil path nil 'silent)
+                                                  (mevedel-execution-transcript-store-pending-terminal
+                                                   buffer '(:tool-use-id "agent-call") updates)
+                                                  (mevedel-execution-transcript-retry-pending-terminals buffer)
+                                                  (with-current-buffer buffer
+                                                    (should-not (gethash "agent-call"
+                                                                         mevedel-execution-transcript--pending-terminals)))
+                                                  (with-temp-buffer
+                                                    (insert (decode-coding-string
+                                                             (mevedel-session-artifacts-read-artifact session logical t)
+                                                             'utf-8-unix))
+                                                    (mevedel--transcript-org-mode)
+                                                    (mevedel-transcript-restore-properties)
+                                                    (should (equal (plist-get updates :sandbox-summary)
+                                                                   (plist-get
+                                                                    (mevedel-tool-render-data-for-tool
+                                                                     (current-buffer) "agent-call")
+                                                                    :sandbox-summary)))
+                                                    (should-not (string-search "poisoned" (buffer-string)))
+                                                    (should-not (string-search "pending prompt" (buffer-string))))))
         (when (and session (mevedel-session-lease session))
           (ignore-errors
             (mevedel-session-durability-lease-release session-dir session)))

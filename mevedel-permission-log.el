@@ -92,8 +92,12 @@
         (if (mevedel-permission-log--remote-p session)
             (mevedel-session-publication-append-diagnostic
              session file content)
-          (make-directory (file-name-directory file) t)
-          (write-region content nil file t 'silent)
+          (let ((coding-system-for-write 'utf-8-unix))
+            (condition-case nil
+                (write-region content nil file t 'silent)
+              (file-missing
+               (make-directory (file-name-directory file) t)
+               (write-region content nil file t 'silent))))
           t)
       (error
        (message "mevedel: permission log persistence failed: %s"

@@ -112,7 +112,7 @@
 (declare-function mevedel-session-artifacts-build-sidecar "mevedel-session-artifacts" (session buffer &optional checkpoint))
 (declare-function mevedel-session-artifacts-chats "mevedel-session-artifacts" (chapters prompt-index current-segment current-title))
 (declare-function mevedel-session-artifacts-check-target-incarnation "mevedel-session-artifacts" (session buffer))
-(declare-function mevedel-session-artifacts-content-start "mevedel-session-artifacts" (buffer))
+(declare-function mevedel-session-artifacts-collect-prompts "mevedel-session-artifacts" (buffer &optional preview-length))
 (declare-function mevedel-session-artifacts-disown-save-machinery "mevedel-session-artifacts" nil)
 (declare-function mevedel-session-artifacts-find-artifact-noselect "mevedel-session-artifacts" (session logical &optional inspection committed-only))
 (declare-function mevedel-session-artifacts-inhibit-so-long "mevedel-session-artifacts" ())
@@ -812,35 +812,12 @@ synchronous commit lands first."
 (defun mevedel-session-persistence-first-user-message (buffer)
   "Return a one-line preview of the first user prompt in BUFFER, or nil.
 
-A user prompt is a nil-`gptel' text-property region with
-non-whitespace content that is not gptel's org tool/reasoning
-scaffolding.  Skips the initial org property drawer and
-`#+begin_summary' / `#+end_summary' block bodies, so the picker preview
-reflects an actual user prompt rather than metadata, a compaction
-summary, or tool/reasoning block glue.  The preview is the first
-non-empty line, truncated to 120 characters."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (save-excursion
-        (save-restriction
-          (widen)
-          (catch 'found
-            (let ((pos (mevedel-session-artifacts-content-start buffer)))
-              (while (< pos (point-max))
-                (let* ((next (next-single-property-change
-                              pos 'gptel nil (point-max)))
-                       (prop (get-text-property pos 'gptel)))
-                  (when-let* ((prompt-start
-                               (mevedel-transcript--user-prompt-start
-                                pos next prop)))
-                    (let ((text (buffer-substring-no-properties
-                                 prompt-start next)))
-                      (when (string-match "[^[:space:]].*$" text)
-                        (let ((line (match-string 0 text)))
-                          (throw 'found
-                                 (mevedel--truncate-display line 120 "..."))))))
-                  (setq pos next)))
-              nil)))))))
+Use the same canonical prompt derivation as the live and restored prompt
+index, excluding structural mailbox deliveries, metadata, summaries and
+tool/reasoning scaffolding.  Keep the first non-empty line, truncated to
+120 characters."
+  (plist-get (car (mevedel-session-artifacts-collect-prompts buffer 120))
+             :preview))
 
 
 ;;

@@ -104,6 +104,58 @@ Each call is a plist of :backend, :model, :effort, :prompt, :callback,
   (cl-find "session-naming" (mevedel-session-recovery-issues session)
            :key (lambda (issue) (plist-get issue :id)) :test #'equal))
 
+(mevedel-deftest mevedel-session-naming-committed-authored-preview (:quiet t)
+  ,test (test)
+  :doc "commits only authored previews and never latches a harness delivery"
+  (test-mevedel-session-naming--with-session
+    (erase-buffer)
+    (dolist (type '(MAIL RESULT EXECUTION MONITOR MONITOR_TERMINAL))
+      (mevedel--insert-user-role-block-at-marker
+       (mevedel-tools--message-delivery-block
+        (list :type type :sender "/root/worker" :recipient "/root"
+              :outcome 'completed :payload "Harness delivery, not a prompt"))))
+    (mevedel-session-artifacts-save session buffer)
+    (let* ((path (mevedel-session-save-path session))
+           (sidecar-path (mevedel-session-artifacts-sidecar-path path)))
+      (should-not (mevedel-session-checkpoint-first-user-message session))
+      (should-not (plist-get (mevedel-session-codec-read sidecar-path)
+                             :first-user-message))
+      (goto-char (point-max))
+      (insert "First authored request\n")
+      (should (equal "First authored request"
+                     (mevedel-session-persistence-first-user-message buffer)))
+      ;; An acknowledged sidecar cannot commit a preview ahead of its text.
+      (mevedel-session-persistence-save-agent-state session)
+      (should-not (mevedel-session-checkpoint-first-user-message session))
+      (should-not (plist-get (mevedel-session-codec-read sidecar-path)
+                             :first-user-message))
+      (mevedel-session-artifacts-save session buffer)
+      (should (equal "First authored request"
+                     (mevedel-session-checkpoint-first-user-message session)))
+      (should (equal "First authored request"
+                     (plist-get (mevedel-session-codec-read sidecar-path)
+                                :first-user-message)))
+      (goto-char (point-max))
+      (insert (propertize "Answer\n" 'gptel 'response))
+      (mevedel--insert-user-role-block-at-marker
+       (mevedel-tools--message-delivery-block
+        '(:type MAIL :sender "/root/worker" :recipient "/root"
+          :payload "Later harness delivery")))
+      (goto-char (point-max))
+      (insert "Later authored request\n")
+      (mevedel-session-persistence-save-agent-state session)
+      (should (equal "First authored request"
+                     (mevedel-session-checkpoint-first-user-message session)))
+      (mevedel-session-artifacts-save session buffer)
+      (test-mevedel-session-persistence--release-and-kill buffer session)
+      (setq buffer (mevedel-session-persistence-restore path nil nil workspace)
+            session (buffer-local-value 'mevedel--session buffer))
+      (should (equal "First authored request"
+                     (mevedel-session-checkpoint-first-user-message session)))
+      (should (equal "First authored request"
+                     (plist-get (mevedel-session-codec-read sidecar-path)
+                                :first-user-message))))))
+
 (mevedel-deftest mevedel-session-naming-normalize ()
   ,test (test)
   :doc "preserves readable Unicode and collapses whitespace"

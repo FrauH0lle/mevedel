@@ -28,7 +28,7 @@
   (let ((event (append
                 (list :schema-version 1 :event 'provider-call :call-id id
                       :stage stage :time "2026-10-03T09:30:00.000+0000"
-                      :session-id "session-1" :request-id "request-1" :turn 1
+                      :request-id "request-1" :turn 1
                       :agent-path "/root" :backend "provider" :backend-type 'gptel-openai
                       :model 'model-1 :workload 'root)
                 (when (eq stage 'finish)
@@ -71,6 +71,39 @@
   ()
   ,test
   (test)
+  :doc "reads the production emitter's compact format with zero and unknown usage distinct"
+  (test-mevedel-session-cache-analysis--with-log (root file)
+    (require 'mevedel-structs)
+    (require 'mevedel-telemetry)
+    (let ((session (mevedel-session--create
+                    :session-id "session-1" :save-path (file-name-directory file)
+                    :turn-count 1))
+          (mevedel-telemetry-enabled t))
+      (mevedel-telemetry-record
+       session 'provider-call :call-id "real" :stage 'start :request-id "request")
+      (mevedel-telemetry-record
+       session 'provider-call :call-id "real" :stage 'finish :request-id "request"
+       :outcome 'success :duration-ms 0 :usage-status 'partial
+       :input-tokens 0 :cached-tokens 0 :output-tokens nil)
+      (let* ((report (mevedel-analyze-session-cache (list root)))
+             (call (aref (alist-get 'calls report) 0)))
+        (should (equal (alist-get 'session_id call) "session-1"))
+        (should (= (alist-get 'duration_ms call) 0))
+        (should (= (alist-get 'input_tokens call) 0))
+        (should (= (alist-get 'cached_tokens call) 0))
+        (should-not (alist-get 'output_tokens call))
+        (should (= (length (alist-get 'issues report)) 0)))))
+
+  :doc "directory identity is authoritative even for old rows with a session field"
+  (test-mevedel-session-cache-analysis--with-log (root file)
+    (test-mevedel-session-cache-analysis--write
+     file (list (test-mevedel-session-cache-analysis--event
+                 "old-row" 'finish :session-id "stale-row-identity")))
+    (let* ((report (mevedel-analyze-session-cache (list file)))
+           (call (aref (alist-get 'calls report) 0)))
+      (should (equal (alist-get 'session_id call) "session-1"))
+      (should (= (length (alist-get 'issues report)) 0))))
+
   :doc "totals and paired token-weighted ratios exclude cumulative settlements"
   (test-mevedel-session-cache-analysis--with-log (root file)
     (test-mevedel-session-cache-analysis--write
@@ -176,7 +209,7 @@
 
   :doc "overlapping paths and identical copied events count each identity once"
   (test-mevedel-session-cache-analysis--with-log (root file)
-    (let* ((copy (file-name-concat root "session-copy" "telemetry-log.el"))
+    (let* ((copy (file-name-concat root "copy" "session-1" "telemetry-log.el"))
            (records (list (test-mevedel-session-cache-analysis--event "same" 'start)
                           (test-mevedel-session-cache-analysis--event "same" 'finish))))
       (test-mevedel-session-cache-analysis--write file records)
@@ -220,18 +253,21 @@
            (test-mevedel-session-cache-analysis--event
             "a-late" 'finish :time "2026-10-03T12:00:00.000+0200")
            (test-mevedel-session-cache-analysis--event
-            "z-early" 'finish :time "2026-10-03T09:00:00.000+0000"
-            :session-id "session-2" :workload 'agent :agent-path "/root/reviewer"
-            :backend "other-provider" :model "model-2" :turn 2 :outcome 'aborted)
-           (test-mevedel-session-cache-analysis--event
             "helper" 'finish :workload 'naming :purpose 'title)
            (test-mevedel-session-cache-analysis--event
             "summary" 'finish :workload 'context-summary :purpose 'compaction)))
+    (test-mevedel-session-cache-analysis--write
+     (file-name-concat root "session-2" "telemetry-log.el")
+     (list (test-mevedel-session-cache-analysis--event
+            "z-early" 'finish :time "2026-10-03T09:00:00.000+0000"
+            :workload 'agent :agent-path "/root/reviewer"
+            :backend "other-provider" :model "model-2" :turn 2 :outcome 'aborted)))
     (let* ((report (mevedel-analyze-session-cache (list root)))
            (calls (alist-get 'calls report))
            (groups (alist-get 'breakdowns report)))
       (should (equal (alist-get 'call_id (aref calls 0)) "z-early"))
       (should (equal (alist-get 'agent_path (aref calls 0)) "/root/reviewer"))
+      (should (equal (alist-get 'session_id (aref calls 0)) "session-2"))
       (should (= (alist-get 'turn (aref calls 0)) 2))
       (should (= (length (alist-get 'session groups)) 2))
       (should (= (length (alist-get 'backend_model groups)) 2))

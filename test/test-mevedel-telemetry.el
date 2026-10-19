@@ -79,7 +79,9 @@
             (should (= 1 (length entries)))
             (should (= 1 (plist-get entry :schema-version)))
             (should (eq 'permission-decision (plist-get entry :event)))
-            (should (equal "telemetry-test" (plist-get entry :session-id)))
+            (should-not (plist-member entry :session-id))
+            (should-not (plist-member entry :profiler-run-id))
+            (should-not (plist-member entry :goal-tokens-incomplete-p))
             (should (= 7 (plist-get entry :turn)))
             (should (equal "goal-1" (plist-get entry :goal-id)))
             (should (equal "parent/1" (plist-get entry :tool-use-id)))
@@ -942,11 +944,20 @@
                   :event forged :outcome))
          (before (copy-tree props))
          (mevedel-telemetry--dropped-keys nil))
-    (should (equal '(:status first :status second :modes (:status nested)
-                     :outcome nil)
+    (should (equal '(:status first :status second :modes (:status nested))
                    (mevedel-telemetry--safe-props props)))
     (should (equal '(:path :command) mevedel-telemetry--dropped-keys))
     (should (equal before props)))
+  :doc "omits nil properties recursively without losing zero or false-list positions"
+  (should (equal '(:duration-ms 0 :modes (:exit-code 0) :skill-names (nil t))
+                 (mevedel-telemetry--safe-props
+                  '(:outcome nil :duration-ms 0
+                    :modes (:status nil :exit-code 0) :skill-names (nil t)))))
+  (should-not (mevedel-telemetry--safe-props '(:modes (:status nil))))
+  (should (equal [nil t 0]
+                 (plist-get (mevedel-telemetry--safe-props
+                             '(:skill-names [nil t 0])) :skill-names)))
+
   :doc "bounds vectors at thirty-two values without inspecting their tail"
   (dolist (size '(0 1 31 32 33 10000))
     (let ((value (vconcat (number-sequence 1 size)))

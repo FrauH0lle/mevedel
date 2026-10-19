@@ -1384,6 +1384,16 @@
           (let ((inhibit-read-only t))
             (should (mevedel-view--refresh-agent-handle-at
                      (point-min) path)))
+          ;; Replacing retained metadata must retire the superseded cache key
+          ;; even when every refresh succeeds without a full projection.
+          (dotimes (i 10)
+            (with-current-buffer data-buf
+              (goto-char (point-min))
+              (re-search-forward "\\(?:Running\\|Update[0-9]\\)\\.")
+              (replace-match (format "Update%d." i) t t))
+            (let ((inhibit-read-only t))
+              (should (mevedel-view--refresh-agent-handle-at (point-min) path)))
+            (should (= 1 (hash-table-count mevedel-view--tool-rendering-cache))))
           (goto-char (point-min))
           (search-forward "Sandbox:")
           (goto-char (+ (match-beginning 0) 2))

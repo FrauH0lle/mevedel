@@ -896,6 +896,26 @@
 ;;
 ;;; Repair telemetry
 
+(mevedel-deftest mevedel-tool-repair--persist-content
+  (:doc "creates missing parents once and appends UTF-8 independent of the caller")
+  (let* ((root (make-temp-file "mevedel-repair-append-" t))
+         (session (mevedel-session--create
+                   :save-path (file-name-concat root "nested" "session")))
+         (mevedel-tool-repair-persist-log t)
+         (content "(:model \"\u2603\")\n"))
+    (unwind-protect
+        (let ((coding-system-for-write 'utf-16le))
+          (should (mevedel-tool-repair--persist-content session content))
+          (cl-letf (((symbol-function 'make-directory)
+                     (lambda (&rest _) (ert-fail "Recreated existing directory"))))
+            (should (mevedel-tool-repair--persist-content session content)))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally (mevedel-tool-repair-log-path session))
+            (should (equal (encode-coding-string (concat content content) 'utf-8-unix)
+                           (buffer-string)))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-tool-repair-log-event
   ()
   ,test
@@ -907,7 +927,7 @@
          (session (mevedel-session--create :name "main"))
          (mevedel-tool-repair-log-limit 2)
          (event '(:time "now" :origin "/root" :backend backend
-                        :model model :tool "Read" :outcome valid
+                        :model model :tool "Read" :outcome invalid
                         :repair-enabled t :rules nil :paths nil
                         :issue-kinds nil :execution executed :result success)))
     (unwind-protect
@@ -965,23 +985,44 @@
     (should (eq 'btw
                 (plist-get (nth 2 captured) :conversation-scope))))
 
-  :doc "keeps routine valid outcomes out of normal unified telemetry"
-  (let ((session (mevedel-session--create :name "main"))
-        captured)
-    (cl-letf (((symbol-function 'mevedel-telemetry-record)
-               (lambda (&rest _) (setq captured t))))
-      (mevedel-tool-repair-log-event
-       session
-       '(:time "now" :origin "/root" :backend backend
-               :model model :tool "Read" :outcome valid
-               :repair-enabled t :rules nil :paths nil
-               :issue-kinds nil :execution executed :result success)))
-    (should-not captured))
+  :doc "skips unchanged valid inputs before redaction, queueing, and persistence"
+  (let* ((root (make-temp-file "mevedel-noop-repair-" t))
+         (session (mevedel-session--create :name "main"))
+         (event '(:time "now" :origin "/root" :backend backend
+                        :model model :tool "Read" :outcome valid
+                        :repair-enabled t :rules nil :paths nil
+                        :issue-kinds nil :execution executed :result success))
+         (mevedel-tool-repair-persist-log t)
+         (original-safe-event (symbol-function 'mevedel-tool-repair--safe-event))
+         (original-audit (symbol-function 'mevedel-telemetry-record-audit))
+         (redactions 0)
+         (audits 0))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-tool-repair--safe-event)
+                     (lambda (&rest args)
+                       (cl-incf redactions)
+                       (apply original-safe-event args)))
+                    ((symbol-function 'mevedel-telemetry-record-audit)
+                     (lambda (&rest args)
+                       (cl-incf audits)
+                       (apply original-audit args))))
+            (dolist (path (list nil root))
+              (setf (mevedel-session-save-path session) path)
+              (mevedel-tool-repair-log-event session event)))
+          (should (= 0 redactions))
+          (should (= 0 audits))
+          (should-not (mevedel-session-repair-log session))
+          (should-not (mevedel-session-repair-log-pending session))
+          (should-not (file-exists-p
+                       (mevedel-tool-repair-log-path session))))
+      (delete-directory root t)))
 
   :doc "logging failures never escape into validated execution"
   (let* ((dir (file-name-as-directory
                (make-temp-file "mevedel-repair-log-fail-" t)))
          (session (mevedel-session--create :name "main" :save-path dir))
+         (mevedel-telemetry-enabled nil)
          warned)
     (unwind-protect
         (cl-letf (((symbol-function 'write-region)
@@ -993,7 +1034,7 @@
            (mevedel-tool-repair-log-event
             session
             '(:time "now" :origin "/root" :backend backend
-                    :model model :tool "Read" :outcome valid
+                    :model model :tool "Read" :outcome repaired
                     :repair-enabled t :rules nil :paths nil
                     :issue-kinds nil :execution executed :result success)))
           (should warned)
@@ -1008,7 +1049,7 @@
                   "OpenRouter" :key "test" :models '(router-model)))
          (session (mevedel-session--create :name "main"))
          (base '(:time "now" :origin "/root" :model model :tool "Read"
-                       :outcome valid :repair-enabled t :rules nil :paths nil
+                       :outcome repaired :repair-enabled t :rules nil :paths nil
                        :issue-kinds nil :execution executed :result success)))
     (mevedel-tool-repair-log-event
      session (plist-put (copy-sequence base) :backend first))
@@ -1183,6 +1224,26 @@
       (dolist (secret '("sentinel-path" "sentinel-result" "private"
                         "Unwrapped a secret path"))
         (should-not (string-match-p secret printed)))))
+
+  :doc "settles a valid call without constructing diagnostics and releases tracking"
+  (let ((session (mevedel-session--create :name "main"))
+        (original-event (symbol-function 'mevedel-tool-repair--event))
+        (constructed 0))
+    (with-temp-buffer
+      (let ((entry (list :tool "Read" :status 'valid :repairs nil :issues nil
+                         :session session :buffer (current-buffer)
+                         :execution 'executed :telemetry-recorded nil)))
+        (setq-local mevedel-tool-repair--in-flight (list entry))
+        (cl-letf (((symbol-function 'mevedel-tool-repair--event)
+                   (lambda (&rest args)
+                     (cl-incf constructed)
+                     (apply original-event args))))
+          (mevedel-tool-repair-record-result entry "ok")
+          (mevedel-tool-repair-record-result entry "duplicate"))
+        (should (= 0 constructed))
+        (should (plist-get entry :telemetry-recorded))
+        (should-not mevedel-tool-repair--in-flight)
+        (should-not (mevedel-session-repair-log session)))))
 
   :doc "records disabled repair and invalid issue kinds without values"
   (let* ((session (mevedel-session--create :name "main"))

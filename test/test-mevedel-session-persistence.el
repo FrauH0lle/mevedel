@@ -116,6 +116,34 @@
     (insert (propertize "All response.\n" 'gptel 'response))
     (should (null (mevedel-session-persistence-first-user-message
                    (current-buffer)))))
+  :doc "skips structural deliveries before the real prompt"
+  (dolist (type '(MAIL RESULT EXECUTION MONITOR MONITOR_TERMINAL))
+    (with-temp-buffer
+      (mevedel--insert-user-role-block-at-marker
+       (mevedel-tools--message-delivery-block
+        (list :type type :sender "/root/view" :recipient "/root"
+              :outcome 'completed :payload "Delivery, not a prompt")))
+      (goto-char (point-max))
+      (insert "Real prompt\n")
+      (should (equal "Real prompt"
+                     (mevedel-session-persistence-first-user-message
+                      (current-buffer))))))
+  :doc "delivery-only transcripts have no first prompt"
+  (with-temp-buffer
+    (mevedel--insert-user-role-block-at-marker
+     (mevedel-tools--message-delivery-block
+      '(:type MAIL :sender "/root/view" :recipient "/root" :payload "mail")))
+    (should-not (mevedel-session-persistence-first-user-message
+                 (current-buffer))))
+  :doc "literal delivery markup in an authored code fence stays a prompt"
+  (with-temp-buffer
+    (insert "```xml\n"
+            (mevedel-tools--message-delivery-block
+             '(:type MAIL :sender "/root/view" :recipient "/root" :payload "example"))
+            "\n```\n")
+    (should (equal "```xml"
+                   (mevedel-session-persistence-first-user-message
+                    (current-buffer)))))
   :doc "truncates long lines"
   (with-temp-buffer
     (insert (make-string 200 ?x))
@@ -780,6 +808,75 @@
 (mevedel-deftest mevedel-session-persistence-restore (:quiet t)
   ,test
   (test)
+  :doc "repair publication keeps authored previews around mailbox deliveries"
+  (let* ((tempdir (make-temp-file "mevedel-preview-restore-" t))
+         (workspace (test-mevedel-session-persistence--make-workspace tempdir)))
+    (let* ((session (mevedel-session-create "main" workspace))
+           (buffer (generate-new-buffer " *restore-delivery-preview*"))
+           restored)
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (org-mode)
+              (dolist (type '(MAIL RESULT EXECUTION))
+                (mevedel--insert-user-role-block-at-marker
+                 (mevedel-tools--message-delivery-block
+                  (list :type type :sender "/root/view" :recipient "/root"
+                        :outcome 'completed :payload "First delivery"))))
+              (goto-char (point-max))
+              (insert "First authored prompt\n"
+                      (propertize "Answer\n" 'gptel 'response)
+                      "Latest authored prompt\n")
+              ;; A real stale execution makes public restore publish repairs.
+              (insert (test-mevedel-session-persistence--execution-tool-block
+                       "preview-stale"
+                       '(:execution-id "exec-preview-stale" :state running
+                         :status success :live-execution-p t)))
+              (mevedel--insert-user-role-block-at-marker
+               (mevedel-tools--message-delivery-block
+                '(:type MAIL :sender "/root/view" :recipient "/root"
+                  :payload "Latest delivery")))
+              (mevedel-session-artifacts-stabilize-gptel-bounds)
+              (mevedel-session-artifacts-save session buffer)
+              ;; Do not let the cached first preview hide restore's derivation.
+              ;; A sidecar without that optional preview must be rebuilt from
+              ;; the persisted transcript by the real repair publication.
+              (mevedel-session-publication-publish
+               session
+               (list
+                (list :path (mevedel-session-artifacts-sidecar-path
+                             (mevedel-session-save-path session))
+                      :content (mevedel-session-artifacts-printed-value
+                                (plist-put
+                                 (mevedel-session-artifacts-build-sidecar session buffer)
+                                 :first-user-message nil))
+                      :commit-marker t))))
+            (let* ((directory (mevedel-session-save-path session))
+                   (head (plist-get (mevedel-session-publication session) :head)))
+              (test-mevedel-session-persistence--release-and-kill buffer session)
+              (setq restored
+                    (mevedel-session-persistence-restore directory nil nil workspace))
+              (with-current-buffer restored
+                (should-not (equal head (plist-get (mevedel-session-publication mevedel--session) :head)))
+                (should (string-match-p ":state lost" (buffer-string)))
+                (let ((sidecar
+                       (with-temp-buffer
+                         (insert (mevedel-session-artifacts-read-artifact
+                                  (buffer-local-value 'mevedel--session restored)
+                                  "session.meta.el"))
+                         (goto-char (point-min))
+                         (read (current-buffer)))))
+                  (should (equal "First authored prompt"
+                                 (plist-get sidecar :first-user-message)))
+                  (should (equal "Latest authored prompt"
+                                 (plist-get sidecar :latest-user-message)))
+                  (should (= 2 (length (cdr (assoc 1 (plist-get sidecar :prompt-index))))))))))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (test-mevedel-session-persistence--release-and-kill
+         restored (and (buffer-live-p restored)
+                       (buffer-local-value 'mevedel--session restored)))
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry))))
   :doc "only PID-lock restore heals a disk counter ahead of the saved sidecar"
   (dolist (make-workspace
            '(test-mevedel-session-persistence--make-file-workspace

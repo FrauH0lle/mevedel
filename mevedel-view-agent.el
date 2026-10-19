@@ -166,6 +166,8 @@
 (declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
 
 ;; `mevedel-view-render'
+(declare-function mevedel-view--retire-tool-renderings
+                  "mevedel-view-render" (data-buf start end))
 (declare-function mevedel-view-render--full-now
                   "mevedel-view-render" (&optional transcript-buffer source-changed-p))
 (declare-function mevedel-view-render-mutate
@@ -1315,8 +1317,10 @@ Return non-nil on success."
             (and bounds source
                  data-buf
                  (buffer-live-p data-buf)
-                 (mevedel-view--segment-rendering
-                  data-buf (car source) (cdr source) collapsed))))
+                 (progn
+                   (mevedel-view--retire-tool-renderings data-buf (car source) (cdr source))
+                   (mevedel-view--segment-rendering
+                    data-buf (car source) (cdr source) collapsed)))))
       (when (and bounds rendering)
         (unless state
           (mevedel-view-disclosure-record-state

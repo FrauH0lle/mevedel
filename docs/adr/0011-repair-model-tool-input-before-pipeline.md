@@ -14,8 +14,8 @@ model-specific branches. `path` is a mevedel-internal semantic
 schema type lowered to JSON string for providers.
 
 Successful repairs run without a retry and add transparent model feedback.
-Incomplete candidates are abandoned atomically. Every raw call emits redacted
-session telemetry, while affected transcript rows reuse the hidden hook-audit
+Incomplete candidates are abandoned atomically. Repairs and validation failures
+emit redacted session telemetry, while affected transcript rows reuse the hidden hook-audit
 side channel. Neither surface stores argument values. These diagnostics are
 best-effort and must never block a validated tool call.
 
@@ -24,6 +24,12 @@ bounds. Conditional bounds, such as WriteStdin's input-versus-poll range, remain
 handler policy with requested-versus-effective telemetry.
 
 ## Decision history
+
+On 2026-10-19 unchanged valid calls stopped entering the repair log as well as
+unified telemetry. A real session contained 5,847 no-op rows out of 5,849 repair
+entries (1.9 MB), despite only two actual repairs. Filtering before redaction
+and persistence removes routine per-tool disk writes without losing repair or
+validation-failure evidence.
 
 The tool-owned repair callback had no production declarations but required a
 second phase, audit validation, and cross-phase cycle tracking. The bounded

@@ -240,7 +240,7 @@ is what a new caller sees instead of silence.
 forwarded audits.")
 
 (defconst mevedel-telemetry--owned-keys
-  '(:schema-version :time :elapsed-ms :sequence :event :session-id :turn
+  '(:schema-version :time :elapsed-ms :sequence :event :turn
     :preset :goal-id :goal-cycle :goal-phase :goal-status :profiler-run-id
     :dropped-keys)
   "Envelope keys supplied by `mevedel-telemetry-record'.")
@@ -400,7 +400,7 @@ symbol instead of their printed representation."
      (t (intern (format ":%s" (type-of value)))))))
 
 (defun mevedel-telemetry--safe-props (props &optional depth)
-  "Return PROPS reduced to allowlisted metadata keys at DEPTH.
+  "Return PROPS reduced to non-nil allowlisted metadata keys at DEPTH.
 Keys outside `mevedel-telemetry--allowed-keys' are dropped; their names are
 collected in `mevedel-telemetry--dropped-keys' so the omission is visible to
 whoever added the caller.  Envelope keys are dropped silently: the envelope
@@ -413,8 +413,9 @@ supplies them itself."
          ((not (keywordp key)) nil)
          ((memq key mevedel-telemetry--owned-keys) nil)
          ((memq key mevedel-telemetry--allowed-keys)
-          (push key safe)
-          (push (mevedel-telemetry--safe-value value depth) safe))
+          (when-let* ((value (mevedel-telemetry--safe-value value depth)))
+            (push key safe)
+            (push value safe)))
          (t (cl-pushnew key mevedel-telemetry--dropped-keys)))))
     (nreverse safe)))
 
@@ -441,21 +442,20 @@ supplies them itself."
                              mevedel-telemetry--origin)))))
            :sequence (cl-incf mevedel-telemetry--sequence)
            :event event
-           :session-id (ignore-errors
-                         (mevedel-session-session-id session))
            :turn (or mevedel-telemetry--event-turn
                      (ignore-errors (mevedel-session-turn-count session))
-                     0)
-           :profiler-run-id
-           (and (eq session mevedel-telemetry--profiler-session)
-                mevedel-telemetry--profiler-run-id))
+                     0))
+     (when (and (eq session mevedel-telemetry--profiler-session)
+                mevedel-telemetry--profiler-run-id)
+       (list :profiler-run-id mevedel-telemetry--profiler-run-id))
      (when preset (list :preset preset))
      (when goal
        (list :goal-id (mevedel-goal-id goal)
              :goal-status (mevedel-goal-status goal)
              :goal-tokens-used (mevedel-goal-tokens-used goal)
-             :goal-tokens-incomplete-p (mevedel-goal-tokens-incomplete-p goal)
              :goal-turns-run (mevedel-goal-turns-run goal)))
+     (when (and goal (mevedel-goal-tokens-incomplete-p goal))
+       (list :goal-tokens-incomplete-p t))
      safe
      (when dropped (list :dropped-keys dropped)))))
 

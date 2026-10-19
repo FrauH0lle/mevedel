@@ -511,15 +511,18 @@ fails validation, its repair audit is marked abandoned and the handler is not
 called. Both audit states contain only rule IDs, schema paths, and before/after
 shape names.
 
-Every raw model call records a redacted event on its root session with
-the actual backend, model, tool, canonical origin (`/root` or an agent path), outcome
+Repairs, validation failures, and abandoned candidates record a redacted event
+on their root session with the actual backend, model, tool, canonical origin
+(`/root` or an agent path), outcome
 (`valid`, `repaired`, `invalid`, or `abandoned`), rule IDs, schema paths,
 execution state, and result classification. Argument values, paths, commands,
 prompts, schemas, validation messages, and results are excluded. The in-memory
-`mevedel-session-repair-log` is bounded by
+and persistent repair logs omit unchanged valid inputs, even during profiling.
+The in-memory `mevedel-session-repair-log` is bounded by
 `mevedel-tool-repair-log-limit` (default 200). When
 `mevedel-tool-repair-persist-log` is non-nil, materialized sessions also append
-events to `<session>/repair-log.el`; bounded events recorded before first
+events to `<session>/repair-log.el` in UTF-8 without rereading prior entries or
+checking an already-existing parent directory; bounded events recorded before first
 materialization are backfilled when the session directory is created.
 Remote callback entries wait for session settlement and append only their
 queued delta. A crash may tear the final line; failed appends warn, remain
@@ -969,6 +972,18 @@ same payload. It contains only logical attempt/start/refusal counts, boundary
 symbols, and aggregate additional read/write mount counts. Default confined
 execution and additional read-only mounts are omitted. Paths, commands, and
 raw launcher reasons are never copied into the summary.
+
+Execution terminal updates that arrive before their tool rows are retained
+without eviction and reconciled immediately after gptel inserts each result
+batch, independently of view rendering or turn completion. Compaction also
+reconciles pending updates before freezing removed rows. Numbered ToolCall
+children update their exact nested metadata inside the enclosing tool row,
+not a nonexistent standalone segment. If a retained agent's sandbox summary
+changes after its parent row was compacted, reconciliation publishes that
+row's receiving-transcript archive; it does not publish the live draft or
+search a different agent's history. Unchanged archived updates use a
+source-identity-checked cache to avoid repeated reads and writes. Failed
+publication remains pending and reports the failure rather than discarding it.
 
 Tool renderer input is derived from the data buffer on each rerender; it
 must not depend on durable state stored only in view overlays or text

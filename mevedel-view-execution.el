@@ -47,6 +47,11 @@
 (defvar mevedel-execution-event-functions)
 (defvar mevedel-execution-state-change-hook)
 
+;; `mevedel-execution-spool'
+(declare-function mevedel-execution-spool-with-path
+                  "mevedel-execution-spool" (path operation callback executor &optional max-lines))
+(autoload 'mevedel-execution-spool-with-path "mevedel-execution-spool")
+
 ;; `mevedel-resource'
 (declare-function mevedel-resource-visit-path "mevedel-resource" (address &optional context))
 (autoload 'mevedel-resource-visit-path "mevedel-resource")
@@ -772,8 +777,24 @@ joins the header instead of adding a line."
                         (condition-case nil
                             (mevedel-resource-visit-path address (list :session session))
                           (error nil)))))
-         (whole (plist-get current :whole-output))
-         (buffer (generate-new-buffer "*mevedel execution output*")))
+         (compressed (and path (string-suffix-p ".log.gz" path))))
+    (if compressed
+        (mevedel-execution-spool-with-path
+         path 'read
+         (lambda (result)
+           (when (eq (plist-get result :status) 'error)
+             (mevedel-view-execution--render-full-output
+              current nil (or (plist-get result :result) "Could not read retained output"))))
+         (lambda (selected callback)
+           (mevedel-view-execution--render-full-output current selected)
+           (funcall callback nil)
+           nil))
+      (mevedel-view-execution--render-full-output current path))))
+
+(defun mevedel-view-execution--render-full-output (current path &optional failure)
+  "Inspect CURRENT's output at ordinary PATH, showing any visible FAILURE."
+  (let ((whole (plist-get current :whole-output))
+        (buffer (generate-new-buffer "*mevedel execution output*")))
     (with-current-buffer buffer
       (insert (format "Full output · %s · %s\n\n"
                       (plist-get current :execution-id)
@@ -781,6 +802,8 @@ joins the header instead of adding a line."
       (when (or (eq (plist-get current :termination) 'output-limit)
                 (> (or (plist-get current :omitted-output-bytes) 0) 0))
         (insert "Warning: output was truncated; retained output may omit content.\n\n"))
+      (when failure
+        (insert "Warning: " failure ".\n\n"))
       (cond
        ((and path (file-regular-p path) (file-readable-p path))
         (when (< (file-attribute-size (file-attributes path))
