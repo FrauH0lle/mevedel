@@ -124,8 +124,11 @@ edits, rather than the original model payload. Its action label uses the same
 selected-change and comment counts as the native review. A separate plain-text
 notice explains that selection and editing stay in Emacs and shows parent-active,
 conflict and incomplete-rollback warnings before staged feedback and rejection
-notes. Explicit review changes refresh the existing request; fold-only redraws
-with unchanged remote content do not republish it. Diff and notice strings have
+notes. Detailed conflict exceptions remain in the native review because they
+can disclose private host paths; browser warnings instead direct the reader to
+inspect the native conflict or request revision. The selected diff still uses
+the authored operands. Explicit review changes refresh the existing request;
+fold-only redraws with unchanged remote content do not republish it. Diff and notice strings have
 separate encoded-byte budgets, with explicit truncation directing the reader to
 the complete review in Emacs. Browser feedback still requests a whole-patch
 revision, deselecting every change; it does not edit individual hunks.

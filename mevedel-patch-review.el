@@ -645,10 +645,12 @@ Foreign view redraws and feedback keystrokes do not call this function."
               (concat
                (mevedel-side-conversation-mutation-warning
                 proposal "applying this patch")
-               (when-let* ((conflict (plist-get proposal :conflict)))
-                 (concat "Conflict: " conflict "\n"
+               (when (plist-get proposal :conflict)
+                 ;; Exceptions may name host paths beyond the authored operands.
+                 ;; Keep their detailed diagnostics in the native review only.
+                 (concat "Conflict: Could not apply the selected changes. Inspect details in Emacs.\n"
                          (if (plist-get proposal :rollback-incomplete)
-                             "Rollback was incomplete. Inspect the listed paths before retrying.\n"
+                             "Rollback was incomplete. Inspect the affected files in Emacs before retrying.\n"
                            "Change the selection in Emacs, or request revision so the model re-reads the stale files.\n")))
                "Current host selection; unselected changes are not applied. Selection and editing stay in Emacs.\n"
                (when (> (mevedel-tool-patch-revised-count proposal) 0)

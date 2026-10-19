@@ -987,8 +987,12 @@ native card. Remote permission outcomes remain one-shot only.
 Patch cards show the current host-selected, host-edited changes rather than the
 original authored patch. A plain-text notice before the diff explains the
 selection, staged feedback, parent activity and any conflict or incomplete
-rollback. The primary action follows the current selection (apply changes,
-request revision, or reject). Selection/editing stay in Emacs; semantic changes
+rollback. Raw conflict exceptions stay in Emacs: they may contain private host
+paths unrelated to the authored operands. Browser notices explain the failure
+and recovery action without copying those exceptions; the diff retains its
+authored relative or resource operands. The primary action follows the current
+selection (apply changes, request revision, or reject). Selection/editing stay
+in Emacs; semantic changes
 refresh the same pending card. Explicit truncation marks oversized review text.
 
 ## Commands, skills, and tool display

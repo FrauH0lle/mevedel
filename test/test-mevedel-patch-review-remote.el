@@ -16,6 +16,8 @@
                byte-compile-current-file))
           "helpers"))
 (require 'cl-lib)
+(require 'mevedel-collaboration)
+(require 'mevedel-collaboration-guest)
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-tool-patch)
 (require 'mevedel-patch-review)
@@ -162,10 +164,12 @@
           (should attempted)
           (should-not (plist-get proposal :state))
           (let ((remote (overlay-get overlay 'mevedel--remote)))
-            (should (string-search "Conflict: Patch rollback incomplete"
+            (should (string-search "Conflict: Could not apply the selected changes"
                                    (plist-get remote :notice)))
+            (should-not (string-search "Could not restore one.txt"
+                                       (plist-get remote :notice)))
             (should (string-search "Could not restore one.txt"
-                                   (plist-get remote :notice)))
+                                   (plist-get proposal :conflict)))
             (should (string-search "Rollback was incomplete"
                                    (plist-get remote :notice)))
             (should (plist-get remote :options)))))))
@@ -187,9 +191,76 @@
                         (list :body (plist-get remote :body)
                               :notice (plist-get remote :notice))))
                       58000))
-          (should (string-search "Conflict: Stale file" (plist-get remote :notice)))
+          (should (string-search "Conflict: Could not apply the selected changes"
+                                 (plist-get remote :notice)))
           (should (string-search "[truncated" (plist-get remote :notice)))
           (should (string-search "[truncated" (plist-get remote :body))))))))
+
+(mevedel-deftest mevedel-patch-review--remote-conflict-privacy
+  (:doc "A full guest's stale-buffer refusal retains native detail without sending host paths" :quiet t)
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "private-host-project-" t)))
+           (path (file-name-concat root "relative.txt"))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "privacy"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "privacy" workspace root))
+           (guests (make-hash-table :test #'eql))
+           (room (list :transport 'transport :session session :guests guests
+                       :data-buffer data-buf :ui-requests (make-hash-table :test #'eql)
+                       :push-guests (make-hash-table :test #'equal)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           (mevedel-collaboration-remote-interactions t)
+           (mevedel-interaction-prompt-created-hook
+            '(mevedel-collaboration--on-prompt-created))
+           sent visited result)
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                     (lambda (_transport peer frame)
+                       (push (cons peer frame) sent) t))
+                    ((symbol-function 'mevedel-collaboration--transport-control)
+                     #'ignore))
+            (puthash 1 '(:name "Full guest" :writable t :ready t) guests)
+            (with-temp-file path (insert "old line\n"))
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace mevedel--session session)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch (concat "*** Begin Patch\n*** Update File: relative.txt\n"
+                                    "@@\n-old line\n+new line\n*** End Patch\n"))))
+            (let* ((initial (cdr (car sent)))
+                   (req-id (plist-get initial :reqId))
+                   (overlay (gethash req-id (plist-get room :ui-requests))))
+              (should (equal "ui-request" (plist-get initial :t)))
+              (setq visited (find-file-noselect path))
+              (with-current-buffer visited
+                (goto-char (point-max)) (insert "unsaved change\n"))
+              (setq sent nil)
+              (mevedel-collaboration--dispatch-frame
+               room 1 (list :t "ui-response" :reqId req-id :option 0))
+              (should-not result)
+              (should (eq overlay (gethash req-id (plist-get room :ui-requests))))
+              (with-current-buffer view-buf
+                (should (string-search path (buffer-string))))
+              (let ((update (cdr (seq-find
+                                  (lambda (entry)
+                                    (equal "ui-request" (plist-get (cdr entry) :t)))
+                                  sent))))
+                (should update)
+                (should (string-search "Conflict:" (plist-get update :notice)))
+                (should (string-search "relative.txt" (plist-get update :body)))
+                (should-not (string-search root (json-encode update)))))
+            (with-current-buffer visited
+              (should (buffer-modified-p))
+              (should (string-search "unsaved change" (buffer-string))))
+            (should (equal "old line\n"
+                           (with-temp-buffer (insert-file-contents path) (buffer-string)))))
+        (when (buffer-live-p visited)
+          (with-current-buffer visited (set-buffer-modified-p nil))
+          (kill-buffer visited))
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-plan-mode--remote-feedback
   (:doc "demotes the proposal and queues the templated revision request with attribution")
