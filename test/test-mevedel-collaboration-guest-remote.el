@@ -412,7 +412,27 @@
           (should (equal (plist-get (cdar sent) :message) "Review changed patch"))
           (should (eq (gethash 41 requests) overlay)))))))
 
-(provide 'test-mevedel-collaboration-guest-remote)
+(mevedel-deftest mevedel-collaboration--questionnaire-answers
+  ()
+  ,test
+  (test)
+  :doc "normalizes mixed single/multi answers and empty selections atomically"
+  (progn
+    (should (equal (mevedel-collaboration--questionnaire-answers
+                    '(" yes " (" a " "b") nil ""))
+                   '("yes" ("a" "b") nil "")))
+    (dolist (answers '(42 ("valid" 3) ("valid" ("a" 3)) ("valid" (("nested")))))
+      (should-not (mevedel-collaboration--questionnaire-answers answers))))
+
+  :doc "enforces a shared UTF-8 budget across nested selections"
+  (let ((mevedel-collaboration--max-prompt-bytes 8))
+    (should (equal (mevedel-collaboration--questionnaire-answers
+                    '("1234" ("5678"))) '("1234" ("5678"))))
+    (should-not (mevedel-collaboration--questionnaire-answers
+                 '("1234" ("56789"))))
+    (should-not (mevedel-collaboration--questionnaire-answers
+                 '(("123456789"))))))
+
 (mevedel-deftest mevedel-collaboration--ui-request-frame
   (:doc "projects current patch warnings alongside its selected diff")
   (with-temp-buffer
@@ -425,4 +445,5 @@
         (should (equal (plist-get frame :body) "+selected change"))
         (should (equal (plist-get frame :bodyKind) "diff"))))))
 
+(provide 'test-mevedel-collaboration-guest-remote)
 ;;; test-mevedel-collaboration-guest-remote.el ends here

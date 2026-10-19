@@ -414,8 +414,9 @@ signals instead:
 - a queued message is dropped with its attachments, as on a retraction; its
   sender gets the same notice, and the host a warning naming the guest.
 
-Either way the host's warning quotes the question; guests see only the notice,
-since prompts can name hosts and paths.
+Either way the host's warning quotes the question when the refusing API supplies
+it; some Emacs input functions signal without question data. Guests see only the
+notice, since prompts can name hosts and paths.
 
 A queued message the host refuses for another reason, such as `/compact` in a
 Claude session, is dropped the same way rather than blocking the queue. Its
@@ -917,13 +918,29 @@ arrived, since each announces itself only once, when it is raised.
 transfer, save, rewind, fork, publication, and execution-target changes are
 impossible from the browser regardless of link strength.
 
-Ask shows one open question and single-line summaries of the others. Choosing
-an option or pressing Enter in a custom answer opens the next unanswered
-question; Submit sends the entire form, including unanswered questions as no
+Ask shows one open question and single-line summaries of the others. For a
+single-select question, choosing an option or pressing Enter in a custom answer
+opens the next unanswered question. A question with `multiSelect: true` instead
+allows several checked options plus optional custom text; toggling or editing
+keeps it open. Clearing custom text leaves selected options intact. Enter on
+custom text matching an offered multi-select label
+commits that option and clears the custom field. Custom text is trimmed; whitespace
+alone is no preference. Submit sends
+the entire form, including unanswered questions as no
 preference. Previous/Next question and the summaries reopen answers for review.
 Tab and Shift-Tab retain normal browser focus traversal instead of skipping
 HTML controls, unlike Emacs's question-navigation bindings. The navigation row
 keeps its space at both ends of the form.
+
+Question descriptors expose the optional `multiSelect` boolean. Atomic response
+`answers` contain strings for single-select questions and arrays of strings for
+multi-select questions, including `[]` for no preference. The host validates
+each answer's shape before changing any state, rejects duplicate multi answers
+and more than one custom value, and orders selected labels by the offered
+options with custom text last. The same submission path settles native and browser
+answers; the first accepted submission wins.
+The shared JSON decoder represents empty arrays, null and false as Lisp nil, so
+these three wire values all mean no preference in a multi-select answer slot.
 
 Option descriptions are visible text, including on touch devices. Focus or
 hover inspects an option's inline sample without selecting it; **Sample** does
@@ -937,6 +954,10 @@ moving behind later requests. When feedback remains available, a changed card
 also retains its open feedback disclosure, text and focused selection without
 stealing focus from the composer. Browser requests read oldest first, so the
 scrolling stack initially exposes the decision that has waited longest.
+For the same questionnaire definition, host answer updates refresh untouched
+questions but preserve locally edited answers, custom drafts, the open question,
+sample inspection and focused selection. Changing the question definitions resets
+that local form; settling the request clears it everywhere.
 
 A refused interaction action is reported to the answering browser through the
 same error boundary as other guest actions: owners receive the actionable host

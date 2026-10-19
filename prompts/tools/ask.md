@@ -16,7 +16,12 @@ Present questions in one form and wait for the user's answers.
   always available, so do not add an "Other" option. Prefer 2-4 useful choices.
 - Mark exactly one option per question with ` (Recommended)` in its label.
   Options can be strings or objects with `label`, `description`, and `sample`.
-  Object options return the selected label.
+  Labels are trimmed and must be unique within their question. Object options
+  return the selected label.
+- Set a question's `multiSelect` to `true` when several answers may apply.
+  It defaults to `false`. Multiple selected labels are returned as a list in
+  the answer text, with optional custom text appended; custom input does not
+  replace the selected options.
 - Use `description` for a short trade-off. Use `sample` when comparing proposed
   output helps the choice; supply it for every option in that question or none.
   The user sees the sample of the option under their cursor below the options.

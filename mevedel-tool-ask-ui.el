@@ -97,12 +97,12 @@ able to tell that from an answered question without reading a nil.")
           (cdr (assoc string-key option)))))))
 
 (defun mevedel-tool-ask-ui--option-label (option)
-  "Return the answer label for OPTION."
+  "Return the trimmed answer label for OPTION."
   (let ((label (if (stringp option)
                    option
                  (mevedel-tool-ask-ui--option-field option :label))))
     (cond
-     ((stringp label) label)
+     ((stringp label) (string-trim label))
      (label (format "%s" label))
      (t (format "%s" option)))))
 
@@ -165,6 +165,8 @@ and is deliberately not reused here."
     (mevedel-tool-ask-ui--state
      (:constructor mevedel-tool-ask-ui--state-create))
   "Mutable state of one Ask questionnaire.
+ANSWERS holds strings for single-select questions, lists of strings for
+multi-select questions, and nil for unanswered questions.
 SAMPLE-SHOWN and SAMPLE-OFFSETS are alists from question index to the
 option its sample panel shows and to the panel's first visible row.
 SAMPLE-CACHE maps sample strings to their fontified lines; SAMPLE-ROWS
@@ -272,6 +274,36 @@ settled the form; nothing may repaint or record into it then."
            :options)
           nil))
 
+(defun mevedel-tool-ask-ui--multi-p (state index)
+  "Return non-nil when question INDEX in STATE allows multiple answers."
+  (eq t (plist-get (nth index (mevedel-tool-ask-ui--state-questions state))
+                  :multiSelect)))
+
+(defun mevedel-tool-ask-ui--normalize-answer (state index answer)
+  "Validate and normalize question INDEX's ANSWER in STATE.
+Single answers are strings; multi answers are lists of strings, ordered
+by offered options followed by at most one custom text.  Blank means no
+preference.  Reject malformed responses before they can settle the form."
+  (if (not (mevedel-tool-ask-ui--multi-p state index))
+      (progn
+        (unless (stringp answer)
+          (user-error "Question %d needs one answer string" (1+ index)))
+        (unless (string-blank-p answer) (string-trim answer)))
+    (unless (and (proper-list-p answer) (cl-every #'stringp answer))
+      (user-error "Question %d needs an array of answer strings" (1+ index)))
+    (let* ((values (delq nil (mapcar (lambda (text)
+                                     (unless (string-blank-p text)
+                                       (string-trim text))) answer)))
+           (labels (mapcar #'mevedel-tool-ask-ui--option-label
+                           (mevedel-tool-ask-ui--question-options state index)))
+           (custom (cl-remove-if (lambda (text) (member text labels)) values)))
+      (unless (= (length values) (length (delete-dups (copy-sequence values))))
+        (user-error "Question %d has duplicate answers" (1+ index)))
+      (when (> (length custom) 1)
+        (user-error "Question %d allows only one custom answer" (1+ index)))
+      (append (cl-remove-if-not (lambda (label) (member label values)) labels)
+              custom))))
+
 (defun mevedel-tool-ask-ui--entry-count (state index)
   "Return the number of focusable entries for question INDEX in STATE."
   (1+ (length (mevedel-tool-ask-ui--question-options state index))))
@@ -307,6 +339,8 @@ Opening is always explicit, so the layout changes only on request."
   "Return the entry selected by question INDEX's answer in STATE."
   (let ((answer (aref (mevedel-tool-ask-ui--state-answers state) index))
         (options (mevedel-tool-ask-ui--question-options state index)))
+    (when (mevedel-tool-ask-ui--multi-p state index)
+      (setq answer (car answer)))
     (when answer
       (or (cl-position answer options
                        :test #'equal
@@ -338,14 +372,18 @@ The search wraps around to questions before FROM."
               :question))
             (answer (aref (mevedel-tool-ask-ui--state-answers state) index)))
         (insert (format "Q%d: %s\n" (1+ index) question))
-        (insert (format "A%d: %s\n" (1+ index)
-                        (or answer mevedel-tool-ask-ui--no-preference)))
-        (when-let* ((answer)
-                    (sample
-                     (mevedel-tool-ask-ui--selected-sample
-                      answer
-                      (mevedel-tool-ask-ui--question-options state index))))
-          (insert (format "Sample shown for A%d:\n%s\n" (1+ index) sample)))
+        (if (and answer (mevedel-tool-ask-ui--multi-p state index))
+            (insert (format "A%d:\n%s\n" (1+ index)
+                            (mapconcat (lambda (text) (concat "- " text)) answer "\n")))
+          (insert (format "A%d: %s\n" (1+ index)
+                          (or answer mevedel-tool-ask-ui--no-preference))))
+        (dolist (label (if (listp answer) answer (list answer)))
+          (when-let* ((label)
+                      (sample (mevedel-tool-ask-ui--selected-sample
+                               label (mevedel-tool-ask-ui--question-options state index))))
+            (insert (if (mevedel-tool-ask-ui--multi-p state index)
+                        (format "Sample shown for A%d (%s):\n%s\n" (1+ index) label sample)
+                      (format "Sample shown for A%d:\n%s\n" (1+ index) sample)))))
         (insert "\n")))
     (buffer-string)))
 
@@ -374,7 +412,9 @@ The search wraps around to questions before FROM."
                (list (cons "description" description)))
              (when sample (list (cons "sample" sample))))))
         (mevedel-tool-ask-ui--question-options state index)))))
-    (when answer (list (cons "answer" answer))))))
+    (if (mevedel-tool-ask-ui--multi-p state index)
+        (list (cons "multiSelect" t) (cons "answer" (vconcat answer)))
+      (when answer (list (cons "answer" answer)))))))
 
 (defun mevedel-tool-ask-ui--sync-sample (state entry)
   "Show the sample of ENTRY, the row at point, in its question's panel.
@@ -682,28 +722,46 @@ A settled form ignores every action."
             ((integerp option)
              (if (mevedel-tool-ask-ui--custom-entry-p state question option)
                  (mevedel-tool-ask-ui--dispatch state 'custom)
-               (mevedel-tool-ask-ui--dispatch
-                state 'record
-                (cons question
-                      (mevedel-tool-ask-ui--option-label
-                       (mevedel-tool-ask-ui--entry-option state identity))))))))
+               (let* ((label (mevedel-tool-ask-ui--option-label
+                              (mevedel-tool-ask-ui--entry-option state identity)))
+                      (answer (aref (mevedel-tool-ask-ui--state-answers state) question)))
+                 (mevedel-tool-ask-ui--dispatch
+                  state 'record
+                  (cons question
+                        (if (mevedel-tool-ask-ui--multi-p state question)
+                            (if (member label answer)
+                                (remove label answer)
+                              (append answer (list label)))
+                          label))))))))
           ('custom
            (when (and (integerp question)
                       (mevedel-tool-ask-ui--question-open-p state question))
-             (let ((answer
-                    (read-string
-                     (format "Answer %d: " (1+ question))
-                     (aref (mevedel-tool-ask-ui--state-answers state) question))))
-               (unless (string-blank-p answer)
+             (let* ((multi (mevedel-tool-ask-ui--multi-p state question))
+                    (old (aref (mevedel-tool-ask-ui--state-answers state) question))
+                    (options (mevedel-tool-ask-ui--question-options state question))
+                    (custom (and multi (cl-find-if-not
+                                        (lambda (text) (mevedel-tool-ask-ui--option-by-label text options))
+                                        old)))
+                    (answer (read-string (format "Answer %d: " (1+ question))
+                                         (if multi custom old))))
+               (when (or multi (not (string-blank-p answer)))
                  (mevedel-tool-ask-ui--dispatch state 'record
-                                                (cons question answer))))))
+                  (cons question (if multi
+                                     (delete-dups
+                                      (append (remove custom old)
+                                              (unless (string-blank-p answer)
+                                                (list (string-trim answer)))))
+                                   answer)))))))
           ('record
            (pcase-let ((`(,answered . ,answer) value))
-             (aset (mevedel-tool-ask-ui--state-answers state) answered answer)
-             (let ((next (mevedel-tool-ask-ui--next-unanswered state answered)))
-               (setf (mevedel-tool-ask-ui--state-open state) next)
-               (mevedel-tool-ask-ui--refresh
-                state t (if next (cons next 0) 'submit)))))
+             (aset (mevedel-tool-ask-ui--state-answers state) answered
+                   (mevedel-tool-ask-ui--normalize-answer state answered answer))
+             (if (mevedel-tool-ask-ui--multi-p state answered)
+                 (mevedel-tool-ask-ui--refresh state t)
+               (let ((next (mevedel-tool-ask-ui--next-unanswered state answered)))
+                 (setf (mevedel-tool-ask-ui--state-open state) next)
+                 (mevedel-tool-ask-ui--refresh
+                  state t (if next (cons next 0) 'submit))))))
           ('submit
            (mevedel--prompt--settle
             (mevedel-tool-ask-ui--state-overlay state)
@@ -716,14 +774,14 @@ A settled form ignores every action."
            (mevedel-abort))
           ('scroll (mevedel-tool-ask-ui--sample-scroll state value))
           ('remote-answer
-           (when (= (length value) (mevedel-tool-ask-ui--state-count state))
-             (cl-loop for answer in value
-                      for index from 0
-                      do (aset
-                          (mevedel-tool-ask-ui--state-answers state)
-                          index
-                          (unless (string-blank-p answer) answer)))
-             (mevedel-tool-ask-ui--dispatch state 'submit))))))))
+           (unless (and (proper-list-p value)
+                        (= (length value) (mevedel-tool-ask-ui--state-count state)))
+             (user-error "Answer every question in the questionnaire response"))
+           (let ((answers (cl-loop for answer in value for index from 0
+                                   collect (mevedel-tool-ask-ui--normalize-answer
+                                            state index answer))))
+             (setf (mevedel-tool-ask-ui--state-answers state) (vconcat answers)))
+           (mevedel-tool-ask-ui--dispatch state 'submit)))))))
 
 (defun mevedel-tool-ask-ui--keymap (state)
   "Return the interaction keymap controlling STATE."
@@ -769,13 +827,16 @@ A settled form ignores every action."
          (customp (mevedel-tool-ask-ui--custom-entry-p state index entry))
          (option (unless customp (nth entry options)))
          (answer (aref (mevedel-tool-ask-ui--state-answers state) index))
+         (multi (mevedel-tool-ask-ui--multi-p state index))
+         (answers (if multi answer (and answer (list answer))))
+         (custom (and customp
+                      (cl-find-if-not
+                       (lambda (text) (mevedel-tool-ask-ui--option-by-label text options))
+                       answers)))
          (selectedp
-          (and answer
-               (if customp
-                   (not (mevedel-tool-ask-ui--option-by-label
-                         answer options))
-                 (equal answer
-                        (mevedel-tool-ask-ui--option-label option)))))
+          (if customp
+              custom
+            (member (mevedel-tool-ask-ui--option-label option) answers)))
          (description
           (and option (mevedel-tool-ask-ui--option-description option)))
          (lines
@@ -783,8 +844,8 @@ A settled form ignores every action."
            (concat
             "     "
             (if selectedp
-                (propertize "●" 'font-lock-face 'success)
-              (propertize "○" 'font-lock-face 'shadow))
+                (propertize (if multi "☑" "●") 'font-lock-face 'success)
+              (propertize (if multi "☐" "○") 'font-lock-face 'shadow))
             " "
             (propertize
              (if customp "c" (number-to-string (1+ entry)))
@@ -792,7 +853,15 @@ A settled form ignores every action."
             "  "
             (if customp
                 (propertize
-                 (concat mevedel-tool-ask-ui--custom-label "…")
+                 (concat
+                  mevedel-tool-ask-ui--custom-label "…"
+                  (when (and multi custom)
+                    (concat " "
+                            (truncate-string-to-width
+                             (replace-regexp-in-string "[ \t\n]+" " " custom)
+                             (max 1 (- (mevedel-tool-ask-ui--wrap-width state)
+                                       12 (string-width mevedel-tool-ask-ui--custom-label)))
+                             nil nil "…"))))
                  'font-lock-face 'shadow)
               (mevedel-tool-ask-ui--format-option option))))))
     (when description
@@ -806,6 +875,7 @@ A settled form ignores every action."
                        'font-lock-face 'shadow))))))
     (list (propertize (string-join lines "\n")
                       'mevedel-ask-entry (cons index entry)
+                      'help-echo custom
                       'wrap-prefix "          "
                       'mouse-face 'highlight))))
 
@@ -829,7 +899,9 @@ A settled form ignores every action."
               gutter
               (propertize
                (replace-regexp-in-string "\n" "\n     " (format "%s" question) t t)
-               'font-lock-face 'bold)))
+               'font-lock-face 'bold)
+              (when (mevedel-tool-ask-ui--multi-p state index)
+                (propertize " (select any)" 'font-lock-face 'shadow))))
            'wrap-prefix "     ")))
     (propertize
      (if collapsed
@@ -860,7 +932,9 @@ question is opened.  Below about 25 columns the line still wraps."
                  (string-trim (replace-regexp-in-string
                                "[ \t\n]+" " " (format "%s" text)))))
          (text (funcall flat question))
-         (reply (and answer (funcall flat answer)))
+         (reply (and answer (funcall flat (if (listp answer)
+                                              (string-join answer ", ")
+                                            answer))))
          (room (- (mevedel-tool-ask-ui--form-width state) 1
                   (string-width gutter)))
          (reply-room
@@ -888,7 +962,7 @@ Question jumps are only advertised when there is another question."
           (when (> (mevedel-tool-ask-ui--state-count state) 1)
             (concat (mevedel-tool-ask-ui--key "TAB") " question  "))
           (mevedel-tool-ask-ui--key "1-9") " focus  "
-          (mevedel-tool-ask-ui--key "RET") " choose  "
+          (mevedel-tool-ask-ui--key "RET") " choose/toggle  "
           (mevedel-tool-ask-ui--key "c") " custom  "
           (mevedel-tool-ask-ui--key "C-c C-c") " submit  "
           (mevedel-tool-ask-ui--key "q") " cancel\n")))

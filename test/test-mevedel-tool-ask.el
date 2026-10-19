@@ -81,7 +81,30 @@
     (should (string-prefix-p "Error:" (plist-get delivered :result))))
 
   :doc "rejects a missing questions argument"
-  (should-error (mevedel-tool-ask--ask #'ignore nil) :type 'error))
+  (should-error (mevedel-tool-ask--ask #'ignore nil) :type 'error)
+
+  :doc "multiSelect is an optional boolean, not a truthy mode switch"
+  (progn
+    (dolist (value '(t nil :json-false))
+      (mevedel-tool-ask--validate
+       (vector (list :question "Which?" :options ["A"] :multiSelect value))))
+    (dolist (value '("true" 1 []))
+      (should-error
+       (mevedel-tool-ask--validate
+        (vector (list :question "Which?" :options ["A"] :multiSelect value)))))))
+
+(mevedel-deftest mevedel-tool-ask--validate ()
+  ,test
+  (test)
+  :doc "option labels must be unique after trimming without mutating model arguments"
+  (progn
+    (dolist (options '(["A" "A"] [" A " (:label "A")] [(:label "A ") (:label " A")]))
+      (should-error (mevedel-tool-ask--validate
+                     (vector (list :question "Which?" :options options)))))
+    (let* ((questions [(:question "Which?" :options [" A " (:label " B ")])])
+           (before (copy-tree questions t)))
+      (mevedel-tool-ask--validate questions)
+      (should (equal before questions)))))
 
 (mevedel-deftest mevedel-tool-ask--render ()
   ,test
@@ -117,6 +140,10 @@
     (mevedel-tool-ask-register)
     (let ((tool (mevedel-tool-get "Ask")))
       (should tool)
+      (should (equal '(:type boolean :description "Allow multiple answers; defaults to false.")
+                     (plist-get (plist-get (plist-get
+                                           (nthcdr 4 (assq 'questions (mevedel-tool-args tool)))
+                                           :items) :properties) :multiSelect)))
       (should (eq #'mevedel-tool-ask--ask
                   (mevedel-tool-handler tool)))
       (should (equal '((success . mevedel-tool-ask--render))

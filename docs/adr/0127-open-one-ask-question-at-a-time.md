@@ -6,9 +6,13 @@ Status: accepted
 
 An Ask questionnaire shows every question, but only one is open: its full
 text, options, and sample panel. Every other question is a single line,
-answered ones ending in `→ answer`. The first question starts open. Answering
-closes it and opens the next unanswered question, or moves to Submit when none
-is left. `RET` or a click on a closed question, or `TAB`/`S-TAB`, opens one.
+answered ones ending in `→ answer`. The first question starts open. Answering a
+single-select question closes it and opens the next unanswered question, or
+moves to Submit when none is left. A question with `multiSelect: true` instead
+uses checkboxes: `RET`/click toggles an option and keeps it open, so further
+choices remain available. Custom text supplements those choices and editing or
+clearing it does not remove selected options. `RET` or a click on a closed
+question, or `TAB`/`S-TAB`, opens one.
 Moving point never opens or closes anything, so cursor motion cannot change
 the form's layout.
 
@@ -26,6 +30,17 @@ focus traversal so every option, sample action, and text input stays keyboard
 accessible. Both navigation controls retain their slots when disabled. The
 browser measures the tallest open panel once per width, not while typing or
 moving focus, and leaves unchanged host replays intact.
+Changed host answers refresh untouched questions only: locally edited answers,
+custom drafts, the open question, inspected samples and focused selection survive
+until the first final submission settles the form. The same question definition
+is required; changing its questions or options starts a fresh local form. This
+follows the other live surfaces' rule that publication never erases a draft.
+Multi-select browser choices likewise stay open; Previous/Next explicitly leave
+the question. Single answers remain strings on the wire, multi answers are
+arrays of strings, and an empty array means no preference. The host validates
+the entire response against each question's mode before recording any answer.
+Summaries join multiple labels on their existing single line, and submission
+lists choices in offered order followed by optional custom text.
 
 ## Rationale
 
@@ -73,3 +88,12 @@ whole form and the transcript above it.
   the form 2 rows taller than any other question, measured as 19 against 17
   rows. Across realistic descriptions at widths 50-160, about 4% of wrapped
   lines change their row count between the two widths.
+
+## Decision history
+
+The form initially allowed one answer per question on both surfaces. During the
+browser collaboration review, the user explicitly requested multi-select in
+both native and browser Ask. The optional per-question boolean adds that choice
+without another form mode or review page. Unlike single-select auto-advance,
+multi-select must remain open after a toggle so answering does not conceal the
+remaining choices. The one-open-question and fixed-height decisions are unchanged.

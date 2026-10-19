@@ -755,9 +755,13 @@ previous question, Submit being the last stop; `1`–`9` focus that option of th
 open question, from its heading too.
 `RET` or a click chooses the entry, including when point is on its description,
 and opens a closed question on its current answer. `c` edits a custom answer
-in the minibuffer, retaining the previous answer as the initial text. Choosing
-an answer opens the next unanswered question, then moves to the final Submit
-row. In the narrowest-capacity window, the form keeps one height while pending,
+in the minibuffer, retaining the previous answer as the initial text. A question
+can set `multiSelect: true` (default false): its options become checkboxes,
+`RET`/click toggles them without leaving the question, and custom text is kept
+alongside the selected labels. Editing custom text replaces only that text;
+clearing it removes only the custom answer. `TAB`/`S-TAB` still navigate questions.
+Single-select answers open the next unanswered question, then move to the final
+Submit row. In the narrowest-capacity window, the form keeps one height while pending,
 the tallest any open question needs, with blank lines above Submit making up
 the difference. Rows are counted using each window's own continuation-column
 policy, reserving that column when it has no right fringe. A wider window can
@@ -768,6 +772,11 @@ preference explicitly. `q`/`C-g` cancel only the questionnaire, while `C-c C-k`
 also aborts
 the run. The form keeps one progress count beside Submit and one keyboard hint
 line, with hanging indentation for wrapped questions and descriptions.
+Multi-select answers are listed in offered-option order, followed by at most one
+custom answer, and include the samples of every selected sample-bearing option.
+An empty selection means no preference, never authorization.
+Option labels are trimmed consistently for display, answers and sample matching;
+duplicate labels after trimming are rejected before the questionnaire is shown.
 
 A question whose options carry samples ends in a sample panel, rendered as a
 source block titled with the option it shows. The panel shows the

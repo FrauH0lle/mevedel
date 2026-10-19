@@ -18,6 +18,10 @@ sample-bearing option point visited last. Moving onto an option without a
 sample, or out of the question, leaves the panel unchanged, and only reaching a
 different sample-bearing option repaints the form. Longer samples page with
 `C-v`/`M-v` while point is in their open question.
+Inspection remains independent of selection for multi-select questions too:
+checking or unchecking an option does not erase the last inspected sample.
+Submission includes the sample for each selected sample-bearing option, labelled
+with its answer, rather than only the most recently inspected sample.
 
 ## Rationale
 

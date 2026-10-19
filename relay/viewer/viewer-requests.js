@@ -11,9 +11,18 @@
       }
     }
 
-    function questionnaire(card, frame) {
+    function questionnaire(card, frame, draft) {
       const questions = frame.questions;
-      const answers = questions.map(q => typeof q.answer === 'string' ? q.answer : '');
+      const definition = JSON.stringify(questions.map(({answer, ...question}) => question));
+      if (draft && draft.definition !== definition) draft = null;
+      const dirty = new Set(draft ? draft.dirty : []);
+      const answers = questions.map(q => q.multiSelect
+        ? (Array.isArray(q.answer) ? q.answer.slice() : [])
+        : (typeof q.answer === 'string' ? q.answer : ''));
+      dirty.forEach(index => { answers[index] = draft.answers[index]; });
+      const answered = answer => Array.isArray(answer) ? answer.length > 0 : Boolean(answer);
+      const selected = (index, label) => Array.isArray(answers[index])
+        ? answers[index].includes(label) : answers[index] === label;
       const form = el('div', 'questionnaire');
       const rows = [];
       let open = 0;
@@ -30,12 +39,13 @@
           row.heading.hidden = i === open;
           row.panel.inert = i !== open;
           row.panel.setAttribute('aria-hidden', i === open ? 'false' : 'true');
-          row.summaryAnswer.textContent = answers[i] ? ` → ${answers[i]}` : '';
-          row.summaryAnswer.hidden = !answers[i];
+          const summary = Array.isArray(answers[i]) ? answers[i].join(', ') : answers[i];
+          row.summaryAnswer.textContent = answered(answers[i]) ? ` → ${summary}` : '';
+          row.summaryAnswer.hidden = !answered(answers[i]);
           row.heading.title = `${i + 1}. ${questions[i].question || ''}`
             + row.summaryAnswer.textContent;
           row.buttons.forEach((button, j) => button.setAttribute('aria-pressed',
-            !row.custom.value && questions[i].options[j].label === answers[i] ? 'true' : 'false'));
+            selected(i, questions[i].options[j].label) ? 'true' : 'false'));
         });
         previous.disabled = open === 0;
         next.disabled = open === null || open === rows.length - 1;
@@ -47,7 +57,7 @@
 
       function advance(index) {
         const unanswered = questions.map((_, step) => (index + step + 1) % questions.length)
-          .find(i => !answers[i]);
+          .find(i => !answered(answers[i]));
         show(unanswered === undefined ? null : unanswered);
       }
 
@@ -62,8 +72,23 @@
         const panel = el('div', 'question-panel');
         panel.append(el('p', 'question-text', `${index + 1}. ${q.question || ''}`));
         const options = Array.isArray(q.options) ? q.options : [];
+        const chosen = new Set(q.multiSelect ? (dirty.has(index) ? draft.chosen[index]
+          : answers[index].filter(label => options.some(option => option.label === label))) : []);
+        if (q.multiSelect) {
+          panel.append(el('p', 'question-description',
+            'Choose any options, then Next question or Submit answers.'));
+        }
+        function updateMulti() {
+          const text = custom.value.trim();
+          const labels = options.filter(option => chosen.has(option.label) || option.label === text)
+            .map(option => option.label);
+          if (text && !labels.includes(text)) labels.push(text);
+          answers[index] = labels;
+          show(open, false);
+        }
         const sampleBox = el('div', 'question-samples');
         const samples = new Map();
+        let inspected;
         options.forEach(option => {
           if (typeof option.sample !== 'string' || !option.sample) return;
           const sample = el('div', 'question-sample-option');
@@ -76,12 +101,14 @@
         });
         function inspect(option) {
           if (!samples.has(option)) return;
+          inspected = options.indexOf(option);
           samples.forEach((sample, entry) => {
             sample.inert = entry !== option;
             sample.setAttribute('aria-hidden', entry === option ? 'false' : 'true');
           });
         }
-        inspect(options.find(option => option.label === answers[index] && samples.has(option))
+        inspect((draft && options[draft.inspected[index]])
+          || options.find(option => selected(index, option.label) && samples.has(option))
           || [...samples.keys()][0]);
         const buttons = options.map(option => {
           const row = el('div', 'question-option');
@@ -90,9 +117,18 @@
           button.addEventListener('focus', () => inspect(option));
           button.addEventListener('pointerenter', () => inspect(option));
           button.addEventListener('click', () => {
-            answers[index] = option.label || '';
-            custom.value = '';
-            advance(index);
+            dirty.add(index);
+            if (q.multiSelect) {
+              if (selected(index, option.label)) {
+                chosen.delete(option.label);
+                if (custom.value.trim() === option.label) custom.value = '';
+              } else chosen.add(option.label);
+              updateMulti();
+            } else {
+              answers[index] = option.label || '';
+              custom.value = '';
+              advance(index);
+            }
           });
           row.append(button);
           if (option.description) row.append(el('span', 'question-description', option.description));
@@ -112,24 +148,35 @@
         custom.autocomplete = 'off';
         custom.placeholder = 'Custom answer…';
         custom.setAttribute('aria-label', `Custom answer ${index + 1}`);
-        if (answers[index] && !options.some(option => option.label === answers[index])) {
+        if (q.multiSelect) {
+          custom.value = answers[index].find(label => !options.some(option => option.label === label)) || '';
+        } else if (answers[index] && !options.some(option => option.label === answers[index])) {
           custom.value = answers[index];
         }
+        if (dirty.has(index)) custom.value = draft.custom[index];
         custom.addEventListener('input', () => {
-          answers[index] = custom.value;
-          buttons.forEach(button => button.setAttribute('aria-pressed', 'false'));
+          dirty.add(index);
+          if (q.multiSelect) updateMulti();
+          else {
+            answers[index] = custom.value.trim();
+            show(open, false);
+          }
         });
         custom.addEventListener('keydown', event => {
           if (event.key === 'Enter' && !event.isComposing) {
             event.preventDefault();
-            advance(index);
+            if (q.multiSelect && options.some(option => option.label === custom.value.trim())) {
+              chosen.add(custom.value.trim());
+              custom.value = '';
+              updateMulti();
+            } else if (!q.multiSelect) advance(index);
           }
         });
         panel.append(custom);
         if (samples.size) panel.append(sampleBox);
         block.append(heading, panel);
         form.append(block);
-        rows.push({heading, summaryAnswer, panel, buttons, custom});
+        rows.push({heading, summaryAnswer, panel, buttons, custom, chosen, inspected: () => inspected});
       });
       previous.addEventListener('click', () => show(open === null ? rows.length - 1 : open - 1));
       next.addEventListener('click', () => show(open + 1));
@@ -144,7 +191,23 @@
         submitRow.append(dismiss);
       }
       card.append(form, controls, submitRow);
-      show(0, false);
+      show(draft ? draft.open : 0, false);
+      // Host answer updates merge into untouched questions only. Keep local
+      // edits, navigation and focus until the atomic response settles.
+      card.questionDraft = () => ({definition, dirty: [...dirty], answers,
+        custom: rows.map(row => row.custom.value), open,
+        chosen: rows.map(row => [...row.chosen]),
+        inspected: rows.map(row => row.inspected()),
+        focus: [...card.querySelectorAll('button,input')].indexOf(document.activeElement),
+        selection: document.activeElement && document.activeElement.tagName === 'INPUT'
+          ? [document.activeElement.selectionStart, document.activeElement.selectionEnd,
+            document.activeElement.selectionDirection] : null});
+      if (draft && draft.focus >= 0) card.restoreQuestionFocus = () => {
+        const node = card.querySelectorAll('button,input')[draft.focus];
+        if (!node) return;
+        node.focus({preventScroll: true});
+        if (draft.selection && node.tagName === 'INPUT') node.setSelectionRange(...draft.selection);
+      };
       // Inactive panels remain measurable but inert. Reserve the tallest open
       // question plus the other summaries once per width, never on focus/input.
       let width;
@@ -191,7 +254,7 @@
         card.append(card.bodyEl);
       }
       if (Array.isArray(frame.questions) && frame.questions.length) {
-        questionnaire(card, frame);
+        questionnaire(card, frame, existing && existing.questionDraft && existing.questionDraft());
       } else {
         const controls = el('div', 'request-controls');
         (Array.isArray(frame.options) ? frame.options : []).forEach(option => {
@@ -229,6 +292,7 @@
         if (existing.dispose) existing.dispose();
         existing.replaceWith(card);
       } else requests.append(card);
+      if (card.restoreQuestionFocus) card.restoreQuestionFocus();
       if (scrolled && card.bodyEl) card.bodyEl.scrollTop = scrolled;
       if (feedbackFocused && card.feedbackEl) {
         card.feedbackEl.focus({preventScroll: true});

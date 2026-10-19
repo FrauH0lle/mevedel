@@ -691,6 +691,32 @@ callback.  Each affected guest receives one nonterminal batch notice."
                            (length entries)
                            (if (= 1 (length entries)) "request" "requests"))))))))))
 
+(defun mevedel-collaboration--questionnaire-answers (answers)
+  "Normalize ANSWERS atomically within the shared guest input budget.
+Each answer is text or a list of selected texts.  Return nil for invalid
+input; the questionnaire handler validates the shape for each question."
+  (when (and (listp answers) answers)
+    (catch 'invalid
+      (let ((bytes 0))
+        (cl-labels
+            ((text (value)
+               (unless (and (stringp value)
+                            (<= (string-bytes value)
+                                mevedel-collaboration--max-prompt-bytes))
+                 (throw 'invalid nil))
+               (let ((trimmed (string-trim value)))
+                 (cl-incf bytes (string-bytes trimmed))
+                 trimmed)))
+          (let ((normalized
+                 (mapcar (lambda (answer)
+                           (cond
+                            ((stringp answer) (text answer))
+                            ((listp answer) (mapcar #'text answer))
+                            (t (throw 'invalid nil))))
+                         answers)))
+            (when (<= bytes mevedel-collaboration--max-prompt-bytes)
+              normalized)))))))
+
 (defun mevedel-collaboration--handle-ui-response (room peer frame)
   "Settle the ui-request answered by writable guest PEER through FRAME.
 
@@ -732,27 +758,14 @@ answer can execute the same path the host key binding would."
                  ((and (eq (plist-get frame :cancel) t)
                        (functionp cancel-handler))
                   cancel-handler)
-                 ;; A questionnaire response is submitted atomically.  A
-                 ;; blank string is the Ask tool's explicit no-preference.
+                 ;; Single answers are strings; multi-select answers are
+                 ;; string lists.  Blank strings/empty lists mean no preference.
                  ((and answers
                        (functionp answer-handler)
-                       (listp answers)
-                       (let ((trimmed
-                              (mapcar
-                               (lambda (answer)
-                                 (and
-                                  (stringp answer)
-                                  (<= (string-bytes answer)
-                                      mevedel-collaboration--max-prompt-bytes)
-                                  (string-trim answer)))
-                               answers)))
-                         (and (not (memq nil trimmed))
-                              ;; Every answer lands in one tool result, so
-                              ;; the set shares the budget its parts pass.
-                              (<= (apply #'+ (mapcar #'string-bytes trimmed))
-                                  mevedel-collaboration--max-prompt-bytes)
-                              (lambda ()
-                                (funcall answer-handler trimmed))))))
+                       (when-let* ((normalized
+                                    (mevedel-collaboration--questionnaire-answers
+                                     answers)))
+                         (lambda () (funcall answer-handler normalized)))))
                  ((and feedback-handler
                        (mevedel-collaboration--guest-text feedback))
                   ;; A function handler owns the whole feedback flow, for
