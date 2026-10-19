@@ -68,6 +68,13 @@ sweep only after completion, never after cancellation or a partial plan.
 Activity classification and insertion also share decoded mailbox entries within
 their existing per-run entry table instead of stripping the same delivery two
 or three times. Source changes and the observing agent identity change that key.
+Projection cleanup returns unchanged text directly when no generated block or
+marker matches, rather than copying it through replacement strings or temporary
+buffers. Matching blocks keep their existing provenance, case-folding, malformed
+block and whitespace rules. A single user-text part needs no joining copy.
+Grouping also skips the unused scaffolding cleanup of a confirmed audit-only
+segment; its audit verdict already determines attachment and preceding-type
+preservation. Other ignored segments still require scaffolding classification.
 A tool/reasoning/delivery activity run remains mutable until its surrounding
 transcript boundary closes it; an individual completed call can still join a
 growing group. Grouped rows retain their individual source identities across
@@ -2046,3 +2053,44 @@ run time since the previous heartbeat. Other displays and frameless Emacs
 keep 100 ms, where a wakeup that changes nothing does not redraw. Telemetry
 loads the native module only on PGTK, so an X11, terminal or headless Emacs
 never compiles it for sampling or reports it missing.
+
+### October 19, 2026: remove allocation before adding caches
+
+After retaining the tool-rendering working set, a restored private copy of the
+1.79-million-character transcript still allocated about 32.4 MB per complete
+projection. Inclusive memory-profile stacks attributed 58.9 MB across twelve
+projections to user-text extraction, including unconditional replacement and
+temporary-buffer copies. No-match cleanup now returns its input; matching cleanup keeps its
+existing rules. A 4.79-million-character agent inspector also cleaned audit-only
+segments for a scaffolding verdict that grouping did not use. Evaluating its
+existing audit verdict first removes that work without a new cache or a weaker
+trust check.
+
+Four alternating compiled runs per variant, twelve updates each, used a 64 MiB
+GC threshold and compared against the post-working-set sources. Median estimated
+allocation and elapsed time were:
+
+| Projection | Allocated MB before / after | Milliseconds before / after |
+| --- | ---: | ---: |
+| Complete root | 32.424 / 29.410 | 211.7 / 195.6 |
+| Root activity update | 2.501 / 2.115 | 12.74 / 12.26 |
+| Steady root text update | 0.085 / 0.085 | 1.67 / 1.74 |
+| First expanded-inspector reconciliation | 103.303 / 82.286 | 408.3 / 389.2 |
+
+MB are decimal estimates derived from `memory-use-counts`, not retained heap.
+Across 48 complete-root updates per variant, collections fell from twenty
+(902 ms total) to sixteen (756 ms); activity updates fell from four (160 ms)
+to none. The inspector's four first reconciliations still collected once each,
+181 / 175 ms total. Every history-text hash matched and every root composer
+retained its multiline draft beginning with `>`.
+
+This does not establish a steady inspector speedup. Four longer alternating
+runs, 119 steady updates each, measured medians 13.00 / 14.27 ms with overlapping
+per-run medians; allocation stayed near 0.221 MB. CPU profiles instead favored
+the new code slightly and put about 60% of steady cost in reader-anchor recovery:
+`mevedel-view--render-anchor-run-end`, `mevedel-view--render-anchor-position`
+and `mevedel-view--position-render-anchor` repeatedly traverse property runs
+through `next-single-property-change`. Cleanup accounted for practically none
+of those steady samples. That remaining cost was not redesigned here. Batch
+replays exclude graphical redisplay and a larger live heap; they do not identify
+the original recurring scheduled-render stall's exact trigger.

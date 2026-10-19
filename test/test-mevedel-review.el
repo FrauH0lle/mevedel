@@ -1361,6 +1361,35 @@
   (let ((text "Visible\n\n<user_action>\n  <action>other</action>\n</user_action>\n\nStill visible"))
     (should (equal text (mevedel-review-strip-user-action-blocks text)))))
 
+(mevedel-deftest mevedel-review-strip-user-action-blocks/no-op ()
+  ,test
+  (test)
+  :doc "plain text retains identity and trimming preserves properties"
+  (let* ((case-fold-search nil)
+         (text (propertize "Visible text" 'face 'bold)))
+    (should (eq text (mevedel-review-strip-user-action-blocks text)))
+    (should (equal-including-properties
+             text (mevedel-review-strip-user-action-blocks
+                   (concat " \n" text "\t")))))
+  :doc "matching and incomplete blocks retain their cleanup semantics"
+  (let ((case-fold-search t))
+    (with-temp-buffer
+      (setq-local case-fold-search nil)
+      (should (equal "Visible" (mevedel-review-strip-user-action-blocks
+                               "<USER_ACTION><ACTION>REVIEW</ACTION></USER_ACTION>\nVisible")))
+      (should (equal "<user_action>unfinished"
+                     (mevedel-review-strip-user-action-blocks
+                      " <user_action>unfinished "))))))
+
+(mevedel-deftest mevedel-review-strip-user-action-blocks/default-case-folding ()
+  (let ((old (default-value 'case-fold-search))
+        (text "<USER_ACTION><ACTION>REVIEW</ACTION></USER_ACTION>"))
+    (unwind-protect
+        (progn
+          (set-default 'case-fold-search nil)
+          (should (eq text (mevedel-review-strip-user-action-blocks text))))
+      (set-default 'case-fold-search old))))
+
 (provide 'test-mevedel-review)
 
 ;;; test-mevedel-review.el ends here
