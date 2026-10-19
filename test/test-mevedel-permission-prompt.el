@@ -623,7 +623,7 @@
         (parent-active nil))
     (unwind-protect
         (with-temp-buffer
-          (let ((target (current-buffer)) captured-body entry)
+          (let ((target (current-buffer)) captured-body captured-remote entry)
             (cl-letf (((symbol-function
                         'mevedel-side-conversation-parent-active-p)
                        (lambda (&optional buffer)
@@ -648,11 +648,17 @@
                       (make-overlay (point-min) (point-min))))
                    ((symbol-function 'mevedel--prompt--register-canceller)
                     #'ignore))
-                (mevedel-permission--prompt-async-with-content
-                 "Body\n" nil #'ignore nil entry t t))
+                (setq captured-remote
+                      (overlay-get
+                       (mevedel-permission--prompt-async-with-content
+                        "Body\n" nil #'ignore nil entry t t)
+                       'mevedel--remote)))
               (should
                (string-match-p "parent request is still active"
                                captured-body))
+              (should
+               (string-match-p "parent request is still active"
+                               (plist-get captured-remote :body)))
               (should (plist-get entry
                                  :parent-active-warning-shown-p)))))
       (kill-buffer side-buffer)))

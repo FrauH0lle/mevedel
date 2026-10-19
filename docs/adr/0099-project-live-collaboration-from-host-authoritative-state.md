@@ -46,7 +46,9 @@ its module. Numeric option IDs are nonnegative indices into the offered list.
 Attachments have allowlisted types and host-generated filenames. Browser input
 uses the ordinary pending-input path; guest attribution is visible to users but
 excluded from model context. Browser permissions are one-shot, not a way to
-install reusable rules. Save, Rewind, Fork, lease transfer, publication, and
+install reusable rules. Their cards preserve native warnings, including the
+concurrency risk of a side-conversation mutation while its parent is active.
+Save, Rewind, Fork, lease transfer, publication, and
 execution-target changes remain host operations.
 
 The workspace lobby lets writable guests open listed sessions through the

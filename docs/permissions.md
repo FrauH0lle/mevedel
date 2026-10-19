@@ -679,10 +679,12 @@ The preview elides a Bash command longer than
 `mevedel-permission-command-display-limit` (400 characters) and an Eval
 expression longer than `mevedel-eval-expression-display-limit` (8 lines).
 The `mevedel--remote` descriptor a browser collaborator reads is built from the
-complete card, independent of local folding -- a guest has no `TAB` to press
-and must not approve what it cannot see. It includes the admission mode, approval
+complete card, independent of local folding -- the native expansion binding
+does not control the browser, which must not approve what it cannot see. It includes the admission mode, approval
 cause, warnings and selected resource scope, including directory selections on
-one-shot cards without remembering controls.
+one-shot cards without remembering controls. A side-conversation mutation also
+carries the warning that its parent request is still active; the browser and
+Emacs disclose the same concurrency risk before approval.
 
 `mevedel-bash-policy.el` supplies Bash classification and reusable rule patterns. `mevedel-tool-exec-permission.el` combines that policy
 with the generic permission chain, persists approved authority, and adapts

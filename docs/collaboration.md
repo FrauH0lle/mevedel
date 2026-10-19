@@ -930,6 +930,11 @@ diagnostic, while full-link guests receive a redacted notice. Rejection does not
 pretend that the pending request was approved. Option IDs must name a nonnegative
 offered option; malformed IDs cannot select the first choice accidentally.
 
+Permission cards include the same warnings as Emacs, including a
+side-conversation mutation's still-active parent. Their full operation and
+authority details remain available regardless of whether the host folded its
+native card. Remote permission outcomes remain one-shot only.
+
 ## Commands, skills, and tool display
 
 A writable guest's welcome also publishes the invocation roster its link
