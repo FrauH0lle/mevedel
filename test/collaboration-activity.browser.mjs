@@ -81,7 +81,8 @@ test('source navigation loads exactly the host-located archive', async () => {
         send: frame => { window.sourceSent.push(frame); return Promise.resolve(true); },
         renderRecord: record => window.mevedelTranscriptRenderer.renderRecord(record)});
       window.sourceHistory.connection(true);
-      window.sourceHistory.handle({t: 'history-index', currentSegment: 4, records: [], final: true});
+      window.sourceHistory.handle({t: 'history-index', currentSegment: 4, final: true,
+        records: [{kind: 'chat', number: 1, title: 'Work', firstSegment: 1, lastSegment: 4}]});
       window.sourceReveal = window.sourceHistory.reveal(2, 'source-two');
     });
     assert.equal(await page.evaluate(() => window.sourceSent.length), 1);

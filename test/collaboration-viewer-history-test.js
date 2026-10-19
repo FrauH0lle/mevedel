@@ -14,7 +14,7 @@ class Node {
   addEventListener(type, fn) { this.listeners[type] = fn; }
 }
 const root = new Node('section');
-const window = {mevedelTranscriptRenderer: {markContinuations() {}}};
+const window = {mevedelTranscriptRenderer: {markContinuations() {}, groupActivity() {}}};
 vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-history.js', 'utf8'), {
   window, document: {getElementById: () => root},
 });
