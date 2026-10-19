@@ -20,6 +20,13 @@ and does not change durable accounting.
 An invalid accepted-plan address is reported as `plan_reference_error`, leaving
 the Goal inspectable without changing its state.
 
+Browser collaborators of every link tier can inspect the durable Goal from its
+own status-strip chip. The read-only sheet shows the objective, status/reason,
+budget and durable token/time/turn accounting, with incomplete usage marked as a
+lower bound. Unlike `GetGoal`, this projection does not add the current request's
+unaccounted usage; already-accounted child charges are included. Goal
+changes remain in Emacs; opening the sheet never resumes work.
+
 ## Durable state
 
 The session sidecar stores a strict Goal record containing:

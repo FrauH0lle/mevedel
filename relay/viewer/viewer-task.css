@@ -27,3 +27,7 @@
   overflow-wrap: anywhere;
 }
 .task-note { font-style: italic; }
+
+.goal-chip { white-space: normal; text-align: left; }
+#goal-content { overflow-wrap: anywhere; }
+.goal-objective { white-space: pre-wrap; }

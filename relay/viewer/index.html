@@ -329,6 +329,15 @@
           </menu>
         </form>
       </dialog>
+      <dialog id="goal-sheet" class="sheet" aria-labelledby="goal-title">
+        <form method="dialog" class="sheet-form">
+          <h2 id="goal-title" class="sheet-title">Session Goal</h2>
+          <div id="goal-content"></div>
+          <menu class="sheet-actions">
+            <button class="btn quiet" type="submit">Done</button>
+          </menu>
+        </form>
+      </dialog>
       <dialog id="settings" class="sheet settings" aria-labelledby="settings-title">
         <form method="dialog" class="sheet-form">
           <h2 id="settings-title" class="sheet-title">Session settings</h2>
@@ -386,6 +395,7 @@
     <script src="/viewer-history.js" defer></script>
     <script src="/viewer-agent.js" defer></script>
     <script src="/viewer-task.js" defer></script>
+    <script src="/viewer-goal.js" defer></script>
     <script src="/qrcode.js" defer></script>
     <script src="/viewer-session.js" defer></script>
     <script src="/viewer-files.js" defer></script>

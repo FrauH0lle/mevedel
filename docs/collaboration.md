@@ -870,6 +870,17 @@ tasks. The frame carries total, completed, omitted, and omitted-active counts,
 so a shortened history remains explicit and any omitted active work is
 conspicuous. The transport's larger wire bound remains the final safety check.
 
+Every link tier also receives a change-latched `goal` frame on joining and as
+the durable Goal changes, including an explicit absent value when cleared.
+The status strip has a separate read-only Goal chip with status, settled turns,
+and token usage/budget. Tapping it opens the objective, status reason, and
+accounted time/usage details. An unbounded budget and incomplete usage are explicit;
+incomplete usage is a lower bound, never a fabricated total. Unaccounted current
+request usage is not added to the durable counters. Objective and reason text
+are each capped at 4 KiB with an explicit truncation notice, keeping the frame
+below 64 KiB even with JSON escaping. Goal changes stay in Emacs:
+the browser adds no Goal editing, pause, resume, or completion authority.
+
 Tapping a chip opens that agent's live transcript as a full-screen
 sheet. The viewer polls with `fetch-agent` frames while the sheet is
 open and refetches promptly on a roster change; the host validates the

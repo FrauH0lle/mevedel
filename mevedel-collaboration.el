@@ -58,6 +58,11 @@
                   "mevedel-collaboration-editing" (room peer))
 (autoload 'mevedel-collaboration-editing-depart "mevedel-collaboration-editing")
 
+;; `mevedel-collaboration-goal'
+(declare-function mevedel-collaboration--publish-goal
+                  "mevedel-collaboration-goal" (room))
+(autoload 'mevedel-collaboration--publish-goal "mevedel-collaboration-goal")
+
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--on-control
                   "mevedel-collaboration-guest" (data-buffer event peer))
@@ -676,6 +681,7 @@ Record the publish's cost on ROOM to pace later coalesced publishes."
       (mevedel-collaboration--publish-history room)
       (mevedel-collaboration--publish-agents room)
       (mevedel-collaboration--publish-tasks room)
+      (mevedel-collaboration--publish-goal room)
       (plist-put room :publish-cost (- (float-time) started))
       (plist-put room :observer-failed nil))))
 
@@ -838,8 +844,11 @@ room, and follows a rename, including an automatic title."
 (defun mevedel-collaboration--on-session-event (data-buffer event)
   "Publish DATA-BUFFER's status when its session EVENT changes it.
 A rename, manual or automatic, changes the name the room is headed by."
-  (when (eq event 'rename)
-    (mevedel-collaboration-notify-request-changed data-buffer)))
+  (pcase event
+    ('rename (mevedel-collaboration-notify-request-changed data-buffer))
+    ('save-history
+     (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
+       (mevedel-collaboration--publish-goal room)))))
 
 (defun mevedel-collaboration-notify-history-changed (data-buffer)
   "Refresh DATA-BUFFER's browser history after a segment transition commits."
@@ -965,6 +974,7 @@ returning the live room."
     (cl-return-from mevedel-collaboration--start room))
   (require 'mevedel-collaboration-guest)
   (require 'mevedel-collaboration-task)
+  (require 'mevedel-collaboration-goal)
   (pcase-let* ((`(,ws-origin . ,web-origin)
                 (mevedel-collaboration--relay-origins))
                (room-id (mevedel-collaboration--base64url

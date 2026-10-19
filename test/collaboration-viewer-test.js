@@ -921,6 +921,7 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-history.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-agent.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-task.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-goal.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-session.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-files.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-store.js', 'utf8'), context);
@@ -1589,6 +1590,14 @@ async function main() {
   assert.equal(textOf(nodes['session-summary']),
                '3 commands · Shared');
   assert.equal(nodes['tasks-list'].children.length, 0);
+
+  // Goal facts have their own read-only status link, independent of model settings.
+  await deliver({t: 'goal', goal: {id: 'goal-1', objective: 'Finish the review',
+    status: 'paused', reason: 'User paused', turns: 3, tokenBudget: 1000,
+    tokensUsed: 400, incomplete: true, seconds: 25}});
+  assert.match(textOf(nodes.modeline), /Goal paused.*3 turns.*≥400\/1000/);
+  await deliver({t: 'goal', goal: null});
+  assert.doesNotMatch(textOf(nodes.modeline), /Goal/);
 
   // Routed artifact frames likewise reach the artifact controller.
   await deliver({t: 'record', record: {
