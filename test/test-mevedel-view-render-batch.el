@@ -44,6 +44,16 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
 (mevedel-deftest mevedel-view-render-batched-full ()
   ,test
   (test)
+  :doc "cache collection waits for the complete staged projection"
+  (mevedel-batch-test--with-history
+    (puthash 'obsolete 'obsolete mevedel-view--tool-rendering-cache)
+    (mevedel-batch-test--start-projection view-buf)
+    (should (gethash 'obsolete mevedel-view--tool-rendering-cache))
+    (cl-loop repeat 30 while mevedel-view-render--batch do
+      (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+    (should-not mevedel-view-render--batch)
+    (should-not (gethash 'obsolete mevedel-view--tool-rendering-cache))
+    (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
   :doc "projects current history first and converges to synchronous output"
   (mevedel-batch-test--with-history
     (let ((expected (buffer-substring-no-properties (point-min) (point-max))))
