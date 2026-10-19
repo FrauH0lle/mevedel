@@ -852,12 +852,17 @@ the standard not-available message; a browser poll never hydrates cold
 state.
 
 The same publication cycle sends the session task list to either link:
-identity, subject, status, optional owner, and unresolved dependency IDs.
+identity, subject, status, optional owner, running agent activity, owner status
+notes, and unresolved dependency IDs. Each task displays its ID so dependency
+references can be resolved; each active owner's note appears once. The host
+uses the native task activity and priority helpers rather than inferring them
+in JavaScript. Long owner paths and notes wrap on narrow screens.
 The frame is latched on change and sent directly to each joining guest so an
 unchanged list cannot disappear on reconnect. The viewer keeps it collapsed
 to a done/total summary, orders in-progress work first, and strikes completed
 rows. Task projection is capped at 64 KiB of encoded JSON: it admits
-in-progress tasks first, then pending tasks, then the most recently completed
+in-progress tasks first, then ready pending tasks, then blocked pending tasks,
+then the most recently completed
 tasks. The frame carries total, completed, omitted, and omitted-active counts,
 so a shortened history remains explicit and any omitted active work is
 conspicuous. The transport's larger wire bound remains the final safety check.
