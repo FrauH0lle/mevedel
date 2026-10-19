@@ -314,10 +314,7 @@
 		       (progn
 			 (with-current-buffer buf
 			   (insert (propertize "Assistant text\n" 'gptel 'response)))
-			 (cl-letf (((symbol-function
-				     'mevedel-agent-conversation-save)
-				    (lambda (_invocation) t)))
-			   (mevedel-agent-conversation-insert-user-block inv block))
+			 (should (mevedel-agent-conversation-insert-user-block inv block))
 			 (with-current-buffer buf
 			   (goto-char (point-min))
 			   (should (search-forward "<agent-message" nil t))
@@ -360,11 +357,9 @@
 			   (should (search-forward "Reminder text" nil t))
 			   (should-not (get-text-property (match-beginning 0) 'gptel))
 			   (should (= (marker-position marker) (point-max))))
-			 (with-temp-buffer
-			   (insert (decode-coding-string
-                                    (mevedel-session-artifacts-read-artifact session relative)
-                                    'utf-8-unix))
-			   (should (string-match-p "Reminder text" (buffer-string)))))
+			 ;; Persistence belongs to the complete delivery batch, not each block.
+			 (should-not (file-exists-p absolute))
+			 (should-not (mevedel-session-publication-uncommitted-batches session)))
 		     (when (buffer-live-p buf)
 		       (with-current-buffer buf
 			 (set-buffer-modified-p nil)

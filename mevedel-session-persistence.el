@@ -736,8 +736,8 @@ artifact batches.  Initial materialization still takes a full snapshot."
 
 (defcustom mevedel-session-persistence-agent-save-debounce 2.0
   "Seconds to coalesce best-effort agent-state saves before publishing.
-Observational agent persists -- activity transitions, mailbox
-consumption -- fire in bursts.  Inside this window they collapse into
+Observational agent persists -- activity transitions, explicit mailbox
+discards -- fire in bursts.  Inside this window they collapse into
 one sidecar-only save, and a synchronous acknowledged commit absorbs a
 pending one entirely."
   :type 'number

@@ -627,7 +627,7 @@ payload and hidden hook audit records.
 `gptel--inject-prompt' mutates the realized request payload, but
 does not write that synthetic user-role message back to the data
 buffer.  This helper keeps the main transcript and view buffer in
-sync with what the model actually saw."
+sync with what the model actually saw.  Return non-nil on successful insertion."
   (when (and (mevedel-session-p session)
              (stringp block)
              (not (string-empty-p block)))
@@ -651,10 +651,12 @@ sync with what the model actually saw."
                   (dolist (audit (plist-get message :hook-audits))
                     (insert (mevedel--format-hook-audit-record audit)))
                   (when marker
-                    (set-marker marker (point)))))))
+                    (set-marker marker (point))))
+                t)))
         (error
          (message "mevedel: insert session injected prompt failed: %S"
-                  err))))))
+                  err)
+         nil)))))
 
 ;;
 ;;; Steering
@@ -828,13 +830,15 @@ model-visible communication in conversation history."
             (list :type 'message
                   :from sender
                   :summary (format "message from %s" sender)))
-           (mevedel-agent-conversation-insert-user-block
-            ctx block
-            (mevedel--active-response-marker
-             info (mevedel-agent-invocation-buffer ctx))))
+           (unless (mevedel-agent-conversation-insert-user-block
+                    ctx block
+                    (mevedel--active-response-marker
+                     info (mevedel-agent-invocation-buffer ctx)))
+             (error "Mailbox transcript insertion failed")))
          (unless agent-p
-           (mevedel-tools--insert-session-injected-prompt
-            ctx fsm message block))
+           (unless (mevedel-tools--insert-session-injected-prompt
+                    ctx fsm message block)
+             (error "Mailbox transcript insertion failed")))
          (gptel--inject-prompt
           (plist-get info :backend) data
           (list :role "user" :content block)

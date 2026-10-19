@@ -134,13 +134,20 @@
                   "mevedel-pending-inputs" (session &optional data-buffer))
 (autoload 'mevedel-pending-inputs-offer-root-event "mevedel-pending-inputs")
 
+;; `mevedel-session-artifacts'
+(defvar mevedel-session-artifacts-require-agent-commit-p)
+
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-autosave-buffer
+                  "mevedel-session-persistence" (buffer))
 (declare-function mevedel-session-persistence-cancel-deferred-agent-save
                   "mevedel-session-persistence" (session))
 (declare-function mevedel-session-persistence-save-agent-state
                   "mevedel-session-persistence" (session))
 (declare-function mevedel-session-persistence-save-agent-state-soon
                   "mevedel-session-persistence" (session))
+(autoload 'mevedel-session-persistence-autosave-buffer
+  "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-cancel-deferred-agent-save
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-save-agent-state
@@ -336,12 +343,12 @@ Return the normalized payload stored in the record."
 (defun mevedel-agent-control--persist-session (session)
   "Best-effort persist SESSION's changed agent state.
 
-Observational transitions -- blocked/waiting activity flavors, mailbox
-consumption -- debounce into one non-forced save instead of a full
+Observational transitions -- blocked/waiting activity flavors, explicit
+mailbox discards -- debounce into one non-forced save instead of a full
 synchronous publication each; the next acknowledged commit absorbs a
 pending one.  Recovery treats every active activity identically, so a
-crash inside the window costs at most a stale activity flavor and an
-already-possible mail re-delivery."
+crash inside the window costs at most a stale activity flavor or a
+repeated discard.  Delivered mail uses a transcript checkpoint instead."
   (unless mevedel-agent-control-suppress-persistence
     (condition-case nil
         (mevedel-session-persistence-save-agent-state-soon session)
@@ -515,17 +522,39 @@ agent clears its mailbox, and almost all of them find it empty."
 
 (defun mevedel-agent-control-acknowledge-mail (context messages)
   "Consume only captured MESSAGES from CONTEXT's retained mailbox.
-Messages queued since capture remain unread.  As with native mailbox delivery,
-persistence is observational; process loss before its save may redeliver mail."
+Call after inserting their delivery blocks into the receiving transcript.
+Checkpoint that transcript with the queue removal before returning.  Failure
+restores removed mail, including when the checkpoint reports nil rather than
+signalling.  Messages queued since capture remain unread."
   (let* ((session (if (mevedel-session-p context) context
                     (mevedel-agent-invocation-parent-session context)))
          (path (mevedel-agent-control-context-path context)))
     (when path
-      (mevedel-agent-control--set-mailbox-queue
-       session path
-       (cl-remove-if (lambda (message) (memq message messages))
-                     (mevedel-agent-control--mailbox-queue session path)))
-      (mevedel-agent-control--persist-session session))))
+      (let* ((previous (mevedel-agent-control--mailbox-queue session path))
+             (remaining (cl-remove-if (lambda (message) (memq message messages))
+                                      previous)))
+        (unless (equal previous remaining)
+          (mevedel-agent-control--set-mailbox-queue session path remaining)
+          (condition-case err
+              (unless (or mevedel-agent-control-suppress-persistence
+                          (not (mevedel-session-save-path session)))
+                (let ((mevedel-session-artifacts-require-agent-commit-p t)
+                      (buffer (if (mevedel-session-p context)
+                                  (mevedel-session-root-buffer session)
+                                (mevedel-agent-invocation-buffer context))))
+                  (unless (mevedel-session-persistence-autosave-buffer buffer)
+                    (error "Mailbox consumption checkpoint failed")))
+                (mevedel-session-persistence-cancel-deferred-agent-save session))
+            ((error quit)
+             ;; A checkpoint can run hooks.  Preserve any arrivals since we
+             ;; removed the captured messages, not just the original queue.
+             (mevedel-agent-control--set-mailbox-queue
+              session path
+              (append (cl-set-difference
+                       (mevedel-agent-control--mailbox-queue session path)
+                       previous :test #'eq)
+                      previous))
+             (signal (car err) (cdr err)))))))))
 
 (defun mevedel-agent-control--waiter (session path)
   "Return PATH's active waiter in SESSION, or nil."

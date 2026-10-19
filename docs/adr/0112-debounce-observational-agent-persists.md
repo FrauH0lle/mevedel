@@ -7,7 +7,7 @@ Status: accepted
 Acknowledged agent mutations remain synchronous: spawn registration, mailbox
 append, RESULT publication, and settlement return only after their publication
 commits. They refuse reentrant queueing. Observational activity changes and
-mailbox consumption schedule one sidecar-only registry save per session, with
+explicit mailbox discards schedule one sidecar-only registry save per session, with
 a two-second default debounce through the idle-transport scheduler.
 
 After initial materialization, acknowledged registry and mailbox mutations also
@@ -18,6 +18,15 @@ snapshot; terminal agent settlement commits its transcript with its metadata.
 Thus a mailbox acknowledgement and its staged transcript dependencies become
 reachable together, before any consumer wakes. This changes save granularity,
 not acknowledgement durability or the ordinary root checkpoint cadence.
+
+Delivered mail is consumed only after successful transcript insertion. Queue
+removal checkpoints the receiving conversation through the existing root/agent
+autosave writer, with required publication rather than reentrant queueing. A
+portable head therefore contains both the delivered text and its removal from
+the mailbox; a file-session checkpoint writes text before its sidecar. Failure
+restores consumed records while preserving later arrivals. One nonempty batch
+pays for one checkpoint instead of saving each retained-agent block separately,
+and empty/repeated acknowledgements do no work.
 
 New retained transcript text and dirty transcript metadata share a strict
 publication when the portable sidecar already exists. The session root supplies
@@ -46,9 +55,10 @@ agent request is in flight, and stops once none is.
 ## Rationale and consequences
 
 Acknowledgement promises durable delivery; an activity flavor does not. Recovery
-settles all abandoned active flavors identically, and mail delivery already has
-at-least-once semantics. A crash during debounce can therefore retain a stale
-activity flavor or redeliver consumed mail without losing an acknowledged send.
+settles all abandoned active flavors identically. A crash during debounce can
+therefore retain a stale activity flavor or repeat an explicit discard. Mail
+delivery remains at-least-once: failure before its consumption checkpoint can
+redeliver mail, but a committed removal never outruns its transcript text.
 A single timer avoids publishing each transient permission-blocked/running pair.
 
 Diagnostic logs also append only their delta through one pinned target operation.
@@ -61,6 +71,20 @@ transactional journal.
 
 All revisions belong to ADR 0112:
 
+- **Consumption checkpoint ordering:** review found that debounced consumption
+  could commit an empty mailbox before the injected transcript text reached disk.
+  A crash then lost both copies. Consumption now reuses the existing conversation
+  checkpoint, preserving native response boundaries and prompt-index updates;
+  raw text plus a sidecar would leave those offsets stale. This deliberately
+  spends one synchronous checkpoint per delivered batch to close the loss window.
+  Agent delivery replaces its per-block saves with this one checkpoint. Compiled
+  alternating root enqueue/consume cycles were neutral for single messages
+  (222.7 versus 222.1 ms), but batching retained the enqueue savings. Replaying
+  the observed root mix of 190 messages in 117 contiguous delivery regions on a
+  private final-size session copy reduced combined time from 39.83 to 31.78 s
+  (two runs per variant, alternating order, reset transcript). This includes
+  the old deferred registry flush and the new checkpoint; it is a workload-shape
+  comparison, not reconstruction of historical drain calls or session elapsed time.
 - **2026-10-19 acknowledged saves:** the long multi-agent session recorded 1,878
   session saves totaling 145 seconds, and execution-delivery callbacks spent
   143-176 ms synchronously saving the whole root. Existing immutable manifests

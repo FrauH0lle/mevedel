@@ -625,8 +625,9 @@ exists only on the wire. The recipient's transcript records the accepted batch
 once, as the shared [injection record](reminders.md#the-injection-record)
 followed by any delivered mail blocks. Receipt establishes SDK acceptance into
 conversation context, not model understanding or retention through later
-compaction. Unreceived mail stays unread; mailbox consumption keeps its deferred
-persistence, so process loss before saving can redeliver mail. Except for a
+compaction. Unreceived mail stays unread; mailbox consumption checkpoints the
+receiving transcript with queue removal, so process loss before that commit can
+redeliver mail without losing its only copy. Except for a
 mail-only hook batch, an unreceived delivery fails the next tool call and turns
 a successful terminal response into an error.
 
@@ -1396,9 +1397,17 @@ bytes, leaving the caller free to retry after the active publication. A
 post-commit cleanup failure remains diagnostic because the new head is already
 authoritative.
 
+Mailbox delivery consumes records only after inserting their transcript blocks
+successfully and checkpointing the receiving conversation. The existing root or
+retained-agent writer publishes that text with the queue removal, refusing
+reentrant queueing. If the checkpoint fails, consumed records return to the
+mailbox without removing newer arrivals. A crash may redeliver mail but cannot
+leave a committed removal without its delivered text. Empty acknowledgements
+do no work; each nonempty batch checkpoints once.
+
 Observational agent persists are not acknowledged mutations.  Activity
-transitions (blocked/waiting flavors and their release) and mailbox
-consumption debounce into one sidecar-only registry save
+transitions (blocked/waiting flavors and their release) and explicit mailbox
+discards debounce into one sidecar-only registry save
 (`mevedel-session-persistence-save-agent-state-soon`, landing as
 `mevedel-session-artifacts-save-agent-registry`): the sidecar carries the
 agent registry the persist is about, and the transcript segment is committed
@@ -1409,9 +1418,8 @@ other committed entry; a portable session whose sidecar is not yet committed
 skips the save until the next critical commit.  A synchronous acknowledged
 commit absorbs a pending one, and
 Emacs exit flushes the rest.  Recovery treats every active activity
-identically and mail delivery is at-least-once, so a crash inside the
-debounce window costs at most a stale activity flavor and an
-already-possible re-delivery.  See ADR 0112.
+identically, so a crash inside the debounce window costs at most a stale
+activity flavor or a repeated explicit discard. See ADR 0112.
 
 Diagnostic streams (telemetry, hook, permission, and repair logs) reach a
 remote target as one pinned `append` operation carrying only the delta.  The

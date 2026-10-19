@@ -416,9 +416,9 @@ BUFFER defaults to INVOCATION's retained conversation buffer."
   "Insert BLOCK as a user-role region in INVOCATION's conversation.
 
 Insert at live MARKER or append at point-max.  Clear inherited
-assistant-response properties and save the transcript before the next provider
-request.  Buffer-write errors are logged and ignored because the provider
-payload remains authoritative."
+assistant-response properties.  The mailbox owner checkpoints the complete
+batch with its queue removal.  Return non-nil on success; report errors and
+return nil so delivery can refuse to consume missing transcript records."
   (when (and (mevedel-agent-invocation-p invocation)
              (stringp block)
              (not (string-empty-p block)))
@@ -428,9 +428,10 @@ payload remains authoritative."
           (with-current-buffer buffer
             (let ((inhibit-read-only t))
               (mevedel--insert-user-role-block-at-marker block marker)
-              (mevedel-agent-conversation-save invocation)))
+              t))
         (error
-         (message "mevedel: conversation user-block insert failed: %S" err))))))
+         (message "mevedel: conversation user-block insert failed: %S" err)
+         nil)))))
 
 
 ;;
