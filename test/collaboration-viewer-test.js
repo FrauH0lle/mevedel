@@ -1745,7 +1745,11 @@ async function main() {
 
   // Owner link: requesting a separate session. The sheet collects the
   // name and optional prompt; the request travels as its own frame.
+  const modelsBefore = first.sent.length;
   nodes['new-session-button'].dispatch('click');
+  await waitFor(() => first.sent.length === modelsBefore + 1, 'fresh model catalog request');
+  assert.deepEqual(await unseal(key, first.sent[modelsBefore]), {t: 'session-models'});
+  await deliver({t: 'session-models', models: ['Codex:gpt-6-astra', 'Codex:gpt-6-luna']});
   assert.equal(nodes['new-session'].open, true);
   // This link is an owner link, so the sheet promises creation rather
   // than a request that waits on a person.

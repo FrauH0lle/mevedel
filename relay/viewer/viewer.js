@@ -108,6 +108,7 @@
     connection.className = `conn ${className || ''}`;
     history.connection(className === 'connected');
     if (className !== 'connected') {
+      sessions.disconnected();
       state.connected = false;
       recoveryFrame = null;
       recoverySignature = '';
@@ -1421,6 +1422,8 @@
       files.removed(frame);
     } else if (frame.t === 'files-changed') {
       files.changed(frame);
+    } else if (frame.t === 'session-models') {
+      sessions.showModels(frame.models);
     } else if (frame.t === 'new-session') {
       sessions.showResult({
         reqId: frame.reqId, ok: frame.ok === true, message: frame.message,

@@ -330,8 +330,10 @@ session starts with, its ID, and the approval prompt says it will be titled
 from the first prompt.
 
 A guest may also pick the session's model. The `welcome` frame lists every
-model registered with gptel, as exact `BACKEND:MODEL` labels, to writable guests;
-the request sheet offers them after a Default entry and sends the pick as the
+model registered with gptel, as exact `BACKEND:MODEL` labels, to writable guests.
+Opening the request sheet refreshes that catalog with `session-models`, so models
+discovered during provider startup are offered without reconnecting. An existing
+pick is retained if still offered. The sheet offers models after a Default entry and sends the pick as the
 `new-session` frame's optional `model`. A label that no registered model
 resolves refuses the request instead of falling back to the default. The new
 session gets the default chat preset first and the picked model second, because
@@ -347,6 +349,9 @@ One creation request per guest waits at a time; another is refused while the
 first awaits approval. Outcomes repeat the request ID and sanitized name so the
 viewer can settle the matching request. Each completed request has its own dock
 notice carrying its link or refusal and a Dismiss action.
+Connection loss marks waiting notices interrupted and dismissible, not refused
+or replayed: the request may already have reached the host. Check the lobby
+before asking again. A late outcome for that request can still settle its notice.
 
 The room reaches more than the requester. Its other owner-link guests are
 offered an owner link to it in a `room` frame -- its own frame rather than

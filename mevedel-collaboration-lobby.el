@@ -80,7 +80,10 @@
 ;; `mevedel-collaboration-owner'
 (declare-function mevedel-collaboration--handle-new-session
                   "mevedel-collaboration-owner" (room peer frame))
+(declare-function mevedel-collaboration--handle-session-models
+                  "mevedel-collaboration-owner" (room peer))
 (autoload 'mevedel-collaboration--handle-new-session "mevedel-collaboration-owner")
+(autoload 'mevedel-collaboration--handle-session-models "mevedel-collaboration-owner")
 
 ;; `mevedel-collaboration-presence'
 (declare-function mevedel-collaboration-presence-handle
@@ -533,6 +536,8 @@ whose link is meant to keep working."
              (mevedel-collaboration-lobby--handle-open lobby peer frame))
             ("new-session"
              (mevedel-collaboration--handle-new-session lobby peer frame))
+            ("session-models"
+             (mevedel-collaboration--handle-session-models lobby peer))
             ("delete-session"
              (mevedel-collaboration-lobby--handle-delete lobby peer frame))
             ("files"
