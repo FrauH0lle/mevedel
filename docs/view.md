@@ -753,6 +753,34 @@ it and reminders welded into a tool result would render as prose. The Skill
 tool's render data therefore carries the bare skill body and the attachment
 names, and the row shows that body under a header naming the dependencies.
 
+### Turn and activity rules
+
+An assistant turn closes with one rule. Once the request summary is known the
+rule carries it, as in `── Worked for 2m 37s ─────`: the label uses
+`mevedel-view-separator`, and a strike-through on its extended newline
+(`mevedel-view-request-summary-rule`) continues it to the window edge, so split
+and narrow windows need no width calculation. One blank row separates it from
+the next heading. A turn without a summary line, such as a running turn,
+closes with the plain overlined `mevedel-view-turn-rule` row after a blank line;
+that empty row leaves the same space above the next heading. A user turn that
+renders nothing visible, such as a harness-started background-event wake,
+contributes no rows, so the space after a closing rule does not depend on
+which kind of turn follows.
+
+Inside a turn, activity hangs below the prose that announced it, separated by a
+blank line only. Prose that follows activity starts with a quiet rule: two
+undecorated columns, then `mevedel-view-activity-rule`, whose overline is
+blended from the active theme at about half the strength of `shadow`, so it
+stays lighter than the turn's closing rule. Each section therefore reads as
+intent followed by its actions. Activity is any non-prose row of the same
+turn, including thinking, reminders, and mailbox cards, so grouping or
+expanding rows never adds or moves a rule. The rule is decided when non-empty
+prose arrives: the activity above it is already rendered, so it needs no
+lookahead, and it belongs to the prose's live render unit, so retained
+activity is never rewritten. The search stops at turn-closing chrome, so a
+directive response without its own heading never takes a rule from the user
+turn before it. Activity that ends a turn is closed by the turn's rule.
+
 Runs of more than `mevedel-view-tool-group-collapse-threshold` (default 3)
 plain tool rows fold into one grouped activity row such as
 `Searched 5 patterns, read 1 file, ran 5 commands, thought 8 times`; tools
@@ -810,7 +838,8 @@ calls has no turn in the transcript until the first result lands, so the
 live render draws its `Assistant` heading with the running calls; the row
 therefore does not move down when the heading would otherwise appear. The
 interim turn also ends with the settled turn's blank line and rule, so the
-progress row below does not move either.
+progress row below does not move either. The labelled closing rule that
+replaces the plain rule when the request ends is one row taller.
 Directive requests keep their own heading instead. An expanded running group lists its
 running calls after its settled children; they are not expandable, have no
 transcript source, and key no disclosure state. A fold or expansion of a

@@ -1862,6 +1862,46 @@
         (should (= 2 (how-many "Worked for"
                                (point-min)
                                mevedel-view--input-marker))))))
+  :doc "closes a turn with its request summary as the labelled rule"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "First prompt.\n\n" nil)
+    (mevedel-view-test--insert-data data-buf "First answer.\n\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-tool-render-data-format
+      '(:kind request-summary :elapsed-seconds 7))
+     'ignore)
+    (mevedel-view-test--insert-data data-buf "Second prompt.\n\n" nil)
+    (mevedel-view-test--insert-data data-buf "Second answer.\n\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (let* ((label (progn (search-forward "── Worked for 7s ")
+                           (match-beginning 0)))
+             (label-end (point))
+             (second-prompt (progn (search-forward "You\nSecond prompt")
+                                   (match-beginning 0)))
+             (turn-rules nil))
+        ;; Blank line above the label, which ends in the extended rule.
+        (should (equal "First answer.\n\n"
+                       (buffer-substring-no-properties
+                        (- label 15) label)))
+        (should (eq 'mevedel-view-request-summary-rule
+                    (get-text-property label-end 'font-lock-face)))
+        (should (eq 'mevedel-view-separator
+                    (get-text-property label 'font-lock-face)))
+        ;; One blank row before the next heading, and no second rule.
+        (should (equal "\n\n" (buffer-substring-no-properties
+                               label-end second-prompt)))
+        (let ((pos (point-min)))
+          (while (< pos mevedel-view--input-marker)
+            (when (eq (get-text-property pos 'font-lock-face)
+                      'mevedel-view-turn-rule)
+              (push pos turn-rules))
+            (setq pos (1+ pos))))
+        ;; Only the summary-less second turn closes with the plain rule.
+        (should (= 1 (length turn-rules)))
+        (should (< second-prompt (car turn-rules))))))
   :doc "omits nested tool blocks from rendered reasoning text"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -1916,7 +1956,7 @@
         (should-not (string-match-p "mevedel-render-data" text))
         (should-not (string-match-p "inline-skill" text))
         (should-not (string-match-p "Thinking" text)))))
-  :doc "separates response prose from following activity"
+  :doc "closes activity with a quiet inset rule before the next prose"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
     (mevedel-view-test--insert-data data-buf "First answer.\n" 'response)
@@ -1927,7 +1967,7 @@
     (mevedel-view-test--insert-data data-buf "Second answer.\n" 'response)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let (first-end tool-pos second-pos rule-pos)
+      (let (first-end tool-pos second-pos rules)
         (goto-char (point-min))
         (search-forward "First answer")
         (setq first-end (point))
@@ -1935,16 +1975,27 @@
         (setq tool-pos (match-beginning 0))
         (search-forward "Second answer")
         (setq second-pos (match-beginning 0))
-        (let ((pos first-end))
-          (while (and (< pos tool-pos) (not rule-pos))
+        (let ((pos (point-min)))
+          (while (< pos second-pos)
             (when (eq (get-text-property pos 'font-lock-face)
                       'mevedel-view-activity-rule)
-              (setq rule-pos pos))
+              (push pos rules))
             (setq pos (1+ pos))))
-        (should rule-pos)
-        (should (string-match-p "\n\n"
-                                (buffer-substring-no-properties
-                                 tool-pos second-pos))))))
+        ;; One rule, after the tool and before the prose it precedes.
+        (should (= 1 (length rules)))
+        (should (< tool-pos (car rules) second-pos))
+        ;; The announcing prose keeps its tool: a blank line, no rule.
+        (should (string-match-p
+                 "\\`\\.\n\n[^\n]*\\'"
+                 (buffer-substring-no-properties first-end tool-pos)))
+        ;; End of the tool row, blank line, inset rule row, then the prose.
+        (should (equal "\n\n  \n"
+                       (buffer-substring-no-properties
+                        (- (car rules) 4) second-pos)))
+        ;; The inset columns stay undecorated.
+        (should-not (get-text-property (- (car rules) 2) 'font-lock-face))
+        (should (eq 'activity-separator
+                    (get-text-property (car rules) 'mevedel-view-type))))))
   :doc "skips leading :PROPERTIES: drawer on data buffer"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
@@ -2924,7 +2975,29 @@
           (set-marker-insertion-type mevedel-view--input-marker nil)))
       (goto-char (point-min))
       (should (search-forward "Raw provider failure"
-                              mevedel-view--input-marker t)))))
+                              mevedel-view--input-marker t))))
+
+  :doc "a failure after partial prose hangs below it like other activity"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Partial prose.\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-tool-render-data-format
+      '(:kind request-summary :elapsed-seconds 7 :outcome error
+        :backend "Provider" :message "Connection lost" :retry manual))
+     'ignore)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (dotimes (_ 3)
+        (goto-char (point-min))
+        (should (re-search-forward
+                 "Partial prose\\.\n\n  [^\n]*Provider request failed"
+                 mevedel-view--input-marker t))
+        (should (search-forward "── Worked for 7s" mevedel-view--input-marker t))
+        (goto-char (point-min))
+        (search-forward "Provider request failed")
+        (mevedel-view-toggle-section)))))
 
 (mevedel-deftest mevedel-view-render-live-update ()
   ,test
@@ -3035,6 +3108,55 @@
         (mevedel-view--full-rerender)
         (should (equal draft (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 3))))))
+
+  :doc "streamed prose after a tool keeps one activity rule, as a full render does"
+  (mevedel-view-test--with-buffers
+    (let ((draft "> quoted\nsecond line")
+          live)
+      (cl-flet ((rules ()
+                  (with-current-buffer view-buf
+                    (let ((pos (point-min)) (count 0))
+                      (while (< pos (mevedel-view--input-start))
+                        (when (eq (get-text-property pos 'font-lock-face)
+                                  'mevedel-view-activity-rule)
+                          (cl-incf count))
+                        (setq pos (1+ pos)))
+                      count)))
+                (history ()
+                  (with-current-buffer view-buf
+                    (buffer-substring-no-properties
+                     (point-min) (mevedel-view--history-insertion-marker))))
+                (update ()
+                  (with-current-buffer view-buf
+                    (mevedel-view-render-live-update data-buf)
+                    (should (equal draft (mevedel-view--input-text)))
+                    (should (= (point) (+ (mevedel-view--input-start) 3))))))
+        (with-current-buffer view-buf
+          (mevedel-view-stream-begin-turn
+           mevedel-view--status-marker
+           (with-current-buffer data-buf (copy-marker (point-min))))
+          (goto-char (mevedel-view--input-start))
+          (insert draft)
+          (goto-char (+ (mevedel-view--input-start) 3)))
+        (mevedel-view-test--insert-data data-buf "Checking the file.\n\n" 'response)
+        (update)
+        (mevedel-view-test--insert-data
+         data-buf "(:name \"Read\" :args (:file_path \"a.el\"))\n\ncontents\n"
+         '(tool . "call_a"))
+        (update)
+        ;; Activity that follows prose gets a blank line, not a rule.
+        (should (= 0 (rules)))
+        (dolist (chunk '("The answer" " grows" " in chunks.\n"))
+          (mevedel-view-test--insert-data data-buf chunk 'response)
+          (update)
+          (should (= 1 (rules))))
+        (setq live (history))
+        (should (string-match-p "  \nThe answer grows in chunks\\." live))
+        (with-current-buffer view-buf
+          (mevedel-view--full-rerender)
+          (should (equal draft (mevedel-view--input-text))))
+        (should (= 1 (rules)))
+        (should (equal live (history))))))
 
   :doc "repair audits preserve expanded groups, child tools, cursor and window start"
   (dolist (interleaved '(nil t))
@@ -9567,6 +9689,90 @@
       (let ((tail (marker-position mevedel-view--status-marker)))
         (set-marker mevedel-view--status-marker nil)
         (should (= tail (mevedel-view--history-boundary-target)))))))
+
+
+;;
+;;; Activity rules
+
+(defun mevedel-view-test--activity-rule-buffer (&rest parts)
+  "Insert PARTS, alternating text and `mevedel-view-type', then return point.
+A part of the form (TEXT . FACE) carries `font-lock-face' FACE instead."
+  (while parts
+    (let ((part (pop parts)))
+      (if (consp part)
+          (insert (propertize (car part) 'font-lock-face (cdr part)))
+        (insert (propertize part 'mevedel-view-type (pop parts))))))
+  (point))
+
+(mevedel-deftest mevedel-view--activity-before-point-p ()
+  ,test
+  (test)
+  :doc "activity rows of the same turn count, across blank lines"
+  (with-temp-buffer
+    (mevedel-view-test--activity-rule-buffer
+     "Assistant\n" 'turn-header "  ✓ Read a.el\n" 'tool-summary "\n" nil)
+    (should (mevedel-view--activity-before-point-p)))
+  :doc "any non-prose row is activity: reminders and mailbox cards too"
+  (dolist (type '(hook-audit mailbox-delivery thinking-summary agent-handle))
+    (with-temp-buffer
+      (mevedel-view-test--activity-rule-buffer "row\n" type)
+      (should (mevedel-view--activity-before-point-p))))
+  :doc "prose, headings, existing rules and empty buffers are not activity"
+  (dolist (type '(response turn-header activity-separator nil))
+    (with-temp-buffer
+      (mevedel-view-test--activity-rule-buffer "row\n" type "\n" nil)
+      (should-not (mevedel-view--activity-before-point-p))))
+  (with-temp-buffer
+    (should-not (mevedel-view--activity-before-point-p)))
+  :doc "turn-closing chrome stops the search at the turn boundary"
+  (dolist (face '(mevedel-view-separator
+                  mevedel-view-turn-rule
+                  mevedel-view-request-summary-rule))
+    (with-temp-buffer
+      ;; A user turn's reminder, then its spacer: a directive response
+      ;; without its own heading must not take a rule from it.
+      (mevedel-view-test--activity-rule-buffer
+       "  ◇ 1 system reminder" 'hook-audit (cons "\n" face))
+      (should-not (mevedel-view--activity-before-point-p)))))
+
+(mevedel-deftest mevedel-view--insert-activity-rule-before-response ()
+  ,test
+  (test)
+  :doc "inserts a blank line and an inset rule row after activity"
+  (with-temp-buffer
+    (let ((start (mevedel-view-test--activity-rule-buffer
+                  "  ✓ Read a.el\n" 'tool-summary)))
+      (mevedel-view--insert-activity-rule-before-response)
+      (should (equal "\n  \n" (buffer-substring-no-properties
+                               start (point))))
+      (should-not (get-text-property (+ start 1) 'font-lock-face))
+      (should (eq 'mevedel-view-activity-rule
+                  (get-text-property (1- (point)) 'font-lock-face)))
+      (should (eq 'activity-separator
+                  (get-text-property (+ start 1) 'mevedel-view-type)))))
+  :doc "inserts nothing after prose or a heading"
+  (dolist (type '(response turn-header))
+    (with-temp-buffer
+      (let ((start (mevedel-view-test--activity-rule-buffer "row\n" type)))
+        (mevedel-view--insert-activity-rule-before-response)
+        (should (= start (point)))))))
+
+(mevedel-deftest mevedel-view--ensure-blank-line-after-response ()
+  ,test
+  (test)
+  :doc "separates activity from the prose above it by a blank line only"
+  (with-temp-buffer
+    (let ((start (mevedel-view-test--activity-rule-buffer
+                  "Prose.\n" 'response)))
+      (mevedel-view--ensure-blank-line-after-response)
+      (should (equal "\n" (buffer-substring-no-properties start (point))))
+      (should-not (text-property-not-all start (point) 'font-lock-face nil))))
+  :doc "is a no-op after activity, so repeated calls add nothing"
+  (with-temp-buffer
+    (let ((start (mevedel-view-test--activity-rule-buffer
+                  "  ✓ Read a.el\n" 'tool-summary)))
+      (mevedel-view--ensure-blank-line-after-response)
+      (should (= start (point))))))
 
 
 (provide 'test-mevedel-view-render)

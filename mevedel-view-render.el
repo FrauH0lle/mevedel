@@ -4017,7 +4017,7 @@ Above the grouping threshold they form one running group row, as they
 will once settled; otherwise each call gets its own running row.  When a
 reader is on one of their rows, the group is drawn open beneath its
 header, so that row stays on screen."
-  (mevedel-view--insert-activity-rule-after-response)
+  (mevedel-view--ensure-blank-line-after-response)
   (if (and (> mevedel-view-tool-group-collapse-threshold 0)
            (> (length entries) mevedel-view-tool-group-collapse-threshold))
       (let* ((start (point))
@@ -4707,17 +4707,24 @@ CONTINUATION-P appends an already-started assistant turn without a new header."
                      (mevedel-view--conversation-variant-button
                       data-buf turn-start turn-end variant-session))
                 directive continuation-p)))
-            ;; Blank line above the trailing separator so the rule doesn't
-            ;; butt up against the last response line.
-            (when (eq role 'assistant)
-              (mevedel-view--ensure-blank-line-before-response))
-            ;; Trailing separator -- horizontal rule after assistant turns,
-            ;; plain spacer after user turns.
-            (insert (propertize "\n"
-                                'font-lock-face
-                                (if (eq role 'assistant)
-                                    'mevedel-view-turn-rule
+            ;; Trailing separator: a rule closes an assistant turn, a plain
+            ;; spacer follows any other turn that rendered something.
+            (cond
+             ((not (eq role 'assistant))
+              (when (> (point) insert-start)
+                (insert (propertize "\n" 'font-lock-face
+                                    'mevedel-view-separator))))
+             ;; The request summary already drew the closing rule.  Leave
+             ;; one row under it before the next heading.
+             ((eq (mevedel-view--previous-rendered-type) 'request-summary)
+              (insert (propertize "\n" 'font-lock-face
                                   'mevedel-view-separator)))
+             (t
+              ;; Blank line above the rule so it doesn't butt up against
+              ;; the last response line.
+              (mevedel-view--ensure-blank-line-before-response)
+              (insert (propertize "\n" 'font-lock-face
+                                  'mevedel-view-turn-rule))))
             ;; Apply read-only to the entire block.  Per-segment source
             ;; coordinates are set by the individual render functions;
             ;; tag text that has no segment-level source with the turn
@@ -5738,7 +5745,8 @@ Use SHARED-DISPLAY text when it replaces the original prompt."
 
 (defun mevedel-view--render-user-turn (segments data-buf &optional directive)
   "Render user SEGMENTS from DATA-BUF, with optional DIRECTIVE metadata."
-  (let* ((raw-text (mevedel-view--user-turn-text segments data-buf))
+  (let* ((insert-start (point))
+         (raw-text (mevedel-view--user-turn-text segments data-buf))
          (prompt-drawers (mevedel-view--user-turn-prompt-drawers
                           segments data-buf))
          (hook-contexts (mevedel-view--user-turn-hook-contexts
@@ -5857,8 +5865,11 @@ Use SHARED-DISPLAY text when it replaces the original prompt."
          (mevedel-view-disclosure-source-range
           data-buf (plist-get drawer :start) (plist-get drawer :end))))
       (when (and inline-skill inline-source-seg)
-        (mevedel-view--insert-skill-disclosures inline-skill)))))
-  (insert "\n"))
+        (mevedel-view--insert-skill-disclosures inline-skill))))
+    ;; A background wake and its attribution can both render nothing.
+    ;; Keep visible reminders, but do not give a hidden turn spacer rows.
+    (when (> (point) insert-start)
+      (insert "\n"))))
 
 (defun mevedel-view--directive-turn-display-text (text)
   "Return the compact display text for a directive turn TEXT.
@@ -6025,7 +6036,7 @@ Merges adjacent thinking/reasoning segments into a single summary."
                      data-buf first-start last-end)))
       (unless (string-empty-p summary)
         (let ((unit-start (point)))
-          (mevedel-view--insert-activity-rule-after-response)
+          (mevedel-view--ensure-blank-line-after-response)
           (mevedel-view--insert-summary-region
            (mevedel-view--summary-with-face
             summary 'mevedel-view-thinking-summary)
@@ -6048,7 +6059,7 @@ Merges adjacent thinking/reasoning segments into a single summary."
              (buffer-substring-no-properties seg-start seg-end))))
          (summary (mevedel-view--system-reminder-summary
                    data-buf seg-start seg-end)))
-    (mevedel-view--insert-activity-rule-after-response)
+    (mevedel-view--ensure-blank-line-after-response)
     (mevedel-view--insert-rendered-tool
      (list :header summary
            :body body
@@ -6061,10 +6072,14 @@ Merges adjacent thinking/reasoning segments into a single summary."
   "Return the visible request summary line for RENDER-DATA."
   (let ((elapsed (plist-get render-data :elapsed-seconds)))
     (when (numberp elapsed)
-      (format "─ Worked for %s" (mevedel--duration-label elapsed)))))
+      (format "── Worked for %s " (mevedel--duration-label elapsed)))))
 
 (defun mevedel-view--render-request-summary-segment (seg data-buf)
-  "Render request-summary SEG from DATA-BUF as an assistant footer."
+  "Render request-summary SEG from DATA-BUF as the assistant turn's closing rule.
+The label sits on the rule: a strike-through on the extended newline
+continues it to the window edge, so no width has to be computed for
+narrow or split windows.  `mevedel-view--render-turn' then omits its own
+rule."
   (let* ((seg-start (cadr seg))
          (seg-end (caddr seg))
          (render-data
@@ -6077,11 +6092,16 @@ Merges adjacent thinking/reasoning segments into a single summary."
           (mevedel-view--segment-rendering data-buf seg-start seg-end))
          (source (mevedel-view-disclosure-source-range data-buf seg-start seg-end)))
     (when failure-rendering
+      (mevedel-view--ensure-blank-line-after-response)
       (mevedel-view--insert-rendered-tool failure-rendering source))
     (when line
+      (mevedel-view--ensure-blank-line-before-response)
       (let ((start (point)))
-        (insert (propertize (concat line "\n")
-                            'font-lock-face 'mevedel-view-separator))
+        (insert line "\n")
+        (put-text-property start (1- (point))
+                           'font-lock-face 'mevedel-view-separator)
+        (put-text-property (1- (point)) (point)
+                           'font-lock-face 'mevedel-view-request-summary-rule)
         (add-text-properties
          start (point)
          `(mevedel-view-type request-summary
@@ -6109,14 +6129,53 @@ added when the text before point does not already end with a blank line
     (when (> pos (point-min))
       (get-text-property (1- pos) 'mevedel-view-type))))
 
-(defun mevedel-view--insert-activity-rule-after-response ()
-  "Insert a quiet separator before activity following response prose."
+(defun mevedel-view--ensure-blank-line-after-response ()
+  "Insert a blank line before activity following response prose.
+Activity hangs below the prose that announced it; the rule that sets it
+apart comes before the next prose instead, see
+`mevedel-view--insert-activity-rule-before-response'."
   (when (eq (mevedel-view--previous-rendered-type) 'response)
+    (mevedel-view--ensure-blank-line-before-response)))
+
+(defun mevedel-view--activity-before-point-p ()
+  "Return non-nil when this turn's preceding rendered row is activity.
+Activity is anything other than prose or a heading: tool rows, thinking,
+reminders, mailbox cards.  Turn-closing chrome (the user spacer, the turn
+rule) ends the search, so a turn never takes its rule from the turn
+before it, as a directive response without its own heading otherwise
+would."
+  (let ((pos (point)))
+    (while (and (> pos (point-min))
+                (memq (char-before pos) '(?\n ?\s ?\t))
+                (not (memq (get-text-property (1- pos) 'font-lock-face)
+                           '(mevedel-view-separator
+                             mevedel-view-request-summary-rule
+                             mevedel-view-turn-rule))))
+      (setq pos (1- pos)))
+    (and (> pos (point-min))
+         (not (memq (char-before pos) '(?\n ?\s ?\t)))
+         (when-let* ((type (get-text-property (1- pos) 'mevedel-view-type)))
+           (not (memq type '(response turn-header activity-separator)))))))
+
+(defconst mevedel-view--activity-rule
+  (concat (propertize "  " 'mevedel-view-type 'activity-separator
+                      'mevedel-view-collapsed nil)
+          (propertize "\n"
+                      'font-lock-face 'mevedel-view-activity-rule
+                      'mevedel-view-type 'activity-separator
+                      'mevedel-view-collapsed nil))
+  "Text of the quiet rule before prose that follows activity.
+The two leading columns stay undecorated, which insets the rule.")
+
+(defun mevedel-view--insert-activity-rule-before-response ()
+  "Insert a quiet inset rule before prose that follows activity.
+The rule closes the activity the previous prose announced, so each
+section reads as intent followed by its actions.  It is decided when
+the prose arrives: the activity before it is already rendered, so no
+lookahead or later repair is needed."
+  (when (mevedel-view--activity-before-point-p)
     (mevedel-view--ensure-blank-line-before-response)
-    (insert (propertize "\n"
-                        'font-lock-face 'mevedel-view-activity-rule
-                        'mevedel-view-type 'activity-separator
-                        'mevedel-view-collapsed nil))))
+    (insert mevedel-view--activity-rule)))
 
 (defun mevedel-view--tool-activity-tool-segment-p (seg data-buf)
   "Return non-nil when SEG belongs to a tool run in DATA-BUF."
@@ -6371,7 +6430,7 @@ activity when it ends in something they cannot join."
              (let ((entries (mevedel-view--tool-activity-entries segments data-buf)))
                (if (mevedel-view--tool-activity-groupable-p entries pending)
                    (progn
-                     (mevedel-view--insert-activity-rule-after-response)
+                     (mevedel-view--ensure-blank-line-after-response)
                      (mevedel-view--insert-tool-group entries data-buf pending))
                  (let (tool-group thinking-group)
                    (dolist (seg segments)
@@ -6517,6 +6576,9 @@ is inserted beside the header.  CONTINUATION-P suppresses that header."
                      (unless (string-empty-p text)
                        (let ((unit-start (point)))
                          (mevedel-view--ensure-blank-line-before-response)
+                         ;; The rule belongs to this prose's live unit, so
+                         ;; retained activity above it never changes.
+                         (mevedel-view--insert-activity-rule-before-response)
                          (let ((start (point)))
                          (insert (mevedel-view--fontify-response text) "\n")
                          (let ((response-end (copy-marker (point) t)))
@@ -7090,7 +7152,8 @@ its threshold, or start a run of their own after a row that cannot fold."
                           (setcar out entry))
                       (push entry out))))))))
         (start-time (float-time))
-        (inserted-rule nil)
+        ;; Spacing after prose is decided once per run, not per row.
+        (spaced nil)
         (rendered 0)
         (fallbacks 0))
     (unwind-protect
@@ -7123,17 +7186,17 @@ its threshold, or start a run of their own after a row that cannot fold."
                      (mevedel-view--insert-hook-audit-block
                       record (plist-get record :source))))
                   (rendering
-                   (unless inserted-rule
-                     (mevedel-view--insert-activity-rule-after-response)
-                     (setq inserted-rule t))
+                   (unless spaced
+                     (mevedel-view--ensure-blank-line-after-response)
+                     (setq spaced t))
                    (cl-incf rendered)
                    (mevedel-view--insert-rendered-tool rendering source))
                   (t
                    (when-let* ((summary (mevedel-view--tool-one-liner
                                          data-buf seg-start seg-end)))
-                     (unless inserted-rule
-                       (mevedel-view--insert-activity-rule-after-response)
-                       (setq inserted-rule t))
+                     (unless spaced
+                       (mevedel-view--ensure-blank-line-after-response)
+                       (setq spaced t))
                      (cl-incf fallbacks)
                      (let ((ins-start (point)))
                        (mevedel-view--insert-summary-region
@@ -7155,9 +7218,9 @@ its threshold, or start a run of their own after a row that cannot fold."
                           run-entries
                           (> total mevedel-view-tool-group-collapse-threshold)
                           (progn
-                            (unless inserted-rule
-                              (mevedel-view--insert-activity-rule-after-response)
-                              (setq inserted-rule t))
+                            (unless spaced
+                              (mevedel-view--ensure-blank-line-after-response)
+                              (setq spaced t))
                             (mevedel-view--insert-tool-group
                              run-entries data-buf pending)))
                      (cl-incf rendered (length run-entries))

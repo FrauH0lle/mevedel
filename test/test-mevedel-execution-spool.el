@@ -182,10 +182,19 @@
 (mevedel-deftest mevedel-execution-spool-worker-startup
   (:doc "signalling and nil worker startup release buffers, timers, temporaries and registry")
   (dolist (failure '(signal nil))
-    (let* ((root (make-temp-file "mevedel-spool-startup-" t))
+    (let* ((timers (lambda ()
+                     ;; Any undo-recorded change arms Emacs's own one-shot
+                     ;; boundary timer when none is pending, so whether it
+                     ;; appears depends on timing and test order, not on
+                     ;; the spool.
+                     (seq-remove (lambda (timer)
+                                   (eq (timer--function timer)
+                                       #'undo-auto--boundary-timer))
+                                 timer-list)))
+           (root (make-temp-file "mevedel-spool-startup-" t))
            (path (file-name-concat root "execution.log"))
            (before-buffers (buffer-list))
-           (before-timers (copy-sequence timer-list))
+           (before-timers (funcall timers))
            attempted worker-buffer temporary)
       (unwind-protect
           (progn
@@ -205,7 +214,7 @@
             (should temporary)
             (should-not (buffer-live-p worker-buffer))
             (should (equal before-buffers (buffer-list)))
-            (should (equal before-timers timer-list))
+            (should (equal before-timers (funcall timers)))
             (should-not (file-exists-p temporary))
             (should-not (gethash path mevedel-execution-spool--compressions))
             (should (file-exists-p path)))
