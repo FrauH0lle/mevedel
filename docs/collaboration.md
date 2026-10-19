@@ -575,8 +575,10 @@ session list. The host owns this in `mevedel-collaboration-files.el`.
 The project's own listing is the authority. It is `project-files` for the
 lobby's workspace root -- the VC backend's tracked and untracked files minus
 ignored ones in a repository, the transient project's ignores elsewhere --
-with the workspace state under `.mevedel/` removed, because it holds the
-lobby credentials, permissions and memory. A Git repository cloned inside a
+with workspace state under every `.mevedel/` component removed, including
+nested projects and submodules, because it holds lobby credentials, permissions
+and memory. Private directories are not descended into for reference clones.
+A Git repository cloned inside a
 Git project without being tracked or ignored there, such as a reference
 repository, contributes the same listing of its own root by its own rules;
 Git reports it as a single directory entry, which `project-files` drops

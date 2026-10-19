@@ -59,6 +59,8 @@
       (mevedel-collaboration-files-test--write root "data/table.csv")
       (mevedel-collaboration-files-test--write root ".mevedel/lobby")
       (mevedel-collaboration-files-test--write root ".mevedel/shared/x.md")
+      (mevedel-collaboration-files-test--write root "app/.mevedel/lobby")
+      (mevedel-collaboration-files-test--write root "app/.mevedel/permissions.el")
       (should (equal '("data/table.csv" "notes.md")
                      (mevedel-collaboration-files--listing root))))
     (mevedel-collaboration-files-test--with-root root
@@ -89,6 +91,8 @@
     (mevedel-collaboration-files-test--write root ".gitignore" "ignored/\n")
     (mevedel-collaboration-files-test--write root "top.txt")
     (mevedel-collaboration-files-test--write root "plain/b.txt")
+    (mevedel-collaboration-files-test--git-init (file-name-concat root ".mevedel/refs/private"))
+    (mevedel-collaboration-files-test--write root ".mevedel/refs/private/secret.txt")
     ;; A reference clone, with its own ignores, workspace state and a
     ;; clone nested in it in turn.
     (mevedel-collaboration-files-test--git-init
@@ -121,6 +125,25 @@
                    (mevedel-collaboration-files--file
                     root (mevedel-collaboration-files--listing root)
                     "refs/app/src/main.py")))))
+
+(mevedel-deftest mevedel-collaboration-files-private-access
+  (:doc "nested workspace state authorizes no read, upload or removal")
+  (mevedel-collaboration-files-test--with-root root
+    (let ((path "app/.mevedel/lobby")
+          (owner (mevedel-collaboration-files-test--owner)) sent trashed)
+      (mevedel-collaboration-files-test--write root path "private credentials")
+      (mevedel-collaboration-files-test--write root "app/main.el")
+      (mevedel-collaboration-files-test--capturing sent
+        (mevedel-collaboration-files-handle-get owner 2 (list :reqId 1 :path path) root)
+        (should (plist-get (cdar sent) :error))
+        (should-error (mevedel-collaboration-files--begin-upload
+                       root '(:dir "app/.mevedel" :name "upload.txt" :size 1) 2))
+        (cl-letf (((symbol-function 'move-file-to-trash)
+                   (lambda (&rest _) (setq trashed t))))
+          (setq sent nil)
+          (mevedel-collaboration-files-handle-remove owner 2 (list :reqId 3 :path path) root)
+          (should (plist-get (cdar sent) :error))
+          (should-not trashed))))))
 
 (mevedel-deftest mevedel-collaboration-files--folder-p
   (:doc "accepts the root and folders that hold listed files only")

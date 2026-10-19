@@ -16,7 +16,7 @@ checks, or ApplyPatch review. A view link sees no project files at all.
 Uploads land in any listed folder of the project, not in a confined drop
 folder such as `work://shared/`. An upload creates a new file and never
 replaces one. Removal moves a file to the trash. The project's own listing,
-minus `.mevedel/`, is the only authority for which paths a browser may name;
+minus `.mevedel/` components at every depth, is the only authority for which paths a browser may name;
 the browser never supplies a path the listing does not show. In a Git
 project that listing includes each untracked, unignored Git repository
 cloned inside it, by that repository's own listing.
@@ -42,6 +42,11 @@ nested repository as one directory entry and `project-files` drops it, while
 the model's search tools read those files; the browser then hid exactly the
 material the sessions were reading. Asking each clone for its own listing
 keeps that clone's ignore rules, and a clone the project ignores stays hidden.
+The private-state exclusion applies before descending into clones as well as
+to ordinary and merged-submodule paths. A root-only prefix filter exposed nested
+workspace credentials and permissions through the same listing-based file
+authority; matching whole path components closes that hole without hiding
+ordinary nested project files.
 
 ## Consequences
 
