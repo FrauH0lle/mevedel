@@ -201,3 +201,21 @@ test('discussions, history and libraries read as text', async () => {
   const sheet = (await handle({ action: 'library-view', part: 'sheet', libraries: [{ name: 'Weather', text: library }] })).result;
   assert.equal(sheet.mime, 'image/png');
 });
+
+test('an unsupported installed library does not hide valid libraries or their sheet', async () => {
+  const libraries = [
+    {name: 'Broken', text: JSON.stringify({type: 'excalidrawlib', version: 99, libraryItems: []})},
+    {name: 'Good', text: JSON.stringify({type: 'excalidrawlib', version: 2, libraryItems: [
+      {id: 'box', name: 'Box', status: 'published', elements: [rect('a', 0)]},
+    ]})},
+  ];
+  const {text} = (await handle({action: 'library-view', part: 'list',
+    at: 'shared://library', libraries})).result;
+  assert.match(text, /1\. Good\/box/);
+  assert.match(text, /Broken.*Not an Excalidraw library/);
+  assert.equal((await handle({action: 'library-view', part: 'sheet', libraries})).result.mime, 'image/png');
+  const empty = (await handle({action: 'library-view', part: 'list', at: 'shared://library',
+    libraries: libraries.slice(0, 1)})).result;
+  assert.match(empty.text, /No library items/);
+  assert.match(empty.text, /Broken.*Not an Excalidraw library/);
+});

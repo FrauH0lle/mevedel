@@ -153,9 +153,12 @@
     (make-directory mevedel-shared-library-directory t)
     (with-temp-file (file-name-concat mevedel-shared-library-directory "Legacy.excalidrawlib")
       (insert "{\"type\":\"excalidrawlib\",\"version\":1,\"library\":[[{\"id\":\"r\",\"type\":\"rectangle\",\"x\":0,\"y\":0,\"width\":80,\"height\":40}]]}"))
+    (with-temp-file (file-name-concat mevedel-shared-library-directory "Unsupported.excalidrawlib")
+      (insert "{\"type\":\"excalidrawlib\",\"version\":99,\"libraryItems\":[]}"))
     (let* ((listing (text (run "Read" '(:file_path "shared://library"))))
            (legacy (and (string-match "\\(Legacy/[^ ]+\\) ·" listing) (match-string 1 listing))))
       (should (string-search "Built-in/builtin-database · " listing))
+      (should (string-match-p "Unsupported.*Not an Excalidraw library" listing))
       (should legacy)
       (should (plist-get (run "Read" '(:file_path "shared://library/Legacy/sheet.png")) :media))
       (should (string-match-p "No element library Missing"

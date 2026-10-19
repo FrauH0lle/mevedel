@@ -317,6 +317,9 @@ the host's Emacs, not to a session or board: every writable participant in
 every room, and the assistant, sees the same libraries. Inserted items are
 ordinary elements, so a board carries them without its libraries, as an
 Excalidraw scene does. View links have no library.
+An invalid or unsupported installed file reports its own error in the browser
+and at `shared://library`; other libraries remain available, with the same
+item numbering in the model's listing and preview sheet.
 
 **Browse public libraries** lists the collection at
 [libraries.excalidraw.com](https://libraries.excalidraw.com) with a search
