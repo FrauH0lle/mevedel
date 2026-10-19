@@ -285,7 +285,8 @@ card's selection stays authoritative once retained."
      ((not (eq attempt (plist-get plan :attempt)))
       (setq outcome 'superseded))
      ((and (proper-list-p outcome)
-           (plist-get outcome :accept)
+           (or (plist-get outcome :accept)
+               (plist-get outcome :remote-feedback))
            (not (mevedel-directive-plan--live-p plan 'proposed)))
       (setq outcome 'invalidated)))
     (cond
@@ -295,6 +296,9 @@ card's selection stays authoritative once retained."
                 (plist-get (mevedel-directive-plan record) :attempt))
         (mevedel-directive-plan--implement
          directive record session (plist-get outcome :selection) callback)))
+     ((and (proper-list-p outcome) (plist-get outcome :remote-feedback))
+      (mevedel-directive-plan-continue
+       directive (plist-get outcome :remote-feedback)))
      ((eq outcome 'feedback-draft)
       (mevedel-directive-plan-put record :status 'draft)
       (mevedel-session-artifacts-save

@@ -37,7 +37,11 @@ implementation settings; they do not replace the session policy or the
 directive's planning model. Selection survives proposal feedback, while a fresh
 directive action starts with fresh defaults seeded with the directive's own
 skill selection (deduplicated by skill source); the card's selection at accept
-time is the single authority for that attempt.
+time is the single authority for that attempt. Browser feedback from a full or
+owner link continues that directive's planning conversation directly, with the
+current proposal as reference; it neither submits ordinary chat nor enters the
+host's composer. View links cannot answer the approval. Feedback captured from
+a replaced, cancelled, or invalidated attempt cannot restart its planning.
 
 ## Directive skills
 

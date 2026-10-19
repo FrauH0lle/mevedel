@@ -132,6 +132,37 @@
 (mevedel-deftest mevedel-directive-plan--approval-outcome ()
   ,test
   (test)
+  :doc "browser feedback continues only the live captured directive attempt"
+  (dolist (state '(live superseded invalidated cancelled))
+    (let* ((attempt (gensym "attempt-"))
+           (record (mevedel-directive--create
+                    :id "directive" :request "Request"
+                    :plan (list :status 'proposed :action 'implement
+                                :attempt (if (eq state 'superseded)
+                                             (gensym "replacement-") attempt)
+                                :invalidated (eq state 'invalidated)
+                                :cancelled (eq state 'cancelled))))
+           (session (mevedel-session--create :name "main"))
+           (directive (make-overlay (point-min) (point-min)))
+           continued messages)
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-directive-plan-continue)
+                     (lambda (owner text) (setq continued (list owner text))))
+                    ((symbol-function 'mevedel-session-artifacts-save) #'ignore)
+                    ((symbol-function 'mevedel-directive-plan--refresh) #'ignore)
+                    ((symbol-function 'mevedel-directive-plan--restore-chat-scope)
+                     #'ignore))
+            (mevedel-test--with-captured-messages messages
+              (mevedel-directive-plan--approval-outcome
+               directive record session nil attempt
+               '(:remote-feedback "Cover failure recovery"))
+              (should-not messages))
+            (if (eq state 'live)
+                (should (equal continued
+                               (list directive "Cover failure recovery")))
+              (should-not continued)))
+        (delete-overlay directive))))
+
   :doc "settles the caller with an error when the proposal is invalidated"
   (let* ((attempt (gensym "attempt-"))
          (record (mevedel-directive--create
