@@ -182,7 +182,7 @@ test('room appearance, navigation and decisions preserve work', async t => {
 
   await page.setViewportSize({width:1600,height:1000});
   await page.evaluate(()=>{
-    window.receiveTest({t:'history-index',currentSegment:2,records:[{id:'history-1-artifact',artifact:'Workspace guide.html',size:2400}],final:true});
+    window.receiveTest({t:'history-index',currentSegment:2,records:[{kind:'chat',number:1,title:'Room design',firstSegment:1,lastSegment:2},{id:'history-1-artifact',artifact:'Workspace guide.html',size:2400}],final:true});
     window.receiveTest({t:'remove',ids:['person','reply','artifact']});
     window.receiveTest({t:'record',record:{id:'after-compaction',kind:'assistant',text:'Continuing with compacted context.'}});
   });
