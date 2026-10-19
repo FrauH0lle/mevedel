@@ -11,9 +11,19 @@ Emacs Lisp plist. This uses the package's existing append-only log convention,
 requires no serializer dependency, and remains streamable even when a run is
 interrupted. Every entry has schema version 1, an ISO wall time,
 process-relative elapsed milliseconds, a process-local sequence number, the
-session and turn, and any current preset and Goal identity.
+turn, and any current preset and Goal identity. Session identity comes from
+the containing session directory, not a repeated `:session-id` on every line.
+Keep that directory name when copying logs for analysis. Nil-valued properties
+are omitted, including inside nested plists: an absent field means nil or
+unknown, never zero. Numeric zero, true flags, and nil positions in ordinary
+lists and vectors are retained. Schema tags remain per-event so incomplete
+or concatenated streams remain independently interpretable; preset and active
+profiler/Goal identities remain per-event because they can change during a run.
+Existing files are not rewritten. The offline cache analyzer derives session
+identity from the containing directory for all rows, including previously
+written rows with the now-redundant session field.
 
-Sessionless background work uses the same envelope and privacy filter at
+Sessionless background work uses the same compact envelope and privacy filter at
 `WORKSPACE/.mevedel/state/diagnostics/telemetry-log.el`, through target-native control
 operations on local and TRAMP workspaces. It has no session identity or Goal
 and does not manufacture a conversation. It follows the same enable switch;

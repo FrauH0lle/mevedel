@@ -96,7 +96,8 @@ are searched recursively without following directory symlinks."
   "Read FILE without evaluation, returning metadata records and diagnostics.
 Each physical line is one Lisp value.  Circular reader syntax is disabled.
 Malformed lines do not discard later complete records, and reader error
-messages are never echoed because they may contain log payloads."
+messages are never echoed because they may contain log payloads.
+Session identity is the containing directory's name, not a per-event field."
   (let (records issues (other-events 0) (line 0))
     (condition-case nil
         (with-temp-buffer
@@ -131,17 +132,18 @@ messages are never echoed because they may contain log payloads."
                                         (stringp (plist-get record :call-id))
                                         (not (string-empty-p
                                               (plist-get record :call-id)))
-                                        (<= (length (plist-get record :call-id)) 512)
-                                        (stringp (plist-get record :session-id))
-                                        (not (string-empty-p
-                                              (plist-get record :session-id)))
-                                        (<= (length (plist-get record :session-id)) 512)))
+                                        (<= (length (plist-get record :call-id)) 512)))
                               (push (mevedel-analyze-session-cache--issue
                                      "invalid-call" file line) issues)
-                            (let (metadata)
+                            (let ((metadata
+                                   (list :session-id
+                                         (file-name-nondirectory
+                                          (directory-file-name
+                                           (file-name-directory file))))))
                               (dolist (field mevedel-analyze-session-cache--event-fields)
-                                (setq metadata
-                                      (plist-put metadata field (plist-get record field))))
+                                (unless (eq field :session-id)
+                                  (setq metadata
+                                        (plist-put metadata field (plist-get record field)))))
                               (push (list :metadata metadata :file file :line line)
                                     records))))))
                   (error
