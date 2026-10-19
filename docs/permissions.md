@@ -277,7 +277,10 @@ workspace, memory, and additional writable roots before every launch; the
 execution target's temporary directory is excluded as a discovery root. A
 workspace or additional root beneath it is still searched when independently
 listed. Other repositories placed only in temporary scratch do not receive
-glob-discovered protection.
+glob-discovered protection. Local preparation defaults to
+`temporary-file-directory` when no explicit temporary root is supplied, including
+one-shot helpers, so it does not plant synthetic Git or workspace metadata in
+the shared temporary root.
 
 On local Linux, literal directory globs such as `**/.git/**` use GNU `find`
 when available. Discovery still runs before each launch: it follows a symlink

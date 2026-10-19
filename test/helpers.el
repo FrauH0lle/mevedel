@@ -466,18 +466,19 @@ temporary directory is an ancestor of every other test directory."
         (setq mevedel-test--placeholder-root root))))
 
 (defun mevedel-test--assert-no-temporary-root-state ()
-  "Signal, after removing it, when a test leaves state in the temp directory.
+  "Signal when Git or workspace state is found in the shared temp directory.
 A workspace rooted at `temporary-file-directory' makes every later temporary
-test directory resolve to that workspace."
+test directory resolve to that workspace.  Preserve the evidence: shared-root
+state might belong to another process, not the test that first notices it."
   (when-let* ((leaked
                (seq-filter
                 #'file-exists-p
                 (mapcar (lambda (name)
                           (expand-file-name name temporary-file-directory))
-                        '(".mevedel")))))
-    (dolist (path leaked)
-      (delete-directory path t))
-    (error "Test left workspace state in the temporary directory: %S" leaked)))
+                        '(".git" ".mevedel")))))
+    (error "Git or workspace state found after test %S in the temporary directory: %S"
+           (when-let* ((test (ert-running-test))) (ert-test-name test))
+           leaked)))
 
 
 ;;

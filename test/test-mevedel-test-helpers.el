@@ -91,6 +91,38 @@
       (when (ert-test-boundp 'mevedel-test--nested-registry-case/test)
         (ert-delete-test 'mevedel-test--nested-registry-case/test)))))
 
+(mevedel-deftest mevedel-test--assert-no-temporary-root-state ()
+  ,test
+  (test)
+  :doc "accepts a clean temporary root"
+  (let ((root (make-temp-file "mevedel-test-root-guard-" t)))
+    (unwind-protect
+        (let ((temporary-file-directory root))
+          (should-not (mevedel-test--assert-no-temporary-root-state)))
+      (delete-directory root t)))
+  :doc "names the test and leaves Git and workspace evidence untouched"
+  (let ((root (make-temp-file "mevedel-test-root-guard-" t)))
+    (unwind-protect
+        (dolist (name '(".git" ".mevedel"))
+          (let* ((path (file-name-concat root name))
+                 (evidence (file-name-concat path "evidence")))
+            (make-directory path)
+            (with-temp-file evidence (insert "Do not remove"))
+            (let* ((temporary-file-directory root)
+                   (err (should-error
+                         (mevedel-test--assert-no-temporary-root-state)
+                         :type 'error))
+                   (text (error-message-string err)))
+              (should (string-match-p (regexp-quote path) text))
+              (should (string-match-p
+                       (regexp-quote
+                        (symbol-name (ert-test-name (ert-running-test))))
+                       text)))
+            (should (equal "Do not remove"
+                           (mevedel-test--read-file evidence)))
+            (delete-directory path t)))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-test--cancel-stray-lease-timers
   (:doc "retires delayed store notifications before another test can observe them")
   (let* ((mevedel-artifact-store--content-changes (make-hash-table :test #'equal))

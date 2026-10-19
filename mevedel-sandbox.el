@@ -452,7 +452,8 @@ Do not follow interior symlinks. NUL framing preserves arbitrary file names."
   "Return concrete protected-path candidates for WORKDIR and WRITABLE-ROOTS.
 
 Glob patterns are discovered by walking the writable roots.  TEMPORARY-ROOT,
-the execution target's temporary directory, is exempt from that walk: it is
+the execution target's temporary directory, defaults to
+`temporary-file-directory' for local WORKDIR and is exempt from that walk: it is
 scratch the child already owns, a repository placed there is not protected,
 and walking all of it on every launch cost more than the protection was
 worth while surfacing transient trees that vanished before launch.
@@ -462,6 +463,11 @@ Literal state roots carry `:create-parents' so preparation protects their
 leaf while retaining writable authored siblings.  These directories persist
 across launches, since another active sandbox may still mount them."
   (let* ((target-prefix (file-remote-p workdir))
+         ;; One-shot and helper callers may omit the target temporary root.
+         ;; Never plant synthetic Git or workspace metadata in shared scratch.
+         (temporary-root (or temporary-root
+                             (and (not target-prefix)
+                                  temporary-file-directory)))
          (exempt (and temporary-root
                       (mevedel-sandbox--canonical-directories
                        (list temporary-root))))

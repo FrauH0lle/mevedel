@@ -621,7 +621,31 @@
             :writable-roots (list temporary-file-directory))))
       (should (= 0 (plist-get result :exit-code)))
       (should-not (plist-get result :output-limit-p))
-      (should (= 4096 (plist-get result :output-bytes))))))
+      (should (= 4096 (plist-get result :output-bytes)))))
+  :doc "does not plant Git or workspace metadata in the system temporary root"
+  (progn
+    (skip-unless (plist-get (mevedel-sandbox-probe) :available))
+    (let* ((root (make-temp-file "mevedel-one-shot-temporary-root-" t))
+           (temporary-file-directory (file-name-as-directory root))
+           (mevedel-sandbox-mode 'required))
+      (unwind-protect
+          (let ((result
+                 (mevedel-execution-run-one-shot
+                  :name "mevedel-test-temporary-root"
+                  :command
+                  (list "sh" "-c"
+                        (concat "for path in .git .mevedel; do "
+                                "test ! -e \"$path\" || printf '%s\\n' \"$path\"; done"))
+                  :workdir root :writable-roots (list root))))
+            ;; Observe the mounted tree while the child is alive, not just
+            ;; after synthetic mount-target cleanup has removed an empty .git.
+            (should (= 0 (plist-get result :exit-code)))
+            (should (equal "" (plist-get result :output)))
+            (should (eq 'bubblewrap
+                        (plist-get (plist-get result :sandbox-facts) :sandbox)))
+            (should-not (file-exists-p (file-name-concat root ".git")))
+            (should-not (file-exists-p (file-name-concat root ".mevedel"))))
+        (delete-directory root t)))))
 
 
 ;;
