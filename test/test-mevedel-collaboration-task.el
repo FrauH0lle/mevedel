@@ -27,7 +27,8 @@
   (let ((row (mevedel-collaboration--task-row
               (mevedel-task--create
                :id 2 :subject "Fix propagation" :status 'in-progress
-               :owner "/root/worker-1" :blocked-by '(1))))
+               :owner "/root/worker-1" :blocked-by '(1)
+               :metadata '(:activeForm "Fixing propagation"))))
         (plain (mevedel-collaboration--task-row
                 (mevedel-task--create
                  :id 1 :subject "Trace the grant" :status 'pending))))
@@ -36,6 +37,7 @@
     (should (equal "Fix propagation" (cdr (assoc "subject" row))))
     (should (equal "/root/worker-1" (cdr (assoc "owner" row))))
     (should (equal [1] (cdr (assoc "blockedBy" row))))
+    (should (equal "Fixing propagation" (cdr (assoc "activeForm" row))))
     (should-not (assoc "owner" plain))
     (should-not (assoc "blockedBy" plain))))
 
@@ -85,7 +87,24 @@
                          :omitted 2 :omittedActive 2))
          (mevedel-collaboration--task-frame-max-bytes
           (string-bytes (json-encode expected))))
-    (should (equal expected (mevedel-collaboration--tasks-frame room)))))
+    (should (equal expected (mevedel-collaboration--tasks-frame room))))
+
+  :doc "uses native active priority and attaches each active owner's note once"
+  (let* ((session
+          (mevedel-session--create
+           :tasks (list (mevedel-task--create :id 5 :subject "Later running" :status 'in-progress)
+                        (mevedel-task--create :id 1 :subject "Blocked"
+                                             :status 'pending :blocked-by '(3))
+                        (mevedel-task--create :id 2 :subject "Ready" :status 'pending)
+                        (mevedel-task--create :id 3 :subject "Running" :status 'in-progress)
+                        (mevedel-task--create :id 4 :subject "Done" :status 'completed :owner "past"))
+           :task-status-notes '((nil :note "Checking evidence")
+                                ("past" :note "Hidden old note"))))
+         (rows (append (plist-get (mevedel-collaboration--tasks-frame
+                                  (list :session session)) :tasks) nil)))
+    (should (equal '(3 5 2 1 4) (mapcar (lambda (row) (cdr (assoc "id" row))) rows)))
+    (should (equal "Checking evidence" (cdr (assoc "note" (car rows)))))
+    (should-not (cl-some (lambda (row) (assoc "note" row)) (cdr rows)))))
 
 (mevedel-deftest mevedel-collaboration--publish-tasks
   (:doc "broadcasts the task list once per change, an emptied list included")

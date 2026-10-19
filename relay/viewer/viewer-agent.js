@@ -21,10 +21,12 @@
                   timer: null};
     let requestSequence = 0;
 
-    function meta(row) {
+    function meta(row, full = false) {
       const bits = [];
       if (typeof row.role === 'string' && row.role) bits.push(row.role);
       bits.push(row.status);
+      if (full && row.backend) bits.push(row.backend);
+      if (row.model) bits.push(row.model + (row.effort ? `:${row.effort}` : ''));
       return bits.join(' · ');
     }
 
@@ -67,13 +69,11 @@
     function open(row) {
       if (!panel) return;
       view.path = row.path;
-      view.row = {path: row.path};
-      if (typeof row.role === 'string') view.row.role = row.role;
-      if (typeof row.status === 'string') view.row.status = row.status;
+      view.row = {...row};
       view.digest = null;
       view.staging = null;
       if (title) title.textContent = row.path;
-      if (metaEl) metaEl.textContent = meta(row);
+      if (metaEl) metaEl.textContent = meta(row, true);
       if (transcript) {
         transcript.replaceChildren(el('p', 'panel-note', 'Loading…'));
       }
@@ -107,9 +107,9 @@
         const stuck = status !== 'running';
         const chip = el('button', `dock-chip${stuck ? ' stuck' : ''}`);
         chip.type = 'button';
-        chip.title = stuck
-          ? `${row.path} is ${status} — it needs the host before it can continue`
-          : `${row.path} is working — tap to watch`;
+        chip.title = status === 'blocked'
+          ? `${row.path} is blocked — awaiting an interaction`
+          : `${row.path} is ${status} — tap to watch`;
         chip.append(el('span', 'agent-dot'));
         chip.append(el('span', 'dock-chip-name', row.path));
         const label = meta(row);
@@ -134,8 +134,7 @@
           doneList.append(item);
         });
       }
-      // An agent that is not running needs the host before it can go on,
-      // so the collapsed summary carries that warning.
+      // Waiting is an active state, not necessarily a request for host input.
       if (summarize) {
         const bits = [];
         if (active.length) {
@@ -143,12 +142,15 @@
         }
         if (done.length) bits.push(`${done.length} finished`);
         summarize('agents', bits.join(' · '),
-                  active.some(row => row.status !== 'running'));
+                  active.some(row => row.status === 'blocked'));
       }
       if (view.path) {
         const watched = valid.find(row => row.path === view.path) || null;
-        if (metaEl) metaEl.textContent = watched ? meta(watched) : 'settled';
-        if (watched) fetch();
+        if (metaEl) metaEl.textContent = watched ? meta(watched, true) : 'settled';
+        if (watched) {
+          view.row = {...watched};
+          fetch();
+        }
       }
     }
 

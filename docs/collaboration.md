@@ -833,7 +833,8 @@ sent: the relay refuses an oversized frame by closing the connection, and
 for the host connection it collects the room with it.
 
 Guests of every link tier also receive the retained agent roster:
-the canonical path, role, and status of every active or settled registered agent,
+the canonical path, role, status, and effective provider/model/known effort of
+every active or settled registered agent,
 broadcast on change and told to a joining guest directly. An active
 agent carries its blocked/waiting/running status; a settled one carries
 its terminal outcome (done, errored, or interrupted), because retained
@@ -843,24 +844,42 @@ it too. It rides the same coalesced publication as the transcript; the
 view's status render nudges that publication so a retained agent working
 while the root request is idle, when no gptel observer fires, still
 reaches the strip. The viewer splits the roster inside the Session menu:
-active agents render as chips, marking a blocked or waiting agent so a
+active agents render as chips with compact model:effort attribution, marking a blocked or waiting agent so a
 session that fans out workers never reads as an opaque gap, while settled
 agents collapse into a "Finished agents" disclosure whose rows open the
-same transcript sheet. A settled agent whose conversation
-buffer is not resident (cold state after a restart) answers a fetch with
-the standard not-available message; a browser poll never hydrates cold
-state.
+same transcript sheet. Waiting is not itself a request for host intervention;
+only blocked agents mark the summary as requiring attention. The inspection
+sheet shows full provider/model attribution, without borrowing the parent's
+configuration or inventing an unknown effort.
+Expanded active and finished rows wrap long paths and model labels within the
+disclosure rather than making a narrow viewport scroll horizontally.
 
 The same publication cycle sends the session task list to either link:
-identity, subject, status, optional owner, and unresolved dependency IDs.
+identity, subject, status, optional owner, running agent activity, owner status
+notes, and unresolved dependency IDs. Each task displays its ID so dependency
+references can be resolved; each active owner's note appears once. The host
+uses the native task activity and priority helpers rather than inferring them
+in JavaScript. Long owner paths and notes wrap on narrow screens.
 The frame is latched on change and sent directly to each joining guest so an
 unchanged list cannot disappear on reconnect. The viewer keeps it collapsed
 to a done/total summary, orders in-progress work first, and strikes completed
 rows. Task projection is capped at 64 KiB of encoded JSON: it admits
-in-progress tasks first, then pending tasks, then the most recently completed
+in-progress tasks first, then ready pending tasks, then blocked pending tasks,
+then the most recently completed
 tasks. The frame carries total, completed, omitted, and omitted-active counts,
 so a shortened history remains explicit and any omitted active work is
 conspicuous. The transport's larger wire bound remains the final safety check.
+
+Every link tier also receives a change-latched `goal` frame on joining and as
+the durable Goal changes, including an explicit absent value when cleared.
+The status strip has a separate read-only Goal chip with status, settled turns,
+and token usage/budget. Tapping it opens the objective, status reason, and
+accounted time/usage details. An unbounded budget and incomplete usage are explicit;
+incomplete usage is a lower bound, never a fabricated total. Unaccounted current
+request usage is not added to the durable counters. Objective and reason text
+are each capped at 4 KiB with an explicit truncation notice, keeping the frame
+below 64 KiB even with JSON escaping. Goal changes stay in Emacs:
+the browser adds no Goal editing, pause, resume, or completion authority.
 
 Tapping a chip opens that agent's live transcript as a full-screen
 sheet. The viewer polls with `fetch-agent` frames while the sheet is

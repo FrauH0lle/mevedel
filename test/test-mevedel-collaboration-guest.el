@@ -443,6 +443,12 @@
         (should (equal [] (plist-get (cdr (car agents)) :agents))))
       ;; The task list is latched the same way, so both guests are told
       ;; the current one directly.
+      (let ((goals (cl-remove-if-not
+                    (lambda (entry)
+                      (equal "goal" (plist-get (cdr entry) :t)))
+                    sent)))
+        (should (equal '(1 2) (sort (mapcar #'car goals) #'<)))
+        (should-not (alist-get 'goal (json-read-from-string (json-encode (cdar goals))))))
       (let ((tasks (cl-remove-if-not
                     (lambda (entry)
                       (equal "tasks" (plist-get (cdr entry) :t)))

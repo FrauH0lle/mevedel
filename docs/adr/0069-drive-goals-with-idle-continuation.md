@@ -25,6 +25,11 @@ settlement supply policy and subsequent continuation. Native and discoverable
 tool paths share availability checks; execution also requires the owning root
 request. Inspection never resumes stopped work or changes permission mode.
 
+Browser inspection follows the same observation-only boundary: every link tier
+receives durable Goal facts through a latched projection and opens a read-only
+status-strip detail sheet. It reports durable accounting with incompleteness
+preserved, not an inferred live total. The browser has no Goal mutation controls.
+
 Continuation and follow-up delivery are re-offered at the closing seam, not by
 each interaction kind: the interaction zone offers the root session's held
 idle work when its last pending interaction closes, and the composer offers
