@@ -146,7 +146,7 @@ test('a room handed off leads its guests to the room that continues it', async (
       const page = await open(browser, {viewport});
       await page.goto(sessionRoom.link);
       await page.waitForFunction(() => document.getElementById('session-label')
-        .textContent === 'Feature work');
+        ?.textContent === 'Feature work');
       await page.push[sessionRoom.id]({t: 'bye', reason: 'handoff',
                                        name: 'Implement plan', link: forkRoom.link});
       const action = page.locator('#terminal-action');
@@ -161,7 +161,7 @@ test('a room handed off leads its guests to the room that continues it', async (
                 `the Open action fits ${viewport.width}px`);
       await action.click();
       await page.waitForFunction(() => document.getElementById('session-label')
-        .textContent === 'Implement plan');
+        ?.textContent === 'Implement plan');
       assert.equal(await visible(page, '#terminal-state'), false);
       assert.ok(page.joined.includes(forkRoom.id));
 
@@ -202,7 +202,7 @@ test('the lobby, a room and its artifact lead back through header and history', 
     // Opening a session is a history entry, not a replacement.
     await page.getByRole('button', {name: 'Open Feature work'}).click();
     await page.waitForFunction(() => document.getElementById('session-label')
-      .textContent === 'Feature work');
+      ?.textContent === 'Feature work');
     assert.equal(await visible(page, '#room-back'), true);
     assert.equal(await page.locator('#room-back').getAttribute('aria-label'),
                  'Back to the project lobby');
@@ -244,11 +244,11 @@ test('the lobby, a room and its artifact lead back through header and history', 
     // And browser Back returns to the room, Back again to the lobby.
     await page.goBack();
     await page.waitForFunction(() => document.getElementById('session-label')
-      .textContent === 'Feature work');
+      ?.textContent === 'Feature work');
     while (await title(page) !== 'Lobby · proj') {
       await page.goBack();
       await page.waitForFunction(() => document.getElementById('session-label')
-        .textContent !== 'Live session');
+        ?.textContent !== 'Live session');
     }
     assert.equal(await visible(page, '#lobby'), true);
 
@@ -293,7 +293,7 @@ test('a host without a running lobby leaves the project as the only way out', as
     await page.goto(lobbyRoom.link);
     await page.getByRole('button', {name: 'Open Feature work'}).click();
     await page.waitForFunction(() => document.getElementById('session-label')
-      .textContent === 'Feature work');
+      ?.textContent === 'Feature work');
     // The browser holds the lobby's link, but the host says it is stopped.
     assert.equal(await visible(page, '#room-back'), false);
     await page.locator('#room-crumbs .crumb').click();
@@ -311,7 +311,7 @@ test('a phone keeps the way back and the project menu in its header', async () =
     await page.goto(lobbyRoom.link);
     await page.getByRole('button', {name: 'Open Feature work'}).click();
     await page.waitForFunction(() => document.getElementById('session-label')
-      .textContent === 'Feature work');
+      ?.textContent === 'Feature work');
     for (const selector of ['#room-back', '#room-crumbs .crumb', '#session-label']) {
       const box = await page.locator(selector).boundingBox();
       assert.ok(box && box.width > 0 && box.y >= 0 && box.y + box.height <= 56,
