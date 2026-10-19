@@ -712,9 +712,16 @@ changes."
                    (let* ((render-data
                            (if (eq type 'tool-child)
                                (plist-get child :render-data)
-                             (mevedel-tool-render-data-for-tool
-                              (mevedel-view-segments-display-buffer)
-                              parent-id)))
+                             (with-current-buffer
+                                 (mevedel-view-segments-display-buffer)
+                               (save-restriction
+                                 (widen)
+                                 ;; A nested parent's metadata does not make
+                                 ;; this outer summary its direct-call row.
+                                 (when (mevedel-tool-render-data-segment-bounds
+                                        parent-id)
+                                   (mevedel-tool-render-data-for-tool
+                                    (current-buffer) parent-id))))))
                           (direct (mevedel-tool-render-data-direct-call
                                    "ToolCall" render-data)))
                      (and (equal (plist-get direct :tool) "Bash")

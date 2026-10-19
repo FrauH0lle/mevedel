@@ -31,8 +31,11 @@
                   "mevedel-session-artifacts" (session descriptor))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds
                   "mevedel-session-artifacts" ())
+(declare-function mevedel-session-artifacts-transcript-segment-identity
+                  "mevedel-session-artifacts" (session descriptor))
 (declare-function mevedel-session-artifacts-transcript-segments
-                  "mevedel-session-artifacts" (session live-buffer))
+                  "mevedel-session-artifacts"
+                  (session live-buffer &optional agent-transcript-p))
 (autoload 'mevedel-session-artifacts-artifact-present-p
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-publish-transcript-state
@@ -43,6 +46,8 @@
 (autoload 'mevedel-session-artifacts-stabilize-gptel-bounds
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-transcript-segment-identity
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-portable-authority-p
@@ -59,6 +64,7 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(defvar mevedel--agent-invocation)
 (defvar mevedel--session)
 
 ;; `mevedel-tool-render-data'
@@ -84,8 +90,6 @@
 (declare-function mevedel--insert-at-active-response
                   "mevedel-utilities" (buffer text))
 (declare-function mevedel--transcript-org-mode "mevedel-utilities" ())
-(declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
 
 ;; `org'
 (defvar org-agenda-file-menu-enabled)
@@ -96,11 +100,12 @@
 (defvar-local mevedel-execution-transcript--completion-index nil
   "(TICK . TABLE) mapping tool-use ids to their newest recorded render data.")
 
+(defvar-local mevedel-execution-transcript--archived-update-cache nil
+  "Last published archived updates, keyed by exact tool-use id.
+Each value is (DESCRIPTOR IDENTITY UPDATES); identity guards external changes.")
+
 (defvar-local mevedel-execution-transcript--archived-rows nil
   "Execution tool-use ids whose rows were explicitly removed by compaction.")
-
-(defconst mevedel-execution-transcript--pending-terminal-limit 64
-  "Maximum render-data updates retained while rows are unavailable.")
 
 (defun mevedel-execution-transcript--status (facts)
   "Return visual status for terminal execution FACTS."
@@ -433,6 +438,7 @@ RENDER-DATA is retained in the hidden transcript audit record."
     (data-buffer tool-use-ids)
   "Return a compaction plan for TOOL-USE-IDS removed from DATA-BUFFER.
 Inspect archived records once per call, only when a live row is missing."
+  (mevedel-execution-transcript-retry-pending-terminals data-buffer)
   (let (archived live completed)
     (dolist (tool-use-id tool-use-ids)
       (when-let* ((render-data
@@ -558,21 +564,73 @@ after the text changes."
   (when-let* ((table
                (mevedel-execution-transcript--pending-table data-buffer)))
     (let ((tool-use-id (plist-get event :tool-use-id)))
-      (when (and (not (gethash tool-use-id table))
-                 (>= (hash-table-count table)
-                     mevedel-execution-transcript--pending-terminal-limit))
-        (let (evicted)
-          (maphash (lambda (key _value)
-                     (unless evicted (setq evicted key)))
-                   table)
-          (when evicted
-            (remhash evicted table)
-            (mevedel--warn-once
-             'execution-transcript-eviction
-             "Discarding stale render-data update for tool %s" evicted))))
       (puthash tool-use-id
                (list :event event :render-data render-data)
                table))))
+
+(defun mevedel-execution-transcript--update-archived-render-data
+    (data-buffer tool-use-id updates)
+  "Merge UPDATES into TOOL-USE-ID's archived row from DATA-BUFFER.
+Search only this receiving transcript's history, newest first.  Summary
+updates can outlive their Agent row after compaction; never discard them or
+substitute the root transcript for an agent's history.  Return non-nil only
+after publishing the updated archive."
+  (when (buffer-live-p data-buffer)
+    (with-current-buffer data-buffer
+      (when-let* ((session mevedel--session)
+                  (save-path (mevedel-session-save-path session)))
+        (catch 'updated
+          (let ((cached (and mevedel-execution-transcript--archived-update-cache
+                             (gethash tool-use-id
+                                      mevedel-execution-transcript--archived-update-cache))))
+            (when (and cached (equal updates (nth 2 cached))
+                       (nth 1 cached)
+                       (equal (nth 1 cached)
+                              (mevedel-session-artifacts-transcript-segment-identity
+                               session (car cached))))
+              (throw 'updated t)))
+          (dolist (descriptor
+                   (reverse
+                    (mevedel-session-artifacts-transcript-segments
+                     session data-buffer mevedel--agent-invocation)))
+            (when (and (eq (plist-get descriptor :status) 'readable)
+                       (not (plist-get descriptor :current-p)))
+              (let ((archive
+                     (mevedel-session-artifacts-read-transcript-segment
+                      session descriptor)))
+                (unwind-protect
+                    (when (mevedel-tool-render-data-update
+                           archive tool-use-id updates)
+                      (with-current-buffer archive
+                        (let ((inhibit-read-only t))
+                          (mevedel-session-artifacts-stabilize-gptel-bounds))
+                        (let ((path
+                               (expand-file-name
+                                (or (plist-get descriptor :logical)
+                                    (format "segment-%04d.chat.org"
+                                            (plist-get descriptor :number)))
+                                save-path))
+                              (coding (or buffer-file-coding-system 'utf-8-unix)))
+                          (if (mevedel-session-codec-portable-authority-p session)
+                              (mevedel-session-artifacts-publish-transcript-state
+                               session (mevedel-session-root-buffer session) path
+                               (buffer-substring-no-properties (point-min) (point-max))
+                               coding)
+                            (mevedel-session-persistence-write-current-buffer-atomically
+                             path))))
+                      (unless mevedel-execution-transcript--archived-update-cache
+                        (setq mevedel-execution-transcript--archived-update-cache
+                              (make-hash-table :test #'equal)))
+                      (puthash tool-use-id
+                               (list descriptor
+                                     (mevedel-session-artifacts-transcript-segment-identity
+                                      session descriptor)
+                                     (copy-tree updates))
+                               mevedel-execution-transcript--archived-update-cache)
+                      (throw 'updated t))
+                  (when (buffer-live-p archive)
+                    (with-current-buffer archive (set-buffer-modified-p nil))
+                    (kill-buffer archive)))))))))))
 
 (defun mevedel-execution-transcript-retry-pending-terminals (data-buffer)
   "Persist pending tool updates whose rows exist in DATA-BUFFER."
@@ -590,6 +648,10 @@ after the text changes."
                    (cond
                     ((mevedel-tool-render-data-update
                       data-buffer tool-use-id render-data)
+                     (push tool-use-id settled))
+                    ((and (not (eq (plist-get event :type) 'terminal))
+                          (mevedel-execution-transcript--update-archived-render-data
+                           data-buffer tool-use-id render-data))
                      (push tool-use-id settled))
                     ((and (eq (plist-get event :type) 'terminal)
                           (mevedel-execution-transcript--archived-row-p

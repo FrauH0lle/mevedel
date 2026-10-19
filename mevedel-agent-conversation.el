@@ -611,7 +611,10 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
                        parent tool-use-id updates))
                 (unless patched-summary-p
                   (mevedel-execution-transcript-store-pending-terminal
-                   parent (list :tool-use-id tool-use-id) updates))))
+                   parent (list :tool-use-id tool-use-id) updates)
+                  ;; A retained agent may outlive the parent's compacted row.
+                  ;; The transcript owner settles that update in its archive.
+                  (mevedel-execution-transcript-retry-pending-terminals parent))))
             (when-let* ((bounds
                          (mevedel-agent-conversation--render-data-bounds
                           invocation agent-id)))

@@ -973,6 +973,18 @@ symbols, and aggregate additional read/write mount counts. Default confined
 execution and additional read-only mounts are omitted. Paths, commands, and
 raw launcher reasons are never copied into the summary.
 
+Execution terminal updates that arrive before their tool rows are retained
+without eviction and reconciled immediately after gptel inserts each result
+batch, independently of view rendering or turn completion. Compaction also
+reconciles pending updates before freezing removed rows. Numbered ToolCall
+children update their exact nested metadata inside the enclosing tool row,
+not a nonexistent standalone segment. If a retained agent's sandbox summary
+changes after its parent row was compacted, reconciliation publishes that
+row's receiving-transcript archive; it does not publish the live draft or
+search a different agent's history. Unchanged archived updates use a
+source-identity-checked cache to avoid repeated reads and writes. Failed
+publication remains pending and reports the failure rather than discarding it.
+
 Tool renderer input is derived from the data buffer on each rerender; it
 must not depend on durable state stored only in view overlays or text
 properties. View-local fragment metadata, collapse state, and renderer caches

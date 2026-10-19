@@ -1130,6 +1130,35 @@
       (should (string-match-p "\\`before\n" (buffer-string)))
       (should (string-match-p "after\n\\'" (buffer-string))))))
 
+(mevedel-deftest mevedel-tool-render-data--nested-call-location ()
+  ,test
+  (test)
+  :doc "resolves only exact numbered ancestry through real PTC children"
+  (with-temp-buffer
+    (insert
+     (propertize
+      (mevedel-tool-render-data-format
+       '(:kind ptc
+         :calls ((:id "outer/1" :tool "ToolCall"
+                  :render-data
+                  (:kind ptc :calls ((:id "outer/1/2" :tool "Agent"
+                                     :render-data (:status running)))))
+                 (:id "outer/3" :tool "Read"
+                  :render-data
+                  (:kind ptc :calls ((:id "outer/3/1" :tool "Agent"))))
+                 (:id "outer/4/1" :tool "Agent")))
+       "outer")
+      'gptel '(tool . "outer")))
+    (let ((location (mevedel-tool-render-data--nested-call-location
+                     (current-buffer) "outer/1/2")))
+      (should (equal "outer" (car location)))
+      (should (eq 'ptc (plist-get (cadr location) :kind)))
+      (should (equal "outer/1/2" (plist-get (car (nth 2 location)) :id))))
+    (dolist (id '("outer" "outer/01" "outer/0" "outer/1/9"
+                  "outer/3/1" "outer/4/1" "missing/1" "/1"))
+      (should-not (mevedel-tool-render-data--nested-call-location
+                   (current-buffer) id)))))
+
 (mevedel-deftest mevedel-tool-render-data-update ()
   ,test
   (test)
@@ -1219,7 +1248,63 @@
             nil "tool-normalized")))
       (should (eq 'completed (plist-get (cdr parsed) :state)))
       (should (equal "final"
-                     (plist-get (cdr parsed) :execution-output))))))
+                     (plist-get (cdr parsed) :execution-output)))))
+  :doc "updates one nested child while preserving envelopes, siblings and source owner"
+  (with-temp-buffer
+    (let* ((data
+            '(:kind ptc :status success :outcome completed
+              :calls ((:id "outer/1" :tool "Read" :status success
+                       :render-data (:keep first))
+                      (:id "outer/2" :tool "ToolCall" :status success
+                       :render-data
+                       (:kind ptc :outcome completed
+                        :calls ((:id "outer/2/1" :tool "Agent" :status success
+                                 :render-data (:status running :keep child))
+                                (:id "outer/2/2" :tool "Read" :status error
+                                 :render-data (:keep sibling))))))))
+           (summary '(:attempt-count 2 :started-count 1 :refused-count 1))
+           (next (propertize "next tool" 'gptel '(tool . "next"))))
+      (insert (propertize (concat "visible result"
+                                  (mevedel-tool-render-data-format data "outer"))
+                          'gptel '(tool . "outer"))
+              next)
+      (should (mevedel-tool-render-data-update
+               (current-buffer) "outer/2/1"
+               (list :sandbox-summary summary :status 'completed)))
+      (let* ((outer (mevedel-tool-render-data-for-tool (current-buffer) "outer"))
+             (branch (cadr (plist-get outer :calls)))
+             (calls (plist-get (plist-get branch :render-data) :calls))
+             (updated (plist-get (car calls) :render-data)))
+        (should (eq 'completed (plist-get updated :status)))
+        (should (eq 'child (plist-get updated :keep)))
+        (should (equal summary (plist-get updated :sandbox-summary)))
+        (should (equal (car (plist-get data :calls)) (car (plist-get outer :calls))))
+        (should (equal
+                 (cadr (plist-get (plist-get (cadr (plist-get data :calls))
+                                            :render-data) :calls))
+                 (cadr calls)))
+        (should (eq 'success (plist-get outer :status)))
+        (should (eq 'completed (plist-get outer :outcome)))
+        (should-not (plist-get outer :sandbox-summary)))
+      (should-not (mevedel-tool-render-data-segment-bounds "outer/2/1"))
+      (should (equal-including-properties
+               next (buffer-substring (- (point-max) (length next)) (point-max))))
+      (should (= 1 (length (mevedel-tool-render-data-blocks (buffer-string))))))
+    (let ((before (buffer-string)))
+      (dolist (id '("outer/99" "outer/2/99" "outer/02/1"))
+        (should-not (mevedel-tool-render-data-update
+                     (current-buffer) id '(:status completed))))
+      (should (equal-including-properties before (buffer-string)))))
+  :doc "adds render data to a nested child that did not have any"
+  (with-temp-buffer
+    (insert (propertize
+             (mevedel-tool-render-data-format
+              '(:kind ptc :calls ((:id "outer/1" :tool "Agent"))) "outer")
+             'gptel '(tool . "outer")))
+    (should (mevedel-tool-render-data-update
+             (current-buffer) "outer/1" '(:status completed)))
+    (should (equal '(:status completed)
+                   (mevedel-tool-render-data-for-tool (current-buffer) "outer/1")))))
 
 (mevedel-deftest mevedel-tool-render-data-for-tool ()
   ,test
@@ -1237,7 +1322,26 @@
             (plist-get
              (mevedel-tool-render-data-for-tool
               (current-buffer) "tool-call")
-             :execution-id)))))
+             :execution-id))))
+  :doc "reads deeply nested exact child metadata without a renderer depth limit"
+  (with-temp-buffer
+    (let* ((ids (list "outer"))
+           (id "outer")
+           (leaf '(:status completed :sandbox-summary (:attempt-count 1)))
+           (data leaf))
+      (dotimes (_ 24)
+        (setq id (concat id "/1"))
+        (push id ids))
+      (dolist (child-id (butlast ids))
+        (setq data
+              (list :kind 'ptc
+                    :calls (list (list :id child-id :tool "ToolCall"
+                                       :render-data data)))))
+      (insert (propertize (mevedel-tool-render-data-format data "outer")
+                          'gptel '(tool . "outer")))
+      (should (equal leaf (mevedel-tool-render-data-for-tool (current-buffer) id)))
+      (should-not (mevedel-tool-render-data-for-tool
+                   (current-buffer) (concat id "/2"))))))
 
 (mevedel-deftest mevedel-tool-render-data-reconcile-lost-executions ()
   ,test

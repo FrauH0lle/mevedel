@@ -22,6 +22,12 @@
 ;; `gptel'
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 
+;; `mevedel-execution-transcript'
+(declare-function mevedel-execution-transcript-retry-pending-terminals
+                  "mevedel-execution-transcript" (data-buffer))
+(autoload 'mevedel-execution-transcript-retry-pending-terminals
+  "mevedel-execution-transcript")
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
@@ -386,6 +392,11 @@ model's call order, independently of asynchronous completion order."
                                    (plist-get call :result)))
                        info)))
         (plist-put info :tool-use calls))
+      ;; Terminal events precede insertion.  Agent turns can loop through
+      ;; hundreds of batches (and compaction) before post-response hooks run.
+      ;; Settle at the durable insertion boundary, even without an open view.
+      (mevedel-execution-transcript-retry-pending-terminals
+       (plist-get info :buffer))
       (mevedel-history-record-tool-batch info))))
 
 (defun mevedel-tool-render-data-segment-bounds (tool-use-id)
@@ -470,64 +481,117 @@ TOOL-USE-ID identifies property runs that still belong to the current tool."
       (setq merged (plist-put merged (pop updates) (pop updates))))
     merged))
 
+(defun mevedel-tool-render-data--nested-call-location (buffer tool-use-id)
+  "Return (ROOT-ID ROOT-DATA CALLS-TAIL) for TOOL-USE-ID in BUFFER, or nil.
+The car of CALLS-TAIL is the matching child in ROOT-DATA.
+Only follow the exact numbered child ancestry assigned by the PTC driver.
+Each intermediate child must be a ToolCall with PTC render data; arbitrary
+matching ids elsewhere in a payload are not tool identities.  The traversal
+is iterative and bounded by the number of components in TOOL-USE-ID."
+  (when (stringp tool-use-id)
+    (let ((root tool-use-id) path)
+      (while (string-match "/[1-9][0-9]*\\'" root)
+        (push root path)
+        (setq root (substring root 0 (match-beginning 0))))
+      (when (and path (not (string-empty-p root)))
+        (let* ((data (mevedel-tool-render-data-for-tool buffer root))
+               (parent data)
+               tail)
+          (while (and path (proper-list-p parent)
+                      (eq (plist-get parent :kind) 'ptc)
+                      (proper-list-p (plist-get parent :calls)))
+            (let ((id (pop path)))
+              (setq tail
+                    (member-if
+                     (lambda (call)
+                       (and (proper-list-p call)
+                            (equal (plist-get call :id) id)))
+                     (plist-get parent :calls))
+                    parent
+                    (and (equal (plist-get (car tail) :tool) "ToolCall")
+                         (plist-get (car tail) :render-data)))))
+          (when (and tail (null path))
+            (list root data tail)))))))
+
 (defun mevedel-tool-render-data-update
     (buffer tool-use-id updates)
   "Merge UPDATES into TOOL-USE-ID's hidden render data in BUFFER.
 
 Return non-nil when the authoritative tool segment was found and updated.
+For a numbered ToolCall child, merge into that child's render data inside
+the enclosing real tool segment, preserving its siblings and envelope.
 The side channel remains inside the segment's `gptel' property run, so it is
 persisted with the transcript while the provider scrubber keeps it model-hidden."
   (when (and (buffer-live-p buffer)
              (stringp tool-use-id)
              (listp updates))
-    (with-current-buffer buffer
-      (save-restriction
-        (widen)
-        (when-let* ((segment
-                     (mevedel-tool-render-data-segment-bounds tool-use-id)))
-          (let* ((beg (car segment))
-                 (end (cdr segment))
-                 (search-end
-                  (or (mevedel-tool-render-data--next-segment-start
-                       end tool-use-id)
-                      (point-max)))
-                 (block
-                  (mevedel-tool-render-data--find-block
-                   beg search-end tool-use-id))
-                 (existing
-                  (and block
-                       (mevedel-tool-render-data-without-owner (caddr block))))
-                 (render-data
-                  (mevedel-tool-render-data--plist-merge existing updates))
-                 (inhibit-modification-hooks t)
-                 (inhibit-read-only t))
-            (if block
-                (mevedel-tool-render-data-patch-block
-                 (car block) (cadr block) render-data)
-              (goto-char end)
-              (insert
-               (propertize
-                (mevedel-tool-render-data-format
-                 render-data tool-use-id)
-                'gptel (get-text-property beg 'gptel))))
-            t))))))
+    (or (with-current-buffer buffer
+          (save-restriction
+            (widen)
+            (when-let* ((segment
+                         (mevedel-tool-render-data-segment-bounds tool-use-id)))
+              (let* ((beg (car segment))
+                     (end (cdr segment))
+                     (search-end
+                      (or (mevedel-tool-render-data--next-segment-start
+                           end tool-use-id)
+                          (point-max)))
+                     (block
+                      (mevedel-tool-render-data--find-block
+                       beg search-end tool-use-id))
+                     (existing
+                      (and block
+                           (mevedel-tool-render-data-without-owner (caddr block))))
+                     (render-data
+                      (mevedel-tool-render-data--plist-merge existing updates))
+                     (inhibit-modification-hooks t)
+                     (inhibit-read-only t))
+                (if block
+                    (mevedel-tool-render-data-patch-block
+                     (car block) (cadr block) render-data)
+                  (goto-char end)
+                  (insert
+                   (propertize
+                    (mevedel-tool-render-data-format
+                     render-data tool-use-id)
+                    'gptel (get-text-property beg 'gptel))))
+                t))))
+        (when-let* ((location
+                     (mevedel-tool-render-data--nested-call-location
+                      buffer tool-use-id)))
+          (let* ((tail (nth 2 location))
+                 (child (car tail)))
+            (setcar tail
+                    (mevedel-tool-render-data--plist-merge
+                     child
+                     (list :render-data
+                           (mevedel-tool-render-data--plist-merge
+                            (plist-get child :render-data) updates))))
+            (mevedel-tool-render-data-update
+             buffer (car location)
+             (list :calls (plist-get (cadr location) :calls))))))))
 
 (defun mevedel-tool-render-data-for-tool (buffer tool-use-id)
-  "Return TOOL-USE-ID's hidden render data in BUFFER, or nil."
+  "Return TOOL-USE-ID's hidden render data in BUFFER, or nil.
+Numbered ToolCall child ids select only their exact nested call metadata."
   (when (and (buffer-live-p buffer) (stringp tool-use-id))
-    (with-current-buffer buffer
-      (save-restriction
-        (widen)
-        (when-let* ((segment
-                     (mevedel-tool-render-data-segment-bounds tool-use-id))
-                    (search-end
-                     (or (mevedel-tool-render-data--next-segment-start
-                          (cdr segment) tool-use-id)
-                         (point-max)))
-                    (block
-                     (mevedel-tool-render-data--find-block
-                      (car segment) search-end tool-use-id)))
-          (mevedel-tool-render-data-without-owner (caddr block)))))))
+    (or (with-current-buffer buffer
+          (save-restriction
+            (widen)
+            (when-let* ((segment
+                         (mevedel-tool-render-data-segment-bounds tool-use-id))
+                        (search-end
+                         (or (mevedel-tool-render-data--next-segment-start
+                              (cdr segment) tool-use-id)
+                             (point-max)))
+                        (block
+                         (mevedel-tool-render-data--find-block
+                          (car segment) search-end tool-use-id)))
+              (mevedel-tool-render-data-without-owner (caddr block)))))
+        (when-let* ((location
+                     (mevedel-tool-render-data--nested-call-location
+                      buffer tool-use-id)))
+          (plist-get (car (nth 2 location)) :render-data)))))
 
 (defun mevedel-tool-render-data--reconcile-running
     (data successor-execution-ids)
