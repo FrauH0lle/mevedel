@@ -53,9 +53,11 @@ ordinary nested project files.
 A full lobby link, which ADR 0114 already makes a long-lived bearer, now also
 carries write access to the project tree. Anyone it is handed on to can add
 files and remove them without a permission prompt. The bounds are: no
-overwrite, no folder removal, no hidden or ignored paths, no `.mevedel/`
+overwrite, no folder removal, no hidden upload names or ignored paths, no `.mevedel/`
 state, at most 16 MiB per upload, and removal to the trash, which keeps the
-bytes. The same bounds cover files inside nested clones; a clone the host
+bytes. Existing listed dotfiles, such as `.gitignore`, remain readable and
+removable; the leading-dot restriction applies to new upload names, not the
+project's existing files. The same bounds cover files inside nested clones; a clone the host
 mounts read-only refuses the change itself. A file with unsaved changes in Emacs cannot be removed. Rotating the
 lobby credentials revokes the access.
 

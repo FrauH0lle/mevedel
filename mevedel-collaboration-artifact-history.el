@@ -102,27 +102,38 @@ addition and deletion.  Only the mutable current segment needs its own probe."
            session (list :number number)))))
 
 (defun mevedel-collaboration-artifact-history--project (session live item)
-  "Return bounded canonical history for ITEM in SESSION, preferring LIVE."
-  (let ((cold (unless (buffer-live-p live)
-                (mevedel-session-artifacts-read-segment
-                 session (or (mevedel-session-current-segment session) 1)))))
-    (unwind-protect
-        (let* ((history (mevedel-shared-conversation-history
-                         session item :live-buffer (or cold live)
-                         :limit mevedel-shared-conversation--history-limit))
-               (turns (reverse (plist-get history :turns))))
-          (with-temp-buffer
-            (delay-mode-hooks (org-mode))
-            (setq-local mevedel--session session)
-            (dolist (turn turns) (insert (plist-get turn :text) "\n"))
-            (let ((records (mevedel-collaboration--canonical-records (current-buffer))))
-              (dolist (record records)
-                (plist-put record :id (format "item-history:%s:%s"
-                                             (mevedel-session-session-id session)
-                                             (plist-get record :id))))
-              (list :conversation (vconcat records)
-                    :conversationTruncated (if (plist-get history :truncated) t :json-false)))))
-      (when cold (kill-buffer cold)))))
+  "Return bounded canonical history for ITEM in SESSION, preferring LIVE.
+Keep archive-read diagnostics local; browser errors name only logical segments."
+  (cl-flet ((unavailable (err &optional number)
+              (message "mevedel: artifact history read failed: %S" err)
+              (if number
+                  (user-error "Session history segment %d is unavailable" number)
+                (user-error "An answering-session transcript segment is unavailable"))))
+    (let* ((number (or (mevedel-session-current-segment session) 1))
+           (cold (unless (buffer-live-p live)
+                   (condition-case err
+                       (mevedel-session-artifacts-read-segment session number)
+                     (error (unavailable err number))))))
+      (unwind-protect
+          (let* ((history
+                  (condition-case err
+                      (mevedel-shared-conversation-history
+                       session item :live-buffer (or cold live)
+                       :limit mevedel-shared-conversation--history-limit)
+                    (error (unavailable err))))
+                 (turns (reverse (plist-get history :turns))))
+            (with-temp-buffer
+              (delay-mode-hooks (org-mode))
+              (setq-local mevedel--session session)
+              (dolist (turn turns) (insert (plist-get turn :text) "\n"))
+              (let ((records (mevedel-collaboration--canonical-records (current-buffer))))
+                (dolist (record records)
+                  (plist-put record :id (format "item-history:%s:%s"
+                                               (mevedel-session-session-id session)
+                                               (plist-get record :id))))
+                (list :conversation (vconcat records)
+                      :conversationTruncated (if (plist-get history :truncated) t :json-false)))))
+        (when cold (kill-buffer cold))))))
 
 (defun mevedel-collaboration-artifact-history (room guest item args)
   "Read ITEM's selected discussion history in ROOM for GUEST using ARGS.

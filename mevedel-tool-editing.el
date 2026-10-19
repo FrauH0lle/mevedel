@@ -168,8 +168,8 @@ versions it when the current request settles."
   "Fetch the current workspace's `shared://' view named by COMPONENTS.
 COMPONENTS are the decoded address components after `shared://'.  Call
 CALLBACK once with (:text TEXT), (:data BASE64 :mime MIME) or
-\(:error MESSAGE).  SEARCH requests expanded text for Grep, without Read's
-overview summaries or output string chunks."
+\(:error MESSAGE).  SEARCH instead returns mapped search documents derived
+from the same Read lines, joining output string chunks only for matching."
   (condition-case err
       (let ((args
              (pcase components
@@ -191,10 +191,12 @@ overview summaries or output string chunks."
                     (if-let* ((message (plist-get reply :error)))
                         (list :error message)
                       (let ((result (plist-get reply :result)))
-                        (if (plist-get result :text)
+                        (if search
+                            (list :documents (plist-get result :documents))
+                          (if (plist-get result :text)
                             (list :text (plist-get result :text))
                           (list :data (plist-get result :png)
-                                :mime (plist-get result :mime)))))))))
+                                :mime (plist-get result :mime))))))))))
     (error (funcall callback (list :error (error-message-string err))))))
 
 (defun mevedel-tool-editing--create (callback args)

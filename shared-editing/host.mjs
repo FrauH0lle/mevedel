@@ -31,7 +31,8 @@ import { generateNKeysBetween } from 'fractional-indexing';
 import { escape } from './render.mjs';
 import { FONT_FILES } from './text.mjs';
 import { address, discussionsView, contentHash, documentImages, element, GENERAL_DISCUSSION,
-  historyView, line, nodeId, nodesOf, overview, restoreImages } from './view.mjs';
+  historyView, line, nodeId, nodesOf, overview, restoreImages, shown } from './view.mjs';
+import { searchDocument } from './search.mjs';
 const b64 = (bytes) => Buffer.from(bytes).toString('base64');
 const bytes = (text) => {
   check(
@@ -332,7 +333,11 @@ export async function handle(request) {
       doc.destroy();
     }
   }
-  if (action === 'library-view') return { result: await libraryView(request.libraries, request.part, request.at) };
+  if (action === 'library-view') {
+    const result = await libraryView(request.libraries, request.part, request.at);
+    return { result: request.search && result.text
+      ? {documents: [searchDocument(request.at, result.text)]} : result };
+  }
   check(
     ['create', 'import', 'read', 'view', 'update', 'patch', 'insert', 'image', 'rename', 'background', 'revert', 'restore', 'export', 'discussion-post', 'discussion-reply', 'discussion-resolve', 'discussion-answered'].includes(action),
     'Unknown editing action',
@@ -449,13 +454,24 @@ export async function handle(request) {
     if (action === 'view') {
       const { part, search } = request;
       const nodes = nodesOf(before.kind, before.content);
-      if (part === 'overview') return { result: { text: overview(state.id, state, before, state.discussions || [], search) } };
-      if (part === 'discussions') return { result: { text: discussionsView(readDiscussions(doc, state.discussions), search) } };
-      if (part === 'history') return { result: { text: historyView(state, search) } };
+      const textView = (at, text) => ({result: search ? {documents: [searchDocument(at, text)]} : {text}});
+      if (part === 'overview') {
+        const result = textView(address(state.id), overview(state.id, state, before, state.discussions || []));
+        if (search) for (const node of nodes) {
+          // A summary has no matching Read range for its omitted content. Name
+          // the existing full-element resource instead, with its own line map.
+          if (line(state.id, before.kind, node).slice(13) !== JSON.stringify(shown(state.id, before.kind, node)))
+            result.result.documents.push(searchDocument(address(state.id, 'elements', nodeId(before.kind, node)),
+              element(state.id, before.kind, node)));
+        }
+        return result;
+      }
+      if (part === 'discussions') return textView(address(state.id, part), discussionsView(readDiscussions(doc, state.discussions)));
+      if (part === 'history') return textView(address(state.id, part), historyView(state));
       if (part === 'element') {
         const node = nodes.find((n) => nodeId(before.kind, n) === request.element);
         check(node, `No ${before.kind === 'whiteboard' ? 'element' : 'block'} ${request.element}; Read ${address(state.id)} for current ids`);
-        return { result: { text: element(state.id, before.kind, node, search) } };
+        return textView(address(state.id, 'elements', request.element), element(state.id, before.kind, node));
       }
       if (part === 'png') {
         check(before.kind === 'whiteboard', `A document has no rendering; Read ${address(state.id)}`);
