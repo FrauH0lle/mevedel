@@ -778,7 +778,26 @@
     }
     const root = target.disclosures?.get('root');
     if (root) root.open = true;
-    target.scrollIntoView({block: 'center', behavior: 'smooth'});
+    const sheet = transcript.closest('.viewer-panel');
+    const rect = target.getBoundingClientRect();
+    let top = 0, bottom = window.innerHeight;
+    if (sheet) {
+      const viewport = transcript.getBoundingClientRect();
+      top = Math.max(top, viewport.top);
+      bottom = Math.min(bottom, viewport.bottom);
+    } else {
+      const header = document.querySelector('body > .topbar')?.getBoundingClientRect();
+      const dock = document.querySelector('.dock')?.getBoundingClientRect();
+      top = Math.max(top, header?.bottom || 0);
+      if (dock?.height > 0 && dock.bottom > top) bottom = Math.min(bottom, Math.max(top, dock.top));
+    }
+    const available = Math.max(0, bottom - top);
+    const inset = Math.min(8, available / 2);
+    const readable = Math.max(0, available - inset * 2);
+    // Center short sources in the readable viewport; start oversized tools
+    // below its header instead of centering their hidden middle under a dock.
+    const desired = top + inset + Math.max(0, (readable - Math.min(rect.height, readable)) / 2);
+    (sheet ? transcript : window).scrollBy({top: rect.top - desired, behavior: 'smooth'});
     return true;
   }
 

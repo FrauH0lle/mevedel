@@ -111,15 +111,28 @@ native audit lookup as the Emacs action: only a click scans source-backed
 history, and the host returns the receiving transcript's owner and exact segment
 instead of asking the browser to guess or sequentially load archives. Child
 archive fetches are confined to that retained child's canonical history.
+Read-only full-output requests also admit running work through the room's live
+execution registry, exact owner/ID, known receiving transcript and native source
+lookup. Completion breadcrumbs exist only after settlement, so requiring them
+would make the running panel's Full output action unavailable. A `source:live`
+response is a bounded artifact snapshot at request time, not a second output
+consumer or subscription. Terminal and forwarded evidence keep their existing
+source-backed authorization and fallback; browser paths never authorize reads.
 
 The browser replaces separate agent chips and finished-agent rows with this
 single panel. A bounded scroll area and three fixed preview lines keep status
 growth away from the composer. Expansion retains completed rows until collapse;
 collapse starts a fresh ten-second grace. Mouse hover and keyboard focus hold
 the displayed row set, but touch does not acquire a synthetic hover hold.
+In compact reading mode, work focus preserves dock geometry: expanding the
+composer on work focus moved a row between pointer-up and click on phones.
+Other dock controls retain their own focus behavior.
 Disclosure and hold state belong to the inspecting browser, not shared native
 view state. Original tool IDs also reveal the source inside folded activity
 groups without replacing records or disturbing a draft.
+Reveal aligns within the actual readable viewport: centering in the entire
+window hid root and archived sources behind a large writable dock. Child-sheet
+reveal scrolls only the sheet, not its parent's conversation.
 
 Artifact cards are settled live or archived transcript records; bytes are fetched on demand by
 record ID, resolved and bounded by the host. HTML runs in a sandboxed iframe

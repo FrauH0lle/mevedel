@@ -913,7 +913,9 @@ An execution preview is exactly three bounded output lines, with an explicit
 availability label, preview/output truncation facts, and output counts. Preview
 rows are capped at 512 characters; browsers fit each to one visible row. Full
 output uses the existing scoped execution-result request, never a browser-sent
-host filesystem path. Passive execution events refresh the same coalesced
+host filesystem path. While work is running, **Full output** shows an explicitly
+labelled snapshot at request time, not an automatically updating terminal.
+Passive execution events refresh the same coalesced
 publication without consuming output. The host retains at most 128 terminal
 snapshots for 30 seconds so completion survives registry removal and short
 reconnects; effective child model metadata stays with the completed row. Each
@@ -939,7 +941,10 @@ collapsed; collapse starts a fresh ten-second grace. Mouse hover or keyboard
 focus freezes the currently shown row set and holds its finished rows; new work
 is counted until the pointer and focus leave, which restarts their grace. Touch
 does not acquire a synthetic hover hold: expansion and focus provide the hold,
-and tapping elsewhere releases focus. The panel's collapse control hides its
+and tapping elsewhere releases focus. In narrow-screen reading mode, focusing
+work controls keeps the dock compact rather than expanding the composer and
+moving the tap target; other dock controls retain their ordinary focus behavior.
+The panel's collapse control hides its
 rows without discarding durable transcript completion notices.
 
 **Open transcript** reads an active retained agent in its existing sheet.
@@ -947,6 +952,10 @@ rows without discarding durable transcript completion notices.
 owner's current or archived conversation, then loads exactly that segment.
 It opens the tool row, including a nested ToolCall child and its enclosing
 activity disclosure; child-owned rows open that child's transcript sheet.
+Source scrolling uses the unobscured transcript viewport between the sticky
+header and dock, rather than the whole window. Oversized tools start below the
+header; short sources center in the available space. Child-sheet navigation
+scrolls only its own transcript and leaves the parent's scroll position alone.
 The browser neither scans archives sequentially nor guesses a nearby row.
 Only a host-reported unavailable source falls back to retained execution
 output; connection, loading and projection failures report a retryable notice
@@ -1209,14 +1218,19 @@ current roster. Their Markdown final answers start folded and retain their
 disclosure choice across updates. Interim messages use a separate `Message
 from /root/name` disclosure. **Open transcript** inspects the retained child
 without changing the parent's composer or workspace.
-**Show result** makes a separate read-only request for retained output; it does
-not duplicate the body in the parent transcript or alter the model-visible
-mailbox. The host validates owner and ID against either the receiving root or
-registered child's trusted local breadcrumb, or a forwarded mailbox in the
-parent's live or archived segments. It prefers the child's trusted terminal
-row or completion audit and retained output when the child transcript is resident. If it is cold,
-the bounded forwarded mailbox output is the fallback. Missing archives or
-evidence are reported explicitly, not resolved from a browser-supplied path.
+**Show result** and the panel's **Full output** make a separate read-only request;
+they do not duplicate the body in the parent transcript or alter the model-visible
+mailbox. For running work, the host requires a yielded execution in this room's
+live registry with the exact owner/ID, a root or registered child's receiving
+transcript, and its readable native tool source, including nested ToolCall sources.
+It reads a bounded request-time snapshot of that execution's artifact output and
+labels the response `source:live`; completion breadcrumbs are not required before
+settlement. Terminal requests validate the receiving root or registered child's
+trusted local breadcrumb, or a forwarded mailbox in the parent's live or archived
+segments. They prefer the child's trusted terminal row or completion audit and
+retained output when the child transcript is resident. If it is cold, the bounded
+forwarded mailbox output is the fallback. Missing archives or evidence are
+reported explicitly, not resolved from a browser-supplied path.
 Each response is capped at 50,000 output bytes and repeated requests from one
 guest are throttled. View-only guests can use the link.
 Nested open and closed choices survive record updates, reconnect snapshots

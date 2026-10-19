@@ -98,3 +98,56 @@ test('unified work panel retains expanded completions and checks writable contro
     }
   } finally { await browser.close(); }
 });
+
+test('reading-mode work taps keep the panel still through focus and click', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const writable of [false, true]) {
+      const page = await browser.newPage({viewport: {width: 375, height: 812}, hasTouch: true});
+      await page.route('http://viewer.test/**', async route => {
+        const path = new URL(route.request().url()).pathname;
+        if (!path.endsWith('.html') && !path.endsWith('.css')) return route.fulfill({status: 204, body: ''});
+        return route.fulfill({body: await readFile(resolve(root, 'relay/viewer', `.${path}`)),
+          contentType: path.endsWith('.css') ? 'text/css' : 'text/html'});
+      });
+      await page.goto('http://viewer.test/index.html');
+      await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/viewer-background.js'), 'utf8')});
+      await page.evaluate(writable => {
+        document.body.setAttribute('data-reading', '');
+        document.getElementById('session-box').hidden = false;
+        document.getElementById('composer').hidden = !writable;
+        document.getElementById('transcript').style.height = '1500px';
+        const el = (tag, cls, text) => { const node = document.createElement(tag);
+          node.className = cls || ''; node.textContent = text || ''; return node; };
+        const bg = window.mevedelBackgroundView.create({state: {connected: true, writable}, el,
+          send() {}, openAgent() {}, openExecution() {}, showConversation() {}});
+        bg.show({rows: Array.from({length: 4}, (_, n) => ({key: `work-${n}`, kind: 'bash',
+          owner: '/root', id: `exec-${n}`, description: `Command ${n}`, status: 'running', statusLabel: 'Running'}))});
+        window.workGeometry = [];
+        for (const type of ['pointerdown', 'click']) document.addEventListener(type, event => {
+          window.workGeometry.push({type, key: event.target.closest('.background-row')?.dataset.key,
+            top: document.getElementById('background-work').getBoundingClientRect().top});
+        }, true);
+      }, writable);
+      await page.locator('[data-key="work-3"] .background-toggle').tap();
+      assert.equal(await page.locator('[data-key="work-3"] .background-toggle').getAttribute('aria-expanded'), 'true');
+      const events = await page.evaluate(() => window.workGeometry);
+      assert.equal(events.at(-1).key, 'work-3');
+      assert.equal(events.at(-1).top, events[0].top, 'focus must not move the hit target before click');
+      assert.equal(await page.locator('#session-box').isVisible(), false);
+      await page.evaluate(() => {
+        const button = document.createElement('button');
+        button.id = 'request-focus';
+        button.textContent = 'Pending request';
+        document.getElementById('requests').append(button);
+      });
+      await page.locator('#request-focus').focus();
+      assert.equal(await page.locator('#session-box').isVisible(), true, 'request focus keeps its existing expansion behavior');
+      if (writable) {
+        await page.locator('#composer-input').focus();
+        assert.equal(await page.locator('#send-button').isVisible(), true, 'composer focus still expands the dock');
+      }
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});

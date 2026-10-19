@@ -60,10 +60,14 @@
 (declare-function mevedel-collaboration--truncate-bytes
                   "mevedel-collaboration-projection" (string limit))
 
+;; `mevedel-execution'
+(declare-function mevedel-execution-list-user "mevedel-execution" (session))
+(autoload 'mevedel-execution-list-user "mevedel-execution")
+
 ;; `mevedel-resource'
-(declare-function mevedel-resource-prepare "mevedel-resource"
-                  (operation address &optional context))
-(autoload 'mevedel-resource-prepare "mevedel-resource")
+(declare-function mevedel-resource-visit-path "mevedel-resource"
+                  (address &optional context))
+(autoload 'mevedel-resource-visit-path "mevedel-resource")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-read-transcript-segment
@@ -105,10 +109,15 @@
 (declare-function mevedel-view--agent-record-status
                   "mevedel-view-agent" (record))
 
+;; `mevedel-view-audit'
+(declare-function mevedel-view-audit-locate-source "mevedel-view-audit"
+                  (session live-buffer tool-id &optional agent-transcript-p))
+(autoload 'mevedel-view-audit-locate-source "mevedel-view-audit")
+
 (defconst mevedel-collaboration--agent-fetch-window 1.0
   "Minimum seconds between current or archive agent fetches from one guest.")
 (defconst mevedel-collaboration--execution-result-limit 50000
-  "Maximum bytes of retained execution evidence in one guest response.")
+  "Maximum bytes of execution output evidence in one guest response.")
 
 (defun mevedel-collaboration--agent-rows (room)
   "Return ROOM's guest-visible retained agent rows, sorted by path.
@@ -409,7 +418,8 @@ Only a matching forwarded completion in this room authorizes a fetch."
       (mevedel-transcript-segments (point-min) (point-max))))))
 
 (defun mevedel-collaboration--local-execution (room owner id)
-  "Return (BREADCRUMB . BUFFER) for a trusted local OWNER/ID in ROOM.
+  "Return (EVIDENCE . BUFFER) for a trusted local OWNER/ID in ROOM.
+EVIDENCE is a terminal breadcrumb or source-backed live registry snapshot.
 The receiving transcript must itself be the root or the registered child;
 a client cannot authorize a result by naming another agent or a path."
   (when-let* ((buffer (if (equal owner "/root")
@@ -418,17 +428,30 @@ a client cannot authorize a result by naming another agent or a path."
               ((buffer-live-p buffer))
               (session (buffer-local-value 'mevedel--session buffer))
               (record
-               (mevedel-collaboration--find-transcript-evidence
-                session buffer
-                (lambda ()
-                  (cl-some
-                   (lambda (span)
-                     (let ((audit (plist-get span :record)))
-                       (when (and (equal owner (plist-get audit :owner))
-                                  (equal id (plist-get audit :execution-id)))
-                         audit)))
-                   (reverse (mevedel-transcript-audit-buffer-spans
-                             'execution-breadcrumb)))))))
+               (or
+                (when-let* ((facts
+                             (cl-find-if
+                              (lambda (candidate)
+                                (and (plist-get candidate :yielded)
+                                     (equal owner (plist-get candidate :owner))
+                                     (equal id (plist-get candidate :execution-id))))
+                              (mevedel-execution-list-user (plist-get room :session))))
+                            ((mevedel-view-audit-locate-source
+                              session buffer (plist-get facts :tool-use-id)
+                              (not (equal owner "/root")))))
+                  (list :owner owner :execution-id id :live t
+                        :tool-use-id (plist-get facts :tool-use-id) :facts facts))
+                (mevedel-collaboration--find-transcript-evidence
+                 session buffer
+                 (lambda ()
+                   (cl-some
+                    (lambda (span)
+                      (let ((audit (plist-get span :record)))
+                        (when (and (equal owner (plist-get audit :owner))
+                                   (equal id (plist-get audit :execution-id)))
+                          audit)))
+                    (reverse (mevedel-transcript-audit-buffer-spans
+                              'execution-breadcrumb))))))))
     (cons record buffer)))
 
 (defun mevedel-collaboration--execution-row-facts (buffer tool-id id)
@@ -486,13 +509,10 @@ has no resident transcript, so its forwarded parent delivery is the fallback."
 Only trusted source-backed child/local facts supply a path; never accept a
 guest-supplied artifact address or read paths from a forwarded mailbox."
   (let* ((path (plist-get facts :output-path))
-         (artifact (and (stringp path) (string-prefix-p "artifact://" path)
+         (physical (and (stringp path) (string-prefix-p "artifact://" path)
                         (condition-case nil
-                            (mevedel-resource-prepare
-                             'read path (list :session session))
-                          (error nil))))
-         (physical (and artifact (not (plist-get artifact :unavailable-p))
-                        (plist-get artifact :physical-path))))
+                            (mevedel-resource-visit-path path (list :session session))
+                          (error nil)))))
     (or (and (stringp physical) (file-regular-p physical)
              (file-readable-p physical)
              (with-temp-buffer
@@ -505,8 +525,9 @@ guest-supplied artifact address or read paths from a forwarded mailbox."
 
 (defun mevedel-collaboration--handle-execution-result-get (room peer frame)
   "Serve bounded, read-only execution evidence to registered guest PEER.
-OWNER and identity must occur together in a trusted local breadcrumb or the
-parent's forwarded mailbox; no guest-supplied path grants authority."
+OWNER and identity must occur together in a source-backed live registry entry,
+trusted local breadcrumb or the parent's forwarded mailbox.  No guest-supplied
+path grants authority."
   (let ((guest (mevedel-collaboration--guest room peer))
         (req-id (plist-get frame :reqId))
         (owner (plist-get frame :owner))
@@ -560,6 +581,8 @@ parent's forwarded mailbox; no guest-supplied path grants authority."
          (list :t "execution-result" :reqId req-id
                :owner owner :executionId id
                :source (cond (throttled "missing")
+                             ((and (stringp canonical-output)
+                                   (plist-get (car local) :live)) "live")
                              ((stringp canonical-output) "child")
                              ((stringp output) "forwarded")
                              (t "missing"))
