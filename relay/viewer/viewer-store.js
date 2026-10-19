@@ -287,7 +287,8 @@
       render();
     }
 
-    return Object.freeze({show, handle, refresh, counts, rows: () => rows});
+    return Object.freeze({show, handle, refresh, counts, rows: () => rows,
+                          conversation: id => act('conversation', id)});
   }
 
   window.mevedelStoreView = Object.freeze({create});

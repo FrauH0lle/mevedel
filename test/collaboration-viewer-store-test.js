@@ -241,6 +241,19 @@ const press = (row, label) => {
                   'deleting the open row must not open another row menu');
 }
 
+// The artifact decision sidebar uses the same explicit Conversation action,
+// request identity and navigation response as the store's menu.
+{
+  const {store, sent, followed} = build();
+  store.show(listing);
+  assert.equal(sent.length, 0, 'listing never shares or opens a conversation');
+  store.conversation('flow');
+  assert.deepEqual(plain(sent), [{t: 'store-action', reqId: 1, action: 'conversation', id: 'flow'}]);
+  assert.deepEqual(followed, [], 'the action waits for an authorized host response');
+  store.handle({t: 'store-action', reqId: 1, ok: true, link: 'requester-tier-conversation-link'});
+  assert.deepEqual(followed, ['requester-tier-conversation-link']);
+}
+
 // A deleted artifact that was expanded is forgotten, not asked about again;
 // the deletion names it although its row is gone; unchanged artifacts keep
 // their listed versions.

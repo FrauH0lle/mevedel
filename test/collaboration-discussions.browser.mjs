@@ -66,6 +66,7 @@ async function setup(page) {
   for (const script of [renderer, sidebar, kit]) await page.addScriptTag({content: script});
   await page.evaluate(() => {
     window.sent = [];
+    window.openedConversations = [];
     window.located = [];
     addEventListener('message', event => {
       if (event.data && event.data.mevedelDiscussion === 'located') window.located.push(event.data);
@@ -89,6 +90,9 @@ async function setup(page) {
         window.failNext = null;
       } else if (frame.action === 'list') {
         reply.discussions = window.store;
+      } else if (frame.action === 'history') {
+        reply.conversation = [];
+        reply.conversationDecision = window.decision || null;
       } else if (frame.action === 'post') {
         const id = frame.target.kind === 'whole' ? 'general' : frame.discussionId;
         const known = window.store.find(d => d.id === id);
@@ -115,7 +119,9 @@ async function setup(page) {
       el, toggle: $('artifact-discussion'), sidebarToggle: $('artifact-discussions'),
       side: $('artifact-side'), sideRoot: $('artifact-discussion-sidebar'),
       count: $('artifact-discussion-count'), close: $('artifact-side-close'), peek: $('artifact-peek'),
-      reveal: id => { window.revealed = id; }, canDiscuss: () => true,
+      reveal: id => { window.revealed = id; }, canDiscuss: () => window.writable !== false,
+      openConversation: id => window.openedConversations.push(id),
+      busy: () => window.busy === true,
     });
     window.show = (html, id) => {
       const body = document.getElementById('artifact-body');
@@ -181,6 +187,78 @@ const fresh = '#artifact-side .ds-thread:not([hidden])';
 const subject = page => page.textContent(`${fresh} .ds-subject-title`);
 const target = page => page.textContent(`${fresh} .ds-target`);
 const start = page => page.click(`${fresh} .ds-send`);
+
+test('a dedicated decision stays explicit, with no automatic conversation opening', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 1280]) {
+      const page = await browser.newPage({viewport: {width, height: 812}});
+      const errors = [];
+      page.on('pageerror', error => errors.push(String(error)));
+      await setup(page);
+      await page.evaluate(() => {
+        window.decision = {pending: true, title: 'Architecture review'};
+        window.store.push({id: 'general', target: {kind: 'whole'}, messages: [
+          {id: 'message-1', actor: 'Alice', text: 'Review this page'}]});
+      });
+      await page.evaluate(html => window.show(html, 'tool-1'), ARTIFACT);
+      await artifactFrame(page);
+      await page.click('#artifact-discussions');
+      await page.click('.ds-item[data-discussion-id="general"]');
+      await page.waitForSelector('.ds-status >> text=Waiting for a decision in Architecture review');
+      assert.deepEqual(await page.evaluate(() => window.openedConversations), []);
+      assert.equal((await actions(page, 'conversation')).length, 0);
+      await page.getByRole('button', {name: 'Open conversation', exact: true}).click();
+      assert.deepEqual(await page.evaluate(() => window.openedConversations), ['schema.html']);
+      await page.evaluate(() => { window.writable = false; window.controller.activity(); });
+      assert.equal(await page.getByRole('button', {name: 'Open conversation', exact: true}).count(), 0);
+      assert.match(await page.textContent('.ds-status'), /Waiting for a decision/);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('artifact discussion rows show queued and working state without losing drafts', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 1280]) {
+      const page = await browser.newPage({viewport: {width, height: 812}});
+      await setup(page);
+      await page.evaluate(html => window.show(html, 'tool-1'), ARTIFACT);
+      await artifactFrame(page);
+      await page.waitForFunction(() => window.sent.some(frame => frame.action === 'list'));
+      await page.evaluate(() => {
+        window.store = [{id: 'general', target: {kind: 'whole'}, messages: [
+          {id: 'message-1', actor: 'Alice', text: 'Review this page'},
+        ]}];
+        window.controller.stored({item: 'artifact:schema.html', discussions: window.store});
+        window.controller.queue([{shared: {kind: 'artifact', itemId: 'artifact:schema.html',
+          discussionId: 'general', questionId: 'question-1'}}]);
+      });
+      await page.click('#artifact-discussions');
+      assert.equal(await page.textContent('.ds-item .ds-state'), 'Queued for the assistant');
+      await page.click('.ds-item');
+      await page.fill('.ds-input', '> draft\nkeep this');
+      await page.evaluate(() => {
+        window.controller.queue([]);
+        window.controller.records([{id: 'u1', kind: 'user', shared: {
+          kind: 'artifact', itemId: 'artifact:schema.html', discussionId: 'general',
+          questionId: 'question-1', messageId: 'message-1'}},
+          {id: 'a1', kind: 'assistant', text: 'Reviewing the page'}]);
+        window.busy = true;
+        window.controller.activity();
+      });
+      assert.equal(await page.inputValue('.ds-input'), '> draft\nkeep this');
+      await page.click('.ds-back');
+      assert.equal(await page.textContent('.ds-item .ds-state'), 'Assistant working');
+      await page.evaluate(() => { window.busy = false; window.controller.activity(); });
+      assert.equal(await page.locator('.ds-item .ds-state').count(), 0);
+      assert.match(await page.textContent('.ds-item .ds-snip'), /Reviewing the page/);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
 
 test('artifact discussions: pick, send, marker thread, box, selection, relocation',
      {timeout: 120000}, async () => {

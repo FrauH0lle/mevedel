@@ -34,7 +34,7 @@
       + '});})()<\/script>';
   }
 
-  function create({send, el, flash, summarize, reveal, canDiscuss, canDelete, busy, ask,
+  function create({send, el, flash, summarize, reveal, canDiscuss, canDelete, busy, ask, openConversation,
                    onPage = () => {}}) {
     const nav = document.getElementById('artifacts');
     const box = document.getElementById('artifacts-box');
@@ -73,6 +73,7 @@
       } : null,
       canDiscuss: typeof canDiscuss === 'function' ? canDiscuss : () => false,
       busy: typeof busy === 'function' ? busy : () => false,
+      openConversation,
     }) : null;
 
     function note(text) {

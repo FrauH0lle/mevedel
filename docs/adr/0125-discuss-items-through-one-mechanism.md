@@ -23,7 +23,8 @@ general discussion.
 discussions sidebar, one shared viewer component
 (`relay/viewer/viewer-discussions.js`). It shows either the list of the item's
 discussions -- the whole item first, then the open ones, then the resolved
-ones folded into one row -- or one discussion with its messages, the
+ones folded into one row, with queued/running assistant work visible on the
+affected row -- or one discussion with its messages, the
 assistant's answers beneath them, and one box at its foot that replies to that
 discussion only. **Discuss** picks the part and opens a new discussion that
 looks like any other before its first message. Every message carries an **Ask
@@ -115,6 +116,22 @@ participant's place while they type; the user chose marks over jumping.
   message identity; their answers show at the end of the general discussion.
 - Answers are placed by the attribution's message identity, so the editor and
   the room no longer infer the answered message from the discussion's version.
+- The HTML sidebar reads bounded canonical item history rather than relying
+  on the room's live projection. Live-only input lost answers at compaction
+  and provided none in the lobby. A room reads its own session's item turns;
+  the lobby follows the selected discussion's recorded answering session or
+  existing dedicated session, never an aggregation of project conversations.
+  Inspection does not resume or create sessions, and view links retain read
+  access. The newest complete turns fit within 128,000 characters, with explicit
+  omission and unavailable-history notices. Five-second polls use cached source
+  identities and digest/unchanged responses to avoid repeated archive projection.
+- A lobby discussion whose dedicated conversation has a pending interaction
+  shows **Waiting for a decision in NAME**, with an explicit **Open
+  conversation** for the existing full/owner Conversation authority. A pending
+  Ask or approval must not automatically share that session. History exposes
+  only a pending flag and title, never the interaction body or a bearer;
+  opening uses the existing store action at the requester's tier. The digest
+  observes interaction changes independently from the cached transcript.
 - Retry idempotency checks the queue, the live transcript and the archived
   segments for every kind, as editor questions did before, so a retry after
   compaction is not queued twice. Reading archives costs time proportional to

@@ -65,6 +65,11 @@
 (declare-function mevedel-collaboration--workspace-rooms
                   "mevedel-collaboration-artifact" (workspace))
 
+;; `mevedel-collaboration-artifact-history'
+(declare-function mevedel-collaboration-artifact-history
+                  "mevedel-collaboration-artifact-history" (room guest item args))
+(autoload 'mevedel-collaboration-artifact-history "mevedel-collaboration-artifact-history")
+
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--guest-role
                   "mevedel-collaboration-guest" (guest))
@@ -957,7 +962,7 @@ authority check."
       (condition-case err
           (let* ((action (plist-get args :action))
                  (item (progn
-                         (unless (member action '("list" "post" "reply" "resolve" "ask"))
+                         (unless (member action '("list" "history" "post" "reply" "resolve" "ask"))
                            (error "Unknown discussion action"))
                          (mevedel-collaboration-discussions--item
                           room guest (plist-get args :item))))
@@ -966,33 +971,35 @@ authority check."
                   (lambda ()
                     (and (memq room (mevedel-collaboration--workspace-rooms
                                      (plist-get item :workspace)))
-                         (or (equal action "list") (plist-get guest :writable))
+                         (or (member action '("list" "history")) (plist-get guest :writable))
                          (or (null caller-authorize) (funcall caller-authorize))))))
-            (unless (or (equal action "list") (plist-get guest :writable))
+            (unless (or (member action '("list" "history")) (plist-get guest :writable))
               (error "This link can view the item but not discuss it"))
             (unless (funcall authorize) (error "Discussion authority ended"))
-            (if (plist-get item :shared)
-                (mevedel-collaboration-discussions--shared-perform
-                 room guest item args authorize #'reply)
-              (reply
-               (pcase action
-                 ("list"
-                  (mevedel-collaboration--store-read guest)
-                  (list :item (plist-get item :item)
-                        :discussions (mevedel-collaboration-discussions-public
-                                      (mevedel-collaboration-discussions--load item))))
-                 ("post" (mevedel-collaboration-discussions--post room guest item args))
-                 ("reply" (mevedel-collaboration-discussions--reply room guest item args))
-                 ("resolve" (mevedel-collaboration-discussions--resolve
-                             item args (mevedel-collaboration-discussions--actor guest)))
-                 ("ask"
-                  (let ((id (plist-get args :discussionId)))
-                    (append (list :discussionId id)
-                            (mevedel-collaboration-discussions--ask-now
-                             room guest item (mevedel-collaboration-discussions--load item) id
-                             (mevedel-collaboration-discussions--identity
-                              (plist-get args :questionId) "question")
-                             nil))))))))
+            (if (equal action "history")
+                (reply (mevedel-collaboration-artifact-history room guest item args))
+              (if (plist-get item :shared)
+                  (mevedel-collaboration-discussions--shared-perform
+                   room guest item args authorize #'reply)
+                (reply
+                 (pcase action
+                   ("list"
+                    (mevedel-collaboration--store-read guest)
+                    (list :item (plist-get item :item)
+                          :discussions (mevedel-collaboration-discussions-public
+                                        (mevedel-collaboration-discussions--load item))))
+                   ("post" (mevedel-collaboration-discussions--post room guest item args))
+                   ("reply" (mevedel-collaboration-discussions--reply room guest item args))
+                   ("resolve" (mevedel-collaboration-discussions--resolve
+                               item args (mevedel-collaboration-discussions--actor guest)))
+                   ("ask"
+                    (let ((id (plist-get args :discussionId)))
+                      (append (list :discussionId id)
+                              (mevedel-collaboration-discussions--ask-now
+                               room guest item (mevedel-collaboration-discussions--load item) id
+                               (mevedel-collaboration-discussions--identity
+                                (plist-get args :questionId) "question")
+                               nil)))))))))
         (error (reply (list :error (error-message-string err))))))))
 
 (defun mevedel-collaboration-discussions-handle (room peer frame)

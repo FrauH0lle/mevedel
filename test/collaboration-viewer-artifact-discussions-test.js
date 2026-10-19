@@ -100,7 +100,8 @@ frame.contentWindow = {postMessage: data => posted.push(data)};
 // Opening the artifact lists its stored discussions; the store's broadcast
 // and the transcript's reply become one answered marker.  The general
 // discussion about the whole artifact has no marker.
-assert.deepEqual({...sentFrames.at(-1)}, {t: 'discussion', reqId: 1, action: 'list', item: 'tool-1'});
+assert.deepEqual({...sentFrames.at(-1)},
+                 {t: 'discussion', reqId: sentFrames.at(-1).reqId, action: 'list', item: 'tool-1'});
 const anchor = {kind: 'word', selector: '#lead', label: 'word "Hello"', quote: 'Hello', start: 0};
 const discussion = (id, actor, text, extra = {}) =>
   ({id, target: anchor, quote: 'Hello', resolved: false,
@@ -182,7 +183,7 @@ message({source: frame.contentWindow,
          data: {mevedelDiscussion: 'open', id: 'c1', rect: {left: 1, top: 1, width: 1, height: 1}}});
 assert.deepEqual(plain(sidebar.shown.at(-1)), {kind: 'thread', id: 'c1'});
 assert.equal(nodes['artifact-side'].hidden, false, 'a marker opens its discussion in the sidebar');
-assert.equal(listed('c1').state, 'answered');
+assert.equal(listed('c1').assistantState, 'answered');
 
 // A selection sent alone reads as such in its thread.
 controller.storedDiscussions({item: 'artifact:page', discussions: [

@@ -689,7 +689,8 @@ Whiteboards, documents and HTML artifacts share one discussions sidebar
 (`relay/viewer/viewer-discussions.js`). It shows either the list of the item's
 discussions or one discussion. The list puts the whole item first, then the
 open discussions with their marker number, latest message or answer and any
-state that needs attention, then the resolved ones folded into one row. Its
+state that needs attention (including queued and running assistant work), then
+the resolved ones folded into one row. Its
 foot offers **Discuss** for the current selection. A discussion fills the
 sidebar: its subject and a link that shows the target, its messages with the
 assistant's answers beneath the messages they answer, and one box at the foot
@@ -748,7 +749,33 @@ reaches the rest of the conversation. The request's audit data names the
 discussion and the message it answers, so every view places the answer
 beneath that message.
 
-Each guest action is a `discussion` request with an action of `list`, `post`,
+The HTML sidebar reads canonical item history, including archived answers,
+through the read-only `history` discussion action. A room reads only that
+session's turns about the item. In the lobby, the selected discussion chooses
+its recorded answering session, or the item's existing dedicated session;
+reading never creates or resumes a session. It does not combine project chats.
+History keeps newest complete turns within 128,000 characters, reports omitted
+older turns and unavailable archives, and places answers by their recorded
+discussion/message identities. Live copies replace preserved compaction tails.
+An open artifact polls every five seconds; source identities cache up to four
+bounded projections per room, and a matching digest returns only an unchanged
+reply rather than reading and projecting archives again. Source checks stay
+constant-size: the live buffer tick/current segment identity, portable
+publication head and session-directory timestamp cover immutable archives and
+their atomic replacement, addition or deletion. Closing the panel stops
+polling. View links can read this history just as they can open the artifact.
+
+If a lobby discussion's dedicated conversation is waiting for an Ask answer or
+approval, its sidebar says **Waiting for a decision in NAME**. The history
+snapshot carries only that pending flag and the bounded conversation title,
+not the question, approval body or a room link. Interaction identities also
+participate in the history digest independently of transcript edits, without
+reprojecting its records. Nothing shares or opens the dedicated conversation
+automatically. Full and owner links can explicitly **Open conversation**, using
+the store's existing Conversation action and the requester's existing link tier;
+view links see the waiting notice without a new action or decision authority.
+
+Each guest action is a `discussion` request with an action of `list`, `history`, `post`,
 `reply`, `resolve` or `ask` naming its item as `artifact:ID` or by a card's
 record id. The artifact panel sends it as a room frame; the editor sends it
 through its editing channel, which also carries the message's attachments.

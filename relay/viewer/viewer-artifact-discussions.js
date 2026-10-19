@@ -903,6 +903,103 @@ function createArtifactDiscussionController(options) {
   let requestSequence = 0;
   const inflight = new Map(); // reqId -> {resolve, reject}
 
+  // -- Canonical item history --------------------------------------------
+
+  let history = [], historyDigest = null, historyKey = null;
+  let historyTimer = null, historyGeneration = 0;
+  let historyOpened = false, recordsRevision = 0;
+  let historyFailed = false;
+  let conversationDecision = null;
+  const HISTORY_POLL_MS = 5000;
+  const historyTimers = typeof setTimeout === 'function';
+
+  function stopHistory() {
+    historyGeneration++;
+    if (historyTimer !== null) clearTimeout(historyTimer);
+    historyTimer = null;
+    for (const [id, entry] of inflight) {
+      if (!entry.history) continue;
+      if (entry.timer !== undefined) clearTimeout(entry.timer);
+      inflight.delete(id);
+      entry.reject(new Error('Artifact closed'));
+    }
+    history = [];
+    historyDigest = null;
+    historyKey = null;
+    historyFailed = false;
+    conversationDecision = null;
+  }
+
+  function ensureHistory() {
+    if (!view.frame) return;
+    const selected = sidebar.view();
+    const discussionId = selected.kind === 'thread' ? selected.id : GENERAL;
+    const key = `${view.name}:${discussionId}`;
+    if (key === historyKey) return;
+    stopHistory();
+    historyKey = key;
+    threads = null;
+    const initial = !historyOpened;
+    historyOpened = true;
+    fetchHistory(discussionId, historyGeneration, initial);
+  }
+
+  async function fetchHistory(discussionId, generation, initial = false) {
+    const revision = recordsRevision;
+    try {
+      const reply = await request({action: 'history', item: view.id, discussionId,
+                                   ...(historyDigest ? {digest: historyDigest} : {})});
+      if (generation !== historyGeneration || !view.frame) return;
+      if (historyFailed) sidebar.notice('');
+      historyFailed = false;
+      if (!reply.conversationUnchanged) {
+        conversationDecision = reply.conversationDecision?.pending === true
+          ? reply.conversationDecision : null;
+        history = Array.isArray(reply.conversation) ? reply.conversation : [];
+        historyDigest = reply.conversationDigest || null;
+        threads = null;
+        // Loading another discussion must not clear news in other threads.
+        // Nor may a delayed opening response mark newer live answers as seen.
+        refresh(initial && revision === recordsRevision);
+        if (reply.conversationTruncated) {
+          sidebar.notice('Older item turns are omitted from this history.');
+        }
+      }
+    } catch (error) {
+      if (generation !== historyGeneration || !view.frame) return;
+      historyFailed = true;
+      sidebar.notice(`Item history unavailable: ${error.message}`, true);
+    } finally {
+      if (generation === historyGeneration && view.frame && historyTimers) {
+        historyTimer = setTimeout(() => {
+          historyTimer = null;
+          fetchHistory(discussionId, generation);
+        }, HISTORY_POLL_MS);
+      }
+    }
+  }
+
+  function conversationRecords() {
+    // Prefer the complete live question group over a preserved archive tail.
+    const live = [], questions = new Set();
+    let shared = null;
+    for (const record of records) {
+      if (!record?.kind) continue;
+      if (record.kind === 'user') shared = record.shared;
+      if (mine(shared)) {
+        live.push(record);
+        questions.add(shared.questionId);
+      }
+    }
+    const combined = [];
+    shared = null;
+    for (const record of history) {
+      if (record.kind === 'user') shared = record.shared;
+      if (mine(shared) && !questions.has(shared.questionId)) combined.push(record);
+    }
+    return combined.concat(live);
+  }
+
   const bounded = (value, limit) => typeof value === 'string' && value.length <= limit;
   const finite = value => typeof value === 'number' && Number.isFinite(value);
   function cleanRect(rect) {
@@ -959,15 +1056,29 @@ function createArtifactDiscussionController(options) {
   }
 
   // One discussion request; resolves with the host's reply fields.
-  async function request(fields) {
+  function request(fields) {
     const reqId = ++requestSequence;
-    const answer = new Promise((resolve, reject) => inflight.set(reqId, {resolve, reject}));
-    const ok = await send(Object.assign({t: 'discussion', reqId}, fields));
-    if (!ok) {
-      inflight.delete(reqId);
-      throw new Error('Connection lost; try again.');
-    }
-    return answer;
+    // Return the owned answer immediately, even while transport sealing is
+    // pending. Cancellation/timeout must not reject an unobserved inner promise.
+    return new Promise((resolve, reject) => {
+      const entry = {resolve, reject, history: fields.action === 'history'};
+      const fail = error => {
+        if (inflight.get(reqId) !== entry) return;
+        if (entry.timer !== undefined) clearTimeout(entry.timer);
+        inflight.delete(reqId);
+        reject(error);
+      };
+      if (entry.history && historyTimers) entry.timer = setTimeout(
+        () => fail(new Error('The host did not answer; retrying.')), 15000);
+      inflight.set(reqId, entry);
+      try {
+        Promise.resolve(send(Object.assign({t: 'discussion', reqId}, fields))).then(ok => {
+          if (!ok) fail(new Error('Connection lost; try again.'));
+        }, fail);
+      } catch (error) {
+        fail(error);
+      }
+    });
   }
 
   // -- Threads ----------------------------------------------------------
@@ -988,12 +1099,17 @@ function createArtifactDiscussionController(options) {
     const about = [];
     let current = null;
     let latest = null;
+    // Only live root turns determine working state, never a retained answer.
     for (const record of records) {
-      if (!record) continue;
+      if (record?.kind === 'user') latest = mine(record.shared) ? record.shared.discussionId : null;
+    }
+    const liveIds = new Set(records.map(record => record?.id));
+    for (const record of conversationRecords()) {
+      if (!record || !record.kind) continue;
       if (record.kind === 'user') {
-        current = mine(record.shared) ? {state: 'sent', recordId: record.id} : null;
-        latest = current && record.shared.discussionId;
-        if (current) byId.set(latest, current);
+        current = mine(record.shared)
+          ? {state: 'sent', recordId: liveIds.has(record.id) ? record.id : null} : null;
+        if (current) byId.set(record.shared.discussionId, current);
       } else if (current && current.state === 'sent' && record.kind === 'assistant'
                  && typeof record.text === 'string' && record.text.trim()) {
         current.state = 'answered';
@@ -1095,14 +1211,17 @@ function createArtifactDiscussionController(options) {
       return entries;
     },
     extras: discussion => ({
-      status: discussion.state === 'queued' ? 'Queued for the assistant'
+      status: conversationDecision ? `Waiting for a decision in ${conversationDecision.title}`
+        : discussion.assistantState === 'queued' ? 'Queued for the assistant'
         : discussion.working ? 'The assistant is working on this'
         // The session that answers this discussion, wherever it was written.
         : discussion.sessionName ? `Answered in ${discussion.sessionName}` : '',
-      tone: discussion.working ? 'working' : ''}),
+      tone: discussion.working ? 'working' : '',
+      actions: conversationDecision && canDiscuss() && typeof options.openConversation === 'function'
+        ? [{label: 'Open conversation', run: () => options.openConversation(view.name)}] : []}),
     selectHint: '',
     leaveNew: () => clearDraft(),
-    onRender: () => publishMarkers(),
+    onRender: () => { publishMarkers(); ensureHistory(); },
   });
 
   function showSide(shown) {
@@ -1205,7 +1324,10 @@ function createArtifactDiscussionController(options) {
         title: discussion.anchor ? discussion.anchor.label || 'Part of the artifact' : '',
         quote: discussion.anchor && discussion.anchor.kind !== 'word' ? discussion.anchor.quote || '' : '',
         resolved: discussion.resolved, revealable: !discussion.resolved,
-        recordId: discussion.recordId, state: discussion.state, working: discussion.working,
+        recordId: discussion.recordId, assistantState: discussion.state,
+        state: discussion.state === 'queued' ? {text: 'Queued for the assistant', tone: 'working'}
+          : discussion.working ? {text: 'Assistant working', tone: 'working'} : null,
+        working: discussion.working,
         sessionName: discussion.sessionName,
         messages: discussion.messages})),
       records: threadStates().about,
@@ -1323,6 +1445,8 @@ function createArtifactDiscussionController(options) {
   }
 
   function reset() {
+    stopHistory();
+    historyOpened = false;
     view.mode = false;
     view.draft = null;
     stored = [];
@@ -1353,6 +1477,7 @@ function createArtifactDiscussionController(options) {
       updateToggles();
     },
     records(next) {
+      recordsRevision++;
       records = Array.isArray(next) ? next : [];
       threads = null;
       refresh();
@@ -1385,6 +1510,7 @@ function createArtifactDiscussionController(options) {
       const entry = inflight.get(frame.reqId);
       if (!entry) return;
       inflight.delete(frame.reqId);
+      if (entry.timer !== undefined) clearTimeout(entry.timer);
       if (typeof frame.error === 'string') entry.reject(new Error(frame.error));
       else entry.resolve(frame);
     },

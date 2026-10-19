@@ -172,6 +172,7 @@
     {send, el, page: () => editing.page() || artifacts.page()});
   const artifacts = window.mevedelArtifactView.create({
     send, el, flash: flashNotice, summarize: summarizeSession,
+    openConversation: id => activeStore().conversation(id),
     onPage: () => presence.report(),
     // A lobby has no welcome; its link tier decides instead.
     canDiscuss: () => (state.connected && !state.readOnly)
