@@ -68,6 +68,18 @@ construction and publication through the room's existing stream timer. Every
 projection read refreshes dirty pending trees; top-level events publish immediately,
 including settlement. Canonical transcript records replace these transient trees.
 
+The browser's unified background-work panel projects the native agent/execution
+collector and stable ordering instead of independently interpreting transcript
+notices or sorting mutable statuses. Bounded passive terminal snapshots preserve
+completion facts when executions leave the live registry; each browser owns its
+selection, focus and finished-row grace. Preview availability and truncation are
+explicit, with exactly three bounded output lines and a 64 KiB encoded-frame
+budget. Full and owner links may stop a live scoped execution or interrupt a
+known retained child through typed identity-bearing actions. The host rechecks
+the current guest tier and registry identity before the native user-authority
+operation; view links remain inspection-only. No browser-supplied host path or
+row key grants execution authority.
+
 Artifact cards are settled live or archived transcript records; bytes are fetched on demand by
 record ID, resolved and bounded by the host. HTML runs in a sandboxed iframe
 with scripts permitted but no same-origin authority and a restrictive CSP.

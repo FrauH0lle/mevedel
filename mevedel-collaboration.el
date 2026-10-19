@@ -53,6 +53,11 @@
                   "mevedel-collaboration-artifact-projection" ())
 (autoload 'mevedel-collaboration--artifact-stat-invalidate "mevedel-collaboration-artifact-projection")
 
+;; `mevedel-collaboration-background'
+(declare-function mevedel-collaboration--publish-background
+                  "mevedel-collaboration-background" (room))
+(autoload 'mevedel-collaboration--publish-background "mevedel-collaboration-background")
+
 ;; `mevedel-collaboration-editing'
 (declare-function mevedel-collaboration-editing-depart
                   "mevedel-collaboration-editing" (room peer))
@@ -680,6 +685,7 @@ Record the publish's cost on ROOM to pace later coalesced publishes."
       (mevedel-collaboration--publish-status room)
       (mevedel-collaboration--publish-history room)
       (mevedel-collaboration--publish-agents room)
+      (mevedel-collaboration--publish-background room)
       (mevedel-collaboration--publish-tasks room)
       (mevedel-collaboration--publish-goal room)
       (plist-put room :publish-cost (- (float-time) started))
@@ -975,6 +981,7 @@ returning the live room."
   (require 'mevedel-collaboration-guest)
   (require 'mevedel-collaboration-task)
   (require 'mevedel-collaboration-goal)
+  (require 'mevedel-collaboration-background)
   (pcase-let* ((`(,ws-origin . ,web-origin)
                 (mevedel-collaboration--relay-origins))
                (room-id (mevedel-collaboration--base64url

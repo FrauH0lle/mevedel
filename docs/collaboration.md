@@ -832,27 +832,38 @@ record too large to travel in a frame of its own is dropped rather than
 sent: the relay refuses an oversized frame by closing the connection, and
 for the host connection it collects the room with it.
 
-Guests of every link tier also receive the retained agent roster:
-the canonical path, role, status, and effective provider/model/known effort of
-every active or settled registered agent,
-broadcast on change and told to a joining guest directly. An active
-agent carries its blocked/waiting/running status; a settled one carries
-its terminal outcome (done, errored, or interrupted), because retained
-agents persist in the session and their final reports are worth reading
-after the fact. The roster is read state, which is why a view link gets
-it too. It rides the same coalesced publication as the transcript; the
-view's status render nudges that publication so a retained agent working
-while the root request is idle, when no gptel observer fires, still
-reaches the strip. The viewer splits the roster inside the Session menu:
-active agents render as chips with compact model:effort attribution, marking a blocked or waiting agent so a
-session that fans out workers never reads as an opaque gap, while settled
-agents collapse into a "Finished agents" disclosure whose rows open the
-same transcript sheet. Waiting is not itself a request for host intervention;
-only blocked agents mark the summary as requiring attention. The inspection
-sheet shows full provider/model attribution, without borrowing the parent's
-configuration or inventing an unknown effort.
-Expanded active and finished rows wrap long paths and model labels within the
-disclosure rather than making a narrow viewport scroll horizontally.
+Every link tier receives the unified **Background work** panel: active agents,
+yielded Bash commands, and Monitors. The host's `background-work` frame uses
+the native panel's collector, canonical agent activity and stable ordering;
+the browser does not reconstruct process state or sort by mutable status.
+Rows carry stable keys, owner and execution ID or agent path, native start
+time and order, status labels, descriptions, effective provider/model/known
+effort, and the tool ID needed to find the originating call. Waiting is not
+itself a request for intervention; blocked agents are distinct. Retained-agent
+roster metadata still supports transcript inspection, including settled agents,
+without a second agent-chip or finished-agent presentation.
+
+An execution preview is exactly three bounded output lines, with an explicit
+availability label, preview/output truncation facts, and output counts. Preview
+rows are capped at 512 characters; browsers fit each to one visible row. Full
+output uses the existing scoped execution-result request, never a browser-sent
+host filesystem path. Passive execution events refresh the same coalesced
+publication without consuming output. The host retains at most 128 terminal
+snapshots for 30 seconds so completion survives registry removal and short
+reconnects; effective child model metadata stays with the completed row. Active
+and terminal rows pass through the same native ordering. Frames admit live work
+before terminal evidence, cap at 128 rows and 64 KiB of encoded JSON, and signal
+any omitted rows explicitly. Changed frames broadcast once; joining guests
+receive the current frame directly. Expansion, hover/focus freezing and the
+ten-second visible finished-row grace belong to each browser, not the host view.
+
+Full and owner links may submit typed `background-stop` actions: an execution's
+owner/ID tuple or a retained child's canonical path, optionally with its row key.
+The host checks the guest's current writable tier and resolves the target again
+in that room's live execution registry or retained-agent registry before using
+the native user-authority stop/interrupt API. View links inspect only; forged,
+stale, cross-session, ambiguous and root-agent targets are refused. Interrupting
+a child ends its current turn without deleting its retained conversation.
 
 The same publication cycle sends the session task list to either link:
 identity, subject, status, optional owner, running agent activity, owner status
