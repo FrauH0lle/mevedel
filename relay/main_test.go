@@ -367,6 +367,44 @@ func TestHostDisconnectClosesRoom(t *testing.T) {
 	defer redial.CloseNow()
 }
 
+// A host's last frames -- its goodbye -- precede the room's closing even
+// when the host disconnects right after sending them.
+func TestHostFarewellPrecedesRoomClosed(t *testing.T) {
+	rl, srv := startRelay(t)
+	payload := strings.Repeat("x", 16<<10)
+	for round := range 20 {
+		host := dial(t, srv, testRoom, "host")
+		guest := dial(t, srv, testRoom, "guest")
+		expectText(t, host, `{"t":"peer-joined","peer":1}`)
+		for range 48 {
+			writeBinary(t, host, envelope(1, payload))
+		}
+		writeBinary(t, host, envelope(1, "bye"))
+		host.Close(websocket.StatusNormalClosure, "done")
+		for range 48 {
+			expectBinary(t, guest, envelope(1, payload))
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		typ, data, err := guest.Read(ctx)
+		cancel()
+		if err != nil || typ != websocket.MessageBinary ||
+			string(data) != string(envelope(1, "bye")) {
+			t.Fatalf("round %d: goodbye lost before room-closed: %v %q %v",
+				round, typ, truncate(data), err)
+		}
+		expectText(t, guest, `{"t":"room-closed"}`)
+		expectClose(t, guest, closeRoomClosed)
+		waitEmpty(t, rl)
+	}
+}
+
+func truncate(data []byte) []byte {
+	if len(data) > 40 {
+		return data[:40]
+	}
+	return data
+}
+
 func waitEmpty(t *testing.T, rl *relay) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

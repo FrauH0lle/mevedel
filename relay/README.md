@@ -60,8 +60,9 @@ republished after rename; `currentSegment` remains frame metadata.
 - TEXT control messages (unencrypted, no session data): relay→host
   `{"t":"peer-joined"|"peer-left","peer":N}`; relay→guest
   `{"t":"room-closed"}`; host→relay Web Push subscription routing and wake
-  requests. Host disconnect closes every guest with 4001 and garbage-collects
-  the room, including its subscriptions.
+  requests. Host disconnect first delivers the frames the host sent before
+  leaving, such as its goodbye, then closes every guest with 4001 and
+  garbage-collects the room, including its subscriptions.
 - `GET /push-key` — the relay's persistent VAPID public key. A notification
   opt-in registers an endpoint for that room and browser guest. Wake requests
   are empty Web Push POSTs: the push service receives no prompt, transcript,
