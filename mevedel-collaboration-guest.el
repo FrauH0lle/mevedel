@@ -88,10 +88,13 @@
 ;; `mevedel-collaboration-background'
 (declare-function mevedel-collaboration--background-frame
                   "mevedel-collaboration-background" (room))
+(declare-function mevedel-collaboration--handle-background-locate
+                  "mevedel-collaboration-background" (room peer frame))
 (declare-function mevedel-collaboration--handle-background-stop
                   "mevedel-collaboration-background" (room peer frame))
 (autoload 'mevedel-collaboration--background-frame "mevedel-collaboration-background")
 (autoload 'mevedel-collaboration--handle-background-stop "mevedel-collaboration-background")
+(autoload 'mevedel-collaboration--handle-background-locate "mevedel-collaboration-background")
 
 ;; `mevedel-collaboration-discussions'
 (declare-function mevedel-collaboration-discussions-handle
@@ -1296,6 +1299,8 @@ sending guest instead of waiting for an answer."
     ("abort" (mevedel-collaboration--handle-abort room peer))
     ("background-stop"
      (mevedel-collaboration--handle-background-stop room peer frame))
+    ("background-locate"
+     (mevedel-collaboration--handle-background-locate room peer frame))
     ("fetch-agent"
      (mevedel-collaboration--handle-fetch-agent room peer frame))
     ("execution-result-get"

@@ -16,14 +16,45 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-view-execution)
 
+;; `mevedel-agent-persistence'
+(declare-function mevedel-agent-persistence-ensure-conversation
+                  "mevedel-agent-persistence" (session record root-buffer &optional readonly-p))
+(autoload 'mevedel-agent-persistence-ensure-conversation "mevedel-agent-persistence")
+
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-tool-use-id "mevedel-agents" (cl-x) t)
+
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--broadcast "mevedel-collaboration" (room frame))
 (declare-function mevedel-collaboration--guest "mevedel-collaboration" (room peer))
 (declare-function mevedel-collaboration--room-for-session "mevedel-collaboration" (session))
 (declare-function mevedel-collaboration--schedule-publish "mevedel-collaboration" (room))
 
+;; `mevedel-collaboration-guest'
+(declare-function mevedel-collaboration--request-id-p "mevedel-collaboration-guest" (value))
+
+;; `mevedel-collaboration-transport'
+(declare-function mevedel-collaboration--transport-send "mevedel-collaboration-transport" (transport peer frame))
+
 ;; `mevedel-execution'
 (defvar mevedel-execution-event-functions)
+
+;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
+(declare-function mevedel-transport-run-at-time "mevedel-transport" (seconds function &rest args))
+(declare-function mevedel-transport-run-when-idle "mevedel-transport" (key path function &optional on-cancel))
+(autoload 'mevedel-transport-busy-p "mevedel-transport")
+(autoload 'mevedel-transport-run-at-time "mevedel-transport")
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
+
+;; `mevedel-view-audit'
+(declare-function mevedel-view-audit-execution-record "mevedel-view-audit"
+                  (session live execution-id &optional agent-transcript-p))
+(declare-function mevedel-view-audit-locate-source "mevedel-view-audit"
+                  (session live-buffer tool-id &optional agent-transcript-p))
+(autoload 'mevedel-view-audit-execution-record "mevedel-view-audit")
+(autoload 'mevedel-view-audit-locate-source "mevedel-view-audit")
 
 (defconst mevedel-collaboration--background-row-limit 128
   "Maximum background rows in a frame and retained terminal cache.")
@@ -271,6 +302,99 @@ the target.  The native user-authority API rechecks liveness at the action."
         (user-error "Background identity does not match"))
       (if path (mevedel-agent-control-interrupt-user session path)
         (mevedel-execution-stop-user session id)))))
+
+(defun mevedel-collaboration--background-source-buffer (room owner)
+  "Return ROOM's read-only-inspectable receiving transcript for known OWNER.
+Called outside guest filters so cold retained-agent hydration is safe."
+  (if (equal owner "/root")
+      (plist-get room :data-buffer)
+    (when-let* ((session (plist-get room :session))
+                (record (cdr (assoc owner (mevedel-session-agent-registry session)))))
+      (or (let ((buffer (mevedel-agent-record-conversation-buffer record)))
+            (and (buffer-live-p buffer) buffer))
+          (progn
+            (mevedel-agent-persistence-ensure-conversation
+             session record (plist-get room :data-buffer) t)
+            (mevedel-agent-record-conversation-buffer record))))))
+
+(defun mevedel-collaboration--background-source (room frame)
+  "Locate FRAME's background source in ROOM using native audit lookup.
+Only host registries or source-backed execution evidence supply tool identity;
+neither a client tool ID nor a filesystem path is accepted as authority."
+  (let* ((session (plist-get room :session))
+         (path (plist-get frame :path))
+         (owner (plist-get frame :owner))
+         (id (plist-get frame :id))
+         tool-id)
+    (if path
+        (let* ((record (and (stringp path) (not owner) (not id)
+                            (not (equal path "/root"))
+                            (cdr (assoc path (mevedel-session-agent-registry session)))))
+               (invocation (and record (mevedel-agent-record-invocation record))))
+          (unless record (user-error "Agent source is unavailable"))
+          (setq owner (or (mevedel-agent-record-parent-path record) "/root")
+                tool-id (and (mevedel-agent-invocation-p invocation)
+                             (mevedel-agent-invocation-parent-tool-use-id invocation))))
+      (unless (and (stringp owner) (stringp id)
+                   (<= (string-bytes owner) 256) (<= (string-bytes id) 256)
+                   (or (equal owner "/root")
+                       (assoc owner (mevedel-session-agent-registry session))))
+        (user-error "Execution source is unavailable")))
+    (let* ((buffer (mevedel-collaboration--background-source-buffer room owner))
+           (agent-p (not (equal owner "/root"))))
+      (unless (buffer-live-p buffer) (user-error "Source transcript is unavailable"))
+      (unless path
+        (let* ((snapshot (cl-find-if
+                          (lambda (item) (and (equal owner (plist-get item :owner))
+                                              (equal id (plist-get item :execution-id))))
+                          (mevedel-view-execution--live session)))
+               (cached (assoc (list 'execution owner id)
+                              (mapcar #'cdr (plist-get room :background-terminal)))))
+          (setq tool-id
+                (or (plist-get snapshot :tool-use-id)
+                    (plist-get (nth 2 cached) :tool-use-id)
+                    (plist-get (mevedel-view-audit-execution-record session buffer id agent-p)
+                               :tool-use-id)))))
+      (let ((source (mevedel-view-audit-locate-source session buffer tool-id agent-p)))
+        (unless source (user-error "Original source row is unavailable"))
+        (append (list :owner owner :toolUseId tool-id
+                      :current (if (plist-get source :current-p) t :json-false))
+                (when path (list :path path))
+                (unless (plist-get source :current-p)
+                  (list :segment (plist-get source :number))))))))
+
+(defun mevedel-collaboration--handle-background-locate (room peer frame)
+  "Answer authenticated PEER's read-only background source FRAME in ROOM.
+Archive I/O and cold child hydration run outside the websocket filter, with
+the room and guest rechecked after transport deferral."
+  (when-let* ((guest (mevedel-collaboration--guest room peer))
+              ((mevedel-collaboration--request-id-p (plist-get frame :reqId))))
+    (let* ((session (plist-get room :session))
+           (meta (list :t "background-source" :reqId (plist-get frame :reqId)))
+           (send (lambda (reply)
+                   (mevedel-collaboration--transport-send
+                    (plist-get room :transport) peer (append meta reply))))
+           (last (plist-get guest :last-background-locate))
+           (now (float-time)))
+      (if (and last (< (- now last) 1.0))
+          (funcall send '(:unavailable "Retry source lookup shortly."))
+        (plist-put guest :last-background-locate now)
+        (mevedel-transport-run-at-time
+         0
+         (lambda ()
+           (let ((lookup
+                  (lambda ()
+                    (when (and (eq room (mevedel-collaboration--room-for-session session))
+                               (eq guest (mevedel-collaboration--guest room peer)))
+                      (funcall send
+                               (condition-case nil
+                                   (mevedel-collaboration--background-source room frame)
+                                 (error '(:unavailable "Original source row is unavailable."))))))))
+             (if (mevedel-transport-busy-p (mevedel-session-save-path session))
+                 (mevedel-transport-run-when-idle
+                  (list 'background-locate (plist-get room :room-id) peer (plist-get frame :reqId))
+                  (mevedel-session-save-path session) lookup)
+               (funcall lookup)))))))))
 
 (add-hook 'mevedel-execution-event-functions #'mevedel-collaboration--background-event)
 

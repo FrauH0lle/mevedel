@@ -862,6 +862,20 @@ any omitted rows explicitly. Changed frames broadcast once; joining guests
 receive the current frame directly. Expansion, hover/focus freezing and the
 ten-second visible finished-row grace belong to each browser, not the host view.
 
+Source navigation is read-only for every link tier. A typed `background-locate`
+request names an execution owner/ID or a known child's path; the host obtains
+the tool ID from current scoped execution facts, retained evidence, or the
+registered child's launch invocation. Native audit lookup then identifies the
+actual current or archived receiving transcript, including nested ToolCall
+sources. The `background-source` reply carries only its owner, tool ID, current
+flag and optional segment number, or an explicit unavailable message. Lookup
+and cold read-only child hydration run only on click, outside the guest filter,
+with room/guest and remote transport readiness rechecked before reading.
+No archive scan or I/O is added to background publication. A child's
+`fetch-agent` request may name the located segment number; the host resolves
+only that child's canonical compact archive and returns uniquely identified
+records, never the parent's history or a browser-supplied filesystem path.
+
 Full and owner links may submit typed `background-stop` actions: an execution's
 owner/ID tuple or a retained child's canonical path, optionally with its row key.
 The host checks the guest's current writable tier and resolves the target again

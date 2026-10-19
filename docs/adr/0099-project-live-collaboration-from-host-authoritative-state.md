@@ -81,7 +81,11 @@ budget. Full and owner links may stop a live scoped execution or interrupt a
 known retained child through typed identity-bearing actions. The host rechecks
 the current guest tier and registry identity before the native user-authority
 operation; view links remain inspection-only. No browser-supplied host path or
-row key grants execution authority.
+row key grants execution authority. Read-only source navigation uses the same
+native audit lookup as the Emacs action: only a click scans source-backed
+history, and the host returns the receiving transcript's owner and exact segment
+instead of asking the browser to guess or sequentially load archives. Child
+archive fetches are confined to that retained child's canonical history.
 
 Artifact cards are settled live or archived transcript records; bytes are fetched on demand by
 record ID, resolved and bounded by the host. HTML runs in a sandboxed iframe
