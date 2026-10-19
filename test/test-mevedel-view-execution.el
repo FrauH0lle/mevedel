@@ -54,6 +54,24 @@ mouse events in them, which later interactive calls would read."
   (mevedel-view-execution-test--at text)
   (call-interactively (key-binding (kbd "RET"))))
 
+(defun mevedel-view-execution-test--assert-held-row (label expected-face metadata)
+  "Assert rendered LABEL has EXPECTED-FACE, dim METADATA and an inert row."
+  (mevedel-view-execution-test--at label)
+  (let ((start (line-beginning-position))
+        (end (line-end-position))
+        (glyph (point)))
+    (dolist (property '(face font-lock-face))
+      (should (eq expected-face (get-text-property glyph property)))
+      (should (eq expected-face (get-text-property (+ 2 glyph) property)))
+      (dolist (text metadata)
+        (save-excursion
+          (search-forward text end)
+          (should (eq 'mevedel-view-tool-metadata
+                      (get-text-property (1- (point)) property))))))
+    (dolist (property '(mevedel-view-zone-activate mouse-face
+                       mevedel-view-zone-toggle))
+      (should-not (text-property-not-all start end property nil)))))
+
 (mevedel-deftest mevedel-view-execution-fragment ()
   ,test
   (test)
@@ -1109,21 +1127,8 @@ mouse events in them, which later interactive calls would read."
                     (dolist (key '(:state :outcome :termination :exit-code))
                       (should (equal (plist-get held key) (plist-get (car case) key)))))
                   (dotimes (_ 2)
-                    (mevedel-view-execution-test--at "✓ Completed")
-                    (let ((start (line-beginning-position))
-                          (end (line-end-position))
-                          (glyph (point)))
-                      (dolist (property '(face font-lock-face))
-                        (should (eq (cdr case) (get-text-property glyph property)))
-                        (should (eq (cdr case) (get-text-property (+ 2 glyph) property)))
-                        (dolist (text '("bash" "same command"))
-                          (save-excursion
-                            (search-forward text end)
-                            (should (eq 'mevedel-view-tool-metadata
-                                        (get-text-property (1- (point)) property))))))
-                      (dolist (property '(mevedel-view-zone-activate mouse-face
-                                         mevedel-view-zone-toggle))
-                        (should-not (text-property-not-all start end property nil))))
+                    (mevedel-view-execution-test--assert-held-row
+                     "✓ Completed" (cdr case) '("bash" "same command"))
                     (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
                     (mevedel-view--render-status)))
               (mevedel-view-execution--cancel-release))))))))
@@ -1157,21 +1162,8 @@ mouse events in them, which later interactive calls would read."
                   (setf (mevedel-agent-record-settled-outcome record)
                         (if (eq (car case) 'completed) 'errored 'completed))
                   (dotimes (_ 2)
-                    (mevedel-view-execution-test--at "✓ Finished")
-                    (let ((start (line-beginning-position))
-                          (end (line-end-position))
-                          (glyph (point)))
-                      (dolist (property '(face font-lock-face))
-                        (should (eq (cdr case) (get-text-property glyph property)))
-                        (should (eq (cdr case) (get-text-property (+ 2 glyph) property)))
-                        (dolist (text '("agent" "/root/worker"))
-                          (save-excursion
-                            (search-forward text end)
-                            (should (eq 'mevedel-view-tool-metadata
-                                        (get-text-property (1- (point)) property))))))
-                      (dolist (property '(mevedel-view-zone-activate mouse-face
-                                         mevedel-view-zone-toggle))
-                        (should-not (text-property-not-all start end property nil))))
+                    (mevedel-view-execution-test--assert-held-row
+                     "✓ Finished" (cdr case) '("agent" "/root/worker"))
                     (mevedel-view--render-status))
                   (should (equal "> draft\nsecond line" (mevedel-view--input-text))))
               (mevedel-view-execution--cancel-release))))))))
