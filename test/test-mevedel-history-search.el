@@ -149,6 +149,110 @@ SEEN-SCRATCHES extended with this query's root."
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
 
+(mevedel-deftest mevedel-history-search-start/handler-context (:quiet t)
+  ,test
+  (test)
+  :doc "timer continuations preserve the requesting buffer and handler context"
+  (let* ((root (make-temp-file "mevedel-history-context-" t))
+         (workspace (test-mevedel-session-persistence--make-file-workspace root))
+         (source (test-mevedel-history-search--source workspace "context" "Context needle.\n"))
+         (session (car source))
+         (owner (cdr source))
+         (other (generate-new-buffer " *history-unrelated*"))
+         (request (mevedel-request--create :origin "/root" :session session))
+         (native-helper (symbol-function 'mevedel-execution-start-helper))
+         calls helper-result result cancel)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                   (lambda (&rest args)
+                     (push (list (current-buffer) mevedel-pipeline--active-tool-use-id)
+                           calls)
+                     (let ((callback (car args)))
+                       (setcar args (lambda (value)
+                                      (setq helper-result value)
+                                      (funcall callback value))))
+                     (apply native-helper args))))
+          (with-current-buffer owner
+            (setq-local mevedel--current-request request)
+            (let* ((mevedel-pipeline--active-tool-use-id "history-context")
+                   (attempt (mevedel-resource-prepare
+                             'glob "history://saved" (list :workspace workspace)))
+                   (mevedel-resource-current-attempts
+                    (list (cons "history://saved" attempt))))
+              (setq cancel
+                    (mevedel-tool-fs-search-glob
+                     (lambda (value) (setq result value))
+                     '(:path "history://saved" :pattern "*")))))
+          ;; Emacs timers run in whichever buffer is current when they fire.
+          ;; Do not keep the request owner current while awaiting preparation.
+          (with-current-buffer other
+            (with-timeout (10 (ert-fail "History context callback timed out"))
+              (while (not result) (accept-process-output nil 0.01))))
+          (ert-info ((format "Helper contexts: %S; helper error: %S; result: %S"
+                             (mapcar (lambda (call)
+                                       (cons (buffer-name (car call)) (cdr call)))
+                                     calls)
+                             (plist-get helper-result :error)
+                             result))
+            (should (equal calls (list (list owner "history-context")))))
+          (should-not (plist-get helper-result :error))
+          (should (string-search "segment-0001.chat.org" (plist-get result :result)))
+          (should-not (string-search "Error:" (plist-get result :result))))
+      (when cancel (funcall cancel))
+      (mevedel-request-drain-cancellers request)
+      (when (buffer-live-p other) (kill-buffer other))
+      (test-mevedel-session-persistence--release-and-kill owner session)
+      (mevedel-execution-teardown-all)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+  :doc "local projection helpers honor a remote requesting session's sandbox preference"
+  (let* ((root (make-temp-file "mevedel-history-sandbox-context-" t))
+         (workspace (test-mevedel-session-persistence--make-file-workspace root))
+         (source (test-mevedel-history-search--source workspace "policy" "Policy needle.\n"))
+         (owner (generate-new-buffer " *history-policy-owner*"))
+         (session (mevedel-session--create
+                   :workspace workspace :permission-mode 'ask :sandbox-mode 'off
+                   :execution-target (mevedel-execution-target-create
+                                      "/ssh:history.invalid:/workspace/")))
+         (request (mevedel-request--create :origin "/root" :session session))
+         (mevedel-sandbox-mode 'required)
+         (native-prepare (symbol-function 'mevedel-sandbox-prepare-start))
+         (native-process (symbol-function 'mevedel-execution--start-process))
+         modes launches result cancel)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-sandbox-prepare-start)
+                   (lambda (&rest args)
+                     (push (nth 7 args) modes)
+                     (apply native-prepare args)))
+                  ((symbol-function 'mevedel-execution--start-process)
+                   (lambda (callback name command workdir timeout helper-session origin teardown)
+                     (push (list (file-remote-p workdir) helper-session) launches)
+                     (funcall native-process callback name command workdir timeout
+                              helper-session origin teardown))))
+          (with-current-buffer owner
+            (setq-local mevedel--session session mevedel--current-request request)
+            (let* ((attempt (mevedel-resource-prepare
+                             'glob "history://saved" (list :workspace workspace)))
+                   (mevedel-resource-current-attempts
+                    (list (cons "history://saved" attempt))))
+              (setq cancel
+                    (mevedel-tool-fs-search-glob
+                     (lambda (value) (setq result value))
+                     '(:path "history://saved" :pattern "*")))))
+          (with-timeout (10 (ert-fail "History policy callback timed out"))
+            (while (not result) (accept-process-output nil 0.01)))
+          (should (equal modes '(off)))
+          (should (equal launches '((nil nil))))
+          (should (string-search "segment-0001.chat.org" (plist-get result :result)))
+          (should-not (string-search "Error:" (plist-get result :result))))
+      (when cancel (funcall cancel))
+      (mevedel-request-drain-cancellers request)
+      (when (buffer-live-p owner) (kill-buffer owner))
+      (test-mevedel-session-persistence--release-and-kill (cdr source) (car source))
+      (mevedel-execution-teardown-all)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
 (mevedel-deftest mevedel-history-search--prepare (:quiet t)
   ,test
   (test)

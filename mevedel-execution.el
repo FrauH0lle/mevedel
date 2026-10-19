@@ -24,6 +24,8 @@
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-parent-session
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-runtime-settled-p
                   "mevedel-agents" (cl-x) t)
 (defvar mevedel--agent-invocation)
@@ -185,6 +187,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-cancelled-p "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-session "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session--set-execution-state
                   "mevedel-structs" (session state))
 (declare-function mevedel-session-audit-target "mevedel-structs" (session))
@@ -810,7 +813,11 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
 Only scalar policy and path facts are copied, never live runtime objects.
 Compare snapshots with `equal'.  A deep copy, unlike printed text, cannot
 depend on the printer state of the context that takes it."
-  (let* ((authority (and session (mevedel-execution--mutation-target session)))
+  (let* ((policy-session (or session
+                             (and request (mevedel-request-session request))
+                             (and invocation
+                                  (mevedel-agent-invocation-parent-session invocation))))
+         (authority (and session (mevedel-execution--mutation-target session)))
          (workspace (and authority (mevedel-session-workspace authority))))
     (cl-labels ((snapshot (value)
                   ;; `copy-tree' retains mutable strings, including rule and
@@ -829,7 +836,7 @@ depend on the printer state of the context that takes it."
        (list
         (mevedel-permission-mode-effective session nil nil request invocation)
         (mevedel-sandbox-mode-effective
-         session (mevedel-permission-mode-effective session nil nil request invocation))
+         policy-session (mevedel-permission-mode-effective session nil nil request invocation))
         (and (boundp 'mevedel-memory-dirs) mevedel-memory-dirs)
         (and (boundp 'mevedel-workspace-additional-roots)
              mevedel-workspace-additional-roots)
@@ -902,7 +909,11 @@ TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
              (when child (mevedel-execution-process-stop child 'aborted)))))
        command workdir roots additional permissions
        (mevedel-sandbox-mode-effective
-        session (mevedel-permission-mode-effective session nil nil request invocation))
+        ;; Local snapshot helpers omit SESSION to keep their target local, not
+        ;; to replace the requesting session's confinement preference.
+        (or session (and request (mevedel-request-session request))
+            (and invocation (mevedel-agent-invocation-parent-session invocation)))
+        (mevedel-permission-mode-effective session nil nil request invocation))
        temporary-root))))
 
 
