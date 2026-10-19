@@ -901,6 +901,9 @@ questionnaire) — and the first answer,
 from Emacs or any guest, settles everywhere. Pending interactions stay above
 an open panel, such as a shared editor or an artifact, because an item's own
 conversation runs turns that ask too.
+A session shared while an interaction already waits presents that one too:
+starting a room adopts the session's pending prompts in the order they
+arrived, since each announces itself only once, when it is raised.
 `mevedel-collaboration-remote-interactions` gates that surface. Lease
 transfer, save, rewind, fork, publication, and execution-target changes are
 impossible from the browser regardless of link strength.

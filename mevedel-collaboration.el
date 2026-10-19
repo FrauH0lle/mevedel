@@ -180,6 +180,9 @@
 (autoload 'mevedel-collaboration--transport-send "mevedel-collaboration-transport")
 (autoload 'mevedel-collaboration--transport-stop "mevedel-collaboration-transport")
 
+;; `mevedel-interaction-prompt'
+(defvar mevedel--prompt-overlays)
+
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective
                   "mevedel-permission-mode"
@@ -1044,7 +1047,9 @@ returning the live room."
             (add-hook 'mevedel-interaction-prompt-settled-hook
                       #'mevedel-collaboration--on-prompt-settled)
             (mevedel-sleep-update)
-            (mevedel-collaboration--room-for-buffer data-buffer))
+            (let ((room (mevedel-collaboration--room-for-buffer data-buffer)))
+              (mevedel-collaboration--adopt-prompts room)
+              room))
         (error
          (condition-case nil
              (let ((room (mevedel-collaboration--room-for-buffer
@@ -1055,6 +1060,22 @@ returning the live room."
                    (mevedel-collaboration--transport-stop transport))))
            (error nil))
          (signal (car error-data) (cdr error-data)))))))
+
+(defun mevedel-collaboration--adopt-prompts (room)
+  "Register the interactions ROOM's session raised before ROOM started.
+A prompt announces itself once, when it is created, so a session
+shared while a question, approval or review waits would otherwise never
+show it to guests.  Prompts are adopted oldest first, the order they
+arrived in."
+  (when (boundp 'mevedel--prompt-overlays)
+    (dolist (buffer (buffer-list))
+      (dolist (overlay (reverse (buffer-local-value 'mevedel--prompt-overlays
+                                                    buffer)))
+        (when (and (overlay-buffer overlay)
+                   (not (overlay-get overlay 'mevedel-settled))
+                   (overlay-get overlay 'mevedel--remote)
+                   (eq room (mevedel-collaboration--room-for-overlay overlay)))
+          (mevedel-collaboration--on-prompt-created overlay))))))
 
 (defun mevedel-collaboration--load-room-modules ()
   "Load the modules a room needs before one starts."

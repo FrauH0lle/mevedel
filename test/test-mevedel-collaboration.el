@@ -1419,6 +1419,59 @@
         (remove-hook 'mevedel-interaction-prompt-settled-hook
                      #'mevedel-collaboration--on-prompt-settled)))))
 
+(defmacro mevedel-test--with-stub-relay (sent &rest body)
+  "Run BODY with the relay transport stubbed, pushing (PEER . FRAME) to SENT.
+Remove the global hooks a started room installs afterwards."
+  (declare (indent 1) (debug t))
+  `(unwind-protect
+       (cl-letf (((symbol-function 'mevedel-collaboration--transport-open)
+                  (lambda (url &rest _) (list :url url)))
+                 ((symbol-function 'mevedel-collaboration--transport-send)
+                  (lambda (_transport peer frame)
+                    (push (cons peer frame) ,sent)
+                    t))
+                 ((symbol-function 'mevedel-collaboration--transport-stop)
+                  #'ignore)
+                 ((symbol-function 'mevedel-collaboration--transport-control)
+                  #'ignore)
+                 ((symbol-function 'mevedel-collaboration-presence-publish)
+                  #'ignore)
+                 ((symbol-function 'mevedel-sleep-update) #'ignore)
+                 ((symbol-function 'mevedel-collaboration--canonical-records)
+                  (lambda (&rest _) nil)))
+         ,@body)
+     (dolist (room (mevedel-collaboration--room-list))
+       (mevedel-collaboration--stop-internal room 'user-stop))
+     (remove-hook 'kill-emacs-hook #'mevedel-collaboration--stop-for-emacs)
+     (remove-hook 'mevedel-interaction-prompt-created-hook
+                  #'mevedel-collaboration--on-prompt-created)
+     (remove-hook 'mevedel-interaction-prompt-settled-hook
+                  #'mevedel-collaboration--on-prompt-settled)))
+
+(mevedel-deftest mevedel-collaboration--adopt-prompts
+  (:doc "shows guests an interaction raised before the session was shared")
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-collaboration-relay-url "ws://127.0.0.1:1")
+          (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+          (session (mevedel-session--create :name "late-share"))
+          sent)
+      (with-current-buffer data-buf
+        (mevedel--prompt-user-with-overlay
+         "Confirm" "Raised before sharing" "Proceed?" nil #'ignore))
+      (mevedel-test--with-stub-relay sent
+        (let ((room (mevedel-collaboration--start session data-buf)))
+          ;; A guest joining afterwards is replayed the waiting decision.
+          (puthash 7 (list :name "g" :writable t :ready t)
+                   (plist-get room :guests))
+          (mevedel-collaboration--send-ui-requests room 7)
+          (let ((frames (mapcar #'cdr (seq-filter (lambda (entry)
+                                                    (eql 7 (car entry)))
+                                                  sent))))
+            (should (= 1 (length frames)))
+            (should (equal "ui-request" (plist-get (car frames) :t)))
+            (should (string-match-p "Raised before sharing"
+                                    (plist-get (car frames) :body)))))))))
+
 (mevedel-deftest mevedel-collaboration--multi-room
   (:doc "gives each shared session its own independent room")
   (let ((data-a (generate-new-buffer " *collab-multi-a*"))
