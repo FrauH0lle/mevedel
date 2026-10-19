@@ -1424,9 +1424,10 @@ async function main() {
   // Name changes travel independently of the message draft; clearing the
   // name returns to this tab's random one.
   nodes['composer-input'].value = 'Unsent draft';
+  const explicitGeneratedName = hello.name === 'Clever Cat' ? 'Brave Badger' : 'Clever Cat';
   for (const [value, expected, chosen] of [
     ['  Roland55  ', 'Roland55', 'Roland55'],
-    ['Clever Cat', 'Clever Cat', 'Clever Cat'],
+    [explicitGeneratedName, explicitGeneratedName, explicitGeneratedName],
     ['   ', hello.name, undefined],
   ]) {
     const before = first.sent.length;
