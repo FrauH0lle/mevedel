@@ -42,8 +42,8 @@
 ;; `mevedel-resource'
 (declare-function mevedel-resource-error-message "mevedel-resource"
                   (failure &optional address private-paths))
-(declare-function mevedel-resource-execute
-                  "mevedel-resource" (attempt &optional executor options))
+(declare-function mevedel-resource-execute-async
+                  "mevedel-resource" (attempt callback executor &optional options))
 
 ;; `mevedel-structs'
 (defvar mevedel--session)
@@ -261,6 +261,9 @@ Resource searches use ripgrep's NUL path separator.  Prefer the longest
 existing prefix for captured output without that separator, so a colon in a
 filename is not mistaken for a line-number delimiter."
   (let* ((root (expand-file-name root))
+         (remote (file-remote-p root))
+         (root (if (and remote (not (string-prefix-p remote line)))
+                   (file-local-name root) root))
          (directory (file-name-as-directory root)))
     (cond
      ((string= line root) (length line))
@@ -274,7 +277,8 @@ filename is not mistaken for a line-number delimiter."
       (let ((position (length directory))
             candidate-end)
         (while (setq position (string-search ":" line position))
-          (when (file-exists-p (substring line 0 position))
+          (when (file-exists-p (concat (and remote (not (file-remote-p line)) remote)
+                                       (substring line 0 position)))
             (setq candidate-end position))
           (setq position (1+ position)))
         (or candidate-end (length line)))))))
@@ -791,9 +795,9 @@ admit only contained Markdown files before any content search."
   "Dispatch prepared ATTEMPT to the Glob or Grep handler OPERATION.
 Preserve ARGS and return the handler's cancellation value.  CALLBACK receives
 results rewritten in the authored resource domain."
-  (mevedel-resource-execute
-   attempt
-   (lambda (path authored)
+  (mevedel-resource-execute-async
+   attempt callback
+   (lambda (path authored callback)
      (cond
       ((and (listp path) (plist-member path :history-workspace))
        (mevedel-history-search-start callback args path))
@@ -822,7 +826,8 @@ results rewritten in the authored resource domain."
              (mevedel-tool-fs-search--resource-address authored)
              (mevedel-tool-fs-search--resource-dispatching t))
          (plist-put native-args :path path)
-         (funcall operation callback native-args)))))))
+         (funcall operation callback native-args)))))
+   args))
 
 (defun mevedel-tool-fs-search-glob (callback args)
   "Find files matching a glob pattern using ripgrep.

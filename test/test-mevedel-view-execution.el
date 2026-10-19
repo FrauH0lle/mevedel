@@ -14,6 +14,7 @@
 (require 'mevedel-view-execution)
 (require 'mevedel-view-audit)
 (require 'mevedel-execution)
+(require 'mevedel-execution-spool)
 (require 'mevedel-agents)
 (require 'mevedel-execution-test-helpers
          (file-name-concat
@@ -1444,6 +1445,83 @@ mouse events in them, which later interactive calls would read."
               (should (string-search "Full output unavailable" (buffer-string)))
               (should (string-search "Preview (not full output) — truncated" (buffer-string)))))
         (when (buffer-live-p output) (kill-buffer output)))))
+  :doc "compressed full output inflates asynchronously without false truncation or leaked views"
+  (mevedel-view-execution-test--with-view
+    (let* ((directory (file-name-concat mevedel-user-dir "compressed-output-session"))
+           (path (file-name-concat directory "tool-results" "executions" "output.log"))
+           (body (concat "first output line\n" (make-string 70000 ?x) "\nlast line\n"))
+           (make-temp (symbol-function 'make-temp-file))
+           output cancel views)
+      (make-directory (file-name-directory path) t)
+      (write-region body nil path nil 'silent)
+      (setf (mevedel-session-save-path session) directory)
+      (setq mevedel-view-execution--selected
+            (append (list :session session :terminal-p t :state 'completed
+                          :output-path "artifact://executions/output.log" :artifact-path path
+                          :output-bytes (string-bytes body)
+                          :whole-output "preview" :whole-output-truncated-p t)
+                    (car live))
+            live nil)
+      (unwind-protect
+          (progn
+            (mevedel-execution-spool-compress path)
+            (test-mevedel-execution--wait (lambda () (not (file-exists-p path))))
+            (should (file-exists-p (concat path ".gz")))
+            (should (< (file-attribute-size (file-attributes (concat path ".gz")))
+                       (string-bytes body)))
+            (cl-letf (((symbol-function 'make-temp-file)
+                       (lambda (prefix &rest args)
+                         (let ((temporary (apply make-temp prefix args)))
+                           (when (string-prefix-p "mevedel-spool-view-" prefix)
+                             (push temporary views))
+                           temporary)))
+                      ((symbol-function 'display-buffer)
+                       (lambda (buffer &rest _) (setq output buffer))))
+              (setq cancel (mevedel-view-execution--full-output
+                            session mevedel-view-execution--selected))
+              (test-mevedel-execution--wait (lambda () output)))
+            (with-current-buffer output
+              (should buffer-read-only)
+              (should-not buffer-file-name)
+              (should (equal (concat "Full output · e1 · Completed\n\n" body)
+                             (buffer-string)))
+              (should-not (string-search "Warning:" (buffer-string))))
+            (should views)
+            (dolist (view views) (should-not (file-exists-p view)))
+            (should-not mevedel-execution-spool--readers))
+        (when (functionp cancel) (funcall cancel))
+        (when (buffer-live-p output) (kill-buffer output)))))
+  :doc "compressed full output reports decode failure visibly and cleans its view"
+  (mevedel-view-execution-test--with-view
+    (let* ((path (make-temp-file "mevedel-corrupt-output-" nil ".log.gz"))
+           (make-temp (symbol-function 'make-temp-file))
+           output cancel views)
+      (let ((file-name-handler-alist nil))
+        (write-region "not gzip" nil path nil 'silent))
+      (setf (plist-get (car live) :artifact-path) path)
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'make-temp-file)
+                       (lambda (prefix &rest args)
+                         (let ((temporary (apply make-temp prefix args)))
+                           (when (string-prefix-p "mevedel-spool-view-" prefix)
+                             (push temporary views))
+                           temporary)))
+                      ((symbol-function 'display-buffer)
+                       (lambda (buffer &rest _) (setq output buffer))))
+              (setq cancel (mevedel-view-execution--full-output session (car live)))
+              (test-mevedel-execution--wait (lambda () output)))
+            (with-current-buffer output
+              (should buffer-read-only)
+              (should (string-search "Warning: Error: Could not decode retained execution output"
+                                     (buffer-string)))
+              (should (string-search "Full output unavailable" (buffer-string))))
+            (should views)
+            (dolist (view views) (should-not (file-exists-p view)))
+            (should-not mevedel-execution-spool--readers))
+        (when (functionp cancel) (funcall cancel))
+        (when (buffer-live-p output) (kill-buffer output))
+        (delete-file path))))
   :doc "completion uses retained canonical artifact when local spool is gone"
   (mevedel-view-execution-test--with-view
     (let* ((directory (file-name-concat mevedel-user-dir "session"))

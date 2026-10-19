@@ -305,6 +305,7 @@ Layout:
     plans/current.md                 ; mutable Plan draft/proposal
     plans/accepted-*.md              ; immutable accepted plans
   tool-results/                      ; retained oversized tool output and media
+    executions/*.log[.gz]             ; logical execution output, raw or gzip
   agents/                            ; logical agent transcripts; physical
                                      ; numbered compaction recovery archives
 ```
@@ -321,6 +322,17 @@ sessions use the separate `pid-lock` profile and `.lock`; they do not create a
 lease or publication tree.  A session directory containing both control
 artifacts, or a persisted authority profile that disagrees with its workspace
 category, is rejected rather than guessed.
+
+Retired local execution output may use lossless gzip storage behind stable
+`artifact://executions/*.log` handles. Compression runs outside the editor and
+does not rewrite old sessions. Save As copies retained gzip evidence just like
+raw evidence; Fork continues to exclude execution history, and cooperative
+ownership transfer leaves the same stored evidence in place. A receiving TRAMP
+client reads compressed output through the same resource-storage seam, not
+through a persistent inflated cache. This representation is retained output,
+not a replacement authority for portable session state or published artifacts.
+See [execution output storage](tools/execution.md) and
+[artifact addresses](address-to-resource.md#artifact).
 
 The data buffer is locked to bare `org-mode` so `gptel-org--save-state` can
 round-trip text-property bounds via `GPTEL_BOUNDS`. Entering the mode suppresses

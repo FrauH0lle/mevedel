@@ -151,7 +151,8 @@ path that crosses the handler result boundary is the authored address."
      ((string-prefix-p "artifact://" address)
       ;; Glob uses --iglob for its include pattern.  Ripgrep gives those
       ;; patterns precedence over --glob, so exclusions must use it too.
-      '("--iglob=!**/.mevedel-pending-executions/**"))
+      '("--iglob=!**/.mevedel-pending-executions/**"
+        "--iglob=!**/.mevedel-spool-*"))
      ((string-prefix-p "mevedel://" address)
       '("--glob=**/*.md")))))
 
@@ -166,6 +167,12 @@ this is used for the dynamic memory union whose root itself is not an
 addressable locator."
   (when (and address root path)
     (let* ((root (expand-file-name root))
+           ;; Target processes emit native absolute paths, not TRAMP names.
+           ;; Qualify them before containment checks, never after them.
+           (path (if (and (file-remote-p root) (not (file-remote-p path))
+                          (file-name-absolute-p path))
+                     (concat (file-remote-p root) path)
+                   path))
            (path (expand-file-name path root)))
       (when (mevedel-resource-within-root-p path root)
         (let* ((parsed (and (not address-prefix)
