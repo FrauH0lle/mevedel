@@ -267,7 +267,8 @@ A Worktree handoff runs the same Here handoff in its fork."
                                   ;; bytes; retry failure also performs a save.
                                   (funcall save session buffer)
                                   (setq newer-text (buffer-string)))))
-                             (accept-process-output nil .02))))))
+                             (mevedel-test--await 5 "Competing Direct request did not start"
+                               newer-text))))))
               (mevedel-retry-plan-implementation session buffer)
               ;; Save evidence before settling transports, even on the red run,
               ;; so fixture cleanup does not hide the ownership or policy leak.
