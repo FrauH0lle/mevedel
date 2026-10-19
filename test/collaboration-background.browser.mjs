@@ -48,6 +48,9 @@ test('unified work panel retains expanded completions and checks writable contro
       await activate('[data-key="bash"] .background-toggle');
       assert.equal(await page.locator('[data-key="bash"] .background-preview').innerText(), 'one\ntwo\nthree');
       const height = await page.locator('[data-key="bash"]').evaluate(node => node.getBoundingClientRect().height);
+      // Expansion must hold completion independently of hover or focus.
+      await page.evaluate(() => document.activeElement.blur());
+      if (width !== 375) await page.mouse.move(0, 0);
       await page.evaluate(() => { window.bgRows[1].terminal = true; window.bgRows[1].status = 'completed'; window.bgRows[1].statusLabel = 'Completed';
         window.bg.show({rows: window.bgRows}); window.bgTime += 30000; window.bgTick(); });
       assert.equal(await page.locator('[data-key="bash"]').count(), 1, 'expanded completion remains visible');
