@@ -5010,6 +5010,35 @@
                          (plist-get (mevedel-view--segment-rendering data-buf 1 end t)
                                     :header)))
           (should (= copies 0))))))
+  :doc "a long activity run reuses completed tools after unrelated appends"
+  (mevedel-view-test--with-buffers
+    (let (ranges)
+      (with-current-buffer data-buf
+        (dotimes (i 350)
+          (let ((start (point)))
+            (insert "#+begin_tool\n"
+                    (propertize
+                     (format "(:name \"Read\" :args (:file_path \"file-%d.el\"))\n\nbody\n" i)
+                     'gptel (cons 'tool (format "cached-%d" i)))
+                    "#+end_tool\n\n")
+            (push (cons start (1- (point))) ranges))))
+      (setq ranges (nreverse ranges))
+      (with-current-buffer view-buf
+        (dolist (range ranges)
+          (should (mevedel-view--segment-rendering data-buf (car range) (cdr range) t)))
+        (with-current-buffer data-buf (goto-char (point-max)) (insert "next"))
+        (let ((reads 0)
+              (read (symbol-function 'mevedel-view--prepare-tool-segment)))
+          (cl-letf (((symbol-function 'mevedel-view--prepare-tool-segment)
+                     (lambda (&rest args) (cl-incf reads) (apply read args))))
+            (cl-loop for range in ranges for i from 0
+                     do (should
+                         (string-match-p
+                          (format "file-%d\\.el" i)
+                          (plist-get (mevedel-view--segment-rendering
+                                      data-buf (car range) (cdr range) t)
+                                     :header))))
+            (should (= reads 0)))))))
   :doc "property-only restoration of a request failure precedes cached tool display"
   (mevedel-view-test--with-buffers
     (let (metadata-start end)
@@ -7655,7 +7684,7 @@
     (let ((first (mevedel-view--source-revision 1 6)))
       (remove-hook 'before-change-functions #'mevedel-view--source-before-change t)
       (should-not (eq first (mevedel-view--source-revision 1 6)))))
-  :doc "narrowing preserves identities and the range map stays bounded"
+  :doc "narrowing and an unrelated cache limit preserve range identities"
   (with-temp-buffer
     (insert "first second tail")
     (let ((first (mevedel-view--source-revision 1 6)))
@@ -7665,7 +7694,44 @@
     (let ((mevedel-view-render-cache-max-entries 2))
       (mevedel-view--source-revision 7 10)
       (mevedel-view--source-revision 11 12)
-      (should (<= (hash-table-count mevedel-view--source-revisions) 2)))))
+      (should (= (hash-table-count mevedel-view--source-revisions) 3)))))
+
+(mevedel-deftest mevedel-view--retire-tool-renderings ()
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf (insert "first second tail"))
+    (with-current-buffer view-buf
+      (let ((earlier (mevedel-view--tool-cache-key data-buf 1 6 t))
+            (header (mevedel-view--tool-cache-key data-buf 7 13 t))
+            (body (mevedel-view--tool-cache-key data-buf 7 13 nil)))
+        (puthash earlier 'earlier mevedel-view--tool-rendering-cache)
+        (puthash header 'header mevedel-view--tool-rendering-cache)
+        (puthash body 'body mevedel-view--tool-rendering-cache)
+        (mevedel-view--retire-tool-renderings data-buf 7 13)
+        (should (eq 'earlier (gethash earlier mevedel-view--tool-rendering-cache)))
+        (should-not (gethash header mevedel-view--tool-rendering-cache))
+        (should-not (gethash body mevedel-view--tool-rendering-cache))
+        (should (= 1 mevedel-view--render-cache-entries))))))
+
+(mevedel-deftest mevedel-view--sweep-tool-rendering-cache ()
+  ,test
+  (test)
+  :doc "a complete projection retains only visited tool keys and source ranges"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf (insert "first second tail"))
+    (with-current-buffer view-buf
+      (let* ((old (mevedel-view--tool-cache-key data-buf 1 6 t))
+             (mevedel-view--tool-cache-used (make-hash-table :test #'equal))
+             (kept (mevedel-view--tool-cache-key data-buf 7 13 t)))
+        (with-current-buffer data-buf (mevedel-view--source-revision 14 18))
+        (puthash old 'old mevedel-view--tool-rendering-cache)
+        (puthash kept 'kept mevedel-view--tool-rendering-cache)
+        (mevedel-view--sweep-tool-rendering-cache mevedel-view--tool-cache-used)
+        (should-not (gethash old mevedel-view--tool-rendering-cache))
+        (should (eq 'kept (gethash kept mevedel-view--tool-rendering-cache)))
+        (should (= 1 mevedel-view--render-cache-entries))
+        (with-current-buffer data-buf
+          (should (= 1 (hash-table-count mevedel-view--source-revisions)))
+          (should (eq (nth 3 kept) (mevedel-view--source-revision 7 13))))))))
 
 (mevedel-deftest mevedel-view--source-before-change ()
   (with-temp-buffer
@@ -8024,6 +8090,32 @@
 (mevedel-deftest mevedel-view--mailbox-activity-entry ()
   ,test
   (test)
+  :doc "activity classification decodes a delivery once and observes source edits"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf "<agent-message type=\"MAIL\" sender=\"/root/a\">\nfirst\n</agent-message>\n" nil)
+    (with-current-buffer view-buf
+      (let ((mevedel-view--activity-entry-cache (make-hash-table :test #'equal))
+            (seg (with-current-buffer data-buf (list 'mailbox (point-min) (point-max))))
+            (reads 0)
+            (read (symbol-function 'mevedel-view--user-turn-text)))
+        (cl-letf (((symbol-function 'mevedel-view--user-turn-text)
+                   (lambda (&rest args) (cl-incf reads) (apply read args))))
+          (let ((first (mevedel-view--mailbox-activity-entry seg data-buf)))
+            (plist-put first :count 10)
+            (let ((second (mevedel-view--mailbox-activity-entry seg data-buf)))
+              (should-not (plist-get second :count))
+              (should (string-match-p
+                       "first" (plist-get (plist-get (plist-get second :group-child)
+                                                       :rendering) :mailbox-text)))))
+          (should (= reads 1))
+          (with-current-buffer data-buf
+            (goto-char (point-min)) (search-forward "first") (replace-match "other" t t))
+          (let ((changed (mevedel-view--mailbox-activity-entry seg data-buf)))
+            (should (string-match-p
+                     "other" (plist-get (plist-get (plist-get changed :group-child)
+                                                     :rendering) :mailbox-text))))
+          (should (= reads 2))))))
   :doc "forwarded execution deliveries project one collapsed notice at any threshold"
   (dolist (threshold '(0 1))
     (mevedel-view-test--with-buffers

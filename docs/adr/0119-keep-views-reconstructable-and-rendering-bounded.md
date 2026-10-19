@@ -56,7 +56,19 @@ mutable unit reuses work that its unchanged contents already paid for: tool
 parses keyed by source span, archived breadcrumb keys keyed by archive content
 identity, execution completions indexed once per transcript change, and path
 links resolved once per projection. Boundary bookkeeping steps by property
-runs rather than characters. A tool/reasoning/delivery activity run remains mutable until its surrounding
+runs rather than characters. Tool rendering and source identities follow the
+projection's working set, not a fixed entry ceiling: the October 19 replay had
+348 tool entries, and a 256-entry whole-cache reset reparsed them on every full
+refresh. A successful complete projection sweeps entries it did not visit;
+incremental tails retain earlier tools, and source edits retire affected source
+identities. Targeted tool-row and agent-handle replacements evict their old
+renderings locally, so repeated metadata updates do not wait for a full
+projection to release superseded bodies. Staged full projections retain the visited set across callbacks and
+sweep only after completion, never after cancellation or a partial plan.
+Activity classification and insertion also share decoded mailbox entries within
+their existing per-run entry table instead of stripping the same delivery two
+or three times. Source changes and the observing agent identity change that key.
+A tool/reasoning/delivery activity run remains mutable until its surrounding
 transcript boundary closes it; an individual completed call can still join a
 growing group. Grouped rows retain their individual source identities across
 changes in presentation. A settled direct ToolCall caches its recognized
