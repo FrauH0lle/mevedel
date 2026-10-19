@@ -2364,6 +2364,26 @@ async function main() {
   assert.ok(!textOf(resultDialog).includes('CHILD OUTPUT'));
   await deliverTo(sockets[1], {t: 'remove', ids: ['forwarded-1']});
 
+  // Running Monitor output is an explicit live snapshot, not a terminal
+  // retained result or a Bash-specific surface.
+  await deliverTo(sockets[1], {t: 'background-work', rows: [{key: 'live-monitor',
+    kind: 'monitor', owner: '/root', id: 'monitor-live', status: 'running',
+    statusLabel: 'Watching', description: 'Watch source changes', toolUseId: 'monitor-call'}]});
+  const liveMonitor = nodes['background-list'].children.find(row => row.dataset.key === 'live-monitor');
+  liveMonitor.children[0].dispatch('click');
+  const beforeLiveOutput = sockets[1].sent.length;
+  liveMonitor.children[1].children.at(-1).children[0].dispatch('click');
+  await waitFor(() => sockets[1].sent.length > beforeLiveOutput, 'live Monitor output request');
+  const liveOutput = await unseal(key, sockets[1].sent[beforeLiveOutput]);
+  assert.equal(resultDialog.children[0].textContent, 'Execution output');
+  assert.match(textOf(resultDialog), /Loading execution output/);
+  await deliverTo(sockets[1], {t: 'execution-result', reqId: liveOutput.reqId,
+    owner: liveOutput.owner, executionId: liveOutput.executionId,
+    source: 'live', output: 'LIVE MONITOR EVENT'});
+  assert.match(textOf(resultDialog), /LIVE MONITOR EVENT/);
+  assert.match(textOf(resultDialog), /Running execution output snapshot/);
+  resultDialog.children.at(-1).dispatch('click');
+
   // Shared questions show their exact sent context in a closed disclosure.
   // Metadata is required; host edits and lookalike headings stay visible.
   const question = 'Explain this 🔎\nwith an example';

@@ -344,9 +344,9 @@
     if (typeof facts?.owner !== 'string' || typeof facts.id !== 'string') return;
     const reqId = ++executionResultSequence;
     pendingExecutionResult = {reqId, owner: facts.owner, id: facts.id};
-    executionTitle.textContent = facts.command || 'Bash result';
+    executionTitle.textContent = facts.command || 'Execution output';
     executionBody.textContent = '';
-    executionNote.textContent = 'Loading retained execution result…';
+    executionNote.textContent = 'Loading execution output…';
     if (!executionDialog.open) executionDialog.showModal();
     Promise.resolve(send({t: 'execution-result-get', reqId,
                           owner: facts.owner, executionId: facts.id}))
@@ -365,7 +365,7 @@
     executionNote.textContent = frame.error ||
       (frame.source === 'forwarded'
         ? 'Original child row unavailable; showing forwarded retained evidence.'
-        : 'Execution result.') +
+        : frame.source === 'live' ? 'Running execution output snapshot.' : 'Execution result.') +
       (frame.truncated ? ' Output truncated for this guest view.' : '');
   }
 

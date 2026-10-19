@@ -847,7 +847,9 @@ An execution preview is exactly three bounded output lines, with an explicit
 availability label, preview/output truncation facts, and output counts. Preview
 rows are capped at 512 characters; browsers fit each to one visible row. Full
 output uses the existing scoped execution-result request, never a browser-sent
-host filesystem path. Passive execution events refresh the same coalesced
+host filesystem path. While work is running, **Full output** shows an explicitly
+labelled snapshot at request time, not an automatically updating terminal.
+Passive execution events refresh the same coalesced
 publication without consuming output. The host retains at most 128 terminal
 snapshots for 30 seconds so completion survives registry removal and short
 reconnects; effective child model metadata stays with the completed row. Each
