@@ -118,13 +118,17 @@ Browsers own their ten-second visible grace, independently of this cache.")
               when value append (list key value)))))
 
 (defun mevedel-collaboration--background-retain (room entry)
-  "Retain terminal ENTRY in ROOM with a bounded lifetime and count."
-  (plist-put room :background-terminal
-             (seq-take
-              (cons (cons (float-time) entry)
-                    (cl-remove (car entry) (plist-get room :background-terminal)
-                               :key (lambda (item) (car (cdr item))) :test #'equal))
-              mevedel-collaboration--background-row-limit)))
+  "Retain terminal ENTRY in ROOM with a bounded lifetime and count.
+Duplicate evidence may refresh facts, but never the original completion age."
+  (let* ((cache (plist-get room :background-terminal))
+         (previous (cl-find (car entry) cache
+                            :key (lambda (item) (car (cdr item))) :test #'equal)))
+    (plist-put room :background-terminal
+               (seq-take
+                (cons (cons (if previous (car previous) (float-time)) entry)
+                      (cl-remove (car entry) cache
+                                 :key (lambda (item) (car (cdr item))) :test #'equal))
+                mevedel-collaboration--background-row-limit))))
 
 (defun mevedel-collaboration--background-frame (room)
   "Return ROOM's bounded background-work frame, including terminal evidence."
@@ -171,7 +175,12 @@ Browsers own their ten-second visible grace, independently of this cache.")
                     mevedel-collaboration--background-row-limit))
            (entries (cl-remove-if-not (lambda (entry) (memq entry chosen)) ordered))
            (rows (cl-loop for entry in entries for order from 0
-                          collect (mevedel-collaboration--background-row session entry order)))
+                          ;; Native ordering preserves the cached entry objects.
+                          for cached = (rassq entry terminal)
+                          collect (append
+                                   (mevedel-collaboration--background-row session entry order)
+                                   (when cached
+                                     (list :terminalAgeSeconds (max 0.0 (- now (car cached))))))))
            ;; Reserve the small frame envelope and JSON array separators.
            (remaining (- mevedel-collaboration--background-frame-bytes 256))
            admitted)
@@ -191,9 +200,19 @@ Browsers own their ten-second visible grace, independently of this cache.")
 
 (defun mevedel-collaboration--publish-background (room)
   "Broadcast ROOM's background rows only when their visible facts change."
-  (let ((frame (mevedel-collaboration--background-frame room)))
-    (unless (equal frame (plist-get room :background-frame))
-      (plist-put room :background-frame frame)
+  (let* ((frame (mevedel-collaboration--background-frame room))
+         ;; Age informs initial browser grace, not a changing visible fact.
+         ;; Joining guests construct a fresh frame with the current ages.
+         (facts (plist-put
+                 (copy-sequence frame) :rows
+                 (vconcat
+                  (mapcar (lambda (row)
+                            (let ((copy (copy-sequence row)))
+                              (cl-remf copy :terminalAgeSeconds)
+                              copy))
+                          (plist-get frame :rows))))))
+    (unless (equal facts (plist-get room :background-frame))
+      (plist-put room :background-frame facts)
       (mevedel-collaboration--broadcast room frame))))
 
 (defun mevedel-collaboration--background-event (event)

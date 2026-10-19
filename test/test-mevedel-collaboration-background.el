@@ -294,5 +294,69 @@
         (should (equal "Watching" (plist-get row :statusLabel)))
         (should (string-match-p "truncated" (plist-get row :previewLabel)))))))
 
+(mevedel-deftest mevedel-collaboration-background-terminal-age
+  (:doc "JSON carries original terminal age for fresh joins without restarting settled agent clocks")
+  (let* ((record (mevedel-agent-record--create :path "/root/child" :activity 'running))
+         (session (mevedel-session--create :name "age" :agent-registry
+                                          (list (cons "/root/child" record))))
+         (room (list :session session))
+         (now 100.0)
+         (live (list '(:kind bash :owner "/root" :execution-id "old"
+                       :yielded t :started-at 10 :state running :output-tail "")))
+         (event (list :type 'terminal :session session :owner "/root"
+                      :facts '(:kind bash :execution-id "old" :state completed)
+                      :whole-output "done")))
+    (cl-letf (((symbol-function 'float-time) (lambda (&rest _) now))
+              ((symbol-function 'mevedel-view-execution--live) (lambda (_) live))
+              ((symbol-function 'mevedel-collaboration--room-for-session) (lambda (_) room))
+              ((symbol-function 'mevedel-collaboration--schedule-publish) #'ignore))
+      (let ((frame (mevedel-collaboration--background-frame room)))
+        (dolist (row (append (plist-get frame :rows) nil))
+          (should-not (plist-member row :terminalAgeSeconds))))
+      (setq live nil)
+      (setf (mevedel-agent-record-activity record) 'idle
+            (mevedel-agent-record-settled-outcome record) 'completed)
+      (mevedel-collaboration--background-event event)
+      (mevedel-collaboration--background-frame room)
+      (setq now 125.0)
+      ;; Duplicate evidence and repeated reads must not mint new completion times.
+      (mevedel-collaboration--background-event event)
+      (dotimes (_ 2)
+        (let* ((wire (json-parse-string
+                      (json-encode (mevedel-collaboration--background-frame room))
+                      :object-type 'plist :array-type 'list))
+               (rows (plist-get wire :rows)))
+          (should (= 2 (length rows)))
+          (dolist (row rows)
+            (let ((age (plist-get row :terminalAgeSeconds)))
+              (should (numberp age))
+              (should (= 25.0 age))
+              ;; A new browser has no remaining native ten-second visible grace.
+              (should (zerop (max 0 (- 10000 (* 1000 age))))))))))))
+
+(mevedel-deftest mevedel-collaboration-background-terminal-age-publish
+  (:doc "Elapsed terminal age alone does not publish an otherwise unchanged panel")
+  (let* ((session (mevedel-session--create :name "age-publish"))
+         (room (list :session session))
+         (now 100.0)
+         sent)
+    (cl-letf (((symbol-function 'float-time) (lambda (&rest _) now))
+              ((symbol-function 'mevedel-view-execution--live) (lambda (_) nil))
+              ((symbol-function 'mevedel-collaboration--room-for-session) (lambda (_) room))
+              ((symbol-function 'mevedel-collaboration--schedule-publish) #'ignore)
+              ((symbol-function 'mevedel-collaboration--broadcast)
+               (lambda (_ frame) (push frame sent))))
+      (mevedel-collaboration--background-event
+       (list :type 'terminal :session session :owner "/root"
+             :facts '(:kind bash :execution-id "old" :state completed) :whole-output "done"))
+      (mevedel-collaboration--publish-background room)
+      (setq now 105.0)
+      (mevedel-collaboration--publish-background room)
+      (should (= 1 (length sent)))
+      (setq now 131.0)
+      (mevedel-collaboration--publish-background room)
+      (should (= 2 (length sent)))
+      (should (equal [] (plist-get (car sent) :rows))))))
+
 (provide 'test-mevedel-collaboration-background)
 ;;; test-mevedel-collaboration-background.el ends here

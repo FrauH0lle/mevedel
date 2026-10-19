@@ -850,7 +850,12 @@ output uses the existing scoped execution-result request, never a browser-sent
 host filesystem path. Passive execution events refresh the same coalesced
 publication without consuming output. The host retains at most 128 terminal
 snapshots for 30 seconds so completion survives registry removal and short
-reconnects; effective child model metadata stays with the completed row. Active
+reconnects; effective child model metadata stays with the completed row. Each
+terminal row includes `terminalAgeSeconds`, measured from its original host
+cache timestamp. A newly joining browser subtracts that age from its ten-second
+visible grace instead of reviving old completions; no host/browser clock
+synchronization is needed. Duplicate evidence and frame reads never restart
+the age, and age changes alone do not broadcast another frame. Active
 and terminal rows pass through the same native ordering. Frames admit live work
 before terminal evidence, cap at 128 rows and 64 KiB of encoded JSON, and signal
 any omitted rows explicitly. Changed frames broadcast once; joining guests

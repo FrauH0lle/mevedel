@@ -72,8 +72,11 @@ The browser's unified background-work panel projects the native agent/execution
 collector and stable ordering instead of independently interpreting transcript
 notices or sorting mutable statuses. Bounded passive terminal snapshots preserve
 completion facts when executions leave the live registry; each browser owns its
-selection, focus and finished-row grace. Preview availability and truncation are
-explicit, with exactly three bounded output lines and a 64 KiB encoded-frame
+selection, focus and finished-row grace. The host sends relative terminal age
+from the original cache timestamp, so reconnects do not revive expired visible
+grace or require synchronized clocks. Duplicate evidence does not restart that
+age, and elapsed age alone does not trigger publication. Preview availability
+and truncation are explicit, with exactly three bounded output lines and a 64 KiB encoded-frame
 budget. Full and owner links may stop a live scoped execution or interrupt a
 known retained child through typed identity-bearing actions. The host rechecks
 the current guest tier and registry identity before the native user-authority
