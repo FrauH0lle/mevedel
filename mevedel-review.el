@@ -914,22 +914,25 @@ the `<user_action>' block for parent-history continuity."
 
 (defun mevedel-review-strip-user-action-blocks (text)
   "Return TEXT without synthetic review `<user_action>' blocks."
-  (with-temp-buffer
-    (insert text)
-    (goto-char (point-min))
-    (while (search-forward "<user_action>" nil t)
-      (let ((start (match-beginning 0)))
-        (if (search-forward "</user_action>" nil t)
-            (let ((end (point))
-                  (block (buffer-substring-no-properties start (point))))
-              (when (string-match-p "<action>review</action>" block)
-                (when (and (< end (point-max))
-                           (eq (char-after end) ?\n))
-                  (cl-incf end))
-                (delete-region start end)
-                (goto-char start)))
-          (goto-char (point-max)))))
-    (string-trim (buffer-string))))
+  (let ((case-fold-search (default-value 'case-fold-search)))
+    (if (not (string-match-p "<user_action>" text))
+        (string-trim text)
+      (with-temp-buffer
+        (insert text)
+        (goto-char (point-min))
+        (while (search-forward "<user_action>" nil t)
+          (let ((start (match-beginning 0)))
+            (if (search-forward "</user_action>" nil t)
+                (let ((end (point))
+                      (block (buffer-substring-no-properties start (point))))
+                  (when (string-match-p "<action>review</action>" block)
+                    (when (and (< end (point-max))
+                               (eq (char-after end) ?\n))
+                      (cl-incf end))
+                    (delete-region start end)
+                    (goto-char start)))
+              (goto-char (point-max)))))
+        (string-trim (buffer-string))))))
 
 
 ;;

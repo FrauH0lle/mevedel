@@ -1366,14 +1366,18 @@ without NEXT returns the complete turns."
              (seg-render-kind
               (and (consp seg-render-data)
                    (plist-get seg-render-data :kind)))
-             (seg-scaffolding-only-p
-              (and (memq type '(user ignored))
-                   seg-text
-                   (mevedel-view--scaffolding-only-text-p seg-text)))
              (hook-audit-only-p
               (and (eq type 'ignored)
                    seg-text
                    (mevedel-transcript-audit-only-p seg-text)))
+             (seg-scaffolding-only-p
+              (and (memq type '(user ignored))
+                   seg-text
+                   ;; Audit-only segments already preserve the preceding
+                   ;; type below.  Their scaffolding verdict is never used;
+                   ;; do not clean the encoded payload to compute it.
+                   (not hook-audit-only-p)
+                   (mevedel-view--scaffolding-only-text-p seg-text)))
              (scaffolding-before-hook-audit-p
               (and (eq type 'user)
                    seg-scaffolding-only-p
@@ -3344,15 +3348,19 @@ summary does not include preceding agent-result or tool output text."
 
 (defun mevedel-view--strip-tool-blocks-from-reasoning (text)
   "Return reasoning TEXT with nested org tool blocks removed."
-  (with-temp-buffer
-    (insert (or text ""))
-    (goto-char (point-min))
-    (while (re-search-forward "^#\\+begin_tool\\b" nil t)
-      (let ((start (match-beginning 0)))
-        (if (re-search-forward "^#\\+end_tool[^\n]*\n?" nil t)
-            (delete-region start (point))
-          (delete-region start (point-max)))))
-    (buffer-string)))
+  (let ((text (or text ""))
+        (case-fold-search (default-value 'case-fold-search)))
+    (if (not (string-match-p "^#\\+begin_tool\\b" text))
+        text
+      (with-temp-buffer
+        (insert text)
+        (goto-char (point-min))
+        (while (re-search-forward "^#\\+begin_tool\\b" nil t)
+          (let ((start (match-beginning 0)))
+            (if (re-search-forward "^#\\+end_tool[^\n]*\n?" nil t)
+                (delete-region start (point))
+              (delete-region start (point-max)))))
+        (buffer-string)))))
 
 (defconst mevedel-view--clean-reasoning-cache-size 24
   "Reasoning-text cleanings retained by `mevedel-view--clean-reasoning-cache'.
@@ -3405,8 +3413,10 @@ Completed blocks are cached globally; see
     ;; One pass over the marker lines rather than three.  Each
     ;; `replace-regexp-in-string' copies the whole string, and reasoning
     ;; text runs to thousands of lines while every redraw re-cleans it.
-    (replace-regexp-in-string
-     "#\\+\\(?:begin\\|end\\)_\\(?:reasoning\\|tool\\)[^\n]*\n?" "" cleaned)))
+    (let ((markers "#\\+\\(?:begin\\|end\\)_\\(?:reasoning\\|tool\\)[^\n]*\n?"))
+      (if (string-match-p markers cleaned)
+          (replace-regexp-in-string markers "" cleaned)
+        cleaned))))
 
 (defun mevedel-view--strip-render-data-display-text (text)
   "Return TEXT without hidden render-data side-channel scaffolding."
@@ -3445,17 +3455,21 @@ as generated control markup."
 
 (defun mevedel-view--strip-system-reminder-blocks (text)
   "Return TEXT without generated `<system-reminder>' blocks."
-  (with-temp-buffer
-    (insert (or text ""))
-    (goto-char (point-min))
-    (while (search-forward "<system-reminder>" nil t)
-      (let ((start (match-beginning 0)))
-        (if (search-forward "</system-reminder>" nil t)
-            (progn
-              (delete-region start (point))
-              (goto-char start))
-          (goto-char (point-max)))))
-    (buffer-string)))
+  (let ((text (or text ""))
+        (case-fold-search (default-value 'case-fold-search)))
+    (if (not (string-match-p "<system-reminder>" text))
+        text
+      (with-temp-buffer
+        (insert text)
+        (goto-char (point-min))
+        (while (search-forward "<system-reminder>" nil t)
+          (let ((start (match-beginning 0)))
+            (if (search-forward "</system-reminder>" nil t)
+                (progn
+                  (delete-region start (point))
+                  (goto-char start))
+              (goto-char (point-max)))))
+        (buffer-string)))))
 
 (defun mevedel-view--system-reminder-line-count (body)
   "Return the non-empty line count for system reminder BODY."
@@ -4823,41 +4837,47 @@ Empty string when the turn contains only whitespace or markers."
               ;; rerender that didn't pre-narrow past the drawer.
               (when (string-match "\\`[ \t\n]*:PROPERTIES:\n\\(?:.*\n\\)*?:END:\n?" text)
                 (setq text (replace-match "" t t text)))
-              ;; Strip reasoning block markers
-              (setq text (replace-regexp-in-string
-                          "#\\+\\(?:begin\\|end\\)_reasoning[^\n]*\n?" "" text))
-              ;; Strip tool block markers.  gptel emits `#+begin_tool ...'
+              ;; Strip reasoning and tool markers only when present:
+              ;; replacement otherwise copies the whole delivery.
+              ;; gptel emits `#+begin_tool ...'
               ;; and `#+end_tool' without the `gptel' text property, so the
               ;; separator text around a tool block appears here as a user
               ;; segment -- skip it, otherwise the raw header would render
               ;; as a spurious "You" turn.
-              (setq text (replace-regexp-in-string
-                          "#\\+begin_tool[^\n]*\n?" "" text))
-              (setq text (replace-regexp-in-string
-                          "#\\+end_tool[^\n]*\n?" "" text))
+              (dolist (markers '("#\\+\\(?:begin\\|end\\)_reasoning[^\n]*\n?"
+                                 "#\\+begin_tool[^\n]*\n?"
+                                 "#\\+end_tool[^\n]*\n?"))
+                (when (string-match-p markers text)
+                  (setq text (replace-regexp-in-string markers "" text))))
               (let ((trimmed (string-trim text)))
                 (unless (string-empty-p trimmed)
                   (push trimmed parts)))))
-          (string-join (nreverse parts) "\n")))))
+          (if (cdr parts)
+              (string-join (nreverse parts) "\n")
+            (or (car parts) ""))))))
 
 (defun mevedel-view--strip-model-context-blocks (text)
   "Return TEXT without generated hook or Goal context blocks."
-  (with-temp-buffer
-    (insert text)
-    (goto-char (point-min))
-    (while (re-search-forward
-            "<\\(hook\\|goal\\)-context\\(?:[ \\t][^>]*\\)?>" nil t)
-      (let ((start (match-beginning 0))
-            (close (format "</%s-context>" (match-string 1))))
-        (if (search-forward close nil t)
-            (progn
-              (delete-region start (point))
-              (goto-char start))
-          (goto-char (point-max)))))
-    (goto-char (point-min))
-    (while (re-search-forward "\n\\{3,\\}" nil t)
-      (replace-match "\n\n" t t))
-    (buffer-string)))
+  (let ((case-fold-search (default-value 'case-fold-search)))
+    (if (not (or (string-match-p "<\\(hook\\|goal\\)-context\\(?:[ \\t][^>]*\\)?>" text)
+                 (string-search "\n\n\n" text)))
+        text
+      (with-temp-buffer
+        (insert text)
+        (goto-char (point-min))
+        (while (re-search-forward
+                "<\\(hook\\|goal\\)-context\\(?:[ \\t][^>]*\\)?>" nil t)
+          (let ((start (match-beginning 0))
+                (close (format "</%s-context>" (match-string 1))))
+            (if (search-forward close nil t)
+                (progn
+                  (delete-region start (point))
+                  (goto-char start))
+              (goto-char (point-max)))))
+        (goto-char (point-min))
+        (while (re-search-forward "\n\\{3,\\}" nil t)
+          (replace-match "\n\n" t t))
+        (buffer-string)))))
 
 (autoload 'mevedel-view--hook-audit-records-from-text "mevedel-view-audit")
 (autoload 'mevedel-view--hook-audit-key "mevedel-view-audit")
