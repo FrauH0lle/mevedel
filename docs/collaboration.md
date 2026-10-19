@@ -968,6 +968,13 @@ text in its output body. A `MONITOR` mailbox produces a separate, unlinked
 from the payload. Background-event turn attribution hides the harness's fixed
 wake prompt, while retaining the assistant's response and event notices. An
 ordinary user prompt with the same words remains visible.
+Ordinary retained-agent deliveries also remain in the receiving conversation:
+result notices say `Agent /root/name finished`, `failed`, `interrupted`, or
+`incomplete` from the structural result envelope, never body prose or the
+current roster. Their Markdown final answers start folded and retain their
+disclosure choice across updates. Interim messages use a separate `Message
+from /root/name` disclosure. **Open transcript** inspects the retained child
+without changing the parent's composer or workspace.
 **Show result** makes a separate read-only request for retained output; it does
 not duplicate the body in the parent transcript or alter the model-visible
 mailbox. The host validates owner and ID against either the receiving root or

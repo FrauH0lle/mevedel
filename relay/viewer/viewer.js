@@ -206,7 +206,8 @@
   const history = window.mevedelHistoryView.create({
     send, el, onArtifacts:refreshFilter,
     renderRecord:record => window.mevedelTranscriptRenderer.renderRecord(
-      record, scopeChip, artifacts.open, null, openExecutionResult),
+      record, scopeChip, artifacts.open, null, openExecutionResult,
+      path => agents.open({path})),
   });
   const agents = window.mevedelAgentView.create({
     send, el, scopeChip, openArtifact: artifacts.open,
@@ -610,7 +611,8 @@
   function updateRecordElement(record, previous) {
     const current = state.elements.get(record.id);
     const turn = window.mevedelTranscriptRenderer.renderRecord(
-      record, scopeChip, artifacts.open, previous || current, openExecutionResult);
+      record, scopeChip, artifacts.open, previous || current, openExecutionResult,
+      path => agents.open({path}));
     if (current) {
       turn.hidden = current.hidden;
       current.replaceWith(turn);

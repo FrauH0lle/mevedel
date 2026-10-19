@@ -16,6 +16,37 @@
 (require 'mevedel-tool-ptc)
 (require 'mevedel-tool-render-data)
 
+(mevedel-deftest mevedel-collaboration--agent-mailbox ()
+  ,test
+  (test)
+  :doc "agent results retain envelope outcomes, bodies, identities and wire fields"
+  (dolist (outcome '("completed" "errored" "interrupted" nil))
+    (with-temp-buffer
+      (mevedel--transcript-org-mode)
+      (insert (format "<agent-result sender=\"/root/reviewer\"%s>\n"
+                      (if outcome (format " outcome=\"%s\"" outcome) ""))
+              "Completed successfully? Body prose is not status.\n</agent-result>\n")
+      (let* ((records (mevedel-collaboration--canonical-records (current-buffer)))
+             (record (car records))
+             (wire (mevedel-collaboration--json-record record)))
+        (should (= 1 (length records)))
+        (should (equal "agent-notice" (plist-get record :kind)))
+        (should (equal "/root/reviewer" (alist-get "sender" wire nil nil #'equal)))
+        (should (equal (or outcome "incomplete") (alist-get "outcome" wire nil nil #'equal)))
+        (should (equal "result" (alist-get "mailType" wire nil nil #'equal)))
+        (should (string-match-p "Body prose" (plist-get record :text)))
+        (should (equal records (mevedel-collaboration--canonical-records (current-buffer)))))))
+  :doc "ordinary messages remain inspectable and distinct in source order"
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (dotimes (_ 2)
+      (insert "<agent-message type=\"MAIL\" sender=\"/root/reviewer\">\n"
+              "interim **finding**\n</agent-message>\n"))
+    (let ((records (mevedel-collaboration--canonical-records (current-buffer))))
+      (should (= 2 (length records)))
+      (should (equal "message" (plist-get (car records) :mailType)))
+      (should-not (equal (plist-get (car records) :id) (plist-get (cadr records) :id))))))
+
 (ert-deftest mevedel-collaboration-approval-presentation ()
   "Canonical tool projection carries bounded display-only approval reasons."
   (with-temp-buffer

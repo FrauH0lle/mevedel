@@ -80,6 +80,8 @@
                   "mevedel-view-render" (name args result &optional collapsed-only render-data))
 (declare-function mevedel-view--invoke-renderer
                   "mevedel-view-render" (tool render-data args result))
+(declare-function mevedel-view--mail-attribute
+                  "mevedel-view-render" (open-tag attribute))
 (declare-function mevedel-view--rendering-status
                   "mevedel-view-render" (rendering &optional render-data))
 (declare-function mevedel-view--sandbox-summary-line
@@ -232,7 +234,7 @@ an artifact only by its record id, never by a filesystem path."
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
                        :truncated :guest :directive :item :detail :diff
                        :artifact :store :size :missing :presentation :shared
-                       :execution :description))
+                       :execution :description :sender :mailType :outcome))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -941,6 +943,34 @@ row does not imply success.  This table lives only for one history fetch."
                       (kill-buffer buffer))))))))))
     completions))
 
+(defun mevedel-collaboration--agent-mailbox (segment)
+  "Return ordinary agent mail in structural SEGMENT, or nil.
+The envelope alone supplies sender and result outcome.  Execution mail is
+handled separately, and incomplete envelopes are never guessed from prose."
+  (save-excursion
+    (goto-char (cadr segment))
+    (when (search-forward "<" (caddr segment) t)
+      (backward-char)
+      (when-let* ((block (mevedel-transcript--mailbox-any-block-at-point
+                          (caddr segment)))
+                  (kind (plist-get block :kind))
+                  (open (buffer-substring-no-properties
+                         (plist-get block :open-start) (plist-get block :open-end)))
+                  (type (or (mevedel-view--mail-attribute open "type") ""))
+                  ((or (eq kind 'agent-result)
+                       (and (eq kind 'agent-message)
+                            (not (member type '("EXECUTION" "MONITOR" "MONITOR_TERMINAL")))))))
+        (let ((outcome (mevedel-view--mail-attribute open "outcome")))
+          (list :type 'agent-notice :sender (plist-get block :id)
+                :mailType (if (eq kind 'agent-result) "result" "message")
+                :outcome (if (member outcome '("completed" "errored" "interrupted"))
+                             outcome "incomplete")
+                :text (mevedel-collaboration--truncate-bytes
+                       (string-trim (buffer-substring-no-properties
+                                     (plist-get block :body-start)
+                                     (plist-get block :body-end)))
+                       mevedel-collaboration--max-record-text-bytes)))))))
+
 (defun mevedel-collaboration--forwarded-execution (segment &optional events)
   "Return structured background evidence for mailbox SEGMENT, or nil.
 With EVENTS, include nonterminal monitor event previews.
@@ -1230,11 +1260,23 @@ owner; omitted means the root transcript."
                            (car (project-segment
                                  segment nil
                                  (lambda ()
-                                   (cons (mevedel-collaboration--forwarded-execution
-                                          segment t)
+                                   (cons (or (mevedel-collaboration--forwarded-execution
+                                              segment t)
+                                             (mevedel-collaboration--agent-mailbox segment))
                                          (cons start end)))
                                  #'ignore #'ignore))))
-                (if (eq (plist-get completion :type) 'monitor-event)
+                (cond
+                 ((eq (plist-get completion :type) 'agent-notice)
+                  (let* ((key (list "agent-notice" completion))
+                         (occurrence (gethash key occurrences 0)))
+                    (puthash key (1+ occurrence) occurrences)
+                    (push (mevedel-collaboration--scoped
+                           (apply #'mevedel-collaboration--record
+                                  (mevedel-collaboration--stable-record-id
+                                   "agent-notice" (prin1-to-string completion) occurrence)
+                                  "agent-notice" :revision 0 (cddr completion))
+                           scope) records)))
+                 ((eq (plist-get completion :type) 'monitor-event)
                     (let* ((text (plist-get completion :text))
                            (key (list "monitor-event" completion))
                            (occurrence (gethash key occurrences 0)))
@@ -1247,8 +1289,8 @@ owner; omitted means the root transcript."
                               :text (mevedel-collaboration--truncate-bytes text 2000)
                               :description (plist-get completion :description))
                              scope)
-                            records))
-                  (add-execution completion scope))))
+                            records)))
+                 (t (add-execution completion scope)))))
              ((eq (car segment) 'tool)
               (let ((render-end (gethash end following-render-data)))
                 (dolist (record

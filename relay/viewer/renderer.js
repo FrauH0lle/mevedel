@@ -440,6 +440,8 @@
       if (record.guest) who.append(el('span', 'badge', 'guest'));
     } else if (record.kind === 'assistant') {
       who.append(el('span', 'name', 'Assistant'));
+    } else if (record.kind === 'agent-notice') {
+      who.append(el('span', 'name', 'Agent'));
     } else if (record.artifact) {
       who.append(el('span', 'name', 'Artifact'));
     } else {
@@ -575,7 +577,25 @@
     return details;
   }
 
-  function renderContent(record, onArtifactOpen, disclosures, onExecutionOpen) {
+  function renderContent(record, onArtifactOpen, disclosures, onExecutionOpen, onAgentOpen) {
+    if (record.kind === 'agent-notice') {
+      const details = el('details', 'agent-notice');
+      disclosures.set('mailbox', details);
+      const summary = el('summary');
+      const verb = {completed: 'finished', errored: 'failed', interrupted: 'interrupted'}[record.outcome]
+        || 'incomplete';
+      const sender = String(record.sender || 'unknown agent').replace(/[\n\r\t]+/g, ' ');
+      summary.append(el('span', record.outcome === 'errored' ? 'failed' : '',
+        record.mailType === 'result' ? `● Agent ${sender} ${verb}` : `Message from ${sender}`));
+      details.append(summary);
+      details.append(renderMarkdown(record.text || ''));
+      const open = el('button', 'btn quiet', 'Open transcript');
+      open.type = 'button';
+      open.disabled = typeof onAgentOpen !== 'function' || !record.sender;
+      if (!open.disabled) open.addEventListener('click', () => onAgentOpen(record.sender));
+      details.append(open);
+      return details;
+    }
     if (record.kind === 'execution') {
       const facts = record.execution || {};
       const row = el('div', 'execution-breadcrumb');
@@ -651,7 +671,7 @@
     }
   }
 
-  function renderRecord(record, scopeChip, onArtifactOpen, previous, onExecutionOpen) {
+  function renderRecord(record, scopeChip, onArtifactOpen, previous, onExecutionOpen, onAgentOpen) {
     const turn = el('article', `turn ${roleOf(record)}`);
     turn.dataset.recordId = record.id;
     turn.dataset.role = roleOf(record);
@@ -663,7 +683,7 @@
     const content = el('div', 'content');
     content.append(whoLine(record, scopeChip));
     turn.disclosures = new Map();
-    const rendered = renderContent(record, onArtifactOpen, turn.disclosures, onExecutionOpen);
+    const rendered = renderContent(record, onArtifactOpen, turn.disclosures, onExecutionOpen, onAgentOpen);
     content.append(rendered);
     turn.append(content);
     // Rebuilding a record owns disclosure continuity. Callers supply the

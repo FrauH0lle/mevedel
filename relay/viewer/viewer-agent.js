@@ -53,7 +53,8 @@
       records.forEach(record => {
         if (!record || typeof record.id !== 'string') return;
         const turn = renderer.renderRecord(
-          record, scopeChip, openArtifact, previous.get(record.id), openExecution);
+          record, scopeChip, openArtifact, previous.get(record.id), openExecution,
+          path => open({path}));
         transcript.append(turn);
       });
       renderer.markContinuations(transcript);

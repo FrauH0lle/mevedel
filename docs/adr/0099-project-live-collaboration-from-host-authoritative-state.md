@@ -55,6 +55,10 @@ Tool display comes from the host's bounded semantic presentation tree and
 selected direct-tool identity. Display metadata is allowlisted rather than
 exposing raw internal render data. Delivered Skill dependencies are historical
 captured bodies, not current file reads. Each browser owns nested disclosures.
+Agent messages and final reports are projected from structural mailbox
+envelopes as inspectable notices in the receiving transcript. Outcome labels
+come from the saved envelope, not optimistic body prose or mutable roster
+state; folded final answers do not require opening the child's transcript.
 Nested invocation events update host facts immediately but coalesce tree
 construction and publication through the room's existing stream timer. Every
 projection read refreshes dirty pending trees; top-level events publish immediately,
