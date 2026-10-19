@@ -1586,7 +1586,7 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry)))
-  :doc "an acquiring restore defers collection; a live reopen does not schedule it"
+  :doc "an acquiring restore defers collection; a live reopen preserves its job"
   (let* ((host "restore-collect-host")
          (local-root
           (file-name-as-directory
@@ -1658,16 +1658,21 @@
                         (let ((live-before
                                (length
                                 (mevedel-session-publication--generation-names
-                                 session-dir))))
+                                 session-dir)))
+                              (job (gethash
+                                    (buffer-local-value 'mevedel--session restored)
+                                    mevedel-session-collection--jobs)))
                           (should (> live-before after))
-                        ;; Re-opening switches to the live buffer without
-                        ;; acquiring and therefore collects nothing again.
+                          (should job)
+                          ;; Publishing scheduled this job.  Re-opening only
+                          ;; switches buffers; it neither replaces nor runs it.
                           (should (eq restored
                                       (mevedel-session-persistence-restore
                                        session-dir nil nil workspace)))
-                          (should-not
-                           (gethash (buffer-local-value 'mevedel--session restored)
-                                    mevedel-session-collection--jobs))
+                          (should
+                           (eq job
+                               (gethash (buffer-local-value 'mevedel--session restored)
+                                        mevedel-session-collection--jobs)))
                           (should
                            (= live-before
                               (length
@@ -5865,12 +5870,12 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                  session mevedel-session-persistence--deferred-agent-saves))
     (should (equal (list 'agent-state-save session) cancelled))))
 
-(mevedel-deftest mevedel-session-persistence-save-agent-state ()
+(mevedel-deftest mevedel-session-persistence-save-agent-state (:quiet t)
   ,test
   (test)
 
   :doc "a synchronous agent commit absorbs the pending save"
-  (let ((session (mevedel-session--create :name "debounce"))
+  (let ((session (mevedel-session--create :name "debounce" :authority-mode 'pid-lock))
         (buffer (generate-new-buffer " *debounce-root*")))
     (unwind-protect
         (progn
@@ -5889,7 +5894,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
       (mevedel-session-persistence-cancel-deferred-agent-save session)
       (when (buffer-live-p buffer) (kill-buffer buffer))))
 
-  :doc "forces a full save through the authoritative root buffer"
+  :doc "initial materialization forces a full save through the root buffer"
   (let* ((tempdir (file-name-as-directory
                    (make-temp-file "mevedel-agent-state-" t)))
          (workspace
@@ -5932,6 +5937,79 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
       (when (buffer-live-p root) (kill-buffer root))
       (when (buffer-live-p agent) (kill-buffer agent))
       (delete-directory tempdir t)))
+
+  :doc "acknowledged mail commits staged artifacts without saving the root"
+  (let* ((tempdir (file-name-as-directory (make-temp-file "mevedel-ack-sidecar-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace tempdir)))
+    (let* ((session (mevedel-session-create "main" workspace))
+           (root (generate-new-buffer " *agent-sidecar-root*"))
+           restored directory old-entry old-index)
+      (unwind-protect
+          (progn
+            (with-current-buffer root
+              (org-mode)
+              (setq-local mevedel--session session)
+              (insert "Durable prompt\n")
+              (mevedel-session-artifacts-save session root))
+            (mevedel-session-control-transfer-register-root-buffer session root)
+            (setq directory (mevedel-session-save-path session)
+                  old-entry (copy-tree
+                             (assoc "segment-0001.chat.org"
+                                    (plist-get (mevedel-session-publication session)
+                                               :artifacts)))
+                  old-index (copy-tree (mevedel-session-prompt-index session)))
+            (setf (mevedel-session-publication-active-p session) t)
+            (unwind-protect
+                (with-current-buffer root
+                  (should-error
+                   (mevedel-agent-control-send-message session "/root" "Not queued")
+                   :type 'user-error)
+                  (should-not (mevedel-session-messages session))
+                  (should-not (mevedel-session-publication-queue session)))
+              (setf (mevedel-session-publication-active-p session) nil))
+            ;; A marker-free transcript batch must become reachable in the
+            ;; same head as the acknowledged mailbox record referencing it.
+            (mevedel-session-publication-publish
+             session (list (list :path (file-name-concat directory "agents/answer.chat.org")
+                                 :content "Retained answer\n")))
+            (should (mevedel-session-publication-uncommitted-batches session))
+            (with-current-buffer root (insert "Uncheckpointed root text\n"))
+            (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
+                       (lambda (&rest _) (ert-fail "Unexpected full root save"))))
+              (with-current-buffer root
+                (mevedel-agent-control-send-message
+                 session "/root" "See agents/answer.chat.org")))
+            (should-not (mevedel-session-publication-uncommitted-batches session))
+            (should (equal old-entry
+                           (assoc "segment-0001.chat.org"
+                                  (plist-get (mevedel-session-publication session)
+                                             :artifacts))))
+            (should (equal old-index (mevedel-session-prompt-index session)))
+            ;; Release without a final save: restore sees only committed data.
+            (test-mevedel-session-persistence--release-and-kill root session)
+            (setq root nil
+                  restored (mevedel-session-persistence-restore directory))
+            (with-current-buffer restored
+              (should (string-match-p "Durable prompt" (buffer-string)))
+              (should-not (string-match-p "Uncheckpointed" (buffer-string)))
+              (should (equal old-index (mevedel-session-prompt-index mevedel--session)))
+              (let* ((mail (mevedel-session-messages mevedel--session))
+                     (entry (cdr (assoc "agents/answer.chat.org"
+                                        (plist-get (mevedel-session-publication mevedel--session)
+                                                   :artifacts)))))
+                (should (= 1 (length mail)))
+                (should (eq 'MAIL (plist-get (car mail) :type)))
+                (should (equal "See agents/answer.chat.org"
+                               (plist-get (car mail) :payload)))
+                (should (equal "Retained answer\n"
+                               (with-temp-buffer
+                                 (insert-file-contents (plist-get entry :published))
+                                 (buffer-string)))))))
+        (test-mevedel-session-persistence--release-and-kill root session)
+        (test-mevedel-session-persistence--release-and-kill
+         restored (and restored (buffer-local-value 'mevedel--session restored)))
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry))))
 
   :doc "keeps a committed full agent save successful when its save hook fails"
   (let* ((tempdir (file-name-as-directory

@@ -1285,9 +1285,12 @@ such as target-side copy, restore, and rename.  It suppresses timer target I/O
 and checks final ownership but does not itself publish, commit, or drain queued
 artifacts.
 
-Turn settlement and lease-acquiring restore schedule publication collection
+Every committed publication, turn settlement, and lease-acquiring restore schedule publication collection
 without scanning history on the foreground path. The coalesced job reads at
 most eight generations per idle slice, yielding after 50 ms between reads.
+Publication scheduling also covers a long first root turn: agent checkpoints
+must not accumulate until that root turn finally settles. Existing sessions
+use the same full scan on their next publication or lease-acquiring restore.
 Slices run one idle second apart: each is a wakeup, and at 0.2 s a job that
 deleted a few files woke the editor three or four times a second for fifteen
 seconds after every turn. A wait armed while the editor is already idle is
@@ -1314,20 +1317,24 @@ deletion batches are filtered against the grown retained set. Only the lease
 owner publishes and each new generation carries its manifest, so nothing new
 is ever a deletion candidate. Each job ends with a `publication-collection`
 telemetry event.
-After a complete scan, retained manifests are validated one per idle step and
+After a complete scan, retained manifests are validated one per step and
 mark their exact referenced files. All obsolete manifests are retired before
 any unreferenced payloads are removed, so interruption cannot leave discoverable
 heads whose bytes have been collected. Each deletion batch contains at most
 eight operations. Wholly unreferenced generation directories need no listing
-and share a batch. A partially retained generation is listed on its own step,
-yielding between generations. Steps that read manifests or list generations
+and share a batch. Up to eight partially retained generations share one
+listing program, avoiding a separate target process for each directory.
+Up to eight
+marking, enumeration, or synchronous deletion steps share the same 50 ms
+slice budget; an asynchronous deletion ends the slice immediately.
+Steps that read manifests or list generations
 check local state and cost only their own read. A deleting step is one program
 whose first operations prove, on the target, this client's lease generation
 bytes, a target clock before the lease expiry, and the planned journal pin
 directory's exact entries and pin bytes. On targets that support direct-async
 spawns that program runs in the background; the job waits for it, and its
 report continues the job from a timer outside any remote command. A failed
-proof deletes nothing and ends the plan quietly; the next settlement plans
+proof deletes nothing and ends the plan quietly; the next publication plans
 afresh. Other failures warn without breaking settlement or restore.
 
 Collection follows references rather than age: manifests can retain unchanged
@@ -1338,9 +1345,14 @@ representatives, journal capture pins, the newest
 referenced artifact files. Referencing one file in an older generation does not
 retain its obsolete manifest, sidecar, or unrelated files. Artifact-only
 directories remain eligible for later collection when their last reference
-disappears. Mid-turn heads become collectible once their turn settles unless
+disappears. Superseded mid-turn heads are collectible even before their turn settles unless
 selected by the grace window or pinned. An unreadable journal pin or retained
 manifest blocks collection before any deletion.
+
+Generation assembly compares staged artifact digests with the preceding
+manifest after merging queued writes. Equal payloads, including sidecars, reuse
+their immutable files rather than copying them again. Replacement snapshots
+use only their supplied artifacts; they do not inherit dropped entries.
 
 The generation cache retains only referenced generation names, the sidecar
 locator, and first-transcript size. Full artifact indexes are discarded after
@@ -1365,6 +1377,13 @@ registry or mailbox mutation forces a full non-fork-point root snapshot.  The
 sidecar therefore exists before mevedel reports the child publication or wakes
 a mailbox consumer; the root turn's later DONE publication still establishes
 its first stable fork point.
+
+Once that initial snapshot exists, acknowledged registry and mailbox changes
+publish the sidecar together with any retained transcript/artifact batches.
+They preserve the committed root segment and prompt index instead of taking
+another full root checkpoint. Acknowledged messages and their staged artifact
+dependencies are therefore reachable in the same head; unrelated in-flight
+root text continues to use the normal checkpoint and settlement paths.
 
 An acknowledged agent mutation refuses reentrant publication queueing: its
 caller returns only after that batch changes the immutable head.  Once the head

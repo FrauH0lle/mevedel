@@ -96,6 +96,37 @@
                          (plist-get (cdr (plist-get entry :entry)) :published))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-session-publication--write-generation ()
+  ,test
+  (test)
+  :doc "shares equal payloads, writes changes, and honors replacement snapshots"
+  (let* ((directory (make-temp-file "mevedel-generation-" t))
+         (root (file-name-concat directory ".publications"))
+         (source (file-name-concat directory "source"))
+         (artifacts (list (list :logical "session.meta.el" :source source)
+                          (list :logical "agents/a.chat.org" :source source))))
+    (unwind-protect
+        (progn
+          (write-region "first" nil source nil 'silent)
+          (let* ((first (mevedel-session-publication--write-generation
+                         root artifacts directory nil))
+                 (same (mevedel-session-publication--write-generation
+                        root artifacts directory (cdr first))))
+            (should (equal (cdr first) (cdr same)))
+            (should (equal '("manifest.el")
+                           (directory-files (car same) nil "^[^.].*")))
+            (write-region "changed" nil source nil 'silent)
+            (let ((changed (mevedel-session-publication--write-generation
+                            root artifacts directory (cdr same))))
+              (should-not (equal (cdr same) (cdr changed)))
+              (should (= 3 (length (directory-files (car changed) nil "^[^.].*")))))
+            ;; Replacement has no prior entries: even equal bytes must be
+            ;; supplied by this snapshot, not resurrected from a dropped one.
+            (let ((replacement (mevedel-session-publication--write-generation
+                                root artifacts directory nil)))
+              (should (= 3 (length (directory-files (car replacement) nil "^[^.].*")))))))
+      (delete-directory directory t))))
+
 (mevedel-deftest mevedel-session-publication--deduplicate-artifacts ()
   ,test
   (test)
@@ -587,11 +618,40 @@ and its segment path."
              (should (mevedel-session-publication-read directory current))
              ;; Once its last retained reference disappears, an artifact-only
              ;; generation is reclaimed too, despite having no manifest.
+             ;; The equal sidecar was shared too; replace those bytes so this
+             ;; publication really removes the generation's last reference.
+             (plist-put marker :content (concat (plist-get marker :content) "\n"))
              (mevedel-session-publication-publish
               session (list (list :path (file-name-concat directory "stable") :delete t) marker))
              (set-file-times (file-name-concat directory current) '(1 0 0 0))
              (test-mevedel-publication--collect session)
              (should-not (file-exists-p (file-name-directory stable))))))))))
+
+(mevedel-deftest mevedel-session-publication-collect-step/batched-listings ()
+  (let ((mevedel-session-publication-keep-recent-generations 1))
+    (test-mevedel-session-publication--with-published
+     "publication-list-batch" "mevedel-list-batch-" ?a
+     (lambda (session directory _segment)
+       (let ((marker (list :path (file-name-concat directory "session.meta.el")
+                           :content (mevedel-session-artifacts-printed-value
+                                     (mevedel-session-artifacts-build-sidecar session (current-buffer)))
+                           :commit-marker t))
+             (program (symbol-function 'mevedel-session-control-fs-run-program))
+             (largest 0))
+         (dotimes (index 10)
+           (mevedel-session-publication-publish
+            session (list (list :path (file-name-concat directory (format "stable-%d" index))
+                                :content "retained") marker)))
+         (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                    (lambda (operations)
+                      (setq largest (max largest (cl-count 'list-directory operations
+                                                          :key (lambda (op) (plist-get op :op)))))
+                      (funcall program operations))))
+           (test-mevedel-publication--collect session))
+         (should (= 8 largest))
+         (dotimes (index 10)
+           (should (equal "retained" (mevedel-session-artifacts-read-artifact
+                                      session (format "stable-%d" index) t)))))))))
 
 (mevedel-deftest mevedel-session-publication--retained-heads ()
   (let ((mevedel-session-publication-keep-recent-generations 1))

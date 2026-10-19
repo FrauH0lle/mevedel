@@ -23,6 +23,10 @@
 ;; `files'
 (defvar remote-file-name-inhibit-cache)
 
+;; `mevedel-session-collection'
+(declare-function mevedel-session-collection-schedule "mevedel-session-collection" (session))
+(autoload 'mevedel-session-collection-schedule "mevedel-session-collection")
+
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-append-file
                   "mevedel-session-control-fs"
@@ -817,10 +821,10 @@ deletion candidate."
 
 (defun mevedel-session-publication-collect-step (session plan &optional callback)
   "Advance SESSION's collection PLAN by one bounded step.
-Read one retained manifest, enumerate one generation, or delete up to eight
-files/directories.  Return non-nil while work remains.  A moved head adds
-its new manifests to the retained set before any further step, so a plan
-survives a session that keeps publishing; errors propagate to the idle
+Read one retained manifest, enumerate up to eight generations, or delete
+up to eight files/directories.  Return non-nil while work remains.  A moved
+head adds its new manifests to the retained set before any further step.
+A plan survives a session that keeps publishing; errors propagate to the idle
 collection owner, which reports them and discards the plan.
 
 A deleting step is one program that proves this client's lease generation,
@@ -940,8 +944,7 @@ failure signals here."
                (when failure (signal (car failure) (cdr failure)))))))
           (if (plist-get plan :in-flight) 'pending t))))
      ((plist-get plan :directories)
-      (let* ((path (car (plist-get plan :directories)))
-             (manifest (file-name-concat path "manifest.el")))
+      (let ((path (car (plist-get plan :directories))))
         (if (not (gethash (file-name-as-directory path) keep))
             ;; Wholly unreferenced generations need no listing, so up to a
             ;; batch of them share one deletion step and its proofs.  Obsolete
@@ -958,13 +961,30 @@ failure signals here."
                             unreferenced)
                     (plist-get plan :directories)
                     (seq-difference (plist-get plan :directories) unreferenced)))
-          (setf (plist-get plan :operations)
-                (let ((files (seq-remove (lambda (file) (gethash file keep))
-                                         (mevedel-session-control-fs-list-directory path "."))))
-                  (when (member manifest files)
-                    (setq files (cons manifest (delete manifest files))))
-                  (mapcar (lambda (file) (list :op 'delete-file :path file)) files))
-                (plist-get plan :directories) (cdr (plist-get plan :directories)))))
+          ;; Most retained directories hold only a few immutable artifacts.
+          ;; Listing each in its own target process made an otherwise clean
+          ;; real session spend half a second rescanning them per job.
+          (let* ((directories
+                  (seq-take (seq-filter
+                             (lambda (directory)
+                               (gethash (file-name-as-directory directory) keep))
+                             (plist-get plan :directories)) 8))
+                 (results (mevedel-session-control-fs-run-program
+                           (mapcar (lambda (directory)
+                                     (list :op 'list-directory :path directory :optional t))
+                                   directories)))
+                 operations)
+            (cl-mapc
+             (lambda (directory result)
+               (unless (eq (plist-get result :status) 'absent)
+                 (dolist (name (mevedel-session-control-fs-program-value result))
+                   (let ((file (file-name-concat directory name)))
+                     (unless (gethash file keep)
+                       (push (list :op 'delete-file :path file) operations))))))
+             directories results)
+            (setf (plist-get plan :operations) (nreverse operations)
+                  (plist-get plan :directories)
+                  (seq-difference (plist-get plan :directories) directories)))))
       t))))
 
 (defun mevedel-session-publication-read-batch (directories listings)
@@ -1224,8 +1244,25 @@ collision simply picks another name."
                          pending
                          (mevedel-session-publication--files-sha256 pending))
                 table))
+             ;; Callers may stage the same transcript repeatedly, including
+             ;; across queued batches.  Compare the final bytes here, where
+             ;; last-write-wins and replacement semantics are already known.
+             (previous (make-hash-table :test #'equal))
+             (changed-artifacts
+              (progn
+                (dolist (entry entries)
+                  (puthash (car entry) (plist-get (cdr entry) :sha256) previous))
+                (seq-filter
+                 (lambda (artifact)
+                   (let ((old (gethash (plist-get artifact :logical) previous)))
+                     (if (plist-get artifact :delete)
+                         old
+                       (not (equal old (or (plist-get artifact :source-sha256)
+                                           (gethash (plist-get artifact :source)
+                                                    digests)))))))
+                 artifacts)))
              (payloads
-              (cl-loop for artifact in artifacts
+              (cl-loop for artifact in changed-artifacts
                        for index from 1
                        unless (plist-get artifact :delete)
                        collect (mevedel-session-publication--immutable-entry
@@ -1240,7 +1277,7 @@ collision simply picks another name."
              (changed (make-hash-table :test #'equal))
              overlaid
              manifest manifest-path operations results)
-        (dolist (artifact artifacts)
+        (dolist (artifact changed-artifacts)
           (puthash (plist-get artifact :logical) t changed))
         (setq overlaid
               (append
@@ -1302,7 +1339,7 @@ collision simply picks another name."
          (root (file-name-concat session-dir ".publications"))
          written directory)
     (mevedel-session-control-fs-physical-path root)
-    ;; Immutable generations grow until session-directory cleanup.
+    ;; Unchanged entries keep their existing immutable payloads.
     (setq written (mevedel-session-publication--write-generation
                    root artifacts session-dir entries)
           directory (car written)
@@ -1318,6 +1355,9 @@ collision simply picks another name."
       (unless (mevedel-session-durability-commit-publication-head session head)
         (user-error "Portable session lease was lost before publication commit"))
       (setf (mevedel-session-publication session) captured)
+      ;; A first root turn can run for hours while agents checkpoint.  Waiting
+      ;; for root settlement lets those superseded transcripts grow unbounded.
+      (mevedel-session-collection-schedule session)
       captured)))
 
 (defun mevedel-session-publication-uncommitted-artifact (session logical)

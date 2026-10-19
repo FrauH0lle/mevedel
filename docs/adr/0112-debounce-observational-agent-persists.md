@@ -10,6 +10,15 @@ commits. They refuse reentrant queueing. Observational activity changes and
 mailbox consumption schedule one sidecar-only registry save per session, with
 a two-second default debounce through the idle-transport scheduler.
 
+After initial materialization, acknowledged registry and mailbox mutations also
+publish only the sidecar and any retained artifact batches. They preserve the
+committed root segment and prompt index rather than checkpointing unrelated
+streaming text. The first acknowledged mutation still forces a full root
+snapshot; terminal agent settlement commits its transcript with its metadata.
+Thus a mailbox acknowledgement and its staged transcript dependencies become
+reachable together, before any consumer wakes. This changes save granularity,
+not acknowledgement durability or the ordinary root checkpoint cadence.
+
 New retained transcript text and dirty transcript metadata share a strict
 publication when the portable sidecar already exists. The session root supplies
 that sidecar even for nested agents. Provider setup reuses the transcript saved
@@ -52,6 +61,15 @@ transactional journal.
 
 All revisions belong to ADR 0112:
 
+- **2026-10-19 acknowledged saves:** the long multi-agent session recorded 1,878
+  session saves totaling 145 seconds, and execution-delivery callbacks spent
+  143-176 ms synchronously saving the whole root. Existing immutable manifests
+  already retain the root snapshot and merge staged transcript batches with a
+  sidecar commit. Reusing that transaction removes root serialization, prompt
+  indexing and snapshot scans without deferring acknowledged delivery. Eight
+  alternating compiled observations per variant on a restored private copy
+  (1.79 MB root, 27 retained agents) reduced median acknowledged save time from
+  145.2 to 55.2 ms, with no GC in either measured path.
 - **2026-09-22 agent transition capture:** a 565-ms graphical heartbeat delay
   coincided with three publications and GC at agent completion. Startup had a
   similar burst. Five alternating real-storage lifecycle replays reduced startup
