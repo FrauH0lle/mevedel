@@ -182,8 +182,9 @@ create or focus an inspection window automatically.
 Agent status refreshes replace only the handle. Adjacent audit disclosures,
 including delivered system reminders, retain their rows and fold state.
 Standalone audits after deliveries keep their audit identity during activity
-grouping: provider bookkeeping stays hidden, and user-facing hook records keep
-their own disclosures rather than becoming generic tool rows.
+grouping: provider bookkeeping and agent mailbox receipts stay hidden, and
+user-facing hook records keep their own disclosures rather than becoming generic
+tool rows.
 
 The view is reconstructable from the data buffer. Avoid storing durable
 conversation state only in view overlays or text properties.

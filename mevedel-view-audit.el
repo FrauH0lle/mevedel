@@ -149,7 +149,8 @@ DATA-BUF and SOURCE-START attach each record's exact source range."
              (unless (and (null type)
                           (memq (plist-get record :type)
                                 '(fork-point provider-tool-batch-start provider-tool-batch
-                                  execution-archive execution-completion)))
+                                  execution-archive execution-completion
+                                  mailbox-receipt)))
                (if (and (buffer-live-p data-buf) source-start)
                    (append
                     record

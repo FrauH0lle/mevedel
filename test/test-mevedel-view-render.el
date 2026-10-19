@@ -9,6 +9,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-agent-control)
 (require 'mevedel-agent-conversation)
 (require 'mevedel-directive)
 (require 'mevedel-view)
@@ -5831,6 +5832,7 @@
          :items ((:type verification-suggestion :body "Check the result.")))
         (:type provider-tool-batch-start :id "hidden-call")
         (:type provider-tool-batch :id "hidden-call" :messages [])
+        (:type mailbox-receipt :id "hidden-receipt")
         (:type fork-point :fork-point-id "hidden-fork"))
       "")
      'mevedel-hook-audit)
@@ -5857,6 +5859,52 @@
       (should (string-search "1 system reminder" (buffer-string)))
       (should-not (string-search "hook audit" (buffer-string)))
       (should-not (string-search "hidden-call" (buffer-string))))))
+
+(mevedel-deftest mevedel-view-mailbox-receipt-hidden ()
+  (dolist (restored '(nil t))
+    (dolist (placement '(response tool mailbox))
+      (mevedel-view-test--with-buffers
+        (mevedel-view-test--insert-data data-buf "Plan the change.\n" nil)
+        (pcase placement
+          ('response
+           (mevedel-view-test--insert-data data-buf "Plan ready.\n" 'response))
+          ('tool
+           (mevedel-view-test--insert-data
+            data-buf "(:name \"WaitAgent\" :args nil)\n\nMailbox activity\n"
+            '(tool . "wait-mail")))
+          ('mailbox
+           (mevedel-view-test--insert-data
+            data-buf
+            (concat "<agent-result sender=\"/root/reviewer\" recipient=\"/root\" "
+                    "outcome=\"completed\">\nPlan checked.\n</agent-result>\n")
+            nil)))
+        (mevedel-view-test--insert-data
+         data-buf
+         (mevedel-agent-control-message-receipt '(:id "hidden-receipt"))
+         nil)
+        (with-current-buffer data-buf
+          (when restored
+            (let ((bounds (gptel--get-buffer-bounds)))
+              (set-text-properties (point-min) (point-max) nil)
+              (gptel--restore-props bounds)
+              (mevedel-transcript-restore-properties t)))
+          ;; Delivery recovery must still be able to consume the receipt.
+          (should (equal '((:type mailbox-receipt :id "hidden-receipt"))
+                         (mevedel-transcript-audit-records
+                          (buffer-string) 'mailbox-receipt))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "Keep this draft")
+          (mevedel-view--full-rerender)
+          (should (equal "Keep this draft" (mevedel-view--input-text)))
+          (should-not (string-search "hook audit" (buffer-string)))
+          (should-not (string-search "hidden-receipt" (buffer-string)))
+          (should (string-search
+                   (pcase placement
+                     ('response "Plan ready.")
+                     ('tool "WaitAgent")
+                     ('mailbox "Agent /root/reviewer finished"))
+                   (buffer-string))))))))
 
 (mevedel-deftest mevedel-view--format-injected-reminders-audit ()
   ,test
