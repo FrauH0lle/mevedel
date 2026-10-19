@@ -489,10 +489,26 @@ on the same row."
   "Face for the horizontal rule that closes an assistant turn."
   :group 'mevedel)
 
+(defface mevedel-view-request-summary-rule
+  '((t :inherit shadow :strike-through t :extend t))
+  "Face for the rule that continues a closing request summary.
+It is applied to the summary line's newline only: `:extend' carries the
+strike-through from the end of the label to the window edge, so the
+label reads as part of the turn's closing rule."
+  :group 'mevedel)
+
 (defface mevedel-view-activity-rule
   '((t :inherit shadow :overline t :extend t))
-  "Face for the separator before assistant activity rows."
+  "Face for the quiet rule between assistant activity and the next prose.
+The overline is blended from the active theme by
+`mevedel--derive-theme-faces', about half as strong as `shadow', so the
+rule inside a turn stays lighter than the rule that closes it."
   :group 'mevedel)
+
+(mevedel--derive-theme-face
+ 'mevedel-view-activity-rule
+ (lambda (foreground background)
+   (list :overline (mevedel--tint background foreground 0.15))))
 
 (defface mevedel-view-input-prompt
   '((t :inherit shadow :weight bold))

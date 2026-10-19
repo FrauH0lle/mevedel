@@ -81,6 +81,77 @@
           (should (= offset (- (point) (mevedel-view--input-start)))))))))
 
 
+(mevedel-deftest mevedel-view--render-user-turn/empty-background
+  (:doc "a hidden background wake contributes no text or navigable source span")
+  (mevedel-view-test--with-buffers
+    (let (before)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (setq before (buffer-substring-no-properties
+                      (point-min) (mevedel-view--history-insertion-marker))))
+      (with-current-buffer data-buf
+        (insert "Background work you started has reported.\n")
+        (insert (mevedel--format-hook-audit-record '(:type background-event))))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (should (equal before (buffer-substring-no-properties
+                               (point-min) (mevedel-view--history-insertion-marker))))
+        (should-not (text-property-not-all
+                     (point-min) (mevedel-view--history-insertion-marker)
+                     'mevedel-view-turn-id nil))))))
+
+(mevedel-deftest mevedel-view--render-user-turn/background-live
+  (:doc "a hidden wake stays absent through retained live updates and reconstruction")
+  (mevedel-view-test--with-buffers
+    (let (start live)
+      (with-current-buffer view-buf
+        (setq start (marker-position (mevedel-view--history-insertion-marker)))
+        (mevedel-view-test--insert-composer-draft "> Keep this draft\nsecond line" 4)
+        (mevedel-view-stream-begin-turn
+         (copy-marker start)
+         (with-current-buffer data-buf (copy-marker (point-min)))))
+      (with-current-buffer data-buf
+        (insert "Background work you started has reported.\n")
+        (insert (mevedel--format-hook-audit-record '(:type background-event))))
+      (mevedel-view-test--insert-data data-buf "First paragraph.\n\nMutable tail" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view-render-live-update data-buf))
+      (mevedel-view-test--insert-data data-buf " continues.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view-render-live-update data-buf)
+        (should (equal "Assistant" (buffer-substring-no-properties start (+ start 9))))
+        (should (equal "> Keep this draft\nsecond line" (mevedel-view--input-text)))
+        (should (= 4 (- (point) (mevedel-view--input-start))))
+        (setq live (buffer-substring-no-properties
+                    (point-min) (mevedel-view--history-insertion-marker)))
+        (mevedel-view--full-rerender)
+        (should (equal live (buffer-substring-no-properties
+                             (point-min) (mevedel-view--history-insertion-marker))))))))
+
+(mevedel-deftest mevedel-view--render-user-turn/background-reminder
+  (:doc "background wakes retain visible reminder rows without a generated heading")
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "Background work you started has reported.\n")
+      (insert (mevedel--format-hook-audit-record '(:type background-event)))
+      (insert (mevedel--format-hook-audit-record
+               '(:type injected-reminders :phase turn-start
+                 :items ((:type verification-suggestion :body "Check the result."))))))
+    (mevedel-view-test--insert-data data-buf "Handled.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((history (buffer-substring-no-properties
+                      (point-min) (mevedel-view--history-insertion-marker))))
+        (should (string-match-p "1 system reminder" history))
+        (should (string-match-p "Handled\\." history))
+        (should-not (string-match-p "Background work\\|^You$" history)))
+      (goto-char (point-min))
+      (search-forward "1 system reminder")
+      (should (get-text-property (1- (point)) 'mevedel-view-source))
+      (should (get-text-property (1- (point)) 'mevedel-view-turn-id))
+      (mevedel-view-toggle-section)
+      (should (string-match-p "Check the result\\." (buffer-string))))))
+
 (mevedel-deftest mevedel-view--insert-shared-context
   (:doc "Shared context folds in live echoes and full renders, retaining expansion and the composer")
   (mevedel-view-test--with-buffers

@@ -111,8 +111,10 @@
                   (run-hooks 'pre-command-hook)
                   (run-hooks 'post-command-hook)
                   (should (= start (window-start)))))
+            ;; The invariant is in display rows, not native GUI pixels.
             (should (= (- height 4)
-                       (mevedel-view--position-screen-y (point-max) (selected-window)))))
+                       (mevedel-view-test--position-screen-y
+                        (point-max) (selected-window)))))
           (should-not mevedel-view--draft-window-state)
           (should (equal "> draft\nsecond" (mevedel-view--input-text)))))))
   (later stale)
@@ -163,8 +165,9 @@
           (should-not mevedel-view--draft-command-buffer)
           (with-current-buffer view-buf
             (should-not mevedel-view--draft-window-state)
+            ;; Measure rows explicitly; native geometry uses pixels in GUI.
             (should (= (- (window-body-height window) 4)
-                       (mevedel-view--position-screen-y (point-max) window)))
+                       (mevedel-view-test--position-screen-y (point-max) window)))
             (should (equal "> draft\nsecond" (mevedel-view--input-text))))))))
   (next-command)
   :doc "A command ending in another buffer repairs its original composer once." nil

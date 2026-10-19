@@ -278,6 +278,10 @@ Each row is a plist with :start, :end, :num, and :separator."
 (defvar mevedel-view-table--column-pixels nil
   "Pixel width of a box-drawing column, bound for one table render.")
 
+(defvar mevedel-view-table--cell-widths nil
+  "Per-cell width vectors computed while finding cramped-table glyph floors.
+Bound for one render only, so wrapping can reuse those measurements.")
+
 (defun mevedel-view-table--pixel-capable-p (window)
   "Return non-nil when WINDOW supports pixel-accurate measurement."
   (and window
@@ -358,16 +362,39 @@ Each column adds two padding spaces and one border pipe, plus one
 leading pipe."
   (+ 1 (seq-reduce (lambda (acc w) (+ acc w 3)) widths 0)))
 
+(defun mevedel-view-table--widest-glyph (str window)
+  "Return the minimum width needed for any glyph in STR in WINDOW.
+Use the displayed buffer's composition context to keep grapheme clusters
+together.  This floor matters when even the longest words cannot fit."
+  (with-current-buffer (if (window-live-p window)
+                           (window-buffer window)
+                         (current-buffer))
+    (let ((width 1)
+          (offset 0)
+          (widths (make-vector (length str) 0))
+          (char-px (when (mevedel-view-table--pixel-capable-p window)
+                     (mevedel-view-table--char-pixel-width window))))
+      (dolist (glyph (string-glyph-split str))
+        (let ((glyph-width
+               (if char-px
+                   (/ (float (mevedel-view-table--measure-string glyph window)) char-px)
+                 (string-width glyph))))
+          ;; The remaining characters of a composition contribute no width;
+          ;; the wrapper must keep them with the first character.
+          (aset widths offset glyph-width)
+          (setq offset (+ offset (length glyph))
+                width (max width (ceiling glyph-width)))))
+      (when mevedel-view-table--cell-widths
+        (puthash str widths mevedel-view-table--cell-widths))
+      width)))
+
 (defun mevedel-view-table--allocate-widths (natural-widths min-widths target)
   "Shrink NATURAL-WIDTHS proportionally to fit TARGET, respecting MIN-WIDTHS.
-MIN-WIDTHS holds each column's longest unbreakable word.  When even
-those minima cannot fit TARGET, columns shrink down to one column each
-and the cell wrapper hard-breaks long words."
+MIN-WIDTHS holds word minima or, for cramped tables, indivisible glyph
+minima.  Never shrink below these floors, even if TARGET cannot fit them."
   (let* ((total (mevedel-view-table--total-width natural-widths))
          (excess (- total target))
-         (floors (if (> (mevedel-view-table--total-width min-widths) target)
-                     (make-list (length min-widths) 1)
-                   min-widths)))
+         (floors min-widths))
     (if (<= excess 0)
         natural-widths
       (let* ((shrinkable (seq-mapn (lambda (w m) (max 0 (- w m)))
@@ -409,29 +436,32 @@ it, which keeps that measurement out of a per-character loop."
   "Return a vector of per-character display widths for TEXT.
 
 Graphical text is measured once per character here rather than on each
-visit to the wrapping loop.  Terminal layout uses character widths."
-  (let* ((len (length text))
-         (widths (make-vector len 0)))
-    ;; Callers may hand over nil or empty text; asking the predicate about
-    ;; it would fail where the old per-character loop simply did nothing.
-    (if (or (zerop len)
-            (not (mevedel-view-table--pixel-capable-p window)))
-        (dotimes (index len)
-          (aset widths index (char-width (aref text index))))
-      ;; Measuring can fail -- no graphic window, no live buffer -- and
-      ;; the per-character path treated that as "use `char-width'".
-      ;; Hoisting the measurement has to keep that tolerance, or one
-      ;; failure escapes where it used to be absorbed per character.
-      (let ((char-px (condition-case nil
-                         (mevedel-view-table--char-pixel-width window)
-                       (error nil))))
-        (dotimes (index len)
-          (aset widths index
-                (if char-px
-                    (mevedel-view-table--wrap-char-width
-                     text index window char-px)
-                  (char-width (aref text index)))))))
-    widths))
+visit to the wrapping loop.  Cramped tables reuse the glyph measurements
+from their minimum-width pass.  Terminal layout uses character widths."
+  (or (and mevedel-view-table--cell-widths
+           (gethash text mevedel-view-table--cell-widths))
+      (let* ((len (length text))
+             (widths (make-vector len 0)))
+        ;; Callers may hand over nil or empty text; asking the predicate about
+        ;; it would fail where the old per-character loop simply did nothing.
+        (if (or (zerop len)
+                (not (mevedel-view-table--pixel-capable-p window)))
+            (dotimes (index len)
+              (aset widths index (char-width (aref text index))))
+          ;; Measuring can fail -- no graphic window, no live buffer -- and
+          ;; the per-character path treated that as "use `char-width'".
+          ;; Hoisting the measurement has to keep that tolerance, or one
+          ;; failure escapes where it used to be absorbed per character.
+          (let ((char-px (condition-case nil
+                             (mevedel-view-table--char-pixel-width window)
+                           (error nil))))
+            (dotimes (index len)
+              (aset widths index
+                    (if char-px
+                        (mevedel-view-table--wrap-char-width
+                         text index window char-px)
+                      (char-width (aref text index)))))))
+        widths)))
 
 (defun mevedel-view-table--break-after-p (text i)
   "Return non-nil when a wrapped line may break after index I in TEXT.
@@ -629,7 +659,8 @@ table's position."
     (setq-local inhibit-field-text-motion t)
     (mevedel-view--render-markdown-url-links-in-range
      (point-min) (point-max))
-    (let* ((mevedel-view-table--column-pixels
+    (let* ((mevedel-view-table--cell-widths nil)
+           (mevedel-view-table--column-pixels
             (when (mevedel-view-table--pixel-capable-p window)
               (mevedel-view-table--char-pixel-width window)))
            (rows (mevedel-view-table--collect-rows))
@@ -666,13 +697,22 @@ table's position."
                                mevedel-view-table--max-width-fraction)))
              (col-widths
               (if (> (mevedel-view-table--total-width natural-widths) target)
-                  (mevedel-view-table--allocate-widths
-                   natural-widths
-                   (mevedel-view-table--column-maxima
-                    parsed-rows
-                    (lambda (cell)
-                      (mevedel-view-table--longest-word cell window)))
-                   target)
+                  (let ((minima
+                         (mevedel-view-table--column-maxima
+                          parsed-rows
+                          (lambda (cell)
+                            (mevedel-view-table--longest-word cell window)))))
+                    ;; Words may hard-wrap, but an individual glyph cannot.
+                    ;; Only cramped tables need this additional measurement.
+                    (when (> (mevedel-view-table--total-width minima) target)
+                      (setq mevedel-view-table--cell-widths (make-hash-table :test 'eq)
+                            minima
+                            (mevedel-view-table--column-maxima
+                             parsed-rows
+                             (lambda (cell)
+                               (mevedel-view-table--widest-glyph cell window)))))
+                    (mevedel-view-table--allocate-widths
+                     natural-widths minima target))
                 natural-widths))
              (rendered-rows nil))
         (dolist (entry parsed-rows)
