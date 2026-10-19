@@ -2175,7 +2175,11 @@ Markdown rendering adds small view-only affordances:
   path passes, so buttons and faces inside cells survive. Columns wider
   than 90% of the usable window width (window columns minus any
   `line-prefix` or `wrap-prefix` inset) shrink proportionally toward their
-  longest-word minima and wrap their cells. Graphical layout measures all
+  longest-word minima and wrap their cells. If those words cannot fit, they
+  hard-wrap, but each column retains enough width for its widest indivisible
+  glyph or composed cluster. An impossibly narrow window can therefore exceed
+  the width target rather than misalign borders around a wide glyph.
+  Graphical layout measures all
   text, including header and stripe faces, against the displaying window.
   Column units use the box-drawing glyph width, and padding uses exact
   pixel widths so proportional fonts, bold headers and mixed fonts keep

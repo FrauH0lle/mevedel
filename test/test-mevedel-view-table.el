@@ -13,6 +13,44 @@
 (require 'mevedel-view-render)
 (require 'mevedel-view-table)
 
+(mevedel-deftest mevedel-view-table--allocate-widths
+  (:doc "Indivisible glyph floors survive even an impossibly narrow target.")
+  ;; Three 11-pixel units are needed for a 24-pixel emoji.  Shrinking
+  ;; below that floor would move only its row's right-hand borders.
+  (should (equal '(3 1)
+                 (mevedel-view-table--allocate-widths '(8 43) '(3 1) 8))))
+
+(mevedel-deftest mevedel-view-table--widest-glyph ()
+  ,test
+  (test)
+  :doc "terminal glyph floors preserve wide characters"
+  (progn
+    (should (= 2 (mevedel-view-table--widest-glyph "x界" nil)))
+    (should (= 1 (mevedel-view-table--widest-glyph "" nil))))
+  :doc "graphical glyph floors round up actual pixel widths"
+  (let ((mevedel-view-table--column-pixels 11))
+    (cl-letf (((symbol-function 'mevedel-view-table--pixel-capable-p)
+               (lambda (_) t))
+              ((symbol-function 'mevedel-view-table--measure-string)
+               (lambda (str _) (if (equal str "🙂") 24 11))))
+      (should (= 3 (mevedel-view-table--widest-glyph "a🙂" (selected-window))))))
+  :doc "explicitly composed clusters are measured as indivisible glyphs"
+  (let ((text (compose-string (copy-sequence "ab")))
+        (mevedel-view-table--column-pixels 11)
+        (mevedel-view-table--cell-widths (make-hash-table :test 'eq))
+        measured)
+    (cl-letf (((symbol-function 'mevedel-view-table--pixel-capable-p)
+               (lambda (_) t))
+              ((symbol-function 'mevedel-view-table--measure-string)
+               (lambda (glyph _)
+                 (push (substring-no-properties glyph) measured)
+                 33)))
+      (should (= 3 (mevedel-view-table--widest-glyph text (selected-window))))
+      ;; Wrapping reuses the floor measurement and keeps the composition whole.
+      (should (equal [3.0 0] (mevedel-view-table--char-widths text (selected-window))))
+      (should (equal (list text) (mevedel-view-table--wrap-text text 3 (selected-window))))
+      (should (equal '("ab") measured)))))
+
 (mevedel-deftest mevedel-view-table--pad-string ()
   (let ((mevedel-view-table--column-pixels 10)
         (text ,text) (pixels ,pixels) (expected ,expected))
