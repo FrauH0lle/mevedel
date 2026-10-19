@@ -15,7 +15,7 @@
 - [Investigate history before recommending removal of a boundary](investigate-history-before-removing-boundaries.md) - Read the commits and ADRs that introduced a boundary before proposing to remove it
 - [Verify through the production path and the caller's identity](production-path-verification.md) - Test real producer/parser boundaries and caller identity; quoted payload delimiters are not structural
 - [Read-only verification can rest on independently checked artifacts](read-only-verification-artifacts.md) - Inability to rerun a writing check is not absence of verification evidence
-- [Background-work UI: minimal, unified, and composer-stable](execution-ui-presentation-preference.md) - Unify running work, avoid duplicate status, keep controls out of busy headers, and prevent status growth from displacing the composer
+- [Background-work UI: minimal, unified, and composer-stable](execution-ui-presentation-preference.md) - Unify running work, keep the composer stable, and preserve time to inspect expanded completed entries
 - [Keep live-state inspection probes bounded and non-perturbing](bounded-live-inspection-probes.md) - Return scalars or booleans from live Emacs probes; large object dumps and profiling workload distort what you are measuring
 - [Verify consumer-visible state, not intermediate signals](rendered-state-verification-feedback.md) - Assert rendered/consumed state, not internal flags, audit rows, or same-segment tests
 - [Judge inline image previews by displayed size](inline-image-size-feedback.md) - Compact previews are a visual requirement, not a preference for pixel or fractional settings
@@ -34,8 +34,8 @@
 - [Dim collapsed thinking blocks](collapsed-thinking-visual-preference.md) - Use subdued font highlighting for collapsed thinking blocks
 - [Protect long-running work without treating silence as refusal](sleep-and-long-running-work-preferences.md) - Sleep blocking protects work and remote reachability; permission absence timeouts are opt-in, not implicit refusals
 - [Separate feature enablement from its command setting](separate-feature-toggle-from-command.md) - Use separate defcustoms for enabling a command-backed feature and configuring its command, with enablement off by default
-- [Fix review findings without deferral](fix-review-findings-without-deferral.md) - In review-and-fix work, address every finding in the same pass rather than parking it in the backlog
-- [Use Claude Code as the Monitor design reference](monitor-design-reference-preference.md) - For Monitor and background-wake design, consult Claude Code through its CLI and use it as the default reference when uncertain
+- [Fix review findings without deferral](fix-review-findings-without-deferral.md) - Browser collaboration UI reviews mean review and fix; resolve findings in the same pass while asking about consequential UX choices
+- [Background-wake design priorities and reference](monitor-design-reference-preference.md) - Consult Claude Code for background-wake design; the user weighs lost messages more heavily than wake-loop risk
 - [Actively use a partner when pair work is invoked](explicit-pair-workflow-feedback.md) - An explicit $pair implementation request calls for real partner participation, not solo implementation
 - [Preserve conversational continuity at plan handoff](plan-handoff-continuity-preference.md) - Plan acceptance should preserve the conversation and window, without leaving a confusing obsolete planning view
 - [Desktop/laptop sessions](two-machine-session-workflow.md) - TRAMP takeover is real usage; verify both clients
@@ -43,3 +43,5 @@
 - [Presentation measurements](presentation-measurement-validity.md) - Locking can suppress rendering; isolate and warm the fixture
 - [Suspend versus stalls](correlate-stalls-with-suspend.md) - Correlate telemetry gaps with system sleep records
 - [Narrow-phone viewer testing](narrow-phone-viewer-testing.md) - iPhone mini Safari, vertical fit, and real narrow renders
+- [Delegation model preference](delegation-model-preference.md) - Astra high for partners/review, 6.1 Sol high for implementation
+- [Graphical render check](graphical-render-check-from-worktree.md) - emacs -Q + temp HOME/XDG + x-export-frames for worktree view code

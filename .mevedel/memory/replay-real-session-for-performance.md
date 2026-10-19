@@ -47,3 +47,25 @@ Recipe that worked (harness was `.scratch/live-replay/`, local only):
 
 Related: [Remote hook readiness and stdin timing](remote-hook-readiness-verification.md)
 -- a green replay diagnoses nothing unless it imposes the real conditions.
+
+## Operating on real sessions in batch (2026-10-19)
+
+A one-time prune of 23 real sessions with the new collector showed that a
+batch harness can silently rewrite user state:
+
+- Production restore publishes repair heads (GPTEL_BOUNDS, orphaned
+  executions marked lost). A harness with stub backends republished the
+  sidecar with `:reasoning-effort` high→nil and a wrong chooser preview.
+  Register the user's exact backends/models/presets (from
+  `~/.emacs.d/site-lisp/config.el` and the preset module), and gate on a
+  full sidecar diff against a pre-everything baseline; allow only known
+  benign keys (`:target-incarnation`, ID-keyed `:agent-registry` order).
+- When restore wants to reconcile more (e.g. `:ptc-checkpoints`), use a
+  head-preserving lifecycle: acquire the released lease, schedule collection,
+  drive slices, release. Leave reconciliation to the user's next reopen.
+- Batch slice loops must pump timers/process output, or lease renewal
+  starves and coalesced retries spin.
+- Per session: reflink backup (`cp -a --reflink=always`, btrfs), record
+  SHA-256 of every retained head's artifacts before and after, run a
+  read-only restore of a copy, and delete the backup only after it verifies.
+  Every one of these gates caught a real problem.

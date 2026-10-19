@@ -1,6 +1,6 @@
 ---
 name: "Background-work UI: minimal, unified, and composer-stable"
-description: "Unify running work, avoid duplicate status, keep controls out of busy headers, and prevent status growth from displacing the composer"
+description: "Unify running work, keep the composer stable, and preserve time to inspect expanded completed entries"
 type: user
 ---
 
@@ -19,7 +19,12 @@ User statements, 2026-10-17:
 - Avoid repeating the panel header's counts in the footer: the user called that redundant.
 - Keep headers uncluttered. The user found `Manage…`'s trailing dots strange and wanted the control out of the busy header. They explicitly accepted `[Manage]` in its own last panel row, with `[Show all N]` / `[Show fewer]` for overflow.
 
-These are presentation preferences, not a specification of exact timing or every interaction.
+User clarification, 2026-10-18:
+
+- Completed background-job entries should remain visible while expanded.
+- Collapsing a completed entry should start a **fresh removal grace period only once point is outside the background area**, rather than making the entry disappear immediately.
+
+The clarification preserves time to inspect completed work without consuming its post-collapse visibility period. It qualifies the earlier disappearance preference; no exact grace-period duration was specified.
 
 ## Composer stability and interactive rows
 
