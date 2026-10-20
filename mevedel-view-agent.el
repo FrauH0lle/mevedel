@@ -141,7 +141,8 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--call-preserving-input-point "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--call-preserving-input-text "mevedel-view-composer" (thunk))
-(declare-function mevedel-view--call-preserving-window-state "mevedel-view-composer" (thunk))
+(declare-function mevedel-view--call-preserving-window-state "mevedel-view-composer"
+                  (thunk &optional positions-preserved region))
 (declare-function mevedel-view--composer-anchors "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--position-screen-y

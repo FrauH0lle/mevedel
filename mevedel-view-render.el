@@ -270,9 +270,10 @@
 (declare-function mevedel-view--call-preserving-input-text
                   "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--call-preserving-user-view-state
-                  "mevedel-view-composer" (thunk))
+                  "mevedel-view-composer" (thunk &optional region))
 (declare-function mevedel-view--call-preserving-window-state
-                  "mevedel-view-composer" (thunk))
+                  "mevedel-view-composer"
+                  (thunk &optional positions-preserved region))
 (declare-function mevedel-view--call-with-render-boundaries-advancing
                   "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--ensure-interactive-chat-view
@@ -282,11 +283,11 @@
 (declare-function mevedel-view--input-start
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--position-render-anchor
-                  "mevedel-view-composer" (pos))
+                  "mevedel-view-composer" (pos &optional window region))
 (declare-function mevedel-view--prompt-start-position
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--render-anchor-position
-                  "mevedel-view-composer" (anchor))
+                  "mevedel-view-composer" (anchor &optional strict))
 (declare-function mevedel-view-enter-directive-scope
                   "mevedel-view-composer"
                   (directive action &optional attempt-index workspace))
@@ -3219,49 +3220,92 @@ COLLAPSED-ONLY requests a cached summary without retaining large bodies."
             (puthash key (plist-put (copy-sequence rendering) :group-child nil) cache))
           rendering))))
 
+(defvar-local mevedel-view--tool-row-starts nil
+  "Hash table from tool-use ID to a marker at its last found view row.
+A hint only: `mevedel-view--tool-row-region' revalidates it before use.")
+
+(defconst mevedel-view--tool-row-starts-limit 32
+  "Maximum number of remembered tool row markers per view.")
+
+(defun mevedel-view--forget-tool-row-starts ()
+  "Drop every remembered tool row marker in the current view."
+  (when (hash-table-p mevedel-view--tool-row-starts)
+    (maphash (lambda (_id marker) (set-marker marker nil))
+             mevedel-view--tool-row-starts)
+    (clrhash mevedel-view--tool-row-starts)))
+
+(defun mevedel-view--tool-row-start-p (pos limit tool-use-id)
+  "Return non-nil when TOOL-USE-ID's refreshable row starts at POS before LIMIT."
+  (and (< pos limit)
+       (consp (get-text-property pos 'mevedel-view-source))
+       (eq (get-text-property pos 'mevedel-view-type) 'tool-summary)
+       (equal (get-text-property pos 'mevedel-view-tool-use-id) tool-use-id)))
+
+(defun mevedel-view--tool-row-start (tool-use-id limit)
+  "Return the start of TOOL-USE-ID's refreshable row before LIMIT.
+A projection shows each tool-use ID in at most one summary row.  Progress
+refreshes the same row repeatedly, so a remembered start that still begins
+that row spares scanning the transcript."
+  (let* ((marker (and (hash-table-p mevedel-view--tool-row-starts)
+                      (gethash tool-use-id mevedel-view--tool-row-starts)))
+         (hint (and marker (marker-position marker))))
+    (if (and hint
+             (mevedel-view--tool-row-start-p hint limit tool-use-id)
+             (or (= hint (point-min))
+                 (not (equal (get-text-property (1- hint) 'mevedel-view-tool-use-id)
+                             tool-use-id))))
+        hint
+      (when marker
+        (set-marker marker nil)
+        (remhash tool-use-id mevedel-view--tool-row-starts))
+      (let ((pos (point-min)) found)
+        (while (and (< pos limit) (not found))
+          (if (mevedel-view--tool-row-start-p pos limit tool-use-id)
+              (setq found pos)
+            (setq pos (or (next-single-property-change
+                           pos 'mevedel-view-tool-use-id nil limit)
+                          limit))))
+        (when found
+          (unless (hash-table-p mevedel-view--tool-row-starts)
+            (setq mevedel-view--tool-row-starts (make-hash-table :test #'equal)))
+          (when (>= (hash-table-count mevedel-view--tool-row-starts)
+                    mevedel-view--tool-row-starts-limit)
+            (mevedel-view--forget-tool-row-starts))
+          (puthash tool-use-id (copy-marker found) mevedel-view--tool-row-starts))
+        found))))
+
 (defun mevedel-view--tool-row-region (data-buffer tool-use-id)
   "Return the visible source-backed row for TOOL-USE-ID in DATA-BUFFER.
 The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
   (when-let* ((bounds
                (with-current-buffer data-buffer
-                 (mevedel-tool-render-data-segment-bounds tool-use-id))))
-    (let ((pos (point-min))
-          ;; Yanking a tool row keeps its identity properties.  A draft is
-          ;; never a refresh target, even if grouping hides the original row.
-          (limit (if mevedel-view--agent-transcript-p
-                     (point-max)
-                   (or (mevedel-view--input-marker-position) (point-max))))
-          found)
-      (while (and (< pos limit) (not found))
-        (let* ((source (get-text-property pos 'mevedel-view-source))
-               (next (or (next-single-property-change
-                          pos 'mevedel-view-tool-use-id nil limit)
-                         limit)))
-          (when (and (consp source)
-                     (eq (get-text-property pos 'mevedel-view-type)
-                         'tool-summary)
-                     (equal
-                      (get-text-property pos 'mevedel-view-tool-use-id)
-                      tool-use-id))
-            ;; Expanded compound tools append child rows with their own IDs.
-            ;; Replace the whole parent section, not just its text up to the
-            ;; first child, or every progress refresh duplicates the children.
-            (setq found (list pos (mevedel-view-render-child-calls-end
-                                   next limit source)
-                              ;; Restoring transcript properties can split the
-                              ;; metadata into an ignored run.  The projected
-                              ;; source still owns the complete canonical span.
-                              (if (and (markerp (car source))
-                                       (markerp (cdr source))
-                                       (eq (marker-buffer (car source)) data-buffer)
-                                       (eq (marker-buffer (cdr source)) data-buffer)
-                                       (<= (car source) (car bounds))
-                                       (<= (cdr bounds) (cdr source)))
-                                  (cons (marker-position (car source))
-                                        (marker-position (cdr source)))
-                                bounds))))
-          (setq pos next)))
-      found)))
+                 (mevedel-tool-render-data-segment-bounds tool-use-id)))
+              ;; Yanking a tool row keeps its identity properties.  A draft is
+              ;; never a refresh target, even if grouping hides the original row.
+              (limit (if mevedel-view--agent-transcript-p
+                         (point-max)
+                       (or (mevedel-view--input-marker-position) (point-max))))
+              (pos (mevedel-view--tool-row-start tool-use-id limit)))
+    (let ((source (get-text-property pos 'mevedel-view-source))
+          (next (or (next-single-property-change
+                     pos 'mevedel-view-tool-use-id nil limit)
+                    limit)))
+      ;; Expanded compound tools append child rows with their own IDs.
+      ;; Replace the whole parent section, not just its text up to the
+      ;; first child, or every progress refresh duplicates the children.
+      (list pos (mevedel-view-render-child-calls-end next limit source)
+            ;; Restoring transcript properties can split the metadata into an
+            ;; ignored run.  The projected source still owns the complete
+            ;; canonical span.
+            (if (and (markerp (car source))
+                     (markerp (cdr source))
+                     (eq (marker-buffer (car source)) data-buffer)
+                     (eq (marker-buffer (cdr source)) data-buffer)
+                     (<= (car source) (car bounds))
+                     (<= (cdr bounds) (cdr source)))
+                (cons (marker-position (car source))
+                      (marker-position (cdr source)))
+              bounds)))))
 
 (defun mevedel-view--refresh-tool-row (data-buffer tool-use-id)
   "Refresh only TOOL-USE-ID's visible row from DATA-BUFFER."
@@ -3321,7 +3365,9 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
                     (when turn-id
                       (put-text-property
                        insert-start (point)
-                       'mevedel-view-turn-id turn-id)))))))))
+                       'mevedel-view-turn-id turn-id))))))))
+         ;; Only the row changes; the reader's position elsewhere is exact.
+         (cons start end))
         t)))))
 
 
@@ -8397,6 +8443,7 @@ historical banner.  AGENT-TRANSCRIPT-P selects the headerless layout."
   (unless agent-transcript-p
     (mevedel-view--refresh-continuation-prompt data-buf historical-p))
   (mevedel-view-render-invalidate-live-tail)
+  (mevedel-view--forget-tool-row-starts)
   (if agent-transcript-p
       (progn
         (mevedel-view--debug-log

@@ -3402,6 +3402,33 @@ turn's later text, live and after reconstruction."
                                'progress 'request)
                               :start)))))))
 
+(mevedel-deftest mevedel-view--request-progress-mutation-region ()
+  ,test
+  (test)
+  :doc "covers the permanent rail and its anchor, leaving the transcript outside"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--insert-data data-buf "Hello\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (dolist (step '(idle working))
+        (when (eq step 'working)
+          (mevedel-view--start-spinner "Working..."))
+        (let ((zone (mevedel-view-zone-region 'progress))
+              (anchor (mevedel-view--request-progress-anchor))
+              (region (mevedel-view--request-progress-mutation-region)))
+          (should zone)
+          (should (= (min anchor (overlay-start zone)) (car region)))
+          (should (= (max anchor (overlay-end zone)) (cdr region)))
+          (should (string-search "Hello"
+                                 (buffer-substring-no-properties
+                                  (point-min) (car region))))))
+      (mevedel-view--stop-spinner)
+      ;; Without a live rail region, the redraw inserts at its anchor.
+      (mevedel-view-zone-forget 'progress)
+      (let ((anchor (mevedel-view--request-progress-anchor)))
+        (should (equal (cons anchor anchor)
+                       (mevedel-view--request-progress-mutation-region)))))))
+
 (mevedel-deftest mevedel-view-stream-spinner-reader-state ()
   (mevedel-view-test--with-buffers
     (save-window-excursion

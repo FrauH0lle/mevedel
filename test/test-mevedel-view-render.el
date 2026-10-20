@@ -4874,8 +4874,79 @@
       (should (eq 'mevedel (caar warnings)))
       (should (string-match-p "failed" (cadar warnings))))))
 
-(mevedel-deftest mevedel-view--tool-row-region
-  (:doc "finds the source-backed row for one tool use")
+(mevedel-deftest mevedel-view--tool-row-start-p ()
+  ,test
+  (test)
+  :doc "accepts only a source-backed summary row for the ID before the limit"
+  (with-temp-buffer
+    (insert (propertize "row" 'mevedel-view-source '(1 . 9)
+                        'mevedel-view-type 'tool-summary
+                        'mevedel-view-tool-use-id "id")
+            (propertize "body" 'mevedel-view-source '(1 . 9)
+                        'mevedel-view-type 'body
+                        'mevedel-view-tool-use-id "id")
+            (propertize "loose" 'mevedel-view-type 'tool-summary
+                        'mevedel-view-tool-use-id "id"))
+    (should (mevedel-view--tool-row-start-p 1 (point-max) "id"))
+    (should-not (mevedel-view--tool-row-start-p 1 1 "id"))
+    (should-not (mevedel-view--tool-row-start-p 1 (point-max) "other"))
+    (should-not (mevedel-view--tool-row-start-p 4 (point-max) "id"))
+    (should-not (mevedel-view--tool-row-start-p 8 (point-max) "id"))))
+
+(mevedel-deftest mevedel-view--tool-row-start ()
+  ,test
+  (test)
+  :doc "remembers a found row and rescans when the hint no longer starts it"
+  (with-temp-buffer
+    (let ((row (lambda (id)
+                 (propertize (format "%s row\n" id) 'mevedel-view-source '(1 . 9)
+                             'mevedel-view-type 'tool-summary
+                             'mevedel-view-tool-use-id id))))
+      (insert "header\n" (funcall row "a") (funcall row "b"))
+      (let ((b (mevedel-view--tool-row-start "b" (point-max))))
+        (should (equal "b row\n" (buffer-substring-no-properties b (point-max))))
+        (should (= b (marker-position (gethash "b" mevedel-view--tool-row-starts))))
+        ;; A row inserted before it moves the remembered marker with it.
+        (goto-char (point-min))
+        (insert "more header\n")
+        (should (= (+ b 12) (mevedel-view--tool-row-start "b" (point-max))))
+        ;; A hint moved into the middle of the row is not trusted.
+        (set-marker (gethash "b" mevedel-view--tool-row-starts) (+ b 14))
+        (should (= (+ b 12) (mevedel-view--tool-row-start "b" (point-max))))
+        (should-not (mevedel-view--tool-row-start "b" (+ b 12)))
+        (should-not (mevedel-view--tool-row-start "missing" (point-max))))))
+  :doc "bounds remembered rows"
+  (with-temp-buffer
+    (dotimes (index (1+ mevedel-view--tool-row-starts-limit))
+      (insert (propertize "row\n" 'mevedel-view-source '(1 . 9)
+                          'mevedel-view-type 'tool-summary
+                          'mevedel-view-tool-use-id (format "id%d" index))))
+    (dotimes (index (1+ mevedel-view--tool-row-starts-limit))
+      (should (mevedel-view--tool-row-start (format "id%d" index) (point-max))))
+    (should (<= (hash-table-count mevedel-view--tool-row-starts)
+                mevedel-view--tool-row-starts-limit))))
+
+(mevedel-deftest mevedel-view--forget-tool-row-starts ()
+  ,test
+  (test)
+  :doc "detaches every remembered marker"
+  (with-temp-buffer
+    (insert (propertize "row\n" 'mevedel-view-source '(1 . 9)
+                        'mevedel-view-type 'tool-summary
+                        'mevedel-view-tool-use-id "id"))
+    (mevedel-view--tool-row-start "id" (point-max))
+    (let ((marker (gethash "id" mevedel-view--tool-row-starts)))
+      (mevedel-view--forget-tool-row-starts)
+      (should-not (marker-buffer marker))
+      (should (= 0 (hash-table-count mevedel-view--tool-row-starts)))))
+  :doc "does nothing before any row was remembered"
+  (with-temp-buffer
+    (should-not (mevedel-view--forget-tool-row-starts))))
+
+(mevedel-deftest mevedel-view--tool-row-region ()
+  ,test
+  (test)
+  :doc "finds the source-backed row for one tool use"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
       (insert "#+begin_tool (Custom :value \"x\")\n")
@@ -4904,7 +4975,33 @@
         (should
          (equal "call-custom"
                 (get-text-property
-                 (car region) 'mevedel-view-tool-use-id)))))))
+                 (car region) 'mevedel-view-tool-use-id))))))
+  :doc "revalidates a remembered row start after the projection moves it"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-tool-group-collapse-threshold 100))
+      (dolist (id '("first" "second"))
+        (mevedel-view-test--insert-data
+         data-buf
+         (format "#+begin_tool\n(:name \"Custom\" :args (:value %S))\n\nresult\n#+end_tool\n" id)
+         (cons 'tool id)))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((region (mevedel-view--tool-row-region data-buf "second")))
+          (should (equal region (mevedel-view--tool-row-region data-buf "second")))
+          ;; A stale hint inside another row is not trusted.
+          (set-marker (gethash "second" mevedel-view--tool-row-starts)
+                      (car (mevedel-view--tool-row-region data-buf "first")))
+          (should (equal region (mevedel-view--tool-row-region data-buf "second"))))
+        (with-current-buffer data-buf
+          (goto-char (point-min))
+          (insert (propertize "Earlier response.\n" 'gptel 'response)))
+        (mevedel-view--full-rerender)
+        (let ((region (mevedel-view--tool-row-region data-buf "second")))
+          (should (equal "second"
+                         (get-text-property (car region) 'mevedel-view-tool-use-id)))
+          (should (string-search
+                   "Earlier response"
+                   (buffer-substring-no-properties (point-min) (car region)))))))))
 
 (mevedel-deftest mevedel-view--refresh-tool-row
   (:doc "replaces one row while preserving collapse and composer state")
@@ -5017,6 +5114,45 @@
           (should (= 0 stable-computations)))
         (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
         (should (= 4 (- (point) (mevedel-view--input-start)))))))
+  :doc "a growing row keeps readers above, inside and below it on their text"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-tool-group-collapse-threshold 100))
+      (dolist (id '("above" "changing" "below"))
+        (mevedel-view-test--insert-data
+         data-buf
+         (format "#+begin_tool\n(:name \"Custom\" :args (:value %S))\n\nresult\n#+end_tool\n" id)
+         (cons 'tool id)))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let* ((window (selected-window))
+               (above (car (mevedel-view--tool-row-region data-buf "above")))
+               (changing (car (mevedel-view--tool-row-region data-buf "changing")))
+               (below (car (mevedel-view--tool-row-region data-buf "below")))
+               (row-text (lambda (pos)
+                           (buffer-substring-no-properties pos (min (point-max) (+ pos 8))))))
+          (set-window-buffer window view-buf)
+          (set-window-start window below)
+          (set-window-point window (+ changing 2))
+          (goto-char (+ changing 2))
+          (set-marker (mark-marker) (1+ above))
+          (let ((below-text (funcall row-text below))
+                (inside-text (funcall row-text (+ changing 2)))
+                (above-text (funcall row-text (1+ above))))
+            (with-current-buffer data-buf
+              (goto-char (point-min))
+              (search-forward ":value \"changing\"")
+              (replace-match ":value \"changing into a much longer value\"" nil t))
+            (should (mevedel-view--refresh-tool-row data-buf "changing"))
+            (should (string-search "much longer"
+                                   (buffer-substring-no-properties
+                                    (point-min) (mevedel-view--input-start))))
+            (should (= (window-start window)
+                       (car (mevedel-view--tool-row-region data-buf "below"))))
+            (should (equal below-text (funcall row-text (window-start window))))
+            (should (equal inside-text (funcall row-text (point))))
+            (should (equal "changing"
+                           (get-text-property (point) 'mevedel-view-tool-use-id)))
+            (should (equal above-text (funcall row-text (mark t)))))))))
   :doc "expanding a refreshed row follows metadata growth before its source"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf

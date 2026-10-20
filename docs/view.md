@@ -2023,6 +2023,13 @@ narrowest rendered run whose source contains it. Other anchors that cannot be
 resolved fall back to the clamped raw position, but a position that was in the
 transcript never resolves into the editable composer: it goes to the last
 transcript character instead, so the next keystroke cannot edit the draft.
+A caller that replaces one known span passes it as a region: markers follow
+positions outside the span, advancing over text inserted at its end, and only
+positions inside it take a semantic anchor whose runs are counted from the
+span's start. Markers also stay correct if the redraw removes orphaned zone
+text elsewhere. Targeted tool-row refreshes, request-rail
+ticks and terminal breadcrumb insertion use this, so their reader preservation
+is proportional to the changed span rather than to the transcript.
 Restoring an existing mark updates its marker directly, preserving activation
 state without running mark-activation hooks. A redraw must not schedule editor
 mode transitions for the next user command.

@@ -96,7 +96,7 @@
 (declare-function mevedel-view--call-preserving-input-point
                   "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--call-preserving-user-view-state
-                  "mevedel-view-composer" (thunk))
+                  "mevedel-view-composer" (thunk &optional region))
 (declare-function mevedel-view--call-with-render-boundaries-advancing
                   "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--composer-mode-badge
@@ -496,6 +496,14 @@ the view has already inserted the in-flight markers."
         mevedel-view--spinner-label-target nil
         mevedel-view--spinner-metadata-target nil
         mevedel-view--spinner-sample-frame nil))
+
+(defun mevedel-view--request-progress-mutation-region ()
+  "Return the view text a request-progress redraw can replace.
+The rail is reconciled at its anchor, from wherever its live region is."
+  (let ((anchor (mevedel-view--request-progress-anchor))
+        (zone (mevedel-view-zone-region 'progress)))
+    (cons (min anchor (if zone (overlay-start zone) anchor))
+          (max anchor (if zone (overlay-end zone) anchor)))))
 
 (defun mevedel-view--ensure-request-progress (&optional data-buf status)
   "Ensure the foreground request progress row is visible.
@@ -1355,7 +1363,8 @@ animation or elapsed timer remains to notice the new colors."
                       'mevedel-view-spinner-frame)
                      (mevedel-view--spinner-metadata-visible-p)))
         (mevedel-view--call-preserving-user-view-state
-         (lambda () (mevedel-view--ensure-request-progress))))
+         (lambda () (mevedel-view--ensure-request-progress))
+         (mevedel-view--request-progress-mutation-region)))
       ;; Theme/face changes can turn a color bank into a glyph fallback (or
       ;; back).  Re-evaluate the actual cadence only on this semantic tick.
       (mevedel-view--start-spinner-timer)))
@@ -1681,16 +1690,20 @@ wherever the transcript placed it, so an activity group can count it."
              (lambda ()
                (unless (mevedel-view-audit-breadcrumb-present-p
                         record (mevedel-view--history-insertion-marker))
-                 (mevedel-view--call-preserving-user-view-state
-                  (lambda ()
-                    (mevedel-view--call-with-render-boundaries-advancing
-                     (lambda ()
-                       (let ((inhibit-read-only t)
-                             (inhibit-modification-hooks t))
-                         (save-excursion
-                           (goto-char (mevedel-view--history-insertion-marker))
-                           (mevedel-view--insert-hook-audit-block
-                            record (plist-get record :source)))))))))))))))))
+                 (let ((at (marker-position
+                            (mevedel-view--history-insertion-marker))))
+                   (mevedel-view--call-preserving-user-view-state
+                    (lambda ()
+                      (mevedel-view--call-with-render-boundaries-advancing
+                       (lambda ()
+                         (let ((inhibit-read-only t)
+                               (inhibit-modification-hooks t))
+                           (save-excursion
+                             (goto-char at)
+                             (mevedel-view--insert-hook-audit-block
+                              record (plist-get record :source)))))))
+                    ;; A pure insertion: text on either side is unchanged.
+                    (cons at at))))))))))))
 
 (defun mevedel-view-stream-handle-execution-event (event)
   "Apply Bash EVENT to its authoritative row and visible view.

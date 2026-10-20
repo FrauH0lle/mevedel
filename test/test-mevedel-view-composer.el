@@ -2561,6 +2561,53 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   ,test
   (test)
 
+  :doc "a region's markers are detached even when restoration fails"
+  (save-window-excursion
+    (with-temp-buffer
+      (dotimes (index 40)
+        (insert (format "line %d\n" index)))
+      (switch-to-buffer (current-buffer))
+      (goto-char (point-min))
+      (forward-line 5)
+      (set-mark (point-max))
+      (let ((real-copy-marker (symbol-function 'copy-marker))
+            markers)
+        (cl-letf (((symbol-function 'copy-marker)
+                   (lambda (&rest args)
+                     (car (push (apply real-copy-marker args) markers))))
+                  ((symbol-function 'mevedel-view--clamp-window-starts)
+                   (lambda (&rest _) (error "Restoration failed"))))
+          (should-error
+           (mevedel-view--call-preserving-window-state
+            (lambda () (goto-char 20) (insert "inserted\n"))
+            nil (cons 20 30))))
+        ;; Region ends plus point, window point and window start markers.
+        ;; Unrelated code may copy markers into other buffers meanwhile.
+        (let ((buffer (current-buffer)))
+          (setq markers (seq-filter (lambda (marker)
+                                      (or (null (marker-buffer marker))
+                                          (eq buffer (marker-buffer marker))))
+                                    markers))
+          (should (>= (length markers) 4))
+          (should-not (seq-some #'marker-buffer markers))))))
+
+  :doc "a region keeps point after it on the same text"
+  (save-window-excursion
+    (with-temp-buffer
+      (dotimes (index 40)
+        (insert (format "line %d\n" index)))
+      (switch-to-buffer (current-buffer))
+      (goto-char (point-min))
+      (search-forward "line 30")
+      (let ((start (save-excursion (goto-char (point-min)) (forward-line 2) (point))))
+        (mevedel-view--call-preserving-window-state
+         (lambda ()
+           (delete-region start (+ start 7))
+           (goto-char start)
+           (insert "a much longer replacement line\n"))
+         nil (cons start (+ start 7))))
+      (should (looking-back "line 30" (line-beginning-position)))))
+
   :doc "bottom-following windows stay at the bottom"
   (save-window-excursion
     (with-temp-buffer
@@ -2907,6 +2954,30 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                      (mevedel-view--position-render-anchor
                       (+ body-start 2))))))
 
+  :doc "a replaced region tracks outside positions by marker and counts runs inside it"
+  (with-temp-buffer
+    (insert (propertize "header" 'mevedel-view-source '(40 . 90)))
+    (insert "\n")
+    (let ((region-start (point)))
+      (insert (propertize "body text" 'mevedel-view-source (cons 40 90)))
+      (let ((region (cons region-start (point))))
+        (insert "\ntail\n")
+        (pcase-let ((`(marker ,before) (mevedel-view--position-render-anchor 2 nil region))
+                    (`(marker ,after) (mevedel-view--position-render-anchor
+                                       (cdr region) nil region)))
+          (should (= 2 before))
+          (should-not (marker-insertion-type before))
+          (should (= (cdr region) after))
+          ;; Text inserted where the region ends stays before AFTER.
+          (should (marker-insertion-type after))
+          (mevedel-view--release-render-anchor (list 'marker before))
+          (should-not (marker-buffer before)))
+        ;; Unlike a whole-buffer anchor, the header before the region is not
+        ;; counted: resolution scans only the replaced region.
+        (should (equal (list 'source '(40 nil nil) 0 2 (car region) (cdr region))
+                       (mevedel-view--position-render-anchor
+                        (+ region-start 2) nil region))))))
+
   :doc "returns nil for unannotated text and out-of-buffer positions"
   (with-temp-buffer
     (insert "plain text\n")
@@ -2930,7 +3001,29 @@ Policy tests use terminal rows, not production's pixel measurement helper."
     (insert "plain\n")
     (let ((limit (point)))
       (insert (propertize "group\n" 'mevedel-view-source '(20 . 60)))
-      (should-not (mevedel-view--render-anchor-container 30 limit)))))
+      (should-not (mevedel-view--render-anchor-container 30 limit))))
+  :doc "starts at ORIGIN"
+  (with-temp-buffer
+    (insert (propertize "turn\n" 'mevedel-view-source '(10 . 100)))
+    (let ((origin (point)))
+      (insert "plain\n")
+      (should-not (mevedel-view--render-anchor-container 30 (point-max) origin))
+      (should (= (point-min)
+                 (mevedel-view--render-anchor-container 30 (point-max)))))))
+
+(mevedel-deftest mevedel-view--release-render-anchor ()
+  ,test
+  (test)
+  :doc "detaches a marker anchor"
+  (with-temp-buffer
+    (insert "text")
+    (let ((marker (copy-marker 2)))
+      (mevedel-view--release-render-anchor (list 'marker marker))
+      (should-not (marker-buffer marker))))
+  :doc "ignores anchors without markers"
+  (progn
+    (should-not (mevedel-view--release-render-anchor '(source (1 nil nil) 0 0)))
+    (should-not (mevedel-view--release-render-anchor nil))))
 
 (mevedel-deftest mevedel-view--transcript-position-backstop ()
   ,test
@@ -2975,6 +3068,36 @@ Policy tests use terminal rows, not production's pixel measurement helper."
     (should (= 4 (mevedel-view--render-anchor-position '(pending test nil 3) t)))
     (should (= 8 (mevedel-view--render-anchor-position '(pending test nil 99))))
     (should-not (mevedel-view--render-anchor-position '(pending test nil 99) t)))
+
+  :doc "region anchors follow content around and inside a replaced region"
+  (with-temp-buffer
+    (insert (propertize "header" 'mevedel-view-source '(40 . 90)) "\n")
+    (let* ((start (point))
+           (end (progn (insert (propertize "row" 'mevedel-view-source '(40 . 90))
+                               (propertize "detail" 'mevedel-view-source '(40 . 90)
+                                           'mevedel-view-type 'body))
+                       (point)))
+           (region (progn (insert "\ntail\n")
+                          (cons (copy-marker start) (copy-marker end t))))
+           (before (mevedel-view--position-render-anchor 3 nil region))
+           (inside (mevedel-view--position-render-anchor (+ start 4) nil region))
+           (after (mevedel-view--position-render-anchor
+                   (- (point-max) 4) nil region)))
+      (delete-region start end)
+      (goto-char start)
+      (insert (propertize "longer row" 'mevedel-view-source '(40 . 90))
+              (propertize "new detail" 'mevedel-view-source '(40 . 90)
+                          'mevedel-view-type 'body))
+      ;; A cleanup elsewhere, such as orphaned zone text, still resolves.
+      (delete-region 1 2)
+      (should (= 2 (mevedel-view--render-anchor-position before)))
+      (should (equal "ail\n" (buffer-substring
+                             (mevedel-view--render-anchor-position after)
+                             (point-max))))
+      ;; Offset 1 into the region's first `body' run: "new detail".
+      (should (equal "ew" (buffer-substring
+                           (mevedel-view--render-anchor-position inside t)
+                           (+ 2 (mevedel-view--render-anchor-position inside t)))))))
 
   :doc "full render restoration keeps a tagged row when text before it grows"
   (with-temp-buffer

@@ -67,7 +67,9 @@
                                   (mevedel-memory-scope-capture workspace) nil
                                   (lambda (outcome) (cl-incf calls) (setq result outcome)) :memory-only t)))
                   (wait ()
-                    (with-timeout (5 (ert-fail "Subscription consolidation did not settle"))
+                    ;; A hang guard only: the 65-batch case does ~2 s of real
+                    ;; round trips alone and runs slower on a loaded parallel suite.
+                    (with-timeout (30 (ert-fail "Subscription consolidation did not settle"))
                       (while (not result) (accept-process-output nil 0.01)))
                     (should (= 1 calls))
                     (should-not (buffer-live-p (plist-get handle :buffer)))))

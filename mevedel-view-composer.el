@@ -1069,7 +1069,7 @@ section grows or settles."
           (setq scan (1- probe) span (* 2 span)))))
     boundary))
 
-(defun mevedel-view--position-render-anchor (pos &optional window)
+(defun mevedel-view--position-render-anchor (pos &optional window region)
   "Return a semantic anchor for POS that survives a re-render, or nil.
 
 Redraws delete and re-insert view text, so a raw buffer position saved
@@ -1079,33 +1079,51 @@ map (section identity
 plus offset into its rendered run) identifies the same content after
 the redraw.  Composer positions are handled by input offsets and
 return nil here.  With WINDOW, POS is its start; managed zone offsets
-then count screen rows rather than characters."
+then count screen rows rather than characters.
+
+REGION, a cons (START . END), says that the redraw replaces START..END.
+A POS outside it is not part of the redraw, so a marker follows it: it
+advances over text inserted at END.  Only a POS inside the region needs a
+semantic anchor, counted from START instead of `point-min'.  Make END an
+advancing marker so the anchor finds the region's new end.  Release the
+returned anchor with `mevedel-view--release-render-anchor'."
   (when (and (integer-or-marker-p pos)
              (>= pos (point-min))
              (< pos (point-max))
              (not (mevedel-view--position-in-input-region-p pos)))
-    (or
-     (when-let* ((anchor (mevedel-view-zone-position-anchor pos window)))
-       (list 'fragment anchor))
-     (when-let* ((key (get-text-property pos 'mevedel-view-pending-key)))
-       (list 'pending key
-             (get-text-property pos 'mevedel-view-pending-tool-use-id)
-             (- pos (save-excursion (goto-char pos) (line-beginning-position)))))
-     (when-let* ((identity (mevedel-view--render-anchor-identity pos)))
-       (let ((nth 0)
-             (scan (point-min))
-             anchor)
-         ;; Count only runs of this section.  A retained-tail render can
-         ;; give a neighboring separator the same source start; it must
-         ;; not shift a group header or its first child's ordinal.
-         (while (<= scan pos)
-           (let ((next (mevedel-view--render-anchor-run-end scan (point-max))))
-             (if (< pos next)
-                 (setq anchor (list 'source identity nth (- pos scan)))
-               (when (equal identity (mevedel-view--render-anchor-identity scan))
-                 (setq nth (1+ nth))))
-             (setq scan next)))
-         anchor)))))
+    (cond
+     ((and region (< pos (car region))) (list 'marker (copy-marker pos)))
+     ((and region (>= pos (cdr region))) (list 'marker (copy-marker pos t)))
+     (t
+      (or
+       (when-let* ((anchor (mevedel-view-zone-position-anchor pos window)))
+         (list 'fragment anchor))
+       (when-let* ((key (get-text-property pos 'mevedel-view-pending-key)))
+         (list 'pending key
+               (get-text-property pos 'mevedel-view-pending-tool-use-id)
+               (- pos (save-excursion (goto-char pos) (line-beginning-position)))))
+       (when-let* ((identity (mevedel-view--render-anchor-identity pos)))
+         (let ((nth 0)
+               (scan (if region (car region) (point-min)))
+               anchor)
+           ;; Count only runs of this section.  A retained-tail render can
+           ;; give a neighboring separator the same source start; it must
+           ;; not shift a group header or its first child's ordinal.
+           (while (<= scan pos)
+             (let ((next (mevedel-view--render-anchor-run-end scan (point-max))))
+               (if (< pos next)
+                   (setq anchor
+                         (append (list 'source identity nth (- pos scan))
+                                 (and region (list (car region) (cdr region)))))
+                 (when (equal identity (mevedel-view--render-anchor-identity scan))
+                   (setq nth (1+ nth))))
+               (setq scan next)))
+           anchor)))))))
+
+(defun mevedel-view--release-render-anchor (anchor)
+  "Detach any marker ANCHOR holds, after its final resolution."
+  (when (eq (car-safe anchor) 'marker)
+    (set-marker (cadr anchor) nil)))
 
 (defun mevedel-view--render-anchor-position (anchor &optional strict)
   "Return the buffer position ANCHOR identifies after a redraw, or nil.
@@ -1114,6 +1132,7 @@ is clamped into the re-rendered fragment or source run, so a position
 whose content shrank stays inside the same content instead of drifting
 into a neighbor.  With STRICT, return nil instead of clamping a lost offset."
   (pcase anchor
+    (`(marker ,marker) (marker-position marker))
     (`(fragment ,anchor)
      (mevedel-view-zone-anchor-position anchor strict))
     (`(pending ,key ,id ,offset)
@@ -1141,12 +1160,16 @@ into a neighbor.  With STRICT, return nil instead of clamping a lost offset."
            (let ((position (+ (line-beginning-position) offset)))
              (when (or (not strict) (<= position (line-end-position)))
                (min (line-end-position) position)))))))
-    (`(source ,identity ,nth ,offset)
-     (let ((limit (if (and (markerp mevedel-view--input-marker)
-                           (marker-buffer mevedel-view--input-marker))
-                     (mevedel-view--input-start)
-                    (point-max)))
-           (pos (point-min))
+    (`(source ,identity ,nth ,offset . ,region)
+     ;; A region anchor counts runs from the replaced region's start and
+     ;; ends where the text after it now begins.
+     (let ((limit (cond
+                   (region (min (point-max) (nth 1 region)))
+                   ((and (markerp mevedel-view--input-marker)
+                         (marker-buffer mevedel-view--input-marker))
+                    (mevedel-view--input-start))
+                   (t (point-max))))
+           (pos (if region (min (car region) (point-max)) (point-min)))
            (count 0)
            found done)
        (while (and (not done) (< pos limit))
@@ -1160,14 +1183,15 @@ into a neighbor.  With STRICT, return nil instead of clamping a lost offset."
            (setq pos next)))
        (or found
            (and (not strict)
-                (mevedel-view--render-anchor-container (car identity) limit)))))))
+               (mevedel-view--render-anchor-container
+                (car identity) limit (car region))))))))
 
-(defun mevedel-view--render-anchor-container (source-start limit)
+(defun mevedel-view--render-anchor-container (source-start limit &optional origin)
   "Return the start of the narrowest rendered run containing SOURCE-START.
 A redraw can fold a section into an enclosing one, such as a tool row into
 its group's single row; the reader then belongs on what now shows it.
-Search rendered runs before LIMIT."
-  (let ((pos (point-min))
+Search rendered runs from ORIGIN, default `point-min', before LIMIT."
+  (let ((pos (or origin (point-min)))
         best best-size)
     (while (< pos limit)
       (let ((source (get-text-property pos 'mevedel-view-source))
@@ -1532,7 +1556,8 @@ wait for `post-command-hook'.  Explicit wrappers call without CHANGES."
         (funcall thunk))
     (mevedel-view--restore-draft-window-state)))
 
-(defun mevedel-view--call-preserving-window-state (thunk &optional positions-preserved)
+(defun mevedel-view--call-preserving-window-state
+    (thunk &optional positions-preserved region)
   "Call THUNK while preserving each displayed window's browsing state.
 Preserves those values for every window displaying the current buffer.
 Windows already following the bottom continue following new output;
@@ -1551,8 +1576,13 @@ by offset from `mevedel-view--input-start' so streaming text inserted
 above the composer does not strand it in rendered transcript text.
 With POSITIONS-PRESERVED, THUNK owns exact point, mark and window-start
 relocation (for example, table cell splicing).  Keep viewport policy but
-do not override that relocation or classify its old offsets as lost."
-  (let* ((anchors (mevedel-view--composer-anchors))
+do not override that relocation or classify its old offsets as lost.
+REGION, a cons (START . END), says that THUNK replaces that transcript
+text.  Markers then follow positions outside it, and anchors inside it are
+found without scanning the rest of the buffer."
+  (let* ((region (and region (cons (copy-marker (car region))
+                                   (copy-marker (cdr region) t))))
+         (anchors (mevedel-view--composer-anchors))
          (tails (mevedel-view--window-tail-lengths))
          (mevedel-view--draft-window-state 'preserving)
          lost-starts visited-windows
@@ -1560,12 +1590,12 @@ do not override that relocation or classify its old offsets as lost."
          (mevedel-view--pww-current-buffer (current-buffer))
          (mevedel-view--pww-current-point (point))
          (mevedel-view--pww-current-anchor
-          (mevedel-view--position-render-anchor (point)))
+          (mevedel-view--position-render-anchor (point) nil region))
          (mevedel-view--pww-current-mark (mark t))
          (mevedel-view--pww-mark-anchor
           (and mevedel-view--pww-current-mark
 	       (mevedel-view--position-render-anchor
-                mevedel-view--pww-current-mark)))
+                mevedel-view--pww-current-mark nil region)))
          (mevedel-view--pww-mark-active mark-active)
          (mevedel-view--pww-deactivate-mark deactivate-mark)
          (mevedel-view--pww-current-input-offset
@@ -1593,8 +1623,8 @@ do not override that relocation or classify its old offsets as lost."
 			      (and (mevedel-view--position-in-input-region-p wp)
                                    (- wp (mevedel-view--input-start)))
 			      (= wp (point-max))
-			      (mevedel-view--position-render-anchor wp)
-			      (mevedel-view--position-render-anchor ws w)
+			      (mevedel-view--position-render-anchor wp nil region)
+			      (mevedel-view--position-render-anchor ws w region)
 			      ;; A tall draft can start the window inside the
 			      ;; composer; text above must not shift that view.
 			      (and (mevedel-view--position-in-input-region-p ws)
@@ -1614,6 +1644,8 @@ do not override that relocation or classify its old offsets as lost."
                           (or (mevedel-view--render-anchor-position anchor)
                               position)))))))
              (unwind-protect (funcall thunk)
+               ;; Restoration can fail too; detach this call's markers anyway.
+               (unwind-protect
 		   (when (buffer-live-p mevedel-view--pww-current-buffer)
 		     (with-current-buffer mevedel-view--pww-current-buffer
 		       (unless positions-preserved
@@ -1676,7 +1708,15 @@ do not override that relocation or classify its old offsets as lost."
 					  (and (assq (car tail) anchors)
 					       (not (memq (car tail) lost-starts)))))
 				    tails)
-			lost-starts)))))))
+			lost-starts)))
+		 (when region
+                   (mevedel-view--release-render-anchor mevedel-view--pww-current-anchor)
+                   (mevedel-view--release-render-anchor mevedel-view--pww-mark-anchor)
+                   (dolist (entry mevedel-view--pww-saved)
+                     (mevedel-view--release-render-anchor (nth 5 entry))
+                     (mevedel-view--release-render-anchor (nth 6 entry)))
+                   (set-marker (car region) nil)
+                   (set-marker (cdr region) nil)))))))
 
 (defmacro mevedel-view--preserving-window-state (&rest body)
   "Execute BODY while preserving point and window positions."
@@ -1740,15 +1780,19 @@ caller's buffer, not in a displayed view."
   `(mevedel-view--call-with-render-boundaries-advancing
     (lambda () ,@body)))
 
-(defun mevedel-view--call-preserving-user-view-state (thunk)
+(defun mevedel-view--call-preserving-user-view-state (thunk &optional region)
   "Call THUNK without moving the user's live view cursor.
 Async redraws may insert, delete, or reconcile view-owned text while the
 user is typing in the composer or browsing transcript history.  Preserve
-all displayed windows plus the editable composer text around THUNK."
-  (prog1 (mevedel-view--preserving-window-state
-           (mevedel-view--call-preserving-input-text
-            (lambda ()
-              (mevedel-view--call-preserving-input-point thunk))))
+all displayed windows plus the editable composer text around THUNK.
+REGION, a cons (START . END), promises that THUNK replaces only that
+transcript text; see `mevedel-view--call-preserving-window-state'."
+  (prog1 (mevedel-view--call-preserving-window-state
+          (lambda ()
+            (mevedel-view--call-preserving-input-text
+             (lambda ()
+               (mevedel-view--call-preserving-input-point thunk))))
+          nil region)
     (mevedel-view--sanitize-undo)))
 
 

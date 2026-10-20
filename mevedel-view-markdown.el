@@ -73,7 +73,8 @@
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--call-preserving-window-state
-                  "mevedel-view-composer" (thunk &optional positions-preserved))
+                  "mevedel-view-composer"
+                  (thunk &optional positions-preserved region))
 
 ;; `mevedel-view-fontify'
 (declare-function mevedel-view--fontify-as "mevedel-view-fontify" (text mode))

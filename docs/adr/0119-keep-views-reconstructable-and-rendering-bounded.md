@@ -2153,3 +2153,35 @@ Allocation remained unchanged for each workload. History hashes, point positions
 and root multiline `>` drafts matched throughout. These batch measurements
 exclude graphical redisplay and do not identify the original 647 ms callback's
 reader state or establish that anchor recovery caused that particular stall.
+
+### October 20, 2026: scope reader anchors to the replaced span
+
+A live profile of a 3.4 MB view during a long background command showed
+once-a-second stalls of 40-96 ms: every execution progress event refreshes its
+tool row, and the refresh preserved the reader by capturing and resolving
+point, mark, window point and window start anchors, each counting runs from the
+buffer start. Bounding the run-boundary probes (above) made each scan linear
+instead of quadratic, but a scan to a reader near the end of a long transcript
+is still the whole transcript. A synthetic 1 MB view with 1,500 tool rows
+reproduced it: 238 ms per progress refresh, about 230 ms of it in the anchors,
+the rest in finding the row by scanning from the buffer start.
+
+The refresh already knows it replaces exactly one row, so it passes that span
+to the preserving wrapper. Outside the span, markers follow reader positions
+without semantic identity; a marker at or after the span end advances over
+the replacement. Markers rather than saved offsets keep this exact when a zone
+reconciliation also deletes orphaned namespace text elsewhere. Inside the
+span, the anchor counts runs from the span start. The row lookup remembers a marker per
+tool-use ID, bounded to 32, and revalidates it against the row's identity
+properties before use; any mismatch falls back to the scan. In the same
+fixture a refresh then took 3.9-4.2 ms, and 0.6 ms with 50 rows.
+
+The request rail's per-second elapsed-label tick and terminal breadcrumb
+insertion also touch one known span and now pass it. Scoping cut the rail
+tick from 83-88 to 16 ms in the 1 MB fixture. The managed zone's no-op check
+then compared its small text before scanning the buffer for orphaned namespace
+text, so a changed rail no longer pays for both that check and the cleanup
+sweep: 12 ms. The sweep itself, about 10 ms per reconciliation at 1 MB,
+remains: orphan cleanup
+anywhere in the buffer is a tested contract of ADR 0126, and directive
+inspector text legitimately lives inside the transcript.

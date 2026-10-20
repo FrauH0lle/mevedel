@@ -489,16 +489,18 @@ Return point when movement succeeds, otherwise nil.  LIMIT defaults to
 (defun mevedel-view-zone--unchanged-p (region namespace text)
   "Return non-nil if live REGION already contains TEXT with no stale NAMESPACE.
 Compare properties too: equal characters alone can still change display.
-Any namespace text outside REGION takes the ordinary cleanup path."
+Any namespace text outside REGION takes the ordinary cleanup path.
+Compare the small region first: changed text, such as a ticking elapsed
+label, takes that path anyway, without scanning the whole buffer here."
   (let ((start (overlay-start region))
         (end (overlay-end region)))
     (and (< start end)
          (not (text-property-not-all start end 'mevedel-view-zone-region region))
+         (equal-including-properties text (buffer-substring start end))
          (not (text-property-any (point-min) start
                                 'mevedel-view-zone-namespace namespace))
          (not (text-property-any end (point-max)
-                                'mevedel-view-zone-namespace namespace))
-         (equal-including-properties text (buffer-substring start end)))))
+                                'mevedel-view-zone-namespace namespace)))))
 
 (defun mevedel-view-zone--reconcile (region namespace text)
   "Reconcile rendered TEXT for NAMESPACE inside managed REGION."
