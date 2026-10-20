@@ -485,6 +485,9 @@ frame's selected window shows another buffer, so indicators blend into views
 styled by Solaire or buffer faces. A native surface paints the background
 redisplay draws at the label's start: overlay faces for every window or for
 that window (such as `hl-line`), then text faces, then the remapped default.
+Native placement runs after global redisplay hooks, so per-window `hl-line`
+has restored its highlight after a status-row replacement before the surface
+samples its background.
 Translucent frames (`alpha` or `alpha-background` below opaque) keep ordinary
 text animation, since an opaque box would show there. Prepared banks distinguish each view's remapping specs. A live view reserves a prepared bank for every registered tool label, including
 a running group's count, plus the main label (with a four-bank minimum). This working

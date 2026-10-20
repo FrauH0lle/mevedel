@@ -11,6 +11,7 @@
           "helpers"))
 (require 'mevedel-view-native)
 (require 'mevedel-view)
+(require 'hl-line)
 
 (defmacro mevedel-view-native-test--deftest (object options &rest body)
   "Define a test of OBJECT with OPTIONS and fake surface handles in BODY."
@@ -150,6 +151,60 @@
               (should-not mevedel-view-native--entries)
               (should (= 0 (hash-table-count mevedel-view-native--views)))))
         (mevedel-view-native-stop)))))
+
+(mevedel-view-native-test--deftest mevedel-view-native-sync/hl-line
+  (:doc "Samples hl-line after it follows a rewritten rail, without reopening.")
+  (let ((pre-redisplay-functions '(global-hl-line-window-redisplay))
+        (global-hl-line-buffers t))
+    (save-window-excursion
+      (with-temp-buffer
+        (insert "[edits] Working... · 1s\n> draft")
+        (set-window-buffer (selected-window) (current-buffer))
+        (goto-char (point-min))
+        (let* ((noninteractive nil)
+               (window (selected-window))
+               (mevedel-view-native--views (make-hash-table :test #'eq))
+               (target (cons (copy-marker 9) (copy-marker 19)))
+               (specs (list (list target 'shimmer "Working..." 'default 0.05)))
+               backgrounds closed)
+          (face-remap-add-relative 'default :background "#102030")
+          (face-remap-add-relative 'hl-line :background "#304050")
+          (unwind-protect
+              (cl-letf (((symbol-function 'mevedel-view-native-available-p) (lambda (_) t))
+                        ((symbol-function 'mevedel-view-native--visible-p) (lambda (&rest _) t))
+                        ((symbol-function 'mevedel-view-native--placement)
+                         (lambda (span win)
+                           (list (window-frame win) [8 42 80 21 16] "Mono 16px"
+                                 (mevedel-view-native--background (car span) win))))
+                        ((symbol-function 'mevedel-view-animation--colors)
+                         (lambda (&rest _) '("#ffffff" . "#102030")))
+                        ((symbol-function 'mevedel-view-native--timeline) (lambda (&rest _) [1.0]))
+                        ((symbol-function 'mevedel-view-native--move) (lambda (&rest _) t))
+                        ((symbol-function 'mevedel-view-native--open)
+                         (lambda (_parent _geometry _font background &rest _)
+                           (push background backgrounds)
+                           (length backgrounds)))
+                        ((symbol-function 'mevedel-view-native--close)
+                         (lambda (handle) (push handle closed))))
+                (dotimes (tick 3)
+                  (when (> tick 0)
+                    ;; The progress fragment replaces the whole rail each second.
+                    (delete-region (point-min) (line-beginning-position 2))
+                    (insert (format "[edits] Working... · %ds\n" (1+ tick)))
+                    (goto-char (point-min))
+                    (mevedel-view--release-animation-targets target)
+                    (setq target (cons (copy-marker 9) (copy-marker 19)))
+                    (setf (caar specs) target))
+                  (mevedel-view-native-sync specs tick #'ignore)
+                  (run-hook-with-args 'pre-redisplay-functions window)
+                  (should (equal (nth 3 (nth 3 (car mevedel-view-native--entries)))
+                                 "#304050")))
+                (should (equal backgrounds '("#304050")))
+                (should-not closed))
+            (mevedel-view-native-stop)
+            (redisplay--unhighlight-overlay-function
+             (window-parameter window 'hl-line-overlay))
+            (set-window-parameter window 'hl-line-overlay nil)))))))
 
 (mevedel-view-native-test--deftest mevedel-view-native-sync/moved
   (:doc "Moves the surface of a replaced target that text above displaced.")

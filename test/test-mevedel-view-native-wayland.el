@@ -112,6 +112,8 @@ result is (POSITIONS . VIOLATIONS), POSITIONS being (X . Y) in order."
       (should (plist-get first :restored))
       (should (plist-get first :reopened))
       (should (plist-get first :repainted))
+      (should (plist-get first :hl-line-ready))
+      (should (plist-get first :hl-line-stable))
       (should (plist-get first :pixel-scrolled))
       (should (plist-get first :translucent)))
     (ert-info ((format "Positions: %S" (car checked)))

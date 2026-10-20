@@ -10,6 +10,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'hl-line)
 (require 'mevedel-view-native)
 
 (defvar mevedel-native-wayland--results nil
@@ -107,6 +108,52 @@
             (delete-overlay overlay)
             (redisplay t)
             (mevedel-native-wayland--wait 0.5))
+          ;; The window-local highlight is updated by the global redisplay
+          ;; hook.  Replacing the rail first collapses its old overlay.
+          (let ((global-hl-line-sticky-flag 'window))
+            (set-face-attribute 'hl-line nil :background "#304050")
+            (global-hl-line-mode 1)
+            (unwind-protect
+                (progn
+                  ;; Start with an already highlighted row.  The production
+                  ;; stream scheduler, absent here, owns transition rearming.
+                  (mevedel-view-native-stop)
+                  (goto-char (cdr target))
+                  (redisplay t)
+                  (mevedel-native-wayland--present specs)
+                  (mevedel-native-wayland--note
+                   :hl-line-ready
+                   (let ((entry (car mevedel-view-native--entries)))
+                     (and entry (equal (nth 3 (nth 3 entry)) "#304050")
+                          (mevedel-view-native--live-p (nth 2 entry)) t)))
+                  (let ((highlighted (nth 2 (car mevedel-view-native--entries)))
+                        (stable t) samples)
+                    (dotimes (tick 3)
+                      (let ((start (marker-position (car target))))
+                        (delete-region start (1+ (marker-position (cdr target))))
+                        (goto-char start)
+                        (insert (format "Working... · %ds\n" tick))
+                        (set-marker (car target) nil)
+                        (set-marker (cdr target) nil)
+                        (setq target (cons (copy-marker start) (copy-marker (+ start 10))))
+                        (setf (caar specs) target)
+                        (goto-char (cdr target)))
+                      (mevedel-native-wayland--present specs)
+                      (let ((entry (car mevedel-view-native--entries)))
+                        (push (list (and entry t) (eq highlighted (nth 2 entry))
+                                    (cdr (nth 3 entry))
+                                    (list (marker-position (car target))
+                                          (marker-position (cdr target)) (point))
+                                    (mevedel-view-native--stats)) samples)
+                        (setq stable
+                              (and stable entry (eq highlighted (nth 2 entry))
+                                   (equal (nth 3 (nth 3 entry)) "#304050")
+                                   (mevedel-view-native--live-p highlighted)))))
+                    (mevedel-native-wayland--note :hl-line-samples (nreverse samples))
+                    (mevedel-native-wayland--note :hl-line-stable (and stable t))))
+              (global-hl-line-mode -1)))
+          (goto-char (point-max))
+          (mevedel-native-wayland--present specs)
           ;; Pixel scrolling changes no buffer position or window edges.
           (let ((before (aref (cadr (mevedel-view-native--placement target window)) 1)))
             (set-window-vscroll window 3 t)

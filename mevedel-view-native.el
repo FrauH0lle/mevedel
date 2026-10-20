@@ -405,7 +405,9 @@ animation stops: retrying reopened it about once a second."
     (progn
       (setq mevedel-view-native--pending (list specs (- (float-time) elapsed) rearm))
       (unless specs (force-window-update (current-buffer)))
-      (add-hook 'pre-redisplay-functions #'mevedel-view-native--before-redisplay nil t)
+      ;; Sample after global redisplay hooks have restored paint overlays such
+      ;; as per-window hl-line after a semantic row replacement.
+      (add-hook 'pre-redisplay-functions #'mevedel-view-native--before-redisplay 90 t)
       (cl-loop for spec in specs
                when (cl-find (car spec) mevedel-view-native--entries
                              :key #'caar :test #'eq)
@@ -418,7 +420,7 @@ animation stops: retrying reopened it about once a second."
         (puthash (current-buffer) rearm mevedel-view-native--views)
         (add-hook 'kill-buffer-hook #'mevedel-view-native-stop nil t)
         (add-hook 'window-scroll-functions #'mevedel-view-native--invalidate nil t)
-        (add-hook 'pre-redisplay-functions #'mevedel-view-native--before-redisplay nil t)
+        (add-hook 'pre-redisplay-functions #'mevedel-view-native--before-redisplay 90 t)
         (add-hook 'window-state-change-functions #'mevedel-view-native--window-change)
         (unless mevedel-view-native--settling
           (dolist (spec specs)
