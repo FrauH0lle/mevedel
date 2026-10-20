@@ -43,5 +43,5 @@
 - [Presentation measurements](presentation-measurement-validity.md) - Locking can suppress rendering; isolate and warm the fixture
 - [Suspend versus stalls](correlate-stalls-with-suspend.md) - Correlate telemetry gaps with system sleep records
 - [Narrow-phone viewer testing](narrow-phone-viewer-testing.md) - iPhone mini Safari, vertical fit, and real narrow renders
-- [Delegation model preference](delegation-model-preference.md) - Astra high for partners/review, 6.1 Sol high for implementation
+- [Delegation model preference](delegation-model-preference.md) - Selected preset wins; otherwise prefer 6.1 Sol high for cost efficiency
 - [Graphical render check](graphical-render-check-from-worktree.md) - emacs -Q + temp HOME/XDG + x-export-frames for worktree view code
