@@ -1040,6 +1040,12 @@ Spinner start, update, and stop leave logical-position restoration to zone
 reconciliation. They do not restore raw saved markers over it: a selection
 inside the permanent progress rail survives status replacement, while a draft
 and its reading position in another window remain intact.
+The exception is a rail redraw nested inside an owned projection, such as a
+status update made while a full render is fontifying. There point is the
+projection's insertion cursor, not a reader position, so the rail keeps it
+exactly and the enclosing projection restores reader state when it finishes.
+Treating that cursor as a composer offset would move it past the new rail and
+append the rest of the history below the chrome.
 
 Draft editing captures blank pixels before the first mutation of a command and
 repairs only new blank space after the complete command. Ordinary self-insertion

@@ -456,36 +456,44 @@ the view has already inserted the in-flight markers."
               :navigatable nil)))
 
 (defun mevedel-view--render-request-progress ()
-  "Render the permanent composer rail, changing text only on semantic updates."
-  (when (and (not mevedel-view--agent-transcript-p)
-             (markerp mevedel-view--input-marker)
-             (marker-position mevedel-view--input-marker))
-    (let* ((display-status
-            (and mevedel-view--spinner-status
-                 (mevedel-view--spinner-display-status
-                  mevedel-view--spinner-status)))
-           (badge (mevedel-view--composer-mode-badge))
-           (attention (mevedel-view--interaction-count-label t))
-           (windows (get-buffer-window-list (current-buffer) nil t))
-           (width (max 1 (1- (if windows
-                                 (apply #'min (mapcar #'window-body-width windows))
-                               (window-body-width)))))
-           (prefix (mevedel-view--request-progress-prefix))
-           (render-state (list display-status badge attention width prefix)))
-      (unless (and (equal render-state
-                          mevedel-view--spinner-rendered-state)
-                   (mevedel-view-zone-region 'progress))
-        (let ((anchor (mevedel-view--request-progress-anchor)))
-          (mevedel-view-zone-reconcile
-           'progress anchor anchor
-           (mevedel-view--request-progress-fragments
-            (concat prefix
-                    (mevedel-view--format-composer-rail
-                     badge attention width mevedel-view--spinner-status
-                     display-status))))
-          (setq mevedel-view--spinner-rendered-state
-                render-state)
-          (mevedel-view--capture-request-animation-target))))))
+  "Render the permanent composer rail, changing text only on semantic updates.
+Inside an owned projection, point is the projection's insertion cursor, not
+a reader position: keep it, and let the projection restore reader state.
+Elsewhere, reconciliation's semantic restoration is authoritative."
+  (let ((cursor (and mevedel-view-render--owner (point-marker))))
+    (unwind-protect
+        (when (and (not mevedel-view--agent-transcript-p)
+                   (markerp mevedel-view--input-marker)
+                   (marker-position mevedel-view--input-marker))
+          (let* ((display-status
+                  (and mevedel-view--spinner-status
+                       (mevedel-view--spinner-display-status
+                        mevedel-view--spinner-status)))
+                 (badge (mevedel-view--composer-mode-badge))
+                 (attention (mevedel-view--interaction-count-label t))
+                 (windows (get-buffer-window-list (current-buffer) nil t))
+                 (width (max 1 (1- (if windows
+                                       (apply #'min (mapcar #'window-body-width windows))
+                                     (window-body-width)))))
+                 (prefix (mevedel-view--request-progress-prefix))
+                 (render-state (list display-status badge attention width prefix)))
+            (unless (and (equal render-state
+                                mevedel-view--spinner-rendered-state)
+                         (mevedel-view-zone-region 'progress))
+              (let ((anchor (mevedel-view--request-progress-anchor)))
+                (mevedel-view-zone-reconcile
+                 'progress anchor anchor
+                 (mevedel-view--request-progress-fragments
+                  (concat prefix
+                          (mevedel-view--format-composer-rail
+                           badge attention width mevedel-view--spinner-status
+                           display-status))))
+                (setq mevedel-view--spinner-rendered-state
+                      render-state)
+                (mevedel-view--capture-request-animation-target)))))
+      (when cursor
+        (goto-char cursor)
+        (set-marker cursor nil)))))
 
 (defun mevedel-view--forget-request-progress-region ()
   "Forget the request-progress region after a larger redraw deleted it."
@@ -1449,8 +1457,8 @@ STATUS defaults to \"Thinking...\"."
      (cl-incf mevedel-view--spinner-generation)
      (setq mevedel-view--spinner-status (or status "Thinking...")
            mevedel-view--spinner-owner 'request)
-     ;; Reconciliation restores semantic positions inside the replaced rail.
-     ;; An outer `save-excursion' would overwrite that with its collapsed marker.
+     ;; Reconciliation restores semantic positions inside the replaced rail;
+     ;; see `mevedel-view--render-request-progress' for nested projections.
      (mevedel-view--render-request-progress)
      (mevedel-view--start-spinner-timer))))
 
