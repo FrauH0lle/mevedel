@@ -15,7 +15,7 @@
   (let* ((guests (make-hash-table :test #'eql))
 	 (room (list :guests guests)))
     (puthash 1 '(:writable t :owner nil) guests)
-    (dolist (action '("model" "preset" "history" "retry" "login" "login-code" "cancel-login" "update" "input-discard"))
+    (dolist (action '("model" "effort" "preset" "history" "retry" "login" "login-code" "cancel-login" "update" "input-discard"))
       (should-error (mevedel-collaboration-recovery-handle room 1 (list :action action)) :type 'user-error)))
   :doc "owner requeue discards failed live preparation and keeps input provenance"
   (mevedel-engine-test--with-session
@@ -122,6 +122,98 @@ BODY sees ROOM, SESSION, BUFFER and SENT, the frames sent to peers."
                  ((symbol-function 'mevedel-collaboration--publish-status) #'ignore)
                  ((symbol-function 'mevedel-collaboration--publish-queue) #'ignore))
          ,@body))))
+
+(mevedel-deftest mevedel-collaboration-recovery-effort (:quiet t)
+  (test-mevedel-collaboration-recovery--with-owner
+    (cl-letf (((symbol-plist 'first) '(:reasoning-effort (member low high)))
+              ((symbol-plist 'second) nil))
+      (setq-local gptel-reasoning-effort nil)
+      ,test))
+  (test)
+  :doc "owners receive supported efforts and host-confirmed persisted selections"
+  (progn
+    (mevedel-collaboration-recovery-send room 1)
+    (should (equal ["low" "high"] (plist-get (cdar sent) :efforts)))
+    (should (plist-member (cdar sent) :effort))
+    (should-not (plist-get (cdar sent) :effort))
+    (setq sent nil)
+    (mevedel-collaboration-recovery-handle room 1 '(:action "effort" :value "high"))
+    (should (eq 'high gptel-reasoning-effort))
+    (should (eq 'high (mevedel-session-reasoning-effort session)))
+    (should (equal "high" (plist-get (cdar sent) :effort)))
+    (mevedel-collaboration-recovery-handle room 1 '(:action "effort" :value nil))
+    (should-not gptel-reasoning-effort)
+    (should-not (mevedel-session-reasoning-effort session))
+    (should (plist-member (cdar sent) :effort))
+    (should-not (plist-get (cdar sent) :effort)))
+  :doc "unsupported and malformed effort values cannot silently select default"
+  (progn
+    (mevedel-model-set-session-effort session 'low buffer)
+    (dolist (value '("medium" "" "default" "browser-unknown-effort" 42 t high ("high")))
+      (should-error (mevedel-collaboration-recovery-handle
+                     room 1 (list :action "effort" :value value)) :type 'user-error)
+      (should (eq 'low gptel-reasoning-effort))
+      (should (eq 'low (mevedel-session-reasoning-effort session))))
+    (should-error (mevedel-collaboration-recovery-handle room 1 '(:action "effort"))
+                  :type 'user-error)
+    (should (eq 'low gptel-reasoning-effort)))
+  :doc "model changes refresh choices and refuse stale unsupported efforts"
+  (progn
+    (mevedel-model-set-session-effort session 'high buffer)
+    (mevedel-collaboration-recovery-handle room 1 '(:action "model" :value "Recovery:second"))
+    (should (equal [] (plist-get (cdar sent) :efforts)))
+    (should-not (plist-get (cdar sent) :effort))
+    (should-not gptel-reasoning-effort)
+    (should-error (mevedel-collaboration-recovery-handle
+                   room 1 '(:action "effort" :value "high")) :type 'user-error))
+  :doc "effort changes retain supported effort when switching models"
+  (progn
+    (put 'second :reasoning-effort '(member high))
+    (mevedel-collaboration-recovery-handle room 1 '(:action "effort" :value "high"))
+    (mevedel-collaboration-recovery-handle room 1 '(:action "model" :value "Recovery:second"))
+    (should (equal ["high"] (plist-get (cdar sent) :efforts)))
+    (should (equal "high" (plist-get (cdar sent) :effort)))
+    (should (eq 'high (mevedel-session-reasoning-effort session))))
+  :doc "root and child turns block effort changes before mutation"
+  (dolist (busy-function '(mevedel-turn-busy-p mevedel-agent-control-active-turn-p))
+    (cl-letf (((symbol-function busy-function) (lambda (&rest _) t)))
+      (should-error (mevedel-collaboration-recovery-handle
+                     room 1 '(:action "effort" :value "high")) :type 'user-error)
+      (should-not gptel-reasoning-effort)
+      (should-not (mevedel-session-reasoning-effort session))))
+  :doc "effort selection requires current session mutation authority"
+  (let (checked)
+    (cl-letf (((symbol-function 'mevedel-session-artifacts-assert-new-mutation-authority)
+               (lambda (_session) (setq checked t) (user-error "Fixture stale authority"))))
+      (should-error (mevedel-collaboration-recovery-handle
+                     room 1 '(:action "effort" :value "high")) :type 'user-error)
+      (should checked)
+      (should-not gptel-reasoning-effort)
+      (should-not (mevedel-session-reasoning-effort session)))))
+
+(mevedel-deftest mevedel-collaboration-recovery-effort-owners
+  (:quiet t :doc "effort changes refresh all owners even when public status is unchanged")
+  (let ((publish-status (symbol-function 'mevedel-collaboration--publish-status)))
+    (test-mevedel-collaboration-recovery--with-owner
+      (cl-letf (((symbol-plist 'first) '(:reasoning-effort (member low high)))
+                ((symbol-function 'mevedel-collaboration--publish-status) publish-status))
+        (setq-local gptel-reasoning-effort nil)
+        (puthash 1 (list :owner t :writable t :ready t) guests)
+        (puthash 2 (list :owner t :writable t :ready t) guests)
+        (puthash 3 (list :owner nil :writable t :ready t) guests)
+        (mevedel-collaboration--publish-status room)
+        (dolist (peer '(1 2))
+          (should (plist-member (plist-get (gethash peer guests) :recovery-state) :effort)))
+        (let ((status (plist-get room :status)))
+          (dolist (value '("high" nil))
+            (setq sent nil)
+            (mevedel-collaboration-recovery-handle
+             room 1 (list :action "effort" :value value))
+            (should (equal status (plist-get room :status)))
+            (should (equal '(1 2) (sort (mapcar #'car sent) #'<)))
+            (dolist (entry sent)
+              (should (equal "recovery" (plist-get (cdr entry) :t)))
+              (should (equal value (plist-get (cdr entry) :effort))))))))))
 
 (mevedel-deftest mevedel-collaboration-recovery-send (:quiet t)
   ,test

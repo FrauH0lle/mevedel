@@ -522,6 +522,18 @@
     select.replaceChildren(...options);
     select.value = typeof frame.model === 'string' ? frame.model : '';
   }
+  function renderEffortChoices(frame) {
+    const group = document.getElementById('settings-effort-group');
+    const select = document.getElementById('settings-effort');
+    if (!group || !select) return;
+    const efforts = frame.efforts || [];
+    const fallback = el('option', '', 'Default'); fallback.value = '';
+    select.replaceChildren(fallback, ...efforts.map(effort => {
+      const option = el('option', '', effort); option.value = effort; return option;
+    }));
+    select.value = efforts.includes(frame.effort) ? frame.effort : '';
+    group.hidden = select.disabled = efforts.length === 0;
+  }
   function renderPresetChoices(frame) {
     const select = document.getElementById('settings-preset');
     if (!select) return;
@@ -586,6 +598,7 @@
     renderRecoveryIssues(frame.issues);
     renderAttention(frame);
     renderModelChoices(frame);
+    renderEffortChoices(frame);
     renderPresetChoices(frame);
     renderAccount(frame);
   }
@@ -603,6 +616,14 @@
       const wanted = model.value;
       model.value = recoveryFrame?.model || '';
       if (wanted && wanted !== recoveryFrame?.model) recoveryAction('model', wanted);
+    });
+    const effort = document.getElementById('settings-effort');
+    effort?.addEventListener('change', () => {
+      const wanted = effort.value || null;
+      effort.value = recoveryFrame?.effort || '';
+      const efforts = recoveryFrame?.efforts || [];
+      if (state.owner && efforts.length && (wanted === null || efforts.includes(wanted))
+          && wanted !== (recoveryFrame?.effort || null)) recoveryAction('effort', wanted);
     });
     apply?.addEventListener('click', () => {
       const name = preset.value;

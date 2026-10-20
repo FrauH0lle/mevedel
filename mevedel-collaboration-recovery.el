@@ -14,6 +14,9 @@
 (require 'mevedel-claude-code-maintenance)
 (require 'mevedel-pending-inputs)
 
+;; `gptel'
+(defvar gptel-reasoning-effort)
+
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-active-turn-p "mevedel-agent-control" (session))
 
@@ -22,6 +25,7 @@
 (autoload 'mevedel-claude-code-history-unresumable-p "mevedel-claude-code-history")
 
 ;; `mevedel-collaboration'
+(declare-function mevedel-collaboration--guest-text "mevedel-collaboration" (value))
 (declare-function mevedel-collaboration--publish-queue "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--publish-status "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--room-data-buffer "mevedel-collaboration" (room))
@@ -65,6 +69,10 @@ The selected provider is the one this owner last chose, else the session's."
                ;; The picker selects by its option labels, which are exact
                ;; BACKEND:MODEL pairs; a bare name matches none of them.
                :model (mevedel-model-current-provider-label buffer)
+               :efforts (vconcat (mapcar #'symbol-name
+                                        (mevedel-model-supported-efforts gptel-model)))
+               :effort (when (bound-and-true-p gptel-reasoning-effort)
+                         (format "%s" gptel-reasoning-effort))
                :provider (and provider (gptel-backend-name provider))
                ;; Only providers with a browser login can be signed in to.
                :providers (vconcat (cl-loop for (name . backend) in gptel--known-backends
@@ -189,6 +197,15 @@ bindings, including the absence of one."
             buffer)
            ;; The previous provider's login no longer gates this session.
            (mevedel-recovery-clear session "authentication"))
+          ("effort"
+           (let ((effort (and (stringp value)
+                              (cl-find value (mevedel-model-supported-efforts gptel-model)
+                                       :key #'symbol-name :test #'equal))))
+             ;; An explicit nil selects the default.  Do not intern browser
+             ;; strings or mistake an unknown effort for a default request.
+             (unless (and (plist-member frame :value) (or (null value) effort))
+               (user-error "Reasoning effort is unavailable"))
+             (mevedel-model-set-session-effort session effort buffer)))
           ("preset"
            (let ((name (and (stringp value) (intern-soft value))))
              (unless (assq name mevedel-preset--registry) (user-error "Preset is unavailable"))
@@ -245,7 +262,11 @@ bindings, including the absence of one."
               (mevedel-pending-inputs-schedule-held-input-delivery))))
         (mevedel-collaboration--publish-status room)
         (mevedel-collaboration--publish-queue room)
-        (mevedel-collaboration-recovery-send room peer)))))
+        ;; Settings such as effort can change without changing public status.
+        ;; Build each owner's frame separately to preserve its login selection.
+        (if session-action
+            (mevedel-collaboration-recovery--send-owners room)
+          (mevedel-collaboration-recovery-send room peer))))))
 
 (provide 'mevedel-collaboration-recovery)
 ;;; mevedel-collaboration-recovery.el ends here

@@ -370,6 +370,13 @@
                     title="Model for this session's next turns"></select>
             <p class="settings-help">Used from the next turn. Agents keep their own models.</p>
           </section>
+          <section id="settings-effort-group" class="settings-group" hidden>
+            <label class="settings-heading" for="settings-effort">Reasoning effort</label>
+            <select id="settings-effort" class="sheet-input" disabled
+                    title="Reasoning effort for this session's next turns"
+                    aria-describedby="settings-effort-help"></select>
+            <p id="settings-effort-help" class="settings-help">Used from the next turn. Default leaves the effort to the provider. Agents keep their own settings.</p>
+          </section>
           <section class="settings-group">
             <h3 id="settings-mode-title" class="settings-heading">Permissions</h3>
             <div id="settings-mode" class="settings-actions" role="group"

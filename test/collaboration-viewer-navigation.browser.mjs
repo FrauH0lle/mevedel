@@ -109,6 +109,7 @@ async function open(browser, {lobbyRunning = true, viewport = {width: 1200, heig
       'raw', room.secret.slice(0, 32), 'AES-GCM', false, ['encrypt', 'decrypt']);
   }
   page.joined = [];
+  page.received = [];
   // Frames the host sends unprompted, by room.
   page.push = {};
   await page.routeWebSocket(/\/r\//, socket => {
@@ -118,6 +119,7 @@ async function open(browser, {lobbyRunning = true, viewport = {width: 1200, heig
     socket.onMessage(async message => {
       if (typeof message === 'string') return;
       const frame = await unseal(keys[id], message);
+      page.received.push({room: id, frame});
       answers[id]?.(frame, async reply => socket.send(await seal(keys[id], reply)));
     });
   });
@@ -138,6 +140,94 @@ async function open(browser, {lobbyRunning = true, viewport = {width: 1200, heig
 
 const title = page => page.locator('#session-label').textContent();
 const visible = (page, selector) => page.locator(selector).isVisible();
+
+test('session reasoning effort follows host choices and confirmation on desktop and phone', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const viewport of [{width: 1200, height: 800}, {width: 375, height: 667}]) {
+      const page = await open(browser, {viewport});
+      await page.goto(sessionRoom.link);
+      await page.waitForFunction(() => document.getElementById('session-label')
+        ?.textContent === 'Feature work');
+      const recovery = {t: 'recovery', model: 'Codex:reasoning',
+        models: ['Codex:reasoning', 'Other:model'], efforts: ['low', 'medium', 'high', 'xhigh'],
+        effort: 'medium', presets: [], providers: []};
+      await page.push[sessionRoom.id](recovery);
+      await page.getByRole('button', {name: 'Settings', exact: true}).click();
+      const effort = page.getByLabel('Reasoning effort', {exact: true});
+      assert.deepEqual(await effort.locator('option').allTextContents(),
+                       ['Default', 'low', 'medium', 'high', 'xhigh']);
+      assert.equal(await effort.inputValue(), 'medium');
+      const requests = () => page.received.filter(({frame}) => frame.t === 'recovery')
+        .map(({frame}) => frame);
+      const request = async (select, value, expected, confirmed) => {
+        const count = requests().length;
+        await select.selectOption(value);
+        assert.equal(await select.inputValue(), confirmed);
+        // Wait for the stand-in host to decrypt the real outgoing frame.
+        await new Promise((resolve, reject) => {
+          const deadline = Date.now() + 5000;
+          const check = () => {
+            if (requests().length > count) resolve();
+            else if (Date.now() > deadline) reject(new Error('recovery request not received'));
+            else setTimeout(check, 10);
+          };
+          check();
+        });
+        assert.deepEqual(requests().at(-1), expected);
+      };
+      await request(effort, 'xhigh', {t: 'recovery', action: 'effort', value: 'xhigh'}, 'medium');
+      await page.push[sessionRoom.id]({...recovery, effort: 'xhigh'});
+      await page.waitForFunction(() => document.getElementById('settings-effort').value === 'xhigh');
+      await request(effort, '', {t: 'recovery', action: 'effort', value: null}, 'xhigh');
+      await page.push[sessionRoom.id]({...recovery, effort: null});
+      await page.waitForFunction(() => document.getElementById('settings-effort').value === '');
+      const model = page.getByRole('dialog', {name: 'Session settings'}).getByLabel('Model', {exact: true});
+      await request(model, 'Other:model', {t: 'recovery', action: 'model', value: 'Other:model'}, 'Codex:reasoning');
+      await page.push[sessionRoom.id]({...recovery, model: 'Other:model', efforts: ['minimal', 'high'], effort: 'minimal'});
+      await page.waitForFunction(() => document.getElementById('settings-effort').value === 'minimal');
+      assert.deepEqual(await effort.locator('option').allTextContents(), ['Default', 'minimal', 'high']);
+      await effort.scrollIntoViewIfNeeded();
+      const box = await effort.boundingBox();
+      assert.ok(box && box.x >= 0 && box.x + box.width <= viewport.width
+                && box.y >= 0 && box.y + box.height <= viewport.height,
+                `effort selector fits ${viewport.width}x${viewport.height}`);
+      await page.push[sessionRoom.id]({...recovery, model: 'Other:model', efforts: [], effort: null});
+      await page.waitForFunction(() => document.getElementById('settings-effort-group').hidden);
+      assert.equal(await effort.isVisible(), false);
+      assert.equal(await effort.isDisabled(), true);
+      assert.deepEqual(await effort.locator('option').allTextContents(), ['Default']);
+      await page.context().close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('writer and view links cannot open session effort settings', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const length of [48, 32]) {
+      const page = await open(browser);
+      await page.goto(`http://localhost:8765/#${sessionRoom.id}.${base64url(sessionRoom.secret.slice(0, length))}`);
+      await page.waitForFunction(() => document.getElementById('session-label')
+        ?.textContent === 'Feature work');
+      // Even an erroneously delivered owner snapshot must not expose settings.
+      await page.push[sessionRoom.id]({t: 'recovery', models: ['Codex:reasoning'],
+        model: 'Codex:reasoning', efforts: ['low', 'high'], effort: 'high'});
+      await page.push[sessionRoom.id]({t: 'status', name: 'Non-owner ready'});
+      await page.waitForFunction(() => document.getElementById('session-label')
+        ?.textContent === 'Non-owner ready');
+      assert.equal(await page.locator('#modeline .settings-button').count(), 0);
+      assert.equal(await page.locator('#settings').evaluate(node => node.open), false);
+      assert.equal(await page.locator('#settings-effort').isDisabled(), true);
+      assert.equal(page.received.some(({frame}) => frame.t === 'recovery'), false);
+      await page.context().close();
+    }
+  } finally {
+    await browser.close();
+  }
+});
 
 test('a room handed off leads its guests to the room that continues it', async () => {
   const browser = await chromium.launch();

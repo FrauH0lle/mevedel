@@ -99,8 +99,9 @@ than through the command allowlist:
   authority for an owner, who can create a session outright. The sheet
   says which of the two it is doing before the guest presses anything.
 
-- `recovery` exposes selection among the offered models and registered presets,
-  session rename, native-history recovery, retained-input retry, reviewed input requeue/discard,
+- `recovery` exposes selection among the offered models, reasoning efforts and
+  registered presets, session rename, native-history recovery, retained-input
+  retry, reviewed input requeue/discard,
   provider login and, in Claude Code sessions, runtime update checks. Login
   challenges go only to owner peers viewing that provider's credential store;
   each owner keeps the provider it last selected. Codex uses device authorization
@@ -111,11 +112,17 @@ than through the command allowlist:
   once, with the host's details; other readers see readiness and runtime issues
   only by category, since host diagnostics can name local paths. Signing in
   changes host-wide provider credentials; cancelling discards the challenge.
-  Model/preset/history/input changes require idle turns and current session
+  Model/effort/preset/history/input changes require idle turns and current session
   mutation authority. Preset replacement preserves the session's and data
   buffer's permission and sandbox modes. The frame names the current model as
-  the same `BACKEND:MODEL` label the offered models use. Only providers with a
-  browser login (Codex and Claude Code) are offered for sign-in, defaulting to
+  the same `BACKEND:MODEL` label the offered models use. Its `efforts` array lists
+  the current model's declared effort names, and `effort` is the selected name
+  or null for Default. Owners choose an offered name or Default through the
+  `effort` action; the host validates against the current model, persists the
+  choice and refreshes every owner tab. Model changes retain supported effort or
+  reset it to Default.
+  Only providers with a browser login (Codex and Claude Code) are offered for
+  sign-in, defaulting to
   the session's own when it supports browser login. Account remains available
   when the current session uses an API key but other login providers exist.
   A refused sign-in action leaves the owner's previous selection unchanged.
@@ -132,8 +139,11 @@ than through the command allowlist:
   settings** sheet, opened from the status strip's Settings button or its
   model and mode, which only owner links can do. The button reads **Needs
   attention** while an issue, paused queue, input awaiting review or
-  recoverable history is pending; those actions head the sheet. Model and
-  mode apply on pick, a preset after confirmation. Every control carries a
+  recoverable history is pending; those actions head the sheet. Model, reasoning
+  effort and mode apply on pick, a preset after confirmation. The effort selector
+  includes Default and hides when the model declares no supported effort choices.
+  Its displayed selection changes only after host confirmation, and refreshed
+  model choices discard stale efforts. Every control carries a
   tooltip and, since phones have no hover, a visible explanation.
   An active Plan restriction is shown separately from permission mode: changing
   permission mode does not lift Plan. Rename uses the native readable-Unicode

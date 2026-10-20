@@ -807,6 +807,7 @@ async function main() {
                'composer', 'composer-input', 'composer-identity',
                'you-menu', 'you-form', 'you-name', 'you-random', 'you-initials', 'you-label',
                'settings', 'settings-attention', 'settings-issues', 'settings-model', 'settings-mode',
+               'settings-effort-group', 'settings-effort',
                'settings-mode-help', 'settings-plan', 'settings-name', 'settings-rename',
                'settings-preset', 'settings-preset-apply', 'settings-account',
                'settings-account-title', 'settings-account-actions',
@@ -2102,7 +2103,8 @@ async function main() {
   // session settings.  Mode and model apply on pick, and the sheet keeps
   // reporting what the session actually uses until the host confirms.
   const settled = {t: 'recovery', models: ['Codex:gpt-6-astra', 'Codex:gpt-6-luna'],
-                   model: 'Codex:gpt-6-luna', presets: ['default'], providers: [], paused: false};
+                   model: 'Codex:gpt-6-luna', efforts: ['low', 'medium', 'high', 'xhigh'],
+                   effort: 'medium', presets: ['default'], providers: [], paused: false};
   await deliver(settled);
   assert.equal(settingsButton().textContent, 'Settings');
   assert.equal(nodes['settings-attention'].hidden, true);
@@ -2134,6 +2136,45 @@ async function main() {
   await waitFor(() => first.sent.length === modelBefore + 1, 'sealed model choice');
   assert.deepEqual(await unseal(key, first.sent[modelBefore]),
                    {t: 'recovery', action: 'model', value: 'Codex:gpt-6-astra'});
+  const effort = nodes['settings-effort'];
+  assert.equal(nodes['settings-effort-group'].hidden, false);
+  assert.equal(effort.disabled, false);
+  assert.deepEqual(effort.children.map(option => [option.value, textOf(option)]),
+                   [['', 'Default'], ['low', 'low'], ['medium', 'medium'],
+                    ['high', 'high'], ['xhigh', 'xhigh']]);
+  assert.equal(effort.value, 'medium');
+  const effortBefore = first.sent.length;
+  effort.value = 'xhigh';
+  effort.dispatch('change');
+  assert.equal(effort.value, 'medium', 'effort waits for the host to confirm');
+  await waitFor(() => first.sent.length === effortBefore + 1, 'sealed effort choice');
+  assert.deepEqual(await unseal(key, first.sent[effortBefore]),
+                   {t: 'recovery', action: 'effort', value: 'xhigh'});
+  await deliver({...settled, effort: 'xhigh'});
+  assert.equal(effort.value, 'xhigh');
+  effort.value = '';
+  effort.dispatch('change');
+  assert.equal(effort.value, 'xhigh');
+  await waitFor(() => first.sent.length === effortBefore + 2, 'sealed default effort');
+  assert.deepEqual(await unseal(key, first.sent[effortBefore + 1]),
+                   {t: 'recovery', action: 'effort', value: null});
+  await deliver({...settled, effort: null});
+  assert.equal(effort.value, '');
+  effort.dispatch('change');
+  await deliver({...settled, model: 'Codex:gpt-6-astra', efforts: ['minimal', 'high'], effort: 'minimal'});
+  assert.deepEqual(effort.children.map(option => option.value), ['', 'minimal', 'high']);
+  assert.equal(effort.value, 'minimal');
+  // No choices from the previous model survive, even when the new one has none.
+  await deliver({...settled, efforts: [], effort: null});
+  assert.equal(nodes['settings-effort-group'].hidden, true);
+  assert.equal(effort.disabled, true);
+  assert.deepEqual(effort.children.map(option => option.value), ['']);
+  assert.equal(effort.value, '');
+  effort.value = 'xhigh';
+  effort.dispatch('change');
+  assert.equal(effort.value, '');
+  assert.equal(first.sent.length, effortBefore + 2, 'unchanged and unsupported efforts send nothing');
+  assert.equal(nodes['composer-input'].value, '> retained\nmultiline');
   // A model the host no longer offers stays shown instead of the first option.
   await deliver({...settled, model: 'Gone:old'});
   assert.equal(nodes['settings-model'].value, 'Gone:old');

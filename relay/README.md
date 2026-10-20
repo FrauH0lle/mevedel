@@ -11,10 +11,17 @@ viewer together. Rebuild the relay binary after viewer changes because the
 assets are embedded; reload browser tabs after updating. Tool presentation
 metadata does not change the relay's content-blind forwarding contract.
 
-Owner peers receive a sealed `recovery` snapshot with model/preset choices and
+Owner peers receive a sealed `recovery` snapshot with model/effort/preset choices and
 safe ephemeral login state, and submit closed `recovery` actions. Shared `status`
 frames include persistent operational `issues` and the last turn `outcome`.
 Credentials never enter relay payloads; notification wakeups remain generic.
+
+Recovery `efforts` lists supported reasoning-effort names for the current model;
+`effort` is its selected name or null for Default. Owners submit
+`{"t":"recovery","action":"effort","value":"high"}` with an offered name,
+or `value: null` for Default. The host validates the choice against the current
+model, requires idle turns and current mutation authority, and confirms the
+persisted selection in a fresh recovery snapshot.
 
 Session creation sheets refresh offered `BACKEND:MODEL` labels with
 `{"t":"session-models"}`; the host replies with `models` to writable session
