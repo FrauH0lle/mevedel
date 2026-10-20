@@ -331,36 +331,61 @@
 (mevedel-deftest mevedel-execution-transcript--record-breadcrumb ()
   ,test
   (test)
-  :doc "publishes project completions when the logical transcript has no fixed file"
+  :doc "defers project completions to one queued checkpoint of the live transcript"
   (mevedel-test--with-captured-diagnostics nil
     (mevedel-engine-test--with-session
       (insert "Saved input\n")
       (mevedel-session-artifacts-save session buffer)
       (should-not (file-exists-p buffer-file-name))
-      (let ((logical (file-relative-name
+      (let* ((logical (file-relative-name
                       buffer-file-name (mevedel-session-save-path session)))
             (event (list :type 'terminal :data-buffer buffer :owner "/root"
                          :tool-use-id "project-call"
                          :facts '(:execution-id "project-exec" :command "true"
-                                  :state completed :outcome success))))
-        (goto-char (point-max))
-        (insert "Unsent draft\n")
-        (dotimes (_ 2)
-          (mevedel-execution-transcript--record-breadcrumb event))
-        (let ((published
-               (decode-coding-string
-                (mevedel-session-artifacts-read-artifact session logical t)
-                'utf-8-unix)))
-          (should-not (string-search "Unsent draft" published))
-          (should (= 1 (length
-                        (mevedel-execution-transcript-test--restored-audit-records
-                         published 'execution-breadcrumb)))))
-        (should (string-search "Unsent draft" (buffer-string)))
+                                  :state completed :outcome success)))
+            (published
+             (lambda ()
+               (mevedel-execution-transcript-test--restored-audit-records
+                (decode-coding-string
+                 (mevedel-session-artifacts-read-artifact session logical t)
+                 'utf-8-unix)
+                'execution-breadcrumb)))
+            scheduled)
+        (cl-letf (((symbol-function 'mevedel-session-persistence-autosave-soon)
+                   (lambda (buffer) (push buffer scheduled)))
+                  ;; The fixture's admitted request runs checkpoints.
+                  ((symbol-function 'mevedel-session-persistence-checkpoints-active-p)
+                   #'ignore))
+          (dotimes (_ 2)
+            (mevedel-execution-transcript--record-breadcrumb event)))
+        ;; Nothing is republished inline; one checkpoint is requested.
+        (should-not (funcall published))
+        (should (equal (list buffer) scheduled))
         (should (buffer-modified-p))
+        (should (= 1 (length (mevedel-transcript-audit-records
+                              (buffer-string) 'execution-breadcrumb))))
+        (mevedel-session-persistence-autosave-buffer buffer)
+        (should (= 1 (length (funcall published))))
         (should-not (file-exists-p buffer-file-name)))))
-  :doc "committed-byte enrichment never checkpoints live fields or consumed mail"
-  (dolist (archived '(nil t))
-    (mevedel-test--with-captured-diagnostics nil
+  :doc "relies on in-flight checkpoints instead of queueing another"
+  (mevedel-test--with-captured-diagnostics nil
+    (mevedel-engine-test--with-session
+      (insert "Saved input\n")
+      (mevedel-session-artifacts-save session buffer)
+      (let (scheduled)
+        (cl-letf (((symbol-function 'mevedel-session-persistence-autosave-soon)
+                   (lambda (buffer) (push buffer scheduled)))
+                  ((symbol-function 'mevedel-session-persistence-checkpoints-active-p)
+                   #'always))
+          (mevedel-execution-transcript--record-breadcrumb
+           (list :type 'terminal :data-buffer buffer :owner "/root"
+                 :tool-use-id "running-call"
+                 :facts '(:execution-id "running-exec" :command "true"
+                          :state completed :outcome success))))
+        (should-not scheduled)
+        (should (buffer-modified-p)))))
+  :doc "archived enrichment never checkpoints live fields or consumed mail"
+  (mevedel-test--with-captured-diagnostics nil
       (mevedel-engine-test--with-session
         (let* ((plan '(:live (("old-call" :execution-id "exec-old"
                               :state running :live-execution-p t))))
@@ -369,10 +394,10 @@
                                      :state completed :outcome success)))
                logical id)
           (insert "Saved input\n")
-          (when archived (insert (mevedel-execution-transcript-archive-text plan)))
+          (insert (mevedel-execution-transcript-archive-text plan))
           (mevedel-session-artifacts-save session buffer)
           (setq logical (file-relative-name buffer-file-name (mevedel-session-save-path session)))
-          (when archived (mevedel-execution-transcript-commit-archive buffer plan))
+          (mevedel-execution-transcript-commit-archive buffer plan)
           (mevedel-agent-control-send-message session "/root" "pending delivery")
           (setq id (plist-get (car (mevedel-session-messages session)) :id))
           (mevedel-tools--handle-message-inject
@@ -381,10 +406,8 @@
           (setf (mevedel-session-turn-count session) 42)
           (goto-char (point-max))
           (insert "Unsent draft\n")
-          (if archived
-              (mevedel-execution-transcript--record-archived-terminal
-               buffer event (mevedel-execution-transcript-terminal-render-data event))
-            (mevedel-execution-transcript--record-breadcrumb event))
+          (mevedel-execution-transcript--record-archived-terminal
+           buffer event (mevedel-execution-transcript-terminal-render-data event))
           (let ((published (decode-coding-string
                             (mevedel-session-artifacts-read-artifact session logical t)
                             'utf-8-unix))
@@ -398,10 +421,9 @@
             (should (equal (list id) (mapcar (lambda (mail) (plist-get mail :id))
                                              (plist-get sidecar :messages))))
             (should (= 1 (length (mevedel-execution-transcript-test--restored-audit-records
-                                  published (if archived 'execution-completion
-                                              'execution-breadcrumb))))))))))
+                                  published 'execution-completion))))))))
 
-  :doc "persists one completion without writing an unsent in-memory draft"
+  :doc "records one completion in memory without writing the file"
   (let* ((path (make-temp-file "mevedel-execution-breadcrumb-"))
          (buffer (find-file-noselect path))
          (session (mevedel-session--create :authority-mode 'pid-lock
@@ -427,9 +449,8 @@
             (should (buffer-modified-p))
             (should (= 1 (length (mevedel-transcript-audit-records
                                   (buffer-string) 'execution-breadcrumb)))))
-          (should (= 1 (length
-                        (mevedel-execution-transcript-test--audit-records-in-file
-                         path 'execution-breadcrumb))))
+          (should-not (mevedel-execution-transcript-test--audit-records-in-file
+                       path 'execution-breadcrumb))
           (with-temp-buffer
             (insert-file-contents path)
             (should-not (string-search "draft not yet sent" (buffer-string)))))
@@ -438,7 +459,7 @@
           (set-buffer-modified-p nil))
         (kill-buffer buffer))
       (delete-file path)))
-  :doc "keeps flushed stream text eligible for checkpoint after completion publication"
+  :doc "keeps flushed stream text eligible for checkpoint after a completion"
   (let* ((path (make-temp-file "mevedel-execution-breadcrumb-batch-"))
          (buffer (find-file-noselect path))
          (session (mevedel-session--create :authority-mode 'pid-lock
@@ -474,8 +495,8 @@
             (insert-file-contents path)
             (should-not (string-search "Unsaved batch." (buffer-string))))
           (should (buffer-modified-p))
-          ;; A subsequent checkpoint must publish the flushed response and
-          ;; the in-memory placement, replacing the standalone disk append.
+          ;; The next checkpoint publishes the flushed response and the
+          ;; completion at its in-memory placement.
           (mevedel-session-artifacts-stabilize-gptel-bounds)
           (mevedel-session-artifacts-save-buffer-silently)
           (should-not (buffer-modified-p))
@@ -508,26 +529,18 @@
         (with-current-buffer buffer (set-buffer-modified-p nil))
         (kill-buffer buffer))
       (delete-file path)))
-  :doc "keeps a dirty in-memory completion when publication fails"
+  :doc "never republishes the transcript for a completion"
   (with-temp-buffer
-    (let (warning attempted)
-      (set-buffer-modified-p nil)
-      (cl-letf (((symbol-function 'mevedel-execution-transcript--persist-terminal-record)
-                 (lambda (_record &optional _render-data)
-                   (setq attempted t)
-                   (error "Simulated publication failure")))
-                ((symbol-function 'display-warning)
-                 (lambda (_type message &rest _args) (setq warning message))))
-        (mevedel-execution-transcript--record-breadcrumb
-         (list :data-buffer (current-buffer) :owner "/root" :tool-use-id "call-x"
-               :facts '(:execution-id "exec-x" :command "true"
-                        :state completed :outcome success))))
-      (should attempted)
-      (should (equal "Could not publish execution completion exec-x: Simulated publication failure"
-                     warning))
-      (should (buffer-modified-p))
-      (should (= 1 (length (mevedel-transcript-audit-records
-                            (buffer-string) 'execution-breadcrumb))))))
+    (set-buffer-modified-p nil)
+    (cl-letf (((symbol-function 'mevedel-execution-transcript--persist-terminal-record)
+               (lambda (&rest _) (ert-fail "Completion republished the transcript"))))
+      (mevedel-execution-transcript--record-breadcrumb
+       (list :data-buffer (current-buffer) :owner "/root" :tool-use-id "call-x"
+             :facts '(:execution-id "exec-x" :command "true"
+                      :state completed :outcome success))))
+    (should (buffer-modified-p))
+    (should (= 1 (length (mevedel-transcript-audit-records
+                          (buffer-string) 'execution-breadcrumb)))))
   :doc "places a mid-turn completion where it finished, before later output"
   (with-temp-buffer
     (org-mode)
@@ -591,7 +604,7 @@
         (should (< (search-forward "Agent text.")
                    (plist-get span :start)
                    (search-forward "unrelated tail"))))))
-  :doc "publishes a mid-turn completion and keeps it at the response marker"
+  :doc "checkpoints a mid-turn completion at the response marker"
   (let* ((path (make-temp-file "mevedel-execution-breadcrumb-mid-"))
          (buffer (find-file-noselect path))
          (session (mevedel-session--create :authority-mode 'pid-lock
@@ -613,9 +626,7 @@
              (list :data-buffer buffer :owner "/root" :tool-use-id "call-pub"
                    :facts '(:execution-id "exec-pub" :command "true"
                             :state completed :outcome success)))
-            (should (= 1 (length
-                          (mevedel-execution-transcript-test--audit-records-in-file
-                           path 'execution-breadcrumb))))
+            (should (buffer-modified-p))
             (let ((span (car (mevedel-transcript-audit-buffer-spans
                               'execution-breadcrumb))))
               (should (= (mevedel-transcript--audit-block-end
@@ -764,18 +775,24 @@
                  :tool-use-id "call-row" :whole-output "ok"
                  :facts '(:execution-id "exec-row" :command "printf ok"
                          :state completed :outcome success :exit-code 0)))
+          ;; The live row settles now; the file follows at the next checkpoint.
+          (with-current-buffer buffer
+            (let ((data (mevedel-tool-render-data-for-tool buffer "call-row")))
+              (should (eq 'completed (plist-get data :state)))
+              (should (equal "ok" (plist-get data :execution-output)))
+              (should-not (plist-get data :live-execution-p)))
+            (should (buffer-modified-p))
+            (should (= 1 (length (mevedel-transcript-audit-records
+                                  (buffer-string) 'execution-breadcrumb)))))
           (with-temp-buffer
             (insert-file-contents path)
             (should-not (string-search "unsent composer draft" (buffer-string)))
             (delay-mode-hooks (org-mode))
             (mevedel-transcript-restore-properties)
-            (let ((data (mevedel-tool-render-data-for-tool
-                         (current-buffer) "call-row")))
-              (should (eq 'completed (plist-get data :state)))
-              (should (equal "ok" (plist-get data :execution-output)))
-              (should-not (plist-get data :live-execution-p)))
-            (should (= 1 (length (mevedel-transcript-audit-records
-                                  (buffer-string) 'execution-breadcrumb))))))
+            (should (eq 'running
+                        (plist-get (mevedel-tool-render-data-for-tool
+                                    (current-buffer) "call-row")
+                                   :state)))))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer (set-buffer-modified-p nil))
         (kill-buffer buffer))

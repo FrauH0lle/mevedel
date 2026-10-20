@@ -59,12 +59,16 @@ presentation records in `mevedel-execution-transcript.el` keep these facts
 reconstructable across redraw, reload, and compaction; they do not create a
 second process registry or alter delivery to the model or agent.
 
-Completion publication resolves project transcripts through the session's
-artifact store, not the existence of a fixed transcript file. Portable sessions
-do not keep such files; using that check silently left completions unpublished.
-Publication updates only saved content, never an unsent draft. A mid-turn
-insertion keeps the live buffer modified so its response-position ordering and
-any flushed stream text are included in the next checkpoint.
+A breadcrumb and the settled tool row are written to the live transcript and
+reach disk with its next checkpoint: the in-flight checkpoint while a request
+runs, including the final one when the last request settles, or one queued
+for that transcript when none runs. Their crash window is the same as the
+running turn's own streamed output. Nested ToolCall and archived completion
+records still publish at once; that path resolves project transcripts
+through the session's artifact store, not the existence of a fixed transcript
+file (portable sessions do not keep such files, and that check silently left
+completions unpublished), and updates only saved content, never an unsent
+draft.
 
 ## Rationale and consequences
 
@@ -126,6 +130,17 @@ on elapsed time or on whether a view happened to be open. Distinct executions
 of the same command remain independently navigable.
 
 ## Decision history
+
+- **Breadcrumbs checkpoint with the transcript (2026-10).** Each yielded
+  completion used to re-read, re-parse and republish the whole saved
+  transcript to append one record without publishing unsent live content.
+  Live profiling on a 1.3 MB session measured a 225 ms main-thread stall and
+  10.7 MB of allocation per completion, felt as scroll and typing lag. The
+  in-flight checkpoint already publishes live content every 30 seconds, so
+  immediate publication bought only a shorter crash window than the
+  surrounding turn text had. The breadcrumb now waits for that checkpoint;
+  without one running, the transcript queues its own, since an idle editor
+  may receive no input and so no auto-save.
 
 - **Lossless retired-spool storage (2026-10).** Session inspection found
   385,324,439 bytes of execution logs but only 421,924 duplicate bytes;

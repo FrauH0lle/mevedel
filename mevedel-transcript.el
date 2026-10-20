@@ -176,14 +176,16 @@ user prompt from the prompt index and from compaction turn boundaries."
   (or (get-text-property marker-pos 'gptel)
       (mevedel-transcript--org-tool-block-start-p marker-pos)))
 
-(defun mevedel-transcript--org-block-depth-before
-    (pos block-re &optional start depth)
-  "Return nesting depth before POS for org blocks matching BLOCK-RE.
+(defun mevedel-transcript--org-block-depths-before
+    (pos &optional start tool-depth summary-depth)
+  "Return (TOOL-DEPTH . SUMMARY-DEPTH) of org block nesting before POS.
 
-BLOCK-RE should match the suffix after `#+begin_' / `#+end_', for
-example `tool\\|reasoning'.  START and DEPTH resume a pass that already
-counted up to START, so a caller walking a transcript forward pays for
-each region once instead of rescanning from the beginning per turn.
+TOOL-DEPTH counts tool and reasoning blocks, SUMMARY-DEPTH summary blocks.
+START, TOOL-DEPTH and SUMMARY-DEPTH resume a pass that already counted up
+to START, so a caller walking a transcript forward pays for each region
+once instead of rescanning from the beginning per turn.  Both depths come
+from one regexp pass: counting them separately read a long transcript
+twice on every save.
 
 The marker is recognized with leading whitespace allowed, which is the
 rule the span walk below already applies and the spelling gptel's own org
@@ -191,25 +193,28 @@ support accepts."
   (save-excursion
     (save-restriction
       (widen)
-      (let ((depth (or depth 0))
+      (let ((tool (or tool-depth 0))
+            (summary (or summary-depth 0))
             (regexp (concat
-                     (format "^[ \t]*#\\+\\(begin\\|end\\)_\\(%s\\)\\b"
-                             block-re)
+                     "^[ \t]*#\\+\\(begin\\|end\\)_\\(tool\\|reasoning\\|summary\\)\\b"
                      "\\|^<!-- mevedel-render-data -->")))
         (goto-char (or start (point-min)))
         (while (re-search-forward regexp pos t)
-          (cond
-           ((not (match-beginning 1))
-            (when-let* ((block (mevedel-transcript--render-data-block-at
-                               (match-beginning 0))))
-              (goto-char (min pos (cadr block)))))
-           ((equal (match-string 1) "end")
-            (setq depth (max 0 (1- depth))))
-           ((or (not (equal (match-string 2) "tool"))
-                (mevedel-transcript--counted-tool-marker-p
-                 (match-beginning 0)))
-            (cl-incf depth))))
-        depth))))
+          (if (not (match-beginning 1))
+              (when-let* ((block (mevedel-transcript--render-data-block-at
+                                 (match-beginning 0))))
+                (goto-char (min pos (cadr block))))
+            (let ((end (equal (match-string 1) "end"))
+                  (kind (match-string 2)))
+              (if (equal kind "summary")
+                  (setq summary (if end (max 0 (1- summary)) (1+ summary)))
+                (cond
+                 (end (setq tool (max 0 (1- tool))))
+                 ((or (not (equal kind "tool"))
+                      (mevedel-transcript--counted-tool-marker-p
+                       (match-beginning 0)))
+                  (cl-incf tool)))))))
+        (cons tool summary)))))
 
 (defun mevedel-transcript-prompt-scan-state ()
   "Return carried state for a forward pass of prompt-start scans.
@@ -235,12 +240,10 @@ beginning of the buffer."
       (save-restriction
         (widen)
         (let* ((from (if state (nth 0 state) (point-min)))
-               (tool-depth
-                (mevedel-transcript--org-block-depth-before
-                 pos "tool\\|reasoning" from (and state (nth 1 state))))
-               (summary-depth
-                (mevedel-transcript--org-block-depth-before
-                 pos "summary" from (and state (nth 2 state)))))
+               (depths (mevedel-transcript--org-block-depths-before
+                        pos from (and state (nth 1 state)) (and state (nth 2 state))))
+               (tool-depth (car depths))
+               (summary-depth (cdr depths)))
           (when state
             (setf (nth 0 state) pos
                   (nth 1 state) tool-depth

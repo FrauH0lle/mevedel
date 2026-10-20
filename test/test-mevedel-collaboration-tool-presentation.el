@@ -735,7 +735,11 @@
                    :owner "/root" :whole-output "initial\nfinal"
                    :facts '(:execution-id "exec-1" :command "exit 1"
                             :state completed :outcome failure :exit-code 1))))
-          (with-current-buffer buffer (set-buffer-modified-p nil))
+          ;; The settled row reaches disk with the transcript's checkpoint.
+          (with-current-buffer buffer
+            (should (buffer-modified-p))
+            (mevedel-session-persistence-write-current-buffer-atomically path)
+            (set-buffer-modified-p nil))
           (kill-buffer buffer)
           (setq buffer nil)
           (with-temp-buffer

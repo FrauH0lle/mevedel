@@ -57,8 +57,16 @@
   "mevedel-session-codec")
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-autosave-soon
+                  "mevedel-session-persistence" (buffer))
+(declare-function mevedel-session-persistence-checkpoints-active-p
+                  "mevedel-session-persistence" ())
 (declare-function mevedel-session-persistence-write-current-buffer-atomically
                   "mevedel-session-persistence" (path))
+(autoload 'mevedel-session-persistence-autosave-soon
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-checkpoints-active-p
+  "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-write-current-buffer-atomically
   "mevedel-session-persistence")
 
@@ -241,7 +249,13 @@ The event's execution identity is absent for foreground commands.  This
 record carries no output copy: the tool row and retained artifact own it.
 While the transcript's turn runs, the record goes where its response
 currently ends, so the turn's later output follows it; an idle transcript
-receives it at its end."
+receives it at its end.
+
+The record reaches disk with the transcript's next checkpoint, like the
+running turn's own output: the in-flight checkpoint while a request runs,
+or one queued here otherwise.  Publishing it at once re-read,
+re-parsed and republished the whole transcript for one line, a 225 ms
+stall per yielded command on a long session."
   (when-let* ((data-buffer (plist-get event :data-buffer))
               ((buffer-live-p data-buffer))
               (facts (plist-get event :facts))
@@ -251,8 +265,6 @@ receives it at its end."
       (save-restriction
         (widen)
         (let* ((inhibit-read-only t)
-               (modified-p (buffer-modified-p))
-               (persisted-p nil)
                (record (list :type 'execution-breadcrumb
                              :execution-id execution-id
                              :tool-use-id tool-use-id
@@ -262,18 +274,6 @@ receives it at its end."
                              :source-target buffer-file-name
                              :emitted-at (plist-get event :emitted-at))))
           (unless (mevedel-execution-transcript--breadcrumb-present-p record)
-            (setq persisted-p
-                  (condition-case err
-                      (mevedel-execution-transcript--persist-terminal-record
-                       record
-                       (mevedel-execution-transcript-terminal-render-data event))
-                    (error
-                     (display-warning
-                      'mevedel
-                      (format "Could not publish execution completion %s: %s"
-                              execution-id (error-message-string err))
-                      :warning)
-                     nil)))
             (let* ((text (mevedel--format-hook-audit-record record))
                    (active-position
                     (mevedel--insert-at-active-response data-buffer text)))
@@ -281,11 +281,13 @@ receives it at its end."
                 (save-excursion
                   (goto-char (point-max))
                   (insert text)))
-              ;; Publication only appends to the last saved transcript.
-              ;; Active insertion can flush unsaved stream text or close
-              ;; reasoning, and its position differs from the saved append.
-              (set-buffer-modified-p
-               (or modified-p (not persisted-p) active-position)))))))))
+              (set-buffer-modified-p t)
+              ;; In-flight checkpoints carry it.  Without them an idle
+              ;; editor may receive no input, and so no auto-save, for hours.
+              (when (and mevedel--session
+                         (mevedel-session-save-path mevedel--session)
+                         (not (mevedel-session-persistence-checkpoints-active-p)))
+                (mevedel-session-persistence-autosave-soon data-buffer)))))))))
 
 (defun mevedel-execution-transcript--replace-archived-record
     (tool-use-id replacement)

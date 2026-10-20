@@ -346,7 +346,7 @@
         (setq-local mevedel--current-request nil))
       (test-mevedel-session-persistence--release-and-kill buffer session)
       (delete-directory root t)))
-  :doc "stops once no request is in flight"
+  :doc "stops once no request is in flight, after a final checkpoint"
   (let ((mevedel-session-checkpoint-interval 30)
         (saved nil))
     (mevedel-session-persistence-start-checkpoints)
@@ -355,7 +355,8 @@
               ((symbol-function 'mevedel-session-persistence-autosave)
                (lambda () (setq saved t))))
       (mevedel-session-persistence--checkpoint-tick))
-    (should-not saved)
+    ;; A deferred change made after the last request settled is saved.
+    (should saved)
     (should-not mevedel-session-persistence--checkpoint-timer)))
 
 (provide 'test-mevedel-session-persistence-autosave)

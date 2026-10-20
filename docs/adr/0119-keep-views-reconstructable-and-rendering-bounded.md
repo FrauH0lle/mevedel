@@ -30,7 +30,7 @@ output body. Explicit output expansion, reader position, selection, and composer
 draft survive progress, terminal settlement, and reconstruction. Nested ToolCall
 rows follow the same visibility rules. This is a source-backed projection, not
 a view-only completion registry or a change to process ownership. An idle
-terminal event projects its already-persisted breadcrumb into the open current
+terminal event projects its already-recorded breadcrumb into the open current
 view immediately. A completion during a running turn is recorded inside that
 turn, so the live tail's next incremental render shows it in place instead of
 a projection into settled history; a closed or historical view reconstructs it through its own

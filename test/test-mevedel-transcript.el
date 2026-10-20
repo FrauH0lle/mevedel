@@ -1199,7 +1199,7 @@ outcome=\"completed\">\nI saw:\n<system-reminder>\nquoted\n\
         (should (= second-prompt-end (caddr (cadr segs))))))))
 
 
-(mevedel-deftest mevedel-transcript--org-block-depth-before ()
+(mevedel-deftest mevedel-transcript--org-block-depths-before ()
   ,test
   (test)
   :doc "counts genuine tool markers, indented ones included"
@@ -1210,10 +1210,10 @@ outcome=\"completed\">\nI saw:\n<system-reminder>\nquoted\n\
     (insert "  #+begin_tool call
 (:name \"Read\" :args nil)
 ")
-    (should (= 1 (mevedel-transcript--org-block-depth-before (point-max) "tool\\|reasoning")))
+    (should (equal '(1 . 0) (mevedel-transcript--org-block-depths-before (point-max))))
     (insert "  #+end_tool
 ")
-    (should (= 0 (mevedel-transcript--org-block-depth-before (point-max) "tool\\|reasoning"))))
+    (should (equal '(0 . 0) (mevedel-transcript--org-block-depths-before (point-max)))))
 
   :doc "a propertized marker counts without the serialized plist body"
   (with-temp-buffer
@@ -1222,7 +1222,7 @@ outcome=\"completed\">\nI saw:\n<system-reminder>\nquoted\n\
 prose result
 ")
       (put-text-property start (point) 'gptel 'response))
-    (should (= 1 (mevedel-transcript--org-block-depth-before (point-max) "tool\\|reasoning"))))
+    (should (equal '(1 . 0) (mevedel-transcript--org-block-depths-before (point-max)))))
 
   :doc "literal begin_tool inside plain user text is not structural"
   ;; An unbalanced marker a user typed used to open a phantom block that
@@ -1233,14 +1233,26 @@ prose result
 #+begin_tool oops
 more of my prompt
 ")
-    (should (= 0 (mevedel-transcript--org-block-depth-before (point-max) "tool\\|reasoning"))))
+    (should (equal '(0 . 0) (mevedel-transcript--org-block-depths-before (point-max)))))
 
   :doc "a stray end_tool in user text stays harmless at depth zero"
   (with-temp-buffer
     (insert "#+end_tool
 still my prompt
 ")
-    (should (= 0 (mevedel-transcript--org-block-depth-before (point-max) "tool\\|reasoning")))))
+    (should (equal '(0 . 0) (mevedel-transcript--org-block-depths-before (point-max)))))
+
+  :doc "counts summary nesting separately in the same pass and resumes"
+  (with-temp-buffer
+    (insert "#+begin_summary\nsummary\n#+begin_reasoning\nthinking\n")
+    (let ((middle (point)))
+      (should (equal '(1 . 1) (mevedel-transcript--org-block-depths-before middle)))
+      (insert "#+end_reasoning\n#+end_summary\n#+end_summary\n")
+      ;; Depths never go below zero; resuming equals a full count.
+      (should (equal '(0 . 0) (mevedel-transcript--org-block-depths-before (point-max))))
+      (should (equal (mevedel-transcript--org-block-depths-before (point-max))
+                     (mevedel-transcript--org-block-depths-before
+                      (point-max) middle 1 1))))))
 
 (mevedel-deftest mevedel-transcript--control-search-lines ()
   ,test

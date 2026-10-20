@@ -1245,6 +1245,26 @@ publication.  Views and read-only inspection buffers never write."
 (defvar mevedel-session-persistence--autosaves (make-hash-table :test #'eq)
   "Conversation buffers with a queued auto-save opportunity.")
 
+(defun mevedel-session-persistence-autosave-soon (buffer)
+  "Queue one transport-safe checkpoint of conversation BUFFER.
+Repeated calls before it runs coalesce.  The checkpoint runs only if
+BUFFER still has unsaved changes by then; settlement or an explicit save
+can absorb it."
+  (mevedel-transport-schedule-idle
+   mevedel-session-persistence--autosaves buffer 'conversation-autosave
+   (buffer-local-value 'default-directory buffer)
+   (lambda ()
+     ;; Recheck at execution, including failed saves whose transcript
+     ;; write succeeded before their marker failed.
+     (when (and (buffer-live-p buffer)
+                (or (buffer-modified-p buffer)
+                    (buffer-local-value 'mevedel-session--save-failed buffer)
+                    (with-current-buffer buffer
+                      (and (bound-and-true-p mevedel--session)
+                           (mevedel-session-publication-uncommitted-batches
+                            mevedel--session)))))
+       (mevedel-session-persistence-autosave-buffer buffer)))))
+
 (defun mevedel-session-persistence-autosave ()
   "Checkpoint modified data buffers during Emacs auto-save.
 Queue one transport-safe opportunity per buffer, yielding between saves.
@@ -1263,21 +1283,7 @@ input and an unattended turn receives none."
                                       mevedel--session))
                           (mevedel-session-publication-uncommitted-batches
                            mevedel--session)))))
-      (mevedel-transport-schedule-idle
-       mevedel-session-persistence--autosaves buffer 'conversation-autosave
-       (buffer-local-value 'default-directory buffer)
-       (lambda ()
-         ;; Settlement or an explicit save can absorb this checkpoint while
-         ;; it waits. Recheck at execution, including failed saves whose
-         ;; transcript write succeeded before their marker failed.
-         (when (and (buffer-live-p buffer)
-                    (or (buffer-modified-p buffer)
-                        (buffer-local-value 'mevedel-session--save-failed buffer)
-                        (with-current-buffer buffer
-                          (and (bound-and-true-p mevedel--session)
-                               (mevedel-session-publication-uncommitted-batches
-                                mevedel--session)))))
-           (mevedel-session-persistence-autosave-buffer buffer)))))))
+      (mevedel-session-persistence-autosave-soon buffer))))
 
 
 ;;;; In-flight checkpoints
@@ -1293,10 +1299,13 @@ input and an unattended turn receives none."
                 (buffer-list))))
 
 (defun mevedel-session-persistence--checkpoint-tick ()
-  "Checkpoint modified conversations, or stop once no request is in flight."
-  (if (mevedel-session-persistence--request-in-flight-p)
-      (mevedel-session-persistence-autosave)
-    (mevedel-session-persistence-stop-checkpoints)))
+  "Checkpoint modified conversations; stop once no request is in flight.
+The stopping tick checkpoints too: changes deferred to these checkpoints,
+such as completion breadcrumbs, may have landed after the last request
+settled and saved only its own buffer."
+  (unless (mevedel-session-persistence--request-in-flight-p)
+    (mevedel-session-persistence-stop-checkpoints))
+  (mevedel-session-persistence-autosave))
 
 (defun mevedel-session-persistence-start-checkpoints ()
   "Checkpoint conversations periodically until no request is in flight.
@@ -1315,6 +1324,12 @@ stops itself on the first tick that finds every request settled."
   (when (timerp mevedel-session-persistence--checkpoint-timer)
     (cancel-timer mevedel-session-persistence--checkpoint-timer))
   (setq mevedel-session-persistence--checkpoint-timer nil))
+
+(defun mevedel-session-persistence-checkpoints-active-p ()
+  "Return non-nil while in-flight checkpoints periodically save conversations."
+  (and (timerp mevedel-session-persistence--checkpoint-timer)
+       (memq mevedel-session-persistence--checkpoint-timer timer-list)
+       t))
 
 (defun mevedel-session-persistence-header-segment ()
   "Return a header-line fragment summarising persistence state.
