@@ -19,7 +19,7 @@
 - [Keep live-state inspection probes bounded and non-perturbing](bounded-live-inspection-probes.md) - Return scalars or booleans from live Emacs probes; large object dumps and profiling workload distort what you are measuring
 - [Verify consumer-visible state, not intermediate signals](rendered-state-verification-feedback.md) - Assert rendered/consumed state, not internal flags, audit rows, or same-segment tests
 - [Judge inline image previews by displayed size](inline-image-size-feedback.md) - Compact previews are a visual requirement, not a preference for pixel or fractional settings
-- [Artifact context, visible titles, and user-controlled Git tracking](artifact-collaboration-user-preferences.md) - Use the viewing chat's context for artifact comments, display titles rather than hashes, and leave Git tracking user-controlled
+- [Unified artifact discussions, contextual routing, and visible titles](artifact-collaboration-user-preferences.md) - Prefer one Discuss mechanism across artifact types, preserve the viewing chat's context, show titles, and leave Git tracking user-controlled
 - [Do not attribute guesses or unchecked behavior to reference systems](reference-system-values-feedback.md) - Check authoritative documentation, source, or observed behavior before using another product to justify a design
 - [Reduce permission prompts' visual weight](permission-prompt-visual-weight.md) - User finds sandbox and permission prompts imposing and prefers collapsing parts of them
 - [View changes must preserve rendering and CPU gains](view-render-performance-constraint.md) - Rendering cost and CPU use are hard constraints; measure graphical-only effects in a graphical environment
