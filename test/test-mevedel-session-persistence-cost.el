@@ -92,11 +92,16 @@
                  (test-mevedel-session-persistence-cost--measure
                    (mevedel-session-artifacts-save session buffer))))
             (should (<= processes 2)))
-          ;; Forcing publishes even when the state is already committed.
-          (let ((processes
-                 (test-mevedel-session-persistence-cost--measure
-                   (mevedel-session-artifacts-save session buffer nil t))))
-            (should (> processes 4))))
+          ;; Forcing publishes even when the state is already committed: a
+          ;; new head, from admission, the reservation carrying the fixed
+          ;; sidecar write, and the head commit carrying the generation.
+          (let* ((head (plist-get (mevedel-session-publication session) :head))
+                 (processes
+                  (test-mevedel-session-persistence-cost--measure
+                    (mevedel-session-artifacts-save session buffer nil t))))
+            (should (>= processes 3))
+            (should-not (equal head (plist-get (mevedel-session-publication session)
+                                               :head)))))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer (set-buffer-modified-p nil))
         (kill-buffer buffer))

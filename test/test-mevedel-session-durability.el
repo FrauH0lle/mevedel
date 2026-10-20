@@ -4133,9 +4133,9 @@
             (list (list :path sidecar :content "(:materialized t)"
                         :commit-marker t))))
           (let ((write-generation
-                 (symbol-function 'mevedel-session-publication--write-generation)))
+                 (symbol-function 'mevedel-session-publication--prepare-generation)))
             (cl-letf
-                (((symbol-function 'mevedel-session-publication--write-generation)
+                (((symbol-function 'mevedel-session-publication--prepare-generation)
                   (lambda (root artifacts &rest args)
                     (if (cl-find transcript-relative artifacts
                                  :key (lambda (artifact) (plist-get artifact :logical))

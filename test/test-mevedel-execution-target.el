@@ -1012,6 +1012,33 @@
                      (mevedel-execution-target--probe-incarnation
                       target "bash"))))))
 
+(mevedel-deftest mevedel-execution-target--local-hostname ()
+  ,test
+  (test)
+  :doc "reads the nodename uname prints without starting a process"
+  (progn
+    (skip-unless (and (eq system-type 'gnu/linux)
+                      (file-readable-p "/proc/sys/kernel/hostname")
+                      (executable-find "uname")))
+    (let ((expected (string-trim (shell-command-to-string "uname -n")))
+          (spawned nil))
+      (cl-letf (((symbol-function 'process-file)
+                 (lambda (&rest _) (setq spawned t) 1)))
+        (should (equal expected (mevedel-execution-target--local-hostname))))
+      (should-not spawned)))
+  :doc "falls back to uname where procfs offers no hostname"
+  (progn
+    (skip-unless (executable-find "uname"))
+    (cl-letf (((symbol-function 'mevedel-execution-target--read-local-identity)
+               (lambda (_path) nil)))
+      (should (equal (string-trim (shell-command-to-string "uname -n"))
+                     (mevedel-execution-target--local-hostname)))))
+  :doc "decodes a non-ASCII hostname as process output is decoded"
+  (let ((default-process-coding-system '(utf-8-unix . utf-8-unix)))
+    (cl-letf (((symbol-function 'mevedel-execution-target--read-local-identity)
+               (lambda (_path) (encode-coding-string "höst" 'utf-8))))
+      (should (equal "höst" (mevedel-execution-target--local-hostname))))))
+
 (mevedel-deftest mevedel-execution-target--local-incarnation ()
   ,test
   (test)

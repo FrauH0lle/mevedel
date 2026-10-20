@@ -97,7 +97,7 @@
                          (plist-get (cdr (plist-get entry :entry)) :published))))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-session-publication--write-generation ()
+(mevedel-deftest mevedel-session-publication--prepare-generation ()
   ,test
   (test)
   :doc "shares equal payloads, writes changes, and honors replacement snapshots"
@@ -105,26 +105,33 @@
          (root (file-name-concat directory ".publications"))
          (source (file-name-concat directory "source"))
          (artifacts (list (list :logical "session.meta.el" :source source)
-                          (list :logical "agents/a.chat.org" :source source))))
+                          (list :logical "agents/a.chat.org" :source source)))
+         (write
+          (lambda (entries)
+            ;; The commit runs the planned program as its head commit's prelude.
+            (pcase-let ((`(,generation ,overlaid ,operations)
+                         (mevedel-session-publication--prepare-generation
+                          root artifacts directory entries
+                          (mevedel-session-publication--generation-digests artifacts))))
+              (let ((results (mevedel-session-control-fs-run-program operations)))
+                (dolist (result (cdr results))
+                  (should (eq 'ok (plist-get result :status)))))
+              (cons generation overlaid)))))
     (unwind-protect
         (progn
           (write-region "first" nil source nil 'silent)
-          (let* ((first (mevedel-session-publication--write-generation
-                         root artifacts directory nil))
-                 (same (mevedel-session-publication--write-generation
-                        root artifacts directory (cdr first))))
+          (let* ((first (funcall write nil))
+                 (same (funcall write (cdr first))))
             (should (equal (cdr first) (cdr same)))
             (should (equal '("manifest.el")
                            (directory-files (car same) nil "^[^.].*")))
             (write-region "changed" nil source nil 'silent)
-            (let ((changed (mevedel-session-publication--write-generation
-                            root artifacts directory (cdr same))))
+            (let ((changed (funcall write (cdr same))))
               (should-not (equal (cdr same) (cdr changed)))
               (should (= 3 (length (directory-files (car changed) nil "^[^.].*")))))
             ;; Replacement has no prior entries: even equal bytes must be
             ;; supplied by this snapshot, not resurrected from a dropped one.
-            (let ((replacement (mevedel-session-publication--write-generation
-                                root artifacts directory nil)))
+            (let ((replacement (funcall write nil)))
               (should (= 3 (length (directory-files (car replacement) nil "^[^.].*")))))))
       (delete-directory directory t))))
 
@@ -355,6 +362,88 @@ and its segment path."
        (should-not (mevedel-session-publication-queue session))
        (should (= 8 (plist-get (mevedel-session-checkpoint-project session raw) :total-turn-count)))))))
 
+(mevedel-deftest mevedel-session-publication--prewrite-operations (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-prewrite" "mevedel-prewrite-" ?c
+   (lambda (session session-dir _segment)
+     (let* ((path (file-name-concat session-dir "session.meta.el"))
+            (raw (mevedel-session-artifacts-build-sidecar session (current-buffer)))
+            (run (symbol-function 'mevedel-session-control-fs-run-program))
+            (publish
+             (lambda (title)
+               (let ((programs 0)
+                     (head (plist-get (mevedel-session-publication session) :head)))
+                 (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                            (lambda (&rest args) (cl-incf programs) (apply run args))))
+                   (mevedel-session-publication-publish
+                    session
+                    (list (list :path path :commit-marker t
+                                :content (mevedel-session-artifacts-printed-value
+                                          (plist-put (copy-tree raw) :title title))))))
+                 (should-not (equal head (plist-get (mevedel-session-publication session)
+                                                    :head)))
+                 ;; The fixed copy holds what the new head committed.
+                 (should (equal (mevedel-session-control-fs-read-file path)
+                                (mevedel-session-control-fs-read-file
+                                 (plist-get (mevedel-session-publication session)
+                                            :sidecar))))
+                 (should (equal title (plist-get (mevedel-session-codec-read path)
+                                                 :title)))
+                 programs)))
+            (merged (funcall publish "merged")))
+       ;; A newer `.el' entry beside the lease stops the reservation-side write;
+       ;; the fixed sidecar is then written by its own program, as before.
+       (mevedel-session-control-fs-write-file
+        (file-name-concat (mevedel-session-durability--lease-path session-dir) "zzz.el")
+        "not a generation")
+       (should (= (1+ merged) (funcall publish "fallback")))))))
+
+(mevedel-deftest mevedel-session-publication--read-staged-sidecar ()
+  ,test
+  (test)
+  :doc "reads a staged local sidecar and refuses a target path"
+  (let ((file (make-temp-file "mevedel-staged-sidecar-")))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "(:title \"Grüße\" :n 1)"))
+          (should (equal '(:title "Grüße" :n 1)
+                         (mevedel-session-publication--read-staged-sidecar file)))
+          (should-error (mevedel-session-publication--read-staged-sidecar
+                         "/ssh:host:/tmp/staged")))
+      (delete-file file))))
+
+(mevedel-deftest mevedel-session-publication--commit-marker-publication (:quiet t)
+  (test-mevedel-session-publication--with-published
+   "publication-deadline" "mevedel-deadline-" ?c
+   (lambda (session session-dir _segment)
+     (let* ((path (file-name-concat session-dir "session.meta.el"))
+            (raw (mevedel-session-artifacts-build-sidecar session (current-buffer)))
+            (commit (symbol-function 'mevedel-session-durability--commit-lease))
+            (head (plist-get (mevedel-session-publication session) :head))
+            (lapsed 0))
+       ;; The generation's upload outlasts the deadline its commit was decided
+       ;; with: the prelude's clock proof refuses, and a fresh commit follows.
+       (cl-letf (((symbol-function 'mevedel-session-durability--commit-lease)
+                  (lambda (directory generation expected record &optional deadline)
+                    (when (and deadline
+                               (plist-get mevedel-session-durability--commit-riders :before)
+                               (not (plist-get mevedel-session-durability--commit-riders
+                                               :consumed)))
+                      (cl-incf lapsed)
+                      (setq deadline 1))
+                    (funcall commit directory generation expected record deadline))))
+         (mevedel-session-publication-publish
+          session (list (list :path path :commit-marker t
+                              :content (mevedel-session-artifacts-printed-value
+                                        (plist-put (copy-tree raw) :title "late"))))))
+       (should (= 1 lapsed))
+       (should-not (equal head (plist-get (mevedel-session-publication session) :head)))
+       (should (equal "late" (plist-get (mevedel-session-codec-read
+                                         (plist-get (mevedel-session-publication session)
+                                                    :sidecar))
+                                        :title)))
+       (should-not (mevedel-session-pending-publication session))))))
+
 (mevedel-deftest mevedel-session-publication-publish/checkpoint-queued-projection (:quiet t)
   (test-mevedel-session-publication--with-published
    "publication-queued-projection" "mevedel-queued-projection-" ?c
@@ -366,10 +455,10 @@ and its segment path."
             (candidate (mevedel-session-checkpoint-capture session "/root" root))
             (agent (mevedel-session-checkpoint-capture session "/root/worker"))
             (path (file-name-concat session-dir "session.meta.el"))
-            (write-generation (symbol-function 'mevedel-session-publication--write-generation))
+            (write-generation (symbol-function 'mevedel-session-publication--prepare-generation))
             (queued nil)
             observed)
-       (cl-letf (((symbol-function 'mevedel-session-publication--write-generation)
+       (cl-letf (((symbol-function 'mevedel-session-publication--prepare-generation)
                   (lambda (&rest args)
                     (unless queued
                       (setq queued t)
@@ -408,11 +497,11 @@ and its segment path."
                         :recipient "/root" :payload "consumed" :timestamp (current-time)))
             (stale (plist-put (copy-tree raw) :messages (list mail)))
             (path (file-name-concat session-dir "session.meta.el"))
-            (write-generation (symbol-function 'mevedel-session-publication--write-generation))
+            (write-generation (symbol-function 'mevedel-session-publication--prepare-generation))
             (calls 0))
        (mevedel-session-checkpoint-consume session "/root" (list mail))
        (let ((candidate (mevedel-session-checkpoint-capture session "/root" raw)))
-         (cl-letf (((symbol-function 'mevedel-session-publication--write-generation)
+         (cl-letf (((symbol-function 'mevedel-session-publication--prepare-generation)
                     (lambda (&rest args)
                       (cl-incf calls)
                       (pcase calls

@@ -8,7 +8,9 @@
 ;;; Code:
 
 (eval-when-compile
+  (require 'cl-lib)
   (require 'mevedel-structs))
+(require 'seq)
 
 ;; Every control operation in this file runs through the session control
 ;; filesystem, so its feature is a hard load-time dependency rather than a
@@ -248,6 +250,22 @@ Its car maps control directories to (TARGET-SECONDS . LOCAL-FLOAT-TIME).
 Nested transactions on different targets must not share a clock.  A caller
 that spans one durable transaction binds this to a fresh `(list nil)';
 outside such a binding every reading reaches the target.")
+
+(define-error 'mevedel-session-durability-prelude-failed
+  "Operations preceding a lease commit in its program failed")
+
+(defvar mevedel-session-durability--commit-riders nil
+  "Operations the next lease commit carries in its own program, or nil.
+
+A plist (:before OPS :after OPS :consumed nil :before-results nil
+:after-results nil), mutated in place by the first commit that runs, which
+then marks it consumed; later commits under the same binding carry nothing.
+BEFORE runs ahead of the commit's `verify', AFTER behind its listing, so each
+keeps the order separate programs had, minus their process starts.  When a
+non-optional BEFORE operation fails, nothing of the commit ran and the
+commit signals `mevedel-session-durability-prelude-failed' with the BEFORE
+results.  AFTER results are left for the binder, which must handle a
+`skipped' one: the commit's own proof can stop the program.")
 
 (defun mevedel-session-durability--note-target-time (directory seconds)
   "Record SECONDS as this transaction's clock reading for DIRECTORY."
@@ -641,7 +659,7 @@ the same process; `:extra' holds their results in order."
           :extra results)))
 
 (defun mevedel-session-durability--commit-lease
-    (directory generation expected record)
+    (directory generation expected record &optional deadline)
   "Replace GENERATION's record below DIRECTORY only while it still is EXPECTED.
 
 EXPECTED is the content observed on the target; RECORD is the replacement.
@@ -650,31 +668,61 @@ between them but does not remove it: another client can exclusively create
 the next generation in between, so `verify' is a precondition and not an
 election, and the caller decides who won from what it observes afterwards.
 Return the record names observed after the write, or nil when the proof
-failed."
-  (let* ((path (mevedel-session-durability--generation-path
+failed.
+
+Operations in `mevedel-session-durability--commit-riders' share the program:
+see there.  A prelude delays the commit past the clock reading it was decided
+from, so with one the program also proves, between prelude and commit, that
+the target clock is still before DEADLINE: the earliest of the held lease's
+expiry and the replacement's own.  A lapsed deadline fails the prelude."
+  (let* ((riders (and mevedel-session-durability--commit-riders
+                      (not (plist-get mevedel-session-durability--commit-riders
+                                      :consumed))
+                      mevedel-session-durability--commit-riders))
+         (before (append
+                  (plist-get riders :before)
+                  (when (and (plist-get riders :before) (numberp deadline))
+                    (list (list :op 'before-time :path directory
+                                :content (number-to-string (floor deadline)))))))
+         (after (plist-get riders :after))
+         (path (mevedel-session-durability--generation-path
                 directory generation))
          (bytes (mevedel-session-durability--record-bytes record))
          (changed (not (equal expected bytes)))
          (refresh-time (not (mevedel-session-durability--target-time-cached-p directory)))
-         ;; `verify' stays first: the takeover race tests key on the commit
-         ;; program by its opening operation.  A fresh transaction clock
+         ;; `verify' opens the commit's own operations: the takeover race
+         ;; tests key on the commit program by it.  A fresh transaction clock
          ;; needs no new marker here.  Never extend its reuse window without
          ;; reading the target again; a slow operation expires it naturally.
-         (results
-          (mevedel-session-control-fs-run-program
-           (append
-            (list (list :op 'verify :path path :content expected))
-            ;; Several renewals can share one target-clock second.  Prove
-            ;; the unchanged bytes without replacing them with themselves;
-            ;; the head observation and clock refresh still follow.
-            (when changed (list (list :op 'write :path path :content bytes)))
-            (list (list :op 'list-directory :path directory))
-            (when refresh-time
-              (list (list :op 'target-time :path directory :optional t))))))
+         (own
+          (append
+           (list (list :op 'verify :path path :content expected))
+           ;; Several renewals can share one target-clock second.  Prove
+           ;; the unchanged bytes without replacing them with themselves;
+           ;; the head observation and clock refresh still follow.
+           (when changed (list (list :op 'write :path path :content bytes)))
+           (list (list :op 'list-directory :path directory))
+           (when refresh-time
+             (list (list :op 'target-time :path directory :optional t)))))
+         (all (mevedel-session-control-fs-run-program
+               (append before own after)))
+         (before-results (seq-take all (length before)))
+         (results (seq-take (nthcdr (length before) all) (length own)))
          (proof (nth 0 results))
          (write (and changed (nth 1 results)))
          (listing (nth (if changed 2 1) results))
          (clock (and refresh-time (nth (if changed 3 2) results))))
+    (when riders
+      (setf (plist-get riders :consumed) t
+            (plist-get riders :before-results) before-results
+            (plist-get riders :after-results)
+            (nthcdr (+ (length before) (length own)) all)))
+    ;; Nothing of the commit ran: the program stopped in its prelude.
+    (when (cl-some (lambda (pair)
+                     (and (not (plist-get (car pair) :optional))
+                          (not (eq 'ok (plist-get (cdr pair) :status)))))
+                   (cl-mapcar #'cons before before-results))
+      (signal 'mevedel-session-durability-prelude-failed (list before-results)))
     (when (eq 'ok (plist-get clock :status))
       (mevedel-session-durability--note-target-time
        directory (plist-get clock :value)))
@@ -1252,7 +1300,9 @@ preserved unsettled-mutation flag with UNSETTLED-MUTATION."
                  (committed
                   (mevedel-session-durability--commit-lease
                    directory (plist-get existing :generation)
-                   existing-bytes record)))
+                   existing-bytes record
+                   (min (plist-get existing :expires-at)
+                        (plist-get record :expires-at)))))
             (cond
              ((and committed
                    ;; A newer generation appearing means another client won,

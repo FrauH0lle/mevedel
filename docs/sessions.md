@@ -935,6 +935,15 @@ the reservation that opens a publication proves ownership for its first fixed
 write, and a batch that commits proves it after its last write through the head
 commit's exact-generation check, with only the immutable generation written in
 between.
+Those adjacent steps share one program. The reservation's program continues
+with the batch's first fixed write, behind a `verify-latest` that stops it when
+a newer lease generation exists; the publisher then decides from the listing
+and writes in its own program, as before. The head commit's program opens with
+the immutable generation and its manifest, so a taken generation name stops it
+before the lease record is touched and another name is tried. A committing
+sidecar is read back from its private local staging copy, not through a target
+program, and the local target's hostname comes from `/proc`. A local sidecar
+publication thereby takes three programs instead of six.
 Enumerating a workspace's sessions obeys the same budget. Every candidate
 directory's control artifacts are probed in one program and every lease
 directory is listed in one more, and both observations are then shared with

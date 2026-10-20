@@ -205,6 +205,19 @@
          (file-exists-p (plist-get artifact :source))))
    (plist-get batch :artifacts)))
 
+(defun mevedel-session-publication--read-staged-sidecar (source)
+  "Return the sidecar plist in staged local SOURCE.
+Staged sources live in this client's private temporary directory, never on
+the target, so they need no pinned control program: reading one through it
+cost a process start inside every committing publication."
+  (when (file-remote-p source)
+    (error "Staged publication source is not local: %s" source))
+  (with-temp-buffer
+    (let ((coding-system-for-read 'utf-8-unix))
+      (insert-file-contents source))
+    (goto-char (point-min))
+    (read (current-buffer))))
+
 (defun mevedel-session-publication--retain-uncommitted-batch (session batch)
   "Retain BATCH's session-local artifacts on SESSION until a marker."
   (let ((local
@@ -1257,106 +1270,97 @@ was otherwise read back and copied whole on every save."
                        :sha256 (or (plist-get artifact :source-sha256)
                                    (mevedel-session-publication--file-sha256 source))))))
 
-(defun mevedel-session-publication--write-generation
-    (root artifacts session-dir entries)
-  "Create one fresh generation below ROOT holding ARTIFACTS and its manifest.
+(defun mevedel-session-publication--generation-digests (artifacts)
+  "Return a table from ARTIFACTS' local sources to their SHA-256 digests.
+Only sources without a known digest are hashed."
+  (let* ((pending (cl-loop for artifact in artifacts
+                           unless (or (plist-get artifact :delete)
+                                      (plist-get artifact :source-sha256))
+                           collect (plist-get artifact :source)))
+         (table (make-hash-table :test #'equal)))
+    (cl-mapc (lambda (source digest) (puthash source digest table))
+             pending
+             (mevedel-session-publication--files-sha256 pending))
+    table))
 
-Return a cons of the generation directory and the overlaid manifest ENTRIES.
-The directory, every immutable artifact, and the manifest are one target
-process: they all land inside the single directory this call creates, so one
-pinned parent covers the whole generation.  The manifest is the last operation
-in the program, which keeps it the last byte written inside the generation.
-A name that already exists ends the program before anything is written, so a
-collision simply picks another name."
-  (catch 'written
-    (dotimes (_ 8)
-      (let* ((directory
-              (file-name-as-directory
-               (file-name-concat
-                root (mevedel-session-publication--generation-name))))
-             (digests
-              (let* ((pending (cl-loop for artifact in artifacts
-                                       unless (or (plist-get artifact :delete)
-                                                  (plist-get artifact :source-sha256))
-                                       collect (plist-get artifact :source)))
-                     (table (make-hash-table :test #'equal)))
-                (cl-mapc (lambda (source digest) (puthash source digest table))
-                         pending
-                         (mevedel-session-publication--files-sha256 pending))
-                table))
-             ;; Callers may stage the same transcript repeatedly, including
-             ;; across queued batches.  Compare the final bytes here, where
-             ;; last-write-wins and replacement semantics are already known.
-             (previous (make-hash-table :test #'equal))
-             (changed-artifacts
-              (progn
-                (dolist (entry entries)
-                  (puthash (car entry) (plist-get (cdr entry) :sha256) previous))
-                (seq-filter
-                 (lambda (artifact)
-                   (let ((old (gethash (plist-get artifact :logical) previous)))
-                     (if (plist-get artifact :delete)
-                         old
-                       (not (equal old (or (plist-get artifact :source-sha256)
-                                           (gethash (plist-get artifact :source)
-                                                    digests)))))))
-                 artifacts)))
-             (payloads
-              (cl-loop for artifact in changed-artifacts
-                       for index from 1
-                       unless (plist-get artifact :delete)
-                       collect (mevedel-session-publication--immutable-entry
-                                directory
-                                (if (plist-get artifact :source-sha256)
-                                    artifact
-                                  (append (list :source-sha256
-                                                (gethash (plist-get artifact :source)
-                                                         digests))
-                                          artifact))
-                                index session-dir)))
-             (changed (make-hash-table :test #'equal))
-             overlaid
-             manifest manifest-path operations results)
-        (dolist (artifact changed-artifacts)
-          (puthash (plist-get artifact :logical) t changed))
-        (setq overlaid
-              (append
-               (cl-remove-if (lambda (entry) (gethash (car entry) changed)) entries)
-               (mapcar (lambda (payload) (plist-get payload :entry)) payloads))
-              manifest (list :sidecar "session.meta.el" :artifacts overlaid)
-              manifest-path (file-name-concat directory "manifest.el"))
-        (mevedel-session-publication--validate-manifest manifest manifest-path)
-        (setq operations
-              (append
-               ;; The generations root may already exist; the generation
-               ;; itself must not, which is the collision signal below.
-               (list (list :op 'make-directory
-                           :path (directory-file-name
-                                  (file-name-as-directory root))
-                           :optional t)
-                     (list :op 'make-directory
-                           :path (directory-file-name directory)))
-               (mapcar (lambda (payload)
-                         (list :op 'create
-                               :path (plist-get payload :path)
-                               :source-file (plist-get payload :source-file)))
-                       payloads)
-               (list (list :op 'create :path manifest-path
-                           :content
-                           (mevedel-session-durability--record-bytes
-                            manifest)))))
-        (setq results (mevedel-session-control-fs-run-program operations))
-        (cond
-         ;; A taken generation name simply picks another one.
-         ((eq 'conflict (plist-get (nth 1 results) :status)) nil)
-         (t
-          ;; The optional root ensure is allowed to report a conflict.
-          (dolist (result (cdr results))
-            (unless (eq 'ok (plist-get result :status))
-              (mevedel-session-control-fs-program-value result)))
-          (throw 'written (cons directory overlaid))))))
-    (error "Could not create a fresh session publication directory: %s"
-           root)))
+(defun mevedel-session-publication--prepare-generation
+    (root artifacts session-dir entries digests)
+  "Plan one fresh generation below ROOT holding ARTIFACTS and its manifest.
+
+Return (DIRECTORY OVERLAID OPERATIONS): the generation directory, the
+overlaid manifest ENTRIES, and the program that writes it.  DIGESTS maps
+local sources to their SHA-256 values.  The directory, every immutable
+artifact, and the manifest land inside the single directory the program
+creates, so one pinned parent covers the whole generation.  The manifest is
+its last operation, which keeps it the last byte written inside the
+generation.  A name that already exists ends the program before anything is
+written: the second operation reports `conflict', and a caller picks
+another name."
+  (let* ((directory
+          (file-name-as-directory
+           (file-name-concat
+            root (mevedel-session-publication--generation-name))))
+         ;; Callers may stage the same transcript repeatedly, including
+         ;; across queued batches.  Compare the final bytes here, where
+         ;; last-write-wins and replacement semantics are already known.
+         (previous (make-hash-table :test #'equal))
+         (changed-artifacts
+          (progn
+            (dolist (entry entries)
+              (puthash (car entry) (plist-get (cdr entry) :sha256) previous))
+            (seq-filter
+             (lambda (artifact)
+               (let ((old (gethash (plist-get artifact :logical) previous)))
+                 (if (plist-get artifact :delete)
+                     old
+                   (not (equal old (or (plist-get artifact :source-sha256)
+                                       (gethash (plist-get artifact :source)
+                                                digests)))))))
+             artifacts)))
+         (payloads
+          (cl-loop for artifact in changed-artifacts
+                   for index from 1
+                   unless (plist-get artifact :delete)
+                   collect (mevedel-session-publication--immutable-entry
+                            directory
+                            (if (plist-get artifact :source-sha256)
+                                artifact
+                              (append (list :source-sha256
+                                            (gethash (plist-get artifact :source)
+                                                     digests))
+                                      artifact))
+                            index session-dir)))
+         (changed (make-hash-table :test #'equal))
+         overlaid
+         manifest manifest-path)
+    (dolist (artifact changed-artifacts)
+      (puthash (plist-get artifact :logical) t changed))
+    (setq overlaid
+          (append
+           (cl-remove-if (lambda (entry) (gethash (car entry) changed)) entries)
+           (mapcar (lambda (payload) (plist-get payload :entry)) payloads))
+          manifest (list :sidecar "session.meta.el" :artifacts overlaid)
+          manifest-path (file-name-concat directory "manifest.el"))
+    (mevedel-session-publication--validate-manifest manifest manifest-path)
+    (list directory overlaid
+          (append
+           ;; The generations root may already exist; the generation
+           ;; itself must not, which is the collision signal.
+           (list (list :op 'make-directory
+                       :path (directory-file-name
+                              (file-name-as-directory root))
+                       :optional t)
+                 (list :op 'make-directory
+                       :path (directory-file-name directory)))
+           (mapcar (lambda (payload)
+                     (list :op 'create
+                           :path (plist-get payload :path)
+                           :source-file (plist-get payload :source-file)))
+                   payloads)
+           (list (list :op 'create :path manifest-path
+                       :content
+                       (mevedel-session-durability--record-bytes
+                        manifest)))))))
 
 (defun mevedel-session-publication--commit-marker-publication
     (session batches marker)
@@ -1386,9 +1390,9 @@ collision simply picks another name."
          (replacement
           (when (and (plist-get marker :replace) (not checkpoint))
             (mevedel-session-codec-validate-current-sidecar
-             (mevedel-session-codec-read (plist-get sidecar :source)))))
-         (root (file-name-concat session-dir ".publications"))
-         written directory)
+             (mevedel-session-publication--read-staged-sidecar
+              (plist-get sidecar :source)))))
+         (root (file-name-concat session-dir ".publications")))
     (when (and checkpoint
                (not (mevedel-session-checkpoint-valid-p session checkpoint)))
       (error "Checkpoint candidate belongs to a different owner epoch"))
@@ -1400,38 +1404,79 @@ collision simply picks another name."
                (mevedel-session-checkpoint-state session))
       (let* ((source (plist-get sidecar :source))
              (raw (mevedel-session-codec-validate-current-sidecar
-                   (mevedel-session-codec-read source)))
+                   (mevedel-session-publication--read-staged-sidecar source)))
              (projected (mevedel-session-checkpoint-project session raw checkpoint)))
         (unless (equal raw projected)
           (mevedel-session-codec-write source projected)
           (setf (plist-get sidecar :source-sha256) nil))))
     (mevedel-session-control-fs-physical-path root)
-    ;; Unchanged entries keep their existing immutable payloads.
-    (setq written (mevedel-session-publication--write-generation
-                   root artifacts session-dir entries)
-          directory (car written)
-          entries (cdr written))
-    (let* ((manifest-path (file-name-concat directory "manifest.el"))
-           (head (file-relative-name manifest-path session-dir))
-           (raw (list :head head
-                      :sidecar "session.meta.el"
-                      :artifacts entries))
-           (captured
-            (mevedel-session-publication--capture-publication
-             session-dir raw)))
-      (when (and checkpoint
-                 (not (mevedel-session-checkpoint-valid-p session checkpoint)))
-        (error "Checkpoint candidate belongs to a different owner epoch"))
-      (unless (mevedel-session-durability-commit-publication-head session head)
-        (user-error "Portable session lease was lost before publication commit"))
-      (setf (mevedel-session-publication session) captured)
-      (cond
-       (checkpoint (mevedel-session-checkpoint-install session checkpoint))
-       (replacement (mevedel-session-checkpoint-seed session replacement)))
-      ;; A first root turn can run for hours while agents checkpoint.  Waiting
-      ;; for root settlement lets those superseded transcripts grow unbounded.
-      (mevedel-session-collection-schedule session)
-      captured)))
+    (let ((digests (mevedel-session-publication--generation-digests artifacts)))
+      (catch 'committed
+        (dotimes (_ 8)
+          ;; Unchanged entries keep their existing immutable payloads.
+          (pcase-let* ((`(,directory ,overlaid ,operations)
+                        (mevedel-session-publication--prepare-generation
+                         root artifacts session-dir entries digests))
+                       (manifest-path (file-name-concat directory "manifest.el"))
+                       (head (file-relative-name manifest-path session-dir))
+                       (captured
+                        (mevedel-session-publication--capture-publication
+                         session-dir (list :head head
+                                           :sidecar "session.meta.el"
+                                           :artifacts overlaid)))
+                       (committed nil))
+            (when (and checkpoint
+                       (not (mevedel-session-checkpoint-valid-p session checkpoint)))
+              (error "Checkpoint candidate belongs to a different owner epoch"))
+            ;; The generation is the head commit's prelude, in its own program:
+            ;; the same operations in the same order, one process fewer.
+            (setq committed
+                  (condition-case err
+                      (let ((mevedel-session-durability--commit-riders
+                             (list :before operations :after nil :consumed nil
+                                   :before-results nil :after-results nil)))
+                        (if (mevedel-session-durability-commit-publication-head
+                             session head)
+                            'committed
+                          'lost))
+                    (mevedel-session-durability-prelude-failed
+                     (let ((results (cadr err)))
+                       (cond
+                        ;; A taken generation name simply picks another one.
+                        ((eq 'conflict (plist-get (nth 1 results) :status)) 'retry)
+                        ;; A lease deadline passed while the generation was
+                        ;; written, see `mevedel-session-durability--commit-lease'.
+                        ;; The generation is complete; commit its head afresh,
+                        ;; from a new clock reading, which fails closed only
+                        ;; once the held window itself has lapsed.
+                        ((eq 'mismatch
+                             (plist-get (nth (length operations) results) :status))
+                         (if (mevedel-session-durability-commit-publication-head
+                              session head)
+                             'committed
+                           'lost))
+                        (t
+                         ;; The optional root ensure may report a conflict.
+                         (dolist (result (cdr results))
+                           (unless (eq 'ok (plist-get result :status))
+                             (mevedel-session-control-fs-program-value result)))
+                         (error "Session publication generation was not written")))))))
+            (pcase committed
+              ('retry nil)
+              ('lost
+               (user-error "Portable session lease was lost before publication commit"))
+              (_
+               (setf (mevedel-session-publication session) captured)
+               (cond
+                (checkpoint (mevedel-session-checkpoint-install session checkpoint))
+                (replacement (mevedel-session-checkpoint-seed session replacement)))
+               ;; A first root turn can run for hours while agents checkpoint.
+               ;; Waiting for root settlement lets those superseded transcripts
+               ;; grow unbounded.
+               (mevedel-session-collection-schedule session)
+               (throw 'committed captured)))))
+        (error "Could not create a fresh session publication directory: %s"
+               root)))))
 
 (defun mevedel-session-publication-uncommitted-artifact (session logical)
   "Return SESSION's newest retained or queued local source for LOGICAL.
@@ -1464,6 +1509,41 @@ transaction already created is one target process for a known answer.  A
 caller that spans one transaction binds this to a fresh `(list nil)'; outside
 such a binding every call reaches the target.")
 
+(defvar mevedel-session-publication--prewritten nil
+  "A list (ARTIFACT RIDERS) whose fixed write rode the publication's reservation.
+RIDERS are the reservation commit's riders, see
+`mevedel-session-durability--commit-riders'; their after-results answer
+ARTIFACT's write.  The first `mevedel-session-publication--publish-artifact'
+for ARTIFACT consumes the entry.")
+
+(defun mevedel-session-publication--prewrite-operations (session artifact)
+  "Return the operations writing fixed ARTIFACT behind SESSION's reservation.
+
+They follow the reservation's lease write and listing in its program, as
+the separate write program did, with nothing written in between: the
+reservation is still the ownership proof before the first fixed write.  A
+leading `verify-latest' stops them when a newer lease generation exists,
+which the reservation's listing would otherwise have shown Lisp before the
+write; the caller then writes as before, after its own decision.  Return
+nil when SESSION has no bound generation to compare against."
+  (let ((generation (plist-get (mevedel-session-lease session) :generation))
+        (session-dir (mevedel-session-save-path session))
+        (path (plist-get artifact :path)))
+    (when (and (natnump generation) session-dir path (plist-get artifact :source))
+      (let ((directory (file-name-directory (expand-file-name path))))
+        (mevedel-session-control-fs-physical-path directory)
+        (list (list :op 'verify-latest
+                    :path (mevedel-session-durability--generation-path
+                           (mevedel-session-durability--lease-path session-dir)
+                           generation)
+                    :content ".el")
+              (list :op 'make-directory
+                    :path (directory-file-name directory)
+                    :optional t)
+              (list :op 'write
+                    :path (mevedel-session-control-fs-physical-path path)
+                    :source-file (plist-get artifact :source)))))))
+
 (defun mevedel-session-publication--publish-artifact (artifact)
   "Publish staged ARTIFACT through a nearby target temporary file.
 
@@ -1478,6 +1558,11 @@ component and retries once."
          (directory (file-name-directory (expand-file-name path)))
          (ensure (not (member directory
                               (car mevedel-session-publication--ensured-directories))))
+         (prewritten
+          (when (eq artifact (car mevedel-session-publication--prewritten))
+            (prog1 (plist-get (cadr mevedel-session-publication--prewritten)
+                              :after-results)
+              (setcar mevedel-session-publication--prewritten nil))))
          (write-operation
           (list :op 'write
                 :path (mevedel-session-control-fs-physical-path path)
@@ -1485,13 +1570,16 @@ component and retries once."
          result)
     (mevedel-session-control-fs-physical-path directory)
     (setq result
-          (car (last (mevedel-session-control-fs-run-program
-                      (append
-                       (when ensure
-                         (list (list :op 'make-directory
-                                     :path (directory-file-name directory)
-                                     :optional t)))
-                       (list write-operation))))))
+          (if (eq 'ok (plist-get (nth 2 prewritten) :status))
+              ;; The reservation's program already ensured and wrote it.
+              (nth 2 prewritten)
+            (car (last (mevedel-session-control-fs-run-program
+                        (append
+                         (when ensure
+                           (list (list :op 'make-directory
+                                       :path (directory-file-name directory)
+                                       :optional t)))
+                         (list write-operation)))))))
     (when (eq 'absent (plist-get result :status))
       (mevedel-session-control-fs-make-directory
        (directory-file-name directory) t)
@@ -1647,12 +1735,31 @@ as the reservation that opens a publication does."
             outcome)
         (condition-case err
             (setq outcome
-                  (mevedel-session-durability-call-with-reserved-lease
-                   session
-                   (lambda ()
-                     (setf (mevedel-session-pending-publication session) nil)
-                     ;; The reservation that just ran proved ownership.
-                     (mevedel-session-publication--drain session batches t))))
+                  (let* ((first (and batches
+                                     (seq-find
+                                      #'mevedel-session-publication--fixed-artifact-p
+                                      (plist-get (car batches) :artifacts))))
+                         (operations
+                          (and first
+                               (mevedel-session-publication--prewrite-operations
+                                session first)))
+                         ;; The first fixed write rides the reservation's own
+                         ;; program: one process start fewer per publication.
+                         (riders (and operations
+                                      (list :before nil :after operations
+                                            :consumed nil :before-results nil
+                                            :after-results nil)))
+                         (mevedel-session-durability--commit-riders riders)
+                         (mevedel-session-publication--prewritten
+                          (and riders (list first riders))))
+                    (mevedel-session-durability-call-with-reserved-lease
+                     session
+                     (lambda ()
+                       ;; Only the reservation carries them.
+                       (when riders (setf (plist-get riders :consumed) t))
+                       (setf (mevedel-session-pending-publication session) nil)
+                       ;; The reservation that just ran proved ownership.
+                       (mevedel-session-publication--drain session batches t)))))
           (error
            (unless (mevedel-session-pending-publication session)
              (let* ((committed-p

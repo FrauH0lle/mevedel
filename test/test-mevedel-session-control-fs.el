@@ -1142,6 +1142,29 @@
           (should-not (directory-files root nil "\\`\\.mevedel-control")))
       (delete-directory root t)))
 
+  :doc "an unstageable payload travels inline and the target refuses it"
+  (let* ((root (make-temp-file "mevedel-control-unstageable-" t))
+         (locked (file-name-concat root "locked"))
+         (proof (file-name-concat root "proof")))
+    (unwind-protect
+        (progn
+          (make-directory locked)
+          (write-region "kept" nil proof nil 'silent)
+          (set-file-modes locked #o500)
+          (skip-unless (not (file-writable-p locked)))
+          ;; No local error: the operation before it ran, and the write's
+          ;; own refusal comes back as its result.
+          (let ((results (mevedel-session-control-fs-run-program
+                          (list (list :op 'verify :path proof :content "kept")
+                                (list :op 'write :path (file-name-concat locked "x")
+                                      :content "payload")))))
+            (should (equal '(ok failed)
+                           (mapcar (lambda (result) (plist-get result :status))
+                                   results))))
+          (should-not (file-exists-p (file-name-concat locked "x"))))
+      (set-file-modes locked #o700)
+      (delete-directory root t)))
+
   :doc "stdin framing preserves the batched read archive path"
   (let* ((root (make-temp-file "mevedel-control-stdin-archive-" t))
          (first (file-name-concat root "first"))

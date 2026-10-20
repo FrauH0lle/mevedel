@@ -144,15 +144,23 @@
 
 The rest of the local payload comes from this machine's `/proc', so the
 hostname must too: a remote `default-directory' would mix two machines into
-one fingerprint and read as a replacement."
-  (condition-case nil
-      (with-temp-buffer
-        (let ((default-directory "/"))
-          (unless (zerop (process-file "uname" nil t nil "-n"))
-            (error "'uname' failed")))
-        (let ((value (string-trim (buffer-string))))
-          (and (not (string-empty-p value)) value)))
-    (error nil)))
+one fingerprint and read as a replacement.  `/proc/sys/kernel/hostname' is
+the nodename `uname -n' prints, in this process's UTS namespace, without the
+process `uname' cost on every incarnation check; `uname' remains the
+fallback where procfs does not offer it."
+  (or (when-let* ((raw (mevedel-execution-target--read-local-identity
+                        "/proc/sys/kernel/hostname")))
+        ;; Decoded as `uname's output is, so a fingerprint keeps its bytes.
+        (decode-coding-string raw (or (car default-process-coding-system)
+                                      'undecided)))
+      (condition-case nil
+          (with-temp-buffer
+            (let ((default-directory "/"))
+              (unless (zerop (process-file "uname" nil t nil "-n"))
+                (error "'uname' failed")))
+            (let ((value (string-trim (buffer-string))))
+              (and (not (string-empty-p value)) value)))
+        (error nil))))
 
 (defun mevedel-execution-target--incarnation-payload
     (boot machine pid1-start hostname)

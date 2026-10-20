@@ -1090,7 +1090,11 @@ in the destination's nearest existing ancestor -- a directory the same
 program creates lives on that same filesystem -- and the program renames
 or links it after proving the destination's parent as before.  The
 program names it relative to that pinned parent, never by pathname.  Record each
-staged file in the car of STAGED for cleanup."
+staged file in the car of STAGED for cleanup.  A payload that cannot be
+staged -- an unwritable destination directory -- travels inline instead, so
+the target refuses the operation itself and the program reports it: a local
+staging error must not end operations that preceded it, such as a lease
+commit the write rides behind."
   (mapcar
    (lambda (op)
      (let ((content (plist-get op :content))
@@ -1103,30 +1107,32 @@ staged file in the car of STAGED for cleanup."
                             (>= (string-bytes content)
                                 mevedel-session-control-fs--stage-min-bytes)))))
            (mevedel-session-control-fs--inline-source op)
-         (let* ((parent (plist-get (mevedel-session-control-fs--descriptor
-                                    (plist-get op :path))
-                                   :parent))
-                (directory parent)
-                (up ""))
-           (while (not (file-directory-p directory))
-             (setq directory (file-name-directory (directory-file-name directory))
-                   up (concat up "../")))
-           (let ((file (make-temp-file
-                        (file-name-concat directory ".mevedel-control-fs-staged-")))
-                 (coding-system-for-write
-                  (if (multibyte-string-p content)
-                      (or (plist-get op :coding) 'utf-8-unix)
-                    'no-conversion)))
-             (push file (car staged))
-             (if source
-                 ;; A file-backed payload is copied by the kernel; its bytes
-                 ;; never become a Lisp string.
-                 (copy-file source file t)
-               (write-region content nil file nil 'silent))
-             (list :op (if (eq (plist-get op :op) 'write) 'write-staged 'create-staged)
-                   :path (plist-get op :path)
-                   :content (concat up (file-name-nondirectory file))
-                   :optional (plist-get op :optional)))))))
+         (condition-case nil
+             (let* ((parent (plist-get (mevedel-session-control-fs--descriptor
+                                        (plist-get op :path))
+                                       :parent))
+                    (directory parent)
+                    (up ""))
+               (while (not (file-directory-p directory))
+                 (setq directory (file-name-directory (directory-file-name directory))
+                       up (concat up "../")))
+               (let ((file (make-temp-file
+                            (file-name-concat directory ".mevedel-control-fs-staged-")))
+                     (coding-system-for-write
+                      (if (multibyte-string-p content)
+                          (or (plist-get op :coding) 'utf-8-unix)
+                        'no-conversion)))
+                 (push file (car staged))
+                 (if source
+                     ;; A file-backed payload is copied by the kernel; its bytes
+                     ;; never become a Lisp string.
+                     (copy-file source file t)
+                   (write-region content nil file nil 'silent))
+                 (list :op (if (eq (plist-get op :op) 'write) 'write-staged 'create-staged)
+                       :path (plist-get op :path)
+                       :content (concat up (file-name-nondirectory file))
+                       :optional (plist-get op :optional))))
+           (file-error (mevedel-session-control-fs--inline-source op))))))
    operations))
 
 (defvar mevedel-session-control-fs--measure-min-ms 20

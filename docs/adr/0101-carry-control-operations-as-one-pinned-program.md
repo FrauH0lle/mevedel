@@ -97,6 +97,17 @@ its own proof as the first operation of its program instead of a reservation.
 A collection deletion does too: its program first verifies the lease generation
 bytes, a target clock before the lease expiry, and the planned journal pin
 directory's entries and bytes.
+A lease commit can carry adjacent publication steps as riders in its own
+program: the reservation is followed by the first fixed write, behind a
+`verify-latest` of the lease directory, and the head commit is preceded by the
+immutable generation. Order and proofs are those of the separate programs; only
+their process starts are shared. A prelude delays the lease write past the
+clock reading the commit was decided from, so its program also proves the
+target clock is still before the earlier of the held and the replacement
+lease's expiry; when that fails, the completed generation's head is committed
+again from a fresh reading, failing closed only once the held window lapsed.
+A local payload that cannot be staged travels inline, so the target, not
+a local staging error, refuses the operation and earlier operations still run.
 Identical lease bytes need verification and listing but no replacement write.
 Renewals omit the trailing clock operation while the transaction's existing
 reading is fresh, without refreshing its age. Once that reading expires, the
@@ -121,6 +132,24 @@ an optional read optimization with an ordinary-read fallback. No new caller
 protocol, extraction directory, or generic resolver cache is needed.
 
 ## Decision history
+
+- **Publication still split adjacent proof and write steps.** A live trace of
+  one background-command delivery on a local session (2026-10-20) found six
+  programs in its sidecar publication, about 98 of its 135 ms: admission,
+  reservation, the fixed sidecar write, a pinned read of the client's own
+  staged sidecar, the generation, and the head commit, plus two `uname`
+  processes. The reservation now carries the first fixed write, the head
+  commit carries the generation, the staged sidecar is read locally and the
+  local hostname comes from `/proc`: three programs, about 120 ms. Merged
+  programs cost close to the sum of their parts, so most of the remaining
+  time is the operations' own subprocesses, not program starts. The write
+  that rides the reservation is guarded by `verify-latest` because Lisp no
+  longer sees the reservation's listing before it; a stopped write falls back
+  to the previous separate program. Review found that the merged head commit
+  could otherwise commit an already-expired lease after a slow generation;
+  real-clock probes confirmed the guard and the fresh-clock retry. A
+  read-only agent directory also showed a local staging error ending the
+  reservation's program before it ran, reported as a lease failure.
 
 - **Batched discovery could outlive its lease listing.** A deterministic
   two-client interleaving reproduced an activated successor pruning every
