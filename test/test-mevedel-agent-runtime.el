@@ -33,6 +33,12 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-session-publication-test-helpers
+         (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
+                           "mevedel-session-publication-test-helpers"))
+(require 'mevedel-execution-test-helpers
+         (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
+                           "mevedel-execution-test-helpers"))
 
 (defun mevedel-agent-runtime-test--agent ()
   "Return a small frozen test agent."
@@ -240,7 +246,7 @@
           (cl-letf (((symbol-function 'mevedel-agent-conversation-save)
                      (lambda (&rest _) t))
                     ((symbol-function 'mevedel-agent-runtime--finalize)
-                     (lambda (invocation status)
+                     (lambda (invocation status &optional _token)
                        (setf (mevedel-agent-invocation-transcript-status invocation)
                              status)))
                     ((symbol-function 'run-at-time)
@@ -325,7 +331,7 @@
                 (lambda (_invocation)
                   (push 'view-start events)))
                ((symbol-function 'mevedel-agent-runtime--finalize)
-                (lambda (invocation status)
+                (lambda (invocation status &optional _token)
                   (push status finalizations)
                   (setf (mevedel-agent-invocation-transcript-status invocation)
                         status))))
@@ -340,7 +346,7 @@
                       (push 'invocation-published events)
                       (setq seen-invocation inv))
                     :on-settle
-                    (lambda (inv response event)
+                    (lambda (inv response event &optional _token)
                       (push (list inv response event) settlements)))))
               (should (eq invocation seen-invocation))
               ;; The Goal-charged root request pays for the agent.
@@ -1193,13 +1199,13 @@ Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
             (list (cons "/root/explore" record))
             (mevedel-agent-invocation-parent-session invocation) session
             (mevedel-agent-invocation-runtime-settle-callback invocation)
-            (lambda (invocation response event)
+            (lambda (invocation response event &optional token)
               (mevedel-agent-control--settle
-               session record invocation response event)))
+               session record invocation response event token)))
       (cl-letf (((symbol-function 'mevedel-agent-runtime--execution-live-p)
                  (lambda (_invocation) live-p))
                 ((symbol-function 'mevedel-agent-runtime--finalize)
-                 (lambda (_invocation status)
+                 (lambda (_invocation status &optional _token)
                    (push status finalizations))))
         (when response-first-p
           (mevedel-agent-runtime--handle-provider-result invocation "Agent answer")
@@ -1275,9 +1281,9 @@ Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
           (list (cons "/root/explore" record))
           (mevedel-agent-invocation-parent-session invocation) session
           (mevedel-agent-invocation-runtime-settle-callback invocation)
-          (lambda (invocation response event)
+          (lambda (invocation response event &optional token)
             (mevedel-agent-control--settle
-             session record invocation response event)))
+             session record invocation response event token)))
     (cl-letf (((symbol-function 'mevedel-agent-runtime--execution-live-p)
                (lambda (_invocation) nil))
               ((symbol-function 'mevedel-agent-runtime--finalize) #'ignore))
@@ -1290,6 +1296,280 @@ Each element is (NAME SEARCH-RESULT IN-TOOLCALL-ROSTER-P)."
     (should (equal '(RESULT)
                    (mapcar (lambda (msg) (plist-get msg :type))
                            (mevedel-agent-control-context-mailbox session))))))
+
+(mevedel-deftest mevedel-agent-runtime-queue-execution-completion/acknowledgement
+  (:quiet t)
+  ,test
+  (test)
+  :doc "a rejected completion acknowledges failure once and returns nil"
+  (let ((invocation (mevedel-agent-runtime-test--invocation))
+        acks)
+    (should-not
+     (mevedel-agent-runtime-queue-execution-completion
+      invocation "/root/other" "wrong owner" nil
+      (lambda (success error) (push (list success error) acks))))
+    (should (equal '((nil "Execution owner no longer accepts results")) acks)))
+  :doc "a held response acknowledges success after the body joins its results"
+  (let ((invocation (mevedel-agent-runtime-test--invocation))
+        acks)
+    (setf (mevedel-agent-invocation-runtime-pending-response invocation) "ans")
+    (cl-letf (((symbol-function 'mevedel-agent-runtime--execution-live-p)
+               (lambda (_) t)))
+      (should
+       (eq t (mevedel-agent-runtime-queue-execution-completion
+              invocation (mevedel-agent-invocation-require-path invocation)
+              "held" nil
+              (lambda (success error)
+                (push (list success error
+                            (length (mevedel-agent-invocation-runtime-execution-results
+                                     invocation)))
+                      acks))))))
+    (should (equal '((t nil 1)) acks)))
+  :doc "the mailbox path forwards the acknowledgement and its pending marker"
+  (dolist (marker '(pending t))
+    (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+           (invocation (mevedel-agent-runtime-test--invocation))
+           (path (mevedel-agent-invocation-require-path invocation))
+           (ack (lambda (&rest _) nil))
+           captured)
+      (setf (mevedel-agent-invocation-parent-session invocation) session)
+      (cl-letf (((symbol-function 'mevedel-agent-control-enqueue-execution-result)
+                 (lambda (&rest args) (setq captured args) marker)))
+        (should (eq marker
+                    (mevedel-agent-runtime-queue-execution-completion
+                     invocation path "body" '(:execution-id "e1") ack))))
+      (should (equal (list session path "body" nil nil '(:execution-id "e1"))
+                     (seq-take captured 6)))
+      (should (eq ack (nth 6 captured)))))
+  :doc "the last held completion waits for durable RESULT and transcript, including rollback retry"
+  (dolist (failure-mode '(nil before-commit after-commit))
+    (test-mevedel-publication-async--fixture
+     (lambda (session parent)
+       (let* ((child (generate-new-buffer " *held-completion*"))
+              (invocation (mevedel-agent-runtime-test--invocation child))
+              (record (mevedel-agent-record--create
+                       :id "explorer--test" :role "explorer"
+                       :path "/root/explore" :parent-path "/root"
+                       :activity 'running :invocation invocation))
+              (publisher (symbol-function
+                          'mevedel-session-artifacts-publish-agent-terminal-state))
+              (deliver (symbol-function 'mevedel-agent-control--publish-result))
+              (fail (eq failure-mode 'before-commit))
+              (fail-delivery (eq failure-mode 'after-commit))
+              acks publication-called durable)
+         (setf (mevedel-agent-invocation-parent-session invocation) session
+               (mevedel-agent-invocation-parent-data-buffer invocation) parent
+               (mevedel-agent-invocation-runtime-pending-response invocation) "answer"
+               (mevedel-session-agent-registry session)
+               (list (cons "/root/explore" record))
+               (mevedel-agent-invocation-runtime-settle-callback invocation)
+               (lambda (inv response event token)
+                 (mevedel-agent-control--settle session record inv response event token)))
+         (setf (mevedel-agent-invocation-frozen-configuration invocation)
+               (with-current-buffer parent
+                 (mevedel-agent-exec-freeze-configuration
+                  "explorer" invocation (list :backend gptel-backend :model gptel-model)))
+               (mevedel-agent-record-configuration record)
+               (mevedel-agent-invocation-frozen-configuration invocation))
+         (with-current-buffer child
+           (org-mode)
+           (setq-local mevedel--session session mevedel--agent-invocation invocation)
+           (mevedel-agent-runtime--setup-transcript invocation child)
+           (insert "* Agent Task: explore\n\nHeld durable response\n"))
+         (setf (mevedel-agent-record-conversation-location record)
+               (mevedel-agent-invocation-transcript-relative-path invocation))
+         ;; A real accepted preparation holds the gate before any publication
+         ;; or terminal-state capture; no fabricated token opens the gate.
+         (setf (mevedel-session-publication-preparations session)
+               (list (cons #'ignore nil)))
+         (cl-letf (((symbol-function 'mevedel-agent-runtime--execution-live-p)
+                    (lambda (_) nil))
+                   ((symbol-function 'mevedel-session-artifacts-publish-agent-terminal-state)
+                    (lambda (&rest args)
+                      (setq publication-called t)
+                      (should-not acks)
+                      (when fail (error "Injected deferred settlement failure"))
+                      (prog1 (apply publisher args) (setq durable t))))
+                   ((symbol-function 'mevedel-agent-control--publish-result)
+                    (lambda (&rest args)
+                      (when fail-delivery (error "Injected postcommit notification failure"))
+                      (apply deliver args))))
+           (let ((ack (lambda (success error)
+                        (when success
+                          (should durable)
+                          (should
+                           (equal '(RESULT EXECUTION)
+                                  (mapcar (lambda (mail) (plist-get mail :type))
+                                          (test-mevedel-publication-async--restored-mail session))))
+                          (should
+                           (string-match-p
+                            "Held durable response"
+                            (mevedel-session-artifacts-read-artifact
+                             session (mevedel-agent-invocation-transcript-relative-path invocation)
+                             t))))
+                        (push (list success error) acks))))
+             (should
+              (eq 'pending
+                  (mevedel-agent-runtime-queue-execution-completion
+                   invocation "/root/explore" "execution output" '(:execution-id "held") ack)))
+             (should-not acks)
+             (should-not publication-called)
+             (should-not (mevedel-agent-invocation-runtime-settled-p invocation))
+             (should-not (test-mevedel-publication-async--restored-mail session))
+             (mevedel-session-publication-barrier session)
+             (should publication-called)
+             (should (= 1 (length acks)))
+             (when (eq failure-mode 'before-commit)
+               (should (equal '((nil "Injected deferred settlement failure")) acks))
+               (should-not (mevedel-agent-invocation-runtime-settled-p invocation))
+               (should-not (mevedel-agent-invocation-runtime-execution-results invocation))
+               (should-not (test-mevedel-publication-async--mail session))
+               (should-not (test-mevedel-publication-async--restored-mail session))
+               ;; The producer still owns the failed output.  Retry it through
+               ;; the same sink and verify it appears exactly once on disk.
+               (setq fail nil acks nil)
+               (should
+                (eq t (mevedel-agent-runtime-queue-execution-completion
+                       invocation "/root/explore" "execution output"
+                       '(:execution-id "held") ack))))
+             (should (equal '((t nil)) acks))
+             (when fail-delivery
+               ;; Adoption already secured the result despite the notification
+               ;; error. Retrying cleanup must neither reconsume nor republish it.
+               (should-not (mevedel-agent-invocation-runtime-settled-p invocation))
+               (setq fail-delivery nil)
+               (mevedel-agent-runtime--settle invocation "answer"))
+             (should (mevedel-agent-invocation-runtime-settled-p invocation))
+             (mevedel-session-publication-barrier session)
+             (should (equal '((t nil)) acks))))))))
+  :doc "a rejected deferred preparation acknowledges failure once even if teardown repeats it"
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         failure acks)
+    (setf (mevedel-agent-invocation-parent-session invocation) session
+          (mevedel-agent-invocation-runtime-pending-response invocation) "answer")
+    (cl-letf (((symbol-function 'mevedel-agent-runtime--execution-live-p)
+               (lambda (_) nil))
+              ((symbol-function 'mevedel-session-publication-defer)
+               (lambda (_session _preparation &optional handler _token)
+                 (setq failure handler) t)))
+      (should (eq 'pending
+                  (mevedel-agent-runtime-queue-execution-completion
+                   invocation "/root/explore" "retained output" nil
+                   (lambda (success error) (push (list success error) acks)))))
+      (should-not acks)
+      (funcall failure '(error "Teardown rejected settlement"))
+      (funcall failure '(error "Teardown rejected settlement")))
+    (should (equal '((nil "Teardown rejected settlement")) acks))
+    (should-not (mevedel-agent-invocation-runtime-execution-results invocation))
+    (should-not (mevedel-agent-invocation-runtime-settled-p invocation)))
+  :doc "synchronous settlement errors and quits acknowledge failure once before propagating"
+  (dolist (condition '(error quit))
+    (let ((invocation (mevedel-agent-runtime-test--invocation))
+          (siblings (list (cons "older second" nil) (cons "older first" nil)))
+          caught acks)
+      (setf (mevedel-agent-invocation-runtime-pending-response invocation) "answer"
+            (mevedel-agent-invocation-runtime-execution-results invocation) siblings)
+      (cl-letf (((symbol-function 'mevedel-agent-runtime--execution-live-p)
+                 (lambda (_) nil))
+                ((symbol-function 'mevedel-agent-runtime--settle-1)
+                 (lambda (&rest _) (signal condition '("Settlement failed")))))
+        (condition-case err
+            (mevedel-agent-runtime-queue-execution-completion
+             invocation "/root/explore" "retained" nil
+             (lambda (success error) (push (list success error) acks)))
+          ((error quit) (setq caught err))))
+      (should (eq condition (car caught)))
+      (should (= 1 (length acks)))
+      (should-not (caar acks))
+      (should (stringp (cadar acks)))
+      (should (equal siblings (mevedel-agent-invocation-runtime-execution-results invocation)))
+      (should-not (mevedel-agent-invocation-runtime-settled-p invocation))))
+  :doc "a real yielded producer survives failed held settlement and retries once with its unread spool"
+  (test-mevedel-publication-async--fixture
+   (lambda (session parent)
+     (let* ((child (generate-new-buffer " *held-real-producer*"))
+            (invocation (mevedel-agent-runtime-test--invocation child))
+            (record (mevedel-agent-record--create
+                     :id "explorer--test" :role "explorer" :path "/root/explore"
+                     :parent-path "/root" :activity 'running :invocation invocation))
+            (root (mevedel-workspace-root (mevedel-session-workspace session)))
+            (go (file-name-concat root "go"))
+            (mevedel-sandbox-mode 'off)
+            (publisher (symbol-function 'mevedel-session-artifacts-publish-agent-terminal-state))
+            (fail t)
+            acks execution id)
+       (unwind-protect
+           (progn
+             (setf (mevedel-agent-invocation-parent-session invocation) session
+                   (mevedel-agent-invocation-parent-data-buffer invocation) parent
+                   (mevedel-agent-invocation-runtime-pending-response invocation) "answer"
+                   (mevedel-session-agent-registry session) (list (cons "/root/explore" record))
+                   (mevedel-agent-invocation-runtime-settle-callback invocation)
+                   (lambda (inv response event token)
+                     (mevedel-agent-control--settle session record inv response event token))
+                   (mevedel-agent-invocation-frozen-configuration invocation)
+                   (with-current-buffer parent
+                     (mevedel-agent-exec-freeze-configuration
+                      "explorer" invocation (list :backend gptel-backend :model gptel-model)))
+                   (mevedel-agent-record-configuration record)
+                   (mevedel-agent-invocation-frozen-configuration invocation))
+             (with-current-buffer child
+               (org-mode)
+               (setq-local mevedel--session session mevedel--agent-invocation invocation)
+               (mevedel-agent-runtime--setup-transcript invocation child)
+               (insert "* Agent Task: explore\n\nHeld producer transcript\n"))
+             (setf (mevedel-agent-record-conversation-location record)
+                   (mevedel-agent-invocation-transcript-relative-path invocation))
+             (cl-letf (((symbol-function 'mevedel-session-artifacts-publish-agent-terminal-state)
+                        (lambda (&rest args)
+                          (when fail (error "Injected terminal publication failure"))
+                          (apply publisher args))))
+               (let ((mevedel-execution-mailbox-delivery-function
+                      (lambda (event context ack)
+                        (mevedel-tool-exec-handle-execution-event
+                         event context
+                         (lambda (success error)
+                           (push (list success error) acks)
+                           (funcall ack success error))))))
+                 (let ((initial
+                        (test-mevedel-execution--start-managed
+                         session root
+                         (list "sh" "-c"
+                               "while [ ! -e \"$1\" ]; do sleep .02; done; printf RETAIN-ME"
+                               "wait" go)
+                         :owner "/root/explore" :owner-context invocation)))
+                   (setq id (plist-get (plist-get initial :facts) :execution-id)
+                         execution (mevedel-execution--owned-yielded-record
+                                    session "/root/explore" id)))
+                 (write-region "go" nil go nil 'silent)
+                 (test-mevedel-execution--wait (lambda () acks))
+                 (should (equal '((nil "Injected terminal publication failure")) acks))
+                 (should (eq execution (mevedel-execution--owned-yielded-record
+                                        session "/root/explore" id)))
+                 (should-not (mevedel-execution--record-delivery-state execution))
+                 (should-not (mevedel-execution--record-delivery-pending-p execution))
+                 (should-not (mevedel-execution--record-retire-timer execution))
+                 (should (file-exists-p (mevedel-execution--spool-path execution)))
+                 (should (equal "RETAIN-ME" (mevedel-execution--read-output execution)))
+                 (should (= 0 (mevedel-execution--record-read-offset execution)))
+                 (should-not (test-mevedel-publication-async--restored-mail session))
+                 (setq fail nil)
+                 (mevedel-execution--deliver-independent execution)
+                 (test-mevedel-execution--wait (lambda () (= 2 (length acks))))
+                 (should (equal '((t nil) (nil "Injected terminal publication failure")) acks))
+                 (should (timerp (mevedel-execution--record-retire-timer execution)))
+                 (let ((mail (test-mevedel-publication-async--restored-mail session)))
+                   (should (equal '(RESULT EXECUTION)
+                                  (mapcar (lambda (entry) (plist-get entry :type)) mail)))
+                   (should (string-match-p "RETAIN-ME" (plist-get (cadr mail) :payload))))
+                 (should (string-match-p
+                          "RETAIN-ME"
+                          (plist-get (test-mevedel-execution--observe
+                                      session id :owner "/root/explore" :wait-ms 0) :output)))
+                 (mevedel-execution--deliver-independent execution)
+                 (should (= 2 (length acks))))))
+         (mevedel-execution-teardown-session session))))))
 
 (defun test-mevedel-agent-runtime--terminal-settlement-events (artifact-p)
   "Return a local portable session's terminal persistence events.
@@ -1334,7 +1614,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
                             (equal logical "session.meta.el")
                             artifact-p)))
                     ((symbol-function 'mevedel-agent-runtime--finalize)
-                     (lambda (inv status)
+                     (lambda (inv status &optional _token)
                        (push
                         (list 'finalize
                               mevedel-agent-runtime--defer-terminal-publication-p)
@@ -1348,7 +1628,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
                        t))
                     ((symbol-function
                       'mevedel-agent-control-commit-session)
-                     (lambda (_session)
+                     (lambda (_session &optional _token)
                        (push 'commit events)
                        t)))
             (mevedel-agent-runtime--settle invocation "finished"))
@@ -1689,7 +1969,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
         (progn
           (setf (mevedel-agent-invocation-runtime-fsm invocation) fsm
                 (mevedel-agent-invocation-runtime-settle-callback invocation)
-                (lambda (_invocation response _event)
+                (lambda (_invocation response _event &optional _token)
                   (setq callback-response response)))
           (cl-letf (((symbol-function 'run-at-time)
                      (lambda (_seconds _repeat callback &rest args)
@@ -1698,7 +1978,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
                     ((symbol-function 'mevedel-agent-runtime--partial-text)
                      (lambda (&rest _) "bounded useful evidence"))
                     ((symbol-function 'mevedel-agent-runtime--finalize)
-                     (lambda (inv status)
+                     (lambda (inv status &optional _token)
                        (setf (mevedel-agent-invocation-transcript-status inv)
                              status)))
                     ((symbol-function 'gptel-abort)
@@ -1815,14 +2095,14 @@ ARTIFACT-P selects whether its sidecar counts as committed."
         (progn
           (setf (mevedel-agent-invocation-runtime-fsm invocation) fsm
                 (mevedel-agent-invocation-runtime-settle-callback invocation)
-                (lambda (_invocation response _event)
+                (lambda (_invocation response _event &optional _token)
                   (setq callback-count (1+ (or callback-count 0))
                         callback-response response)))
           (cl-letf
               (((symbol-function 'mevedel-agent-runtime--partial-text)
                 (lambda (&rest _) "useful partial work"))
                ((symbol-function 'mevedel-agent-runtime--finalize)
-                (lambda (inv status)
+                (lambda (inv status &optional _token)
                   (setf (mevedel-agent-invocation-transcript-status inv)
                         status)))
                ((symbol-function 'gptel-abort)
@@ -2002,6 +2282,272 @@ ARTIFACT-P selects whether its sidecar counts as committed."
       (when (buffer-live-p child) (kill-buffer child))
       (when (buffer-live-p parent) (kill-buffer parent))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-agent-runtime--defer-settlement ()
+  ,test
+  (test)
+  :doc "a held publication gate queues settlement and its run receives a fresh token"
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         (buffer (generate-new-buffer " *settle-gate*"))
+         queued settled gate-held)
+    (setf (mevedel-agent-invocation-parent-session invocation) session)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-publication-defer)
+                   (lambda (_session preparation &optional failure token)
+                     (when (and gate-held (not token))
+                       (setq queued (cons preparation failure))
+                       t)))
+                  ((symbol-function 'mevedel-agent-runtime--settle-1)
+                   (lambda (_invocation response event token)
+                     (push (list response event (current-buffer) token)
+                           settled)))
+                  ((symbol-function 'mevedel-agent-control-settlement-finished)
+                   #'ignore))
+          (setq gate-held t)
+          (with-current-buffer buffer
+            (mevedel-agent-runtime--settle invocation "answer" '(:event)))
+          (should queued)
+          (should-not settled)
+          ;; The gate releases: the preparation settles in its own buffer
+          ;; under the token it was handed, never one it held before.
+          (setq gate-held nil)
+          (funcall (car queued) 'fresh)
+          (should (equal (list (list "answer" '(:event) buffer 'fresh))
+                         settled)))
+      (kill-buffer buffer)))
+  :doc "an open gate settles in place and hands its token on"
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         settled)
+    (setf (mevedel-agent-invocation-parent-session invocation) session)
+    (cl-letf (((symbol-function 'mevedel-session-publication-defer)
+               (lambda (&rest _) nil))
+              ((symbol-function 'mevedel-agent-runtime--settle-1)
+               (lambda (_invocation response _event token)
+                 (push (list response token) settled)))
+              ((symbol-function 'mevedel-agent-control-settlement-finished)
+               #'ignore))
+      (mevedel-agent-runtime--settle invocation "answer" nil 'owned))
+    (should (equal '(("answer" owned)) settled)))
+  :doc "the token is forwarded to the publication owner's defer decision"
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         seen)
+    (setf (mevedel-agent-invocation-parent-session invocation) session)
+    (cl-letf (((symbol-function 'mevedel-session-publication-defer)
+               (lambda (_session _preparation &optional _failure token)
+                 (setq seen token)
+                 nil))
+              ((symbol-function 'mevedel-agent-runtime--settle-1)
+               #'ignore)
+              ((symbol-function 'mevedel-agent-control-settlement-finished)
+               #'ignore))
+      (mevedel-agent-runtime--settle invocation "answer" nil 'owned))
+    (should (eq 'owned seen)))
+  :doc "a nested settlement of the same turn is never deferred"
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         (mevedel-agent-control-settling (list invocation))
+         settled)
+    (setf (mevedel-agent-invocation-parent-session invocation) session)
+    (cl-letf (((symbol-function 'mevedel-session-publication-defer)
+               (lambda (&rest _) (error "Must not defer")))
+              ((symbol-function 'mevedel-agent-runtime--settle-1)
+               (lambda (_invocation response _event _token)
+                 (push response settled))))
+      (mevedel-agent-runtime--settle invocation "inner"))
+    (should (equal '("inner") settled)))
+  :doc "a deferred settlement reports no response to its caller"
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+         (invocation (mevedel-agent-runtime-test--invocation)))
+    (setf (mevedel-agent-invocation-parent-session invocation) session)
+    (cl-letf (((symbol-function 'mevedel-session-publication-defer)
+               (lambda (&rest _) t)))
+      (should-not (mevedel-agent-runtime--settle invocation "answer"))))
+  :doc "a queued failure is reported through a warning naming the agent"
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         queued warning)
+    (setf (mevedel-agent-invocation-parent-session invocation) session)
+    (cl-letf (((symbol-function 'mevedel-session-publication-defer)
+               (lambda (_session preparation &optional failure token)
+                 (ignore token)
+                 (setq queued (cons preparation failure))
+                 t)))
+      (mevedel-agent-runtime--settle invocation "answer"))
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type message &optional args) (ignore args) (setq warning message))))
+      (funcall (cdr queued) '(error "Disk full")))
+    (should (string-match-p "/root/explore.*Disk full" warning))
+    (should-not (mevedel-agent-invocation-runtime-settled-p invocation)))
+  :doc "raw deferred acknowledgements run once on precommit and postcommit errors"
+  (dolist (committed '(nil t))
+    (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+           (invocation (mevedel-agent-runtime-test--invocation))
+           queued acks)
+      (setf (mevedel-agent-invocation-parent-session invocation) session)
+      (mevedel-test--with-captured-diagnostics nil
+        (cl-letf (((symbol-function 'mevedel-session-publication-defer)
+                   (lambda (_session preparation &optional failure token)
+                     (unless token (setq queued (cons preparation failure)) t)))
+                  ((symbol-function 'mevedel-agent-runtime--settle-1)
+                   (lambda (&rest _)
+                     (when committed
+                       (setf (mevedel-agent-invocation-runtime-pending-response invocation)
+                             '(:phase committed)))
+                     (error "Deferred step failed"))))
+          (should
+           (mevedel-agent-runtime--defer-settlement
+            invocation "answer" nil nil
+            (lambda (success error) (push (list success error) acks))))
+          (should-not acks)
+          (condition-case err
+              (funcall (car queued) 'fresh)
+            (error (funcall (cdr queued) err)))
+          (funcall (cdr queued) '(error "Repeated teardown failure"))))
+      (should (equal (if committed '((t nil)) '((nil "Deferred step failed"))) acks)))))
+
+(mevedel-deftest mevedel-agent-runtime--settle-1/token ()
+  ,test
+  (test)
+  :doc "the gate token reaches finalization, the settle callback and the control commit"
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         seen)
+    (setf (mevedel-agent-invocation-parent-session invocation) session
+          (mevedel-agent-invocation-runtime-settle-callback invocation)
+          (lambda (_invocation _visible _event token)
+            (push (cons 'callback token) seen)
+            (list 'transaction)))
+    (cl-letf (((symbol-function 'mevedel-agent-runtime--finalize)
+               (lambda (_invocation _status &optional token)
+                 (push (cons 'finalize token) seen)))
+              ((symbol-function 'mevedel-agent-control-commit-session)
+               (lambda (_session &optional token) (push (cons 'commit token) seen))))
+      (mevedel-agent-runtime--settle-1 invocation "answer" nil 'owned))
+    (should (equal '((commit . owned) (callback . owned) (finalize . owned))
+                   seen))))
+
+(mevedel-deftest mevedel-agent-runtime-interrupt/gate ()
+  ,test
+  (test)
+  :doc "a held gate defers abort and settlement together and still returns the response"
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         queued log gate-held)
+    (setf (mevedel-agent-invocation-parent-session invocation) session
+          (mevedel-agent-invocation-runtime-cancel invocation)
+          (lambda () (push 'cancel log) nil))
+    (cl-letf (((symbol-function 'mevedel-session-publication-defer)
+               (lambda (_session preparation &optional _failure token)
+                 (when (and gate-held (not token))
+                   (setq queued preparation)
+                   t)))
+              ((symbol-function 'mevedel-agent-control-clear-agent-wakes)
+               (lambda (&rest _) (push 'clear log)))
+              ((symbol-function 'mevedel-agent-runtime--settle)
+               (lambda (_invocation _response _event token)
+                 (push (cons 'settle token) log)
+                 "settled"))
+              ((symbol-function 'mevedel-agent-control-settlement-finished)
+               #'ignore))
+      (setq gate-held t)
+      (let ((result (mevedel-agent-runtime-interrupt invocation "stop")))
+        (should (stringp result))
+        (should (string-match-p "stop" result)))
+      ;; Nothing was aborted, cleared or settled while the gate is held.
+      (should-not log)
+      (should-not (mevedel-agent-invocation-terminal-reason invocation))
+      (setq gate-held nil)
+      ;; The queued run re-enters with its own token and hands it on.
+      (funcall queued 'fresh)
+      (should (equal '((settle . fresh) cancel clear) log))
+      (should (equal "stop"
+                     (mevedel-agent-invocation-terminal-reason invocation)))))
+  :doc "an open gate interrupts in place and returns the settled response"
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+         (invocation (mevedel-agent-runtime-test--invocation)))
+    (setf (mevedel-agent-invocation-parent-session invocation) session)
+    (cl-letf (((symbol-function 'mevedel-session-publication-defer)
+               (lambda (&rest _) nil))
+              ((symbol-function 'mevedel-agent-control-clear-agent-wakes)
+               #'ignore)
+              ((symbol-function 'mevedel-agent-runtime--settle)
+               (lambda (&rest _) "settled")))
+      (should (equal "settled"
+                     (mevedel-agent-runtime-interrupt invocation "stop"))))))
+
+(defun test-mevedel-agent-runtime--dispatch-with-token (exec-run on-settle)
+  "Dispatch a retained turn under gate token `owned' using EXEC-RUN.
+ON-SETTLE, when non-nil, is the settle callback.  Return the recorded
+calls as (SAVES FINALIZES SETTLES) token lists, after the dispatch error."
+  (let* ((parent (generate-new-buffer " *agent-runtime-token-parent*"))
+         (agent-buffer (generate-new-buffer " *agent-runtime-token-child*"))
+         (session (mevedel-session--create :name "main"))
+         (configuration
+          (mevedel-agent-runtime-test--configuration
+           (mevedel-agent-runtime-test--agent)))
+         saves finalizes settles)
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local mevedel--session session)
+          (cl-letf (((symbol-function 'mevedel-agent-conversation-save)
+                     (lambda (_invocation &optional _deferred token)
+                       (push token saves)
+                       t))
+                    ((symbol-function 'mevedel-agent-exec-run) exec-run)
+                    ((symbol-function 'mevedel-agent-runtime--finalize)
+                     (lambda (_invocation _status &optional token)
+                       (push token finalizes)))
+                    ((symbol-function 'mevedel-agent-runtime--settle)
+                     (lambda (_invocation _response &optional _event token)
+                       (push token settles)
+                       nil))
+                    ((symbol-function 'mevedel-telemetry-record)
+                     (lambda (_session event &rest _)
+                       (when (eq event 'agent-request-sent)
+                         (error "Injected publication failure")))))
+            (should-error
+             (apply #'mevedel-agent-runtime-dispatch
+                    nil "Continue" "Token task"
+                    :path "/root/explore"
+                    :frozen-configuration configuration
+                    :retained-id "explorer--test"
+                    :retained-buffer agent-buffer
+                    :retained-transcript "agents/explorer.chat.org"
+                    :token 'owned
+                    (and on-settle (list :on-settle on-settle))))))
+      (kill-buffer agent-buffer)
+      (kill-buffer parent))
+    (list saves finalizes settles)))
+
+(mevedel-deftest mevedel-agent-runtime-dispatch/token ()
+  ,test
+  (test)
+  :doc "an unpublished error carries the token through the save and the cleanup"
+  (let (cancelled)
+    (pcase-let
+        ((`(,saves ,finalizes ,settles)
+          (test-mevedel-agent-runtime--dispatch-with-token
+           (lambda (_callback _type _description invocation _buffer)
+             (setf (mevedel-agent-invocation-runtime-cancel invocation)
+                   (lambda () (setq cancelled t)))
+             nil)
+           nil)))
+      (should cancelled)
+      (should (equal '(owned) saves))
+      (should (equal '(owned) finalizes))
+      (should-not settles)))
+  :doc "a published error settles under the same token"
+  (pcase-let
+      ((`(,saves ,finalizes ,settles)
+        (test-mevedel-agent-runtime--dispatch-with-token
+         (lambda (&rest _) 'fsm)
+         (lambda (&rest _) nil))))
+    (should (equal '(owned) saves))
+    (should-not finalizes)
+    (should (equal '(owned) settles))))
 
 (provide 'test-mevedel-agent-runtime)
 

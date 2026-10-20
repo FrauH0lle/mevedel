@@ -59,6 +59,12 @@
                   "mevedel-collaboration-projection" (segment &optional events))
 (declare-function mevedel-collaboration--truncate-bytes
                   "mevedel-collaboration-projection" (string limit))
+(autoload 'mevedel-collaboration--canonical-records
+  "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--forwarded-execution
+  "mevedel-collaboration-projection")
+(autoload 'mevedel-collaboration--truncate-bytes
+  "mevedel-collaboration-projection")
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-list-user "mevedel-execution" (session))

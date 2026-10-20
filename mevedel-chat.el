@@ -718,6 +718,8 @@ M-x mevedel-retry-plan-implementation resumes it")))
     ;; function so request configuration is kept out of the transcript.
     (mevedel-session-artifacts-install-gptel-save-state-advice)
     ;; Release the session lock when the chat buffer is killed.
+    (add-hook 'kill-buffer-query-functions
+              #'mevedel-session-persistence-allow-buffer-close-p nil t)
     (add-hook 'kill-buffer-hook
               #'mevedel-session-persistence-release-on-kill nil t)
     (unless inspection-p

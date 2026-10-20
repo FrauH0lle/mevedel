@@ -129,6 +129,27 @@ run here; ordinary sidecars keep these records until their transcript commits."
             records (alist-get conversation ledger nil nil #'equal)))
           (mevedel-session-checkpoint--state-consumed state) ledger)))
 
+(defun mevedel-session-checkpoint-pending-message-p (session conversation id)
+  "Return non-nil when message ID was consumed by CONVERSATION in SESSION.
+The identity is still held by the consumption ledger, or by the retirement
+proofs kept while publication work could resurrect it, so the receiving
+transcript has not yet made it durable.  A retried delivery of the same
+stable ID uses this to avoid queueing a duplicate.  No I/O runs and no
+owner state is created or changed."
+  (when-let* ((state (mevedel-session-checkpoint-state session))
+              ((stringp id)))
+    (and (or (cl-some
+              (lambda (record) (equal id (plist-get record :id)))
+              (alist-get conversation
+                         (mevedel-session-checkpoint--state-consumed state)
+                         nil nil #'equal))
+             (member id
+                     (alist-get
+                      conversation
+                      (mevedel-session-checkpoint--state-retired-mail state)
+                      nil nil #'equal)))
+         t)))
+
 (defun mevedel-session-checkpoint-defer-ptc (session conversation records)
   "Retain removed ToolCall RECORDS until CONVERSATION's transcript commits.
 SESSION owns the durable rows.  Starting or updating a ToolCall does not use
@@ -284,7 +305,9 @@ installation, or nil for a candidate invalidated by restore or adoption."
         ;; Retain identity proofs through that drain/retry, not for the session
         ;; lifetime.  Otherwise rotation could archive the only receipt while
         ;; a queued sidecar brings the consumed row back into the successor.
-        (when (mevedel-session-publication-active-p session)
+        (when (or (mevedel-session-publication-active-p session)
+                  (mevedel-session-publication-job session)
+                  (mevedel-session-publication-preparations session))
           (let ((retired (mevedel-session-checkpoint--state-retired-mail state)))
             (setf (alist-get conversation retired nil nil #'equal)
                   (delete-dups
@@ -316,6 +339,8 @@ installation, or nil for a candidate invalidated by restore or adoption."
 Return nil while any active, queued, staged, or recoverable publication remains.
 These proofs outlive neither the outstanding publication work nor its retries."
   (unless (or (mevedel-session-publication-active-p session)
+              (mevedel-session-publication-job session)
+              (mevedel-session-publication-preparations session)
               (mevedel-session-publication-queue session)
               (mevedel-session-publication-uncommitted-batches session)
               (mevedel-session-pending-publication session))

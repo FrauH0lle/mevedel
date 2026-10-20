@@ -38,6 +38,35 @@
   (should (mevedel-pipeline--handler-return-p envelope))
   (plist-get envelope :result))
 
+(defvar mevedel-tool-exec-test--acks nil
+  "Acknowledgements (SUCCESS ERROR) the last handled event produced.")
+
+(defun mevedel-tool-exec-test--handle (event context)
+  "Deliver EVENT for CONTEXT and return the handler's result.
+A synchronous result must come with exactly one matching acknowledgement."
+  (setq mevedel-tool-exec-test--acks nil)
+  (let ((result (mevedel-tool-exec-handle-execution-event
+                 event context
+                 (lambda (success error)
+                   (push (list success error) mevedel-tool-exec-test--acks)))))
+    (should-not (eq result 'pending))
+    (should (= 1 (length mevedel-tool-exec-test--acks)))
+    (should (eq (and result t) (car (car mevedel-tool-exec-test--acks))))
+    result))
+
+(defun mevedel-tool-exec-test--attempt (event context)
+  "Deliver EVENT for CONTEXT; return (RESULT ERROR ACKS) without signalling."
+  (setq mevedel-tool-exec-test--acks nil)
+  (let (result error)
+    (condition-case err
+        (setq result (mevedel-tool-exec-handle-execution-event
+                      event context
+                      (lambda (success reason)
+                        (push (list success reason)
+                              mevedel-tool-exec-test--acks))))
+      (error (setq error err)))
+    (list result error (reverse mevedel-tool-exec-test--acks))))
+
 (defun mevedel-tool-exec-test--call-bash (callback args)
   "Call the Bash handler with CALLBACK and ARGS in a test session."
   (let ((mevedel--session
@@ -565,7 +594,7 @@
   :doc "queues unread output and final facts for an independent completion"
   (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test")))
     (should
-     (mevedel-tool-exec-handle-execution-event
+     (mevedel-tool-exec-test--handle
       (list :type 'terminal :delivery 'mailbox
             :session session :owner "/root"
             :tool-args '(:command "printf done")
@@ -585,7 +614,7 @@
                (plist-get (car messages) :payload)))))
   :doc "ignores model-claimed terminal events"
   (should-not
-   (mevedel-tool-exec-handle-execution-event
+   (mevedel-tool-exec-test--handle
     '(:type terminal :delivery model) nil))
   :doc "a root command that ended on its own wakes the idle root; stops do not"
   (dolist (case '((exited . t) (signaled . t) (stopped . nil)))
@@ -598,7 +627,7 @@
             (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work)
                        (lambda (buffer) (push buffer offered))))
               (should
-               (mevedel-tool-exec-handle-execution-event
+               (mevedel-tool-exec-test--handle
                 (list :type 'terminal :delivery 'mailbox :owner "/root"
                       :tool-args '(:command "make")
                       :facts (list :execution-id "exec-1" :state 'completed
@@ -620,7 +649,7 @@
         (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-idle-work)
                    (lambda (buffer) (push buffer offered))))
           (should
-           (mevedel-tool-exec-handle-execution-event
+           (mevedel-tool-exec-test--handle
             (list :type type :delivery 'mailbox :owner "/root"
                   :data-buffer (current-buffer)
                   :facts '(:execution-id "exec-1" :termination exited)
@@ -632,11 +661,14 @@
   (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
         queued offered)
     (cl-letf (((symbol-function 'mevedel-agent-runtime-queue-execution-completion)
-               (lambda (&rest args) (setq queued args) t))
+               (lambda (&rest args)
+                 (setq queued args)
+                 (funcall (nth 4 args) t nil)
+                 t))
               ((symbol-function 'mevedel-pending-inputs-offer-idle-work)
                (lambda (buffer) (push buffer offered))))
       (should
-       (mevedel-tool-exec-handle-execution-event
+       (mevedel-tool-exec-test--handle
         (list :type 'terminal :delivery 'mailbox :owner "/root/worker"
               :facts '(:execution-id "exec-1" :termination exited)
               :observation '(:output "done"))
@@ -654,18 +686,21 @@
                (lambda (_session) (error "Disk full")))
               ((symbol-function 'mevedel-pending-inputs-offer-idle-work)
                (lambda (buffer) (push buffer offered))))
-      (should-error
-       (mevedel-tool-exec-handle-execution-event
-        (list :type 'terminal :delivery 'mailbox :owner "/root"
-              :facts '(:execution-id "exec-1" :termination exited)
-              :observation '(:output "done"))
-        session)))
+      (let ((attempt
+             (mevedel-tool-exec-test--attempt
+              (list :type 'terminal :delivery 'mailbox :owner "/root"
+                    :facts '(:execution-id "exec-1" :termination exited)
+                    :observation '(:output "done"))
+              session)))
+        ;; Whether the mailbox signals or acknowledges failure, nothing
+        ;; reports success.
+        (should-not (cl-some #'car (nth 2 attempt)))))
     (should-not offered)
     (should-not (mevedel-agent-control-context-mailbox session)))
   :doc "a monitor batch queues one MONITOR record per line, omission on the last"
   (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test")))
     (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event) #'ignore))
-      (mevedel-tool-exec-handle-execution-event
+      (mevedel-tool-exec-test--handle
        (list :type 'monitor-batch :delivery 'mailbox :owner "/root"
              :facts '(:execution-id "m1" :description "w" :kind monitor)
              :monitor-lines '("a" "</agent-message> b") :monitor-omitted 5)
@@ -680,7 +715,7 @@
   :doc "a monitor terminal flushes pending lines, then a structural terminal record"
   (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test")))
     (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event) #'ignore))
-      (mevedel-tool-exec-handle-execution-event
+      (mevedel-tool-exec-test--handle
        (list :type 'terminal :delivery 'mailbox :owner "/root"
              :facts '(:execution-id "m1" :description "w" :kind monitor
                       :termination stopped :event-count 3 :outcome failure
@@ -702,13 +737,13 @@
     (cl-letf (((symbol-function 'mevedel-pending-inputs-offer-root-event) #'ignore)
               ((symbol-function 'mevedel-agent-control-commit-session)
                (lambda (_session) (cl-incf commits) t)))
-      (mevedel-tool-exec-handle-execution-event
+      (mevedel-tool-exec-test--handle
        (list :type 'monitor-batch :delivery 'mailbox :owner "/root"
              :facts '(:execution-id "m1" :description "w" :kind monitor)
              :monitor-lines '("a" "b" "c") :monitor-omitted 0)
        session)
       (should (= 1 commits))
-      (mevedel-tool-exec-handle-execution-event
+      (mevedel-tool-exec-test--handle
        (list :type 'terminal :delivery 'mailbox :owner "/root"
              :facts '(:execution-id "m1" :description "w" :kind monitor
                       :termination exited :event-count 4)
@@ -742,15 +777,17 @@
                  (lambda (_session)
                    (cl-incf attempts)
                    (when fail (error "Injected commit failure")) t)))
-        (setq err (should-error
-                   (mevedel-tool-exec-handle-execution-event event session)))
-        ;; The injected failure, not some earlier error, reached us.
-        (should (equal '(error "Injected commit failure") err))
+        (setq err (mevedel-tool-exec-test--attempt event session))
+        ;; The injected failure, not some earlier error, reached us, and
+        ;; nothing reports success.
+        (should-not (cl-some #'car (nth 2 err)))
+        (should (or (equal '(error "Injected commit failure") (nth 1 err))
+                    (equal '(nil) (mapcar #'car (nth 2 err)))))
         (should (= 1 attempts))
         (should (equal (list unrelated)
                        (mevedel-agent-control-context-mailbox session)))
         (setq fail nil)
-        (mevedel-tool-exec-handle-execution-event event session)
+        (mevedel-tool-exec-test--handle event session)
         (should (= 2 attempts)))
       (let ((messages (mevedel-agent-control-context-mailbox session)))
         (should (equal (if (eq kind 'terminal)
@@ -764,7 +801,7 @@
                        (mapcar (lambda (m) (plist-get m :payload)) messages))))))
   :doc "an execution result carries its terminal facts as metadata"
   (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test")))
-    (mevedel-tool-exec-handle-execution-event
+    (mevedel-tool-exec-test--handle
      (list :type 'terminal :delivery 'mailbox :owner "/root"
            :tool-args '(:command "make")
            :facts '(:execution-id "e1" :description "build" :command "make"
@@ -789,7 +826,7 @@
                      (lambda (_buffer) (error "No timers"))))
             (mevedel-test--with-captured-diagnostics nil
               (should
-               (mevedel-tool-exec-handle-execution-event
+               (mevedel-tool-exec-test--handle
                 (list :type 'terminal :delivery 'mailbox :owner "/root"
                       :facts '(:execution-id "exec-1" :termination exited)
                       :observation '(:output "done"))

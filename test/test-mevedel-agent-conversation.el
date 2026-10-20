@@ -1090,7 +1090,7 @@
 			(mevedel-agent-conversation-save-debounce 0)
 			saved)
 		   (cl-letf (((symbol-function 'mevedel-agent-conversation--write)
-			      (lambda (argument) (setq saved argument))))
+			      (lambda (argument &optional _token) (setq saved argument))))
 		     (mevedel-agent-conversation-save invocation t))
 		   (should (eq invocation saved))
 		   (should-not
@@ -1275,6 +1275,33 @@
       (kill-buffer parent))))
 
 
+
+(mevedel-deftest mevedel-agent-conversation-save/token ()
+  ,test
+  (test)
+  :doc "an immediate save hands its gate token to the writer"
+  (let ((invocation (mevedel-agent-invocation-create
+                     (mevedel-agent--create :name "default")))
+        written)
+    (cl-letf (((symbol-function 'mevedel-agent-conversation--write)
+               (lambda (value token) (push (list value token) written) t)))
+      (should (mevedel-agent-conversation-save invocation nil 'owned))
+      (should (equal (list (list invocation 'owned)) written))))
+  :doc "a coalesced save writes later and never carries the token"
+  (let ((invocation (mevedel-agent-invocation-create
+                     (mevedel-agent--create :name "default")))
+        (mevedel-agent-conversation-save-debounce 60)
+        written)
+    (cl-letf (((symbol-function 'mevedel-agent-conversation--write)
+               (lambda (&rest args) (push args written) t)))
+      (unwind-protect
+          (progn
+            (mevedel-agent-conversation-save invocation t 'owned)
+            (should-not written)
+            (should (timerp
+                     (mevedel-agent-invocation-transcript-save-timer
+                      invocation))))
+        (mevedel-agent-conversation--cancel-save invocation)))))
 
 (provide 'test-mevedel-agent-conversation)
 

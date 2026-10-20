@@ -72,6 +72,35 @@ Elsewhere TRAMP copies an input file to the target. Delivery changes do not spli
 a program into per-file calls. Whole-process failure invalidates cached
 interpreter paths for later lookup; an ordinary refused operation does not.
 
+`run-program-async` runs a local program as its own process too, and
+nothing waits for it. It keeps the synchronous carrier's staged payload files,
+so no payload is base64-encoded or sent through a pipe; a request that fits the
+argument bounds travels as arguments and writes nothing to stdin, and a larger
+one streams as above. The job owns its staged files until delivery. Cleanup
+runs from the delivery timer before the callback, never from the sentinel;
+it removes unconsumed payloads even when a program stopped early. Failed or
+quit launches clean up before reporting failure. Cleanup errors are diagnostic
+and cannot replace the stored outcome. Each private buffer is cleaned up
+independently, including after another buffer's kill hook fails. An exit hook
+removes files belonging to jobs whose delivery never ran and retries files
+whose earlier deletion failed; a hard process kill cannot run that hook.
+Remote targets use the pipe
+carrier only where direct-async qualifies and otherwise run synchronously;
+while `--async-wait` is bound the program also runs synchronously, and
+`mevedel-session-control-fs-wait-async` waits for programs already running
+(exit and buffer close call it before releasing a lease).
+
+The process sentinel only decodes and stores the outcome. The callback is
+always dispatched afterwards through the idle transport with a zero delay,
+never inline in the sentinel, because a sentinel can sit inside another remote
+command and a callback may start the next target phase. It therefore runs once
+no remote operation is in flight. If the transport is disabled or the queued
+dispatch is cancelled, the stored outcome is still delivered once, from a
+zero-second transport timer: neither lost nor replaced by an invented error.
+A request that fails to launch calls the callback before returning, once.
+Nothing orders an asynchronous program against others on the same target;
+callers serialize the ones that touch the same files.
+
 Two to 32 independent unbounded reads may use GNU tar in the same process, keeping
 all proved parents open, refusing symlink leaves, and disabling inherited
 `TAR_OPTIONS`. Emacs decodes expected ordered regular members and checks headers
@@ -132,6 +161,28 @@ an optional read optimization with an ordinary-read fallback. No new caller
 protocol, extraction directory, or generic resolver cache is needed.
 
 ## Decision history
+
+- **Programs still blocked the editor while the target worked (2026-10-20).**
+  The merged background-command delivery (three programs, about 120 ms) left
+  the editor waiting in each program; the earlier trace put 98 of 135 ms in
+  such waits, and the user observed the pauses as stalls of about 120 ms.
+  The existing asynchronous carrier was test-only locally, and inlined the
+  source-file payload into its pipe request, which would have reintroduced the
+  encoding and write work staging removed. Local async now stages as the
+  synchronous carrier does. The first version delivered callbacks inline when
+  the transport was idle; the sentinel can be inside another remote command and
+  the callback launches the next phase, so dispatch became unconditional and
+  deferred, including the disabled-transport fallback. On a compiled
+  in-process fixture (a local portable session of 6000 saved turns, one
+  4000-character result per sample, six samples, final frozen sources), the
+  publication that held the editor 59.9-73.8 ms synchronously returned its
+  submission in 0.22-0.45 ms and acknowledged 75.4-120.1 ms later with a
+  largest 5 ms-timer heartbeat gap of 8.2-10.2 ms. Launch, staging and parsing
+  stay on the main thread, so
+  the 98 ms is an upper bound on waiting removed, not a measured saving, and
+  acknowledgement latency is not shorter. One fixture and small samples, not a
+  live or graphical measurement, nor a hard bound on arbitrary filesystem
+  latency, sidecar size or GC.
 
 - **Publication still split adjacent proof and write steps.** A live trace of
   one background-command delivery on a local session (2026-10-20) found six

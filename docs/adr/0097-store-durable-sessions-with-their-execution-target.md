@@ -83,7 +83,42 @@ unavailability, and immutable-snapshot storage growth in exchange for portable,
 co-located session history, and requires serialized publication rather than
 asynchronous callbacks writing directly through TRAMP.
 
+Serialized does not mean the editor must wait. For warm local portable sessions
+an acknowledged mailbox delivery runs as one session-owned publication job
+(admission, freeze, reservation, generation, head commit, adoption), each phase
+a pinned control program launched without waiting, and each continuation
+scheduled from a timer after the process sentinel returns, never from the
+sentinel. The job keeps the session's `publication-active-p` set for its whole
+life, so renewal timers stay suppressed and cooperative transfer stays blocked;
+it performs its own bounded lease proofs between phases and fails closed after
+expiry or ownership loss. The commit point is unchanged: the lease head. A crash
+before it leaves the old snapshot authoritative with nothing acknowledged; a
+crash after it but before the acknowledgement leaves committed mail that
+restore finds, and durable mail identities with hidden transcript receipts
+keep delivery at-least-once. An uncertain head outcome is decided by reading
+the authoritative head, not by guessing: the candidate head means adopt, the
+prior head means roll back, anything else, or an unreadable head, retains the
+job as pending publication for explicit retry or abandonment.
+Remote publication, cold materialization and file-backed sessions are not
+converted. [Sessions](../sessions.md#warm-local-asynchronous-mailbox-publication)
+owns the contract; [ADR 0112](0112-debounce-observational-agent-persists.md)
+owns the gate and acknowledgement semantics.
+
 ## Decision history
+
+On 2026-10-20 the synchronous waiting for target programs in a background
+completion's publication was measured at about 98 of 135 ms on a local session
+(see [ADR 0101](0101-carry-control-operations-as-one-pinned-program.md)), the
+source of the roughly 120 ms stalls observed while typing. The assumption that
+serialized publication requires the caller to wait turned out not to hold:
+serialization is a property of ordering and the lease, which a continuation
+chain preserves. On a compiled in-process fixture after the final source freeze
+(six samples, one local portable session of 6000 saved turns), the synchronous
+commit held the editor 59.9-73.8 ms; the asynchronous job returned its submission
+in 0.22-0.45 ms, acknowledged after 75.4-120.1 ms, and left a largest heartbeat
+gap of 8.2-10.2 ms. The acknowledgement is not earlier, only the editor is free
+meanwhile; these are not live-session or graphical measurements, nor a hard
+bound on arbitrary filesystem latency, sidecar size or GC.
 
 The final September 23 pass found that root publication still encoded the same
 transcript for comparison and staging. Root saves now freeze encoded bytes once

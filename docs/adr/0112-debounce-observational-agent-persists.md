@@ -12,6 +12,60 @@ whose terminal transaction later rolls back. Observational activity changes and
 explicit mailbox discards schedule one sidecar-only registry save per session, with
 a two-second default debounce through the idle-transport scheduler.
 
+One acknowledged mutation is asynchronous, for warm local sessions only:
+delivering a background command's completion or monitor batch to its owner's
+mailbox. The producer passes an acknowledgement, and the append commits as a
+session-owned publication job whose callbacks run across event-loop turns. The
+acknowledgement still means what it meant: it runs once, after the new head is
+authoritative and adopted (success) or after a definitive rollback (failure).
+Until then the records are tentative and hidden, and the producer keeps the
+output it would otherwise have consumed. Every other acknowledged mutation, and
+every cold, remote, file-backed or PID-lock session, keeps the synchronous
+path above. [Sessions](../sessions.md#warm-local-asynchronous-mailbox-publication)
+owns the job's phases, gate and recovery.
+
+While a job is accepted, its session's mutation gate is held. Mutations that
+would change acknowledged state or freeze a sidecar -- background mailbox
+arrivals, deferred terminal settlement, autosave, the observational registry
+save -- queue as preparation continuations that run before they mutate or
+capture anything, so no frozen sidecar can outlive a rollback and resurrect its
+rolled-back mail, and no sidecar frozen before a commit can erase it. Queued
+entries hold no snapshot. A caller that must be synchronous (agent mail, spawn
+and activation, manual save, transcript writes, settlement publication or a
+required-commit registry save) drains the gate first and
+never reports queued work as committed. Transcript streaming and composer edits
+are not gated.
+
+Gate ownership is explicit, not ambient. A queued preparation runs with a
+fresh lexical token, also stored in a session slot for exactly the duration of
+that preparation, and the preparation receives it as an argument. Only a call
+that passes that token may reenter the gate; there is no dynamically bound
+exemption, so an unrelated timer or callback that fires during the preparation
+inherits nothing and defers or drains like any other caller. The drain is
+fail-fast where waiting cannot help: it signals instead of waiting when a
+nested transport frame is in flight, when a preparation is running on the
+stack, or when a synchronous publication on this stack owns the gate. Its
+30-second limit is checked between event-loop pumps, so it bounds the number
+of pumps, not the time a single blocking operation inside one may take.
+
+Waking a waiter is the boundary where this matters. Its callback resumes
+arbitrary tool code, so notifications (waiter wakes, root and agent wake
+offers, and the reoffer after a vetoed close) never enter the mutation
+preparation queue and never run under a preparation's token. Each session owns
+one coalesced FIFO of pending notifications and at most one timer. A
+notification runs at once only when the publication gate is idle (no job,
+preparation or active publication), the transport is idle, and nothing is
+already pending; otherwise it joins the FIFO, so a later acknowledgement never
+overtakes an earlier one. The timer starts at 50 ms and doubles up to 500 ms
+while the gate or transport stays busy, then flushes in order, and only while
+the root buffer is live and the session is not stopping. Every callback starts
+with fresh transaction observations, including an immediate notification.
+Temporary stopping retains actual suppressed offers without a timer, so a
+vetoed close re-arms the same FIFO once rather than inventing another wake.
+An idle close schedules nothing. A close that proceeds cancels the timer and
+discards the offers during teardown, without invoking them; the mail remains
+durable.
+
 Acknowledged registry and mailbox mutations publish only the sidecar once the
 first root snapshot exists. `mevedel-session-checkpoint.el` owns the root fields
 as of the last committed transcript: segment, turn count, prompt index, file
@@ -102,6 +156,46 @@ transactional journal.
 
 All revisions belong to ADR 0112:
 
+- **2026-10-20 warm-local asynchronous mailbox acknowledgement:** a live trace
+  of one background-command delivery on a local session spent about 98 of its
+  135 ms in synchronous control-program waits, and the user observed the
+  resulting stalls of roughly 120 ms per completion while typing. After the
+  programs were merged (ADR 0101) a delivery still took about 120 ms, most of
+  it the operations' own subprocesses, which merging cannot remove. Waiting for
+  them from the event loop can: the editor runs between phases. The constraint
+  that shaped the design is the one this ADR already records. An append that
+  starts a commit and lets another save freeze the tentative queue can
+  publish mail a failed first commit has just removed, so serialization sits
+  before mutation and capture, not before the subprocess. Two alternatives were
+  rejected. An Emacs Lisp thread does not fix ordering or acknowledgement, its
+  dynamic bindings and transport-depth guards are thread-local, and the
+  main-thread timers cannot see its remote operations. An append-only mailbox
+  journal would change the persisted format and need framing, replay,
+  deduplication and retention coordinated with transcript commits. Scope is
+  deliberately warm local sessions: remote targets, cold materialization,
+  file-backed and PID-lock sessions stay synchronous until separately
+  converted, so no remote safety is inferred from local results. No persisted
+  format changes. Measured after the final source freeze on one fixture:
+  compiled modules, an isolated test
+  home, a local portable session holding 6000 saved turns, one 4000-character
+  execution result delivered per sample, six samples per mode, a 5 ms timer
+  recording the largest gap between runs as the heartbeat, and a composer
+  draft whose text and point were checked afterwards and preserved in all 19
+  samples. The synchronous path held the editor 59.9-73.8 ms, with a heartbeat
+  gap of 60.0-73.9 ms. Asynchronous submission returned in 0.22-0.45 ms and
+  the acknowledgement arrived 75.4-120.1 ms after submission, with a largest
+  heartbeat gap of 8.2-10.2 ms. An explicit drain issued immediately after
+  submission waited a further 89.8-115.0 ms (submission 0.19-0.46 ms,
+  acknowledgement 85.0-110.2 ms, heartbeat gap 7.9-10.8 ms). A 0.25-second
+  drain limit on a deliberately stalled admission signalled at 255.6 ms in the
+  single sample taken, with acknowledgement still pending until the held
+  callback was released. Acknowledgement latency did not improve: it is about
+  the same as, or a little longer than, the synchronous commit; the gain is
+  that the editor runs meanwhile. These are compiled in-process measurements
+  on one fixture with small samples, not graphical input latency or
+  live-session measurements, and not a hard bound on arbitrary filesystem
+  latency, sidecar size or GC. The 98 ms figure is an upper bound on
+  the waiting removed, not a measured saving.
 - **2026-10-19 unified committed checkpoint:** the full-save fallback added
   120–132 ms to each root delivery batch in compiled private-copy replays.
   A single owner now projects committed root fields and retains consumed mail

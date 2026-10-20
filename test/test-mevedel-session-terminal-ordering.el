@@ -59,8 +59,8 @@
                    :status running :created-at "created" :updated-at "updated"
                    :parent-turn 0))
                 (mevedel-agent-invocation-runtime-settle-callback invocation)
-                (lambda (inv response event)
-                  (mevedel-agent-control--settle session record inv response event)))
+                (lambda (inv response event &optional token)
+                  (mevedel-agent-control--settle session record inv response event token)))
           (with-current-buffer child
             (mevedel-chat-prepare-transcript-buffer)
             (setq-local mevedel--session session mevedel--workspace workspace

@@ -1423,7 +1423,7 @@ A panel row is a line whose text sits on the source block face."
                  'mevedel-agent-runtime--interrupted-agent-response)
                 (lambda (_invocation _reason) "interrupted"))
                ((symbol-function 'mevedel-agent-runtime--finalize)
-                (lambda (invocation status)
+                (lambda (invocation status &optional _token)
                   (when-let* ((buffer (mevedel-agent-invocation-buffer
                                       invocation))
                               ((buffer-live-p buffer)))

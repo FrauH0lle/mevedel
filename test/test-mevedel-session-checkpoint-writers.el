@@ -226,7 +226,7 @@
                    :description "Test agent" :path "agents/worker.chat.org"
                    :status running :created-at "created" :updated-at "updated" :parent-turn 0))
                 (mevedel-agent-invocation-runtime-settle-callback invocation)
-                (lambda (inv response event)
+                (lambda (inv response event &optional _token)
                   (mevedel-agent-control--settle session record inv response event)))
           (with-current-buffer child
             (mevedel-chat-prepare-transcript-buffer)

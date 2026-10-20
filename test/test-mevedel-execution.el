@@ -935,7 +935,7 @@
              (finish (symbol-function 'mevedel-execution--finish-managed))
              (callbacks 0) observation torn-down key mail pending-after-teardown
              (mevedel-execution-mailbox-delivery-function
-              (lambda (&rest _) (setq mail t) t)))
+              (lambda (_event _context ack) (setq mail t) (funcall ack t nil) t)))
         (unwind-protect
             (cl-letf (((symbol-function 'mevedel-execution--finish-managed)
                        (lambda (record &optional defer)
@@ -1044,8 +1044,9 @@
                                :reason (copy-sequence "Reviewed command"))))
          observation terminal
          (mevedel-execution-mailbox-delivery-function
-          (lambda (event _owner)
+          (lambda (event _owner ack)
             (setq terminal event)
+            (funcall ack t nil)
             t)))
     (unwind-protect
         (progn

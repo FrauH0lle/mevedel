@@ -794,22 +794,19 @@ as on the request-file carrier -- the script ships its diagnostics in its own
 record -- and because the wait never drains a separate stderr pipe, which a
 chatty target could otherwise fill until it blocks.")
 
-(defvar mevedel-session-control-fs--pipe-local nil
-  "Test-only: carry local programs over the pipe as well.")
-
 (defun mevedel-session-control-fs--pipe-capable-p (remote)
   "Return non-nil when REMOTE programs may stream their request over a pipe.
 
 A direct-async process is a plain ssh channel beside the connection's shell,
 so a request reaches the target without being copied through that shell as
 a temporary file first -- about twenty TRAMP commands.  Targets qualify as
-for direct-async Bash."
-  (if remote
-      (and mevedel-transport-remote-direct-async
-           (fboundp 'tramp-direct-async-process-p)
-           (mevedel-execution-target-direct-async-capable-p
-            (mevedel-execution-target-create remote)))
-    mevedel-session-control-fs--pipe-local))
+for direct-async Bash.  A local program has no connection to bypass, so the
+synchronous carrier never pipes it; the asynchronous one decides itself."
+  (and remote
+       mevedel-transport-remote-direct-async
+       (fboundp 'tramp-direct-async-process-p)
+       (mevedel-execution-target-direct-async-capable-p
+        (mevedel-execution-target-create remote))))
 
 (defun mevedel-session-control-fs--send-request-buffer (process)
   "Send the current request buffer to PROCESS in small pieces.
@@ -1336,24 +1333,78 @@ as such, so this only raises the classifications no caller can continue past."
 Bound where the editor is about to exit, so an asynchronous program cannot
 be killed with it before its result is known.")
 
+(defvar mevedel-session-control-fs--async-jobs nil
+  "Asynchronous programs whose callback has not yet run.
+Each entry is a unique cell, removed when its callback is about to run.")
+
+(defun mevedel-session-control-fs-wait-async (&optional seconds)
+  "Wait up to SECONDS (default 10) until every asynchronous program has delivered.
+Where the editor is about to exit, this lets programs already running finish
+and their callbacks run, which `mevedel-session-control-fs--async-wait'
+cannot do for programs launched earlier.  Return non-nil when none remain."
+  (let ((deadline (+ (float-time) (or seconds 10))))
+    (while (and mevedel-session-control-fs--async-jobs
+                (< (float-time) deadline))
+      (accept-process-output nil 0.02))
+    (null mevedel-session-control-fs--async-jobs)))
+
+(defvar mevedel-session-control-fs--orphaned-staged nil
+  "Staged payload files whose deletion failed, retried at Emacs exit.")
+
+(defun mevedel-session-control-fs--exit-cleanup ()
+  "Remove staged payload files of asynchronous programs that never delivered.
+Emacs exit can come before a program's delivery timer runs, or after a
+cancelled one was lost; the staged files sit beside target files and must not
+outlive the editor.  Files an earlier cleanup could not delete are retried.
+Each failure is reported and does not stop the rest."
+  (let ((files (apply #'append mevedel-session-control-fs--orphaned-staged
+                      (mapcar (lambda (job) (car (car job)))
+                              mevedel-session-control-fs--async-jobs))))
+    (setq mevedel-session-control-fs--orphaned-staged nil
+          mevedel-session-control-fs--async-jobs nil)
+    (dolist (file files)
+      (condition-case err
+          (when (file-exists-p file) (delete-file file))
+        (error
+         (display-warning
+          'mevedel
+          (format "Staged control payload cleanup failed: %s"
+                  (error-message-string err))
+          :warning))))))
+
+(add-hook 'kill-emacs-hook #'mevedel-session-control-fs--exit-cleanup 90)
+
 (defun mevedel-session-control-fs-run-program-async (operations callback)
   "Run OPERATIONS as one control program, then call CALLBACK.
 
 CALLBACK receives RESULTS, as `mevedel-session-control-fs-run-program'
 returns them, and ERROR, condition data when the program failed as a whole;
-exactly one is non-nil.  Where a direct pipe to the target is allowed the
-program runs on its own channel and nothing waits for it: CALLBACK then runs
-from a process sentinel, which can be inside another remote command, so it
-must not start target I/O itself.  Elsewhere, and while
-`mevedel-session-control-fs--async-wait' is non-nil, the program runs
-synchronously and CALLBACK runs before this returns.  Return the process
-when the program runs asynchronously, and nil otherwise.
+exactly one is non-nil, and it is called exactly once.  A local program, and
+a remote one where a direct pipe to the target is allowed, runs as its own
+process and nothing waits for it.  Local writes keep the synchronous
+carrier's staged payload files, which live until the process has exited and
+are removed just before CALLBACK, from the delivery timer and never the
+sentinel; Emacs exit removes those of programs that never delivered.
+
+The process sentinel only decodes and stores the outcome.  CALLBACK then runs
+through `mevedel-transport-run-when-idle' with a zero delay: always from a
+timer after the sentinel has returned, once no remote operation is in flight,
+so it may start target I/O.  A disabled transport or cancelled retry still
+delivers the stored outcome from a zero-second transport timer rather than
+losing or inventing one.  A request that fails to launch calls CALLBACK
+before this returns.
+
+Elsewhere, and while `mevedel-session-control-fs--async-wait' is non-nil, the
+program runs synchronously and CALLBACK runs before this returns.  Return the
+process when the program runs asynchronously, and nil otherwise.
+`mevedel-session-control-fs-wait-async' waits for programs in flight.
 
 Nothing orders an asynchronous program against other programs on the same
 target: callers serialize the ones that touch the same files."
   (let ((remote (file-remote-p (plist-get (car operations) :path))))
     (if (or mevedel-session-control-fs--async-wait
-            (not (mevedel-session-control-fs--pipe-capable-p remote)))
+            (null operations)
+            (and remote (not (mevedel-session-control-fs--pipe-capable-p remote))))
         (let (results failure)
           (condition-case err
               (setq results (mevedel-session-control-fs-run-program operations))
@@ -1364,81 +1415,193 @@ target: callers serialize the ones that touch the same files."
       (let* ((default-directory
               (mevedel-session-control-fs--connection-directory (or remote "/")))
              (bash (car (mevedel-session-control-fs--programs remote)))
+             (path (plist-get (car operations) :path))
              (output (generate-new-buffer " *mevedel-control-fs-async*"))
              (stderr (generate-new-buffer " *mevedel-control-fs-async-stderr*"))
+             (staged (list nil))
+             (job (list staged))
+             ;; The transport queue coalesces work under `equal' keys, and
+             ;; JOB is structurally equal across programs that stage
+             ;; nothing: an uninterned symbol keeps each delivery its own.
+             (key (list 'mevedel-session-control-fs-async (make-symbol "job")))
              (release (lambda ()
-                        (when-let* ((pipe (get-buffer-process stderr)))
-                          (delete-process pipe))
-                        (dolist (buffer (list output stderr))
-                          (when (buffer-live-p buffer) (kill-buffer buffer)))))
+                        ;; A program that stopped early leaves its later
+                        ;; payloads staged; remove them first, as the buffers'
+                        ;; kill hooks are arbitrary code that may fail.  A file
+                        ;; that cannot be deleted is remembered for exit
+                        ;; cleanup, and the first failure is signalled after
+                        ;; every step ran.
+                        (let (failure)
+                          (dolist (file (car staged))
+                            (condition-case err
+                                (when (file-exists-p file) (delete-file file))
+                              (error
+                               (push file mevedel-session-control-fs--orphaned-staged)
+                               (setq failure (or failure err)))))
+                          ;; Every private resource is released on its own:
+                          ;; one failing kill hook must not leave the others.
+                          (condition-case err
+                              (when-let* ((pipe (get-buffer-process stderr)))
+                                (delete-process pipe))
+                            (error (setq failure (or failure err))))
+                          ;; The buffers are private: another module's kill
+                          ;; query must not veto them, and a veto (a nil
+                          ;; return) counts as failure like a signal does.
+                          (dolist (buffer (list output stderr))
+                            (when (buffer-live-p buffer)
+                              (condition-case err
+                                  (let ((kill-buffer-query-functions nil))
+                                    (kill-buffer buffer))
+                                (error (setq failure (or failure err))))
+                              (when (buffer-live-p buffer)
+                                (setq failure
+                                      (or failure
+                                          (list 'error "Control buffer was not killed")))
+                                (condition-case nil
+                                    (progn
+                                      (with-current-buffer buffer
+                                        (setq-local kill-buffer-hook nil))
+                                      (let ((kill-buffer-hook nil)
+                                            (kill-buffer-query-functions nil))
+                                        (kill-buffer buffer)))
+                                  (error nil)))))
+                          (when failure (signal (car failure) (cdr failure))))))
+             (deliver (lambda (results failure)
+                        (setq mevedel-session-control-fs--async-jobs
+                              (delq job mevedel-session-control-fs--async-jobs))
+                        (funcall callback results failure)))
+             (complete (lambda (results failure)
+                         (let* ((done nil)
+                                (thunk (lambda ()
+                                         (unless done
+                                           (setq done t)
+                                          ;; Cleanup runs here, never in the
+                                          ;; sentinel: killing buffers runs
+                                          ;; arbitrary hooks and deleting staged
+                                          ;; files is file I/O.  A failure is
+                                          ;; reported and must not lose the
+                                          ;; stored outcome.
+                                          (condition-case cleanup
+                                              (funcall release)
+                                            (error
+                                             (display-warning
+                                              'mevedel
+                                              (format "Control program cleanup failed: %s"
+                                                      (error-message-string cleanup))
+                                              :warning)))
+                                           (funcall deliver results failure)))))
+                           ;; Never run the callback in the sentinel, which may
+                           ;; sit inside another remote command and whose
+                           ;; callback may start the next target phase.  A
+                           ;; disabled transport or a cancelled retry still
+                           ;; delivers the stored outcome, from a timer.
+                           (let ((later (lambda ()
+                                          (mevedel-transport-run-at-time
+                                           0 thunk))))
+                             (unless (mevedel-transport-run-when-idle
+                                      key path thunk later 0)
+                               (funcall later))))))
              settled process)
         (with-current-buffer output (set-buffer-multibyte nil))
+        (push job mevedel-session-control-fs--async-jobs)
         (condition-case err
-            ;; Writing the request can run process filters, as it does in the
-            ;; synchronous carrier: counting the dispatch as a remote operation
-            ;; makes whatever they start defer instead of nesting in it.
-            (mevedel-transport-call-as-remote-operation
-             (lambda ()
-               (setq process
-                     (mevedel-transport-call-with-spawn-channel
-                      remote t
-                      (lambda ()
-                        (make-process
-                         :name "mevedel-control-fs-async" :buffer output
-                         :stderr stderr
-                         :command (list bash "-p" "-c"
-                                        mevedel-session-control-fs--pipe-bootstrap
-                                        bash "" "" "0")
-                         :connection-type 'pipe :coding 'no-conversion
-                         :file-handler t :noquery t
-                         :sentinel
-                         (lambda (process _event)
-                           (unless (or settled (process-live-p process))
-                             (setq settled t)
-                             (let ((status (process-exit-status process))
-                                   (text (with-current-buffer output (buffer-string))))
-                               (funcall release)
-                               (if (eql 0 status)
-                                   (let (results failure)
-                                     (condition-case err
-                                         (setq results
-                                               (mevedel-session-control-fs--program-results
-                                                operations text))
-                                       (error (setq failure err)))
-                                     (funcall callback results failure))
-                                 (remhash (or remote "") mevedel-session-control-fs--programs)
-                                 (funcall callback nil
-                                          (list 'file-error
-                                                "Portable control program failed"
-                                                (plist-get (car operations) :path)
-                                                (format "exit status %s" status)))))))))))
-               (with-temp-buffer
-                 (insert (encode-coding-string
-                          mevedel-session-control-fs--program-script 'utf-8-unix) 0)
-                 (mevedel-session-control-fs--send-request-buffer process))
-               (with-temp-buffer
-                 (mevedel-session-control-fs--insert-program-request
-                  (mapcar (lambda (op)
-                            (mevedel-session-control-fs--program-fields
-                             (mevedel-session-control-fs--inline-source op)))
-                          operations))
-                 (mevedel-session-control-fs--send-request-buffer process))
-               (process-send-eof process)
-               process))
+            (let* ((_ (dolist (op operations)
+                        (unless (equal remote
+                                       (file-remote-p
+                                        (plist-get
+                                         (mevedel-session-control-fs--descriptor
+                                          (plist-get op :path))
+                                         :parent)))
+                          (error "Control program crosses execution targets"))))
+                   (fields (mapcar #'mevedel-session-control-fs--program-fields
+                                   (if (or remote
+                                           (not mevedel-session-control-fs--stage-local))
+                                       (mapcar #'mevedel-session-control-fs--inline-source
+                                               operations)
+                                     (mevedel-session-control-fs--stage-payloads
+                                      operations staged))))
+                   ;; A local request that fits rides as arguments, with
+                   ;; nothing to write; the rest streams over stdin.
+                   (arguments (and (not remote)
+                                   (mevedel-session-control-fs--program-arguments
+                                    fields))))
+              ;; Writing the request can run process filters, as it does in the
+              ;; synchronous carrier: counting the dispatch as a remote operation
+              ;; makes whatever they start defer instead of nesting in it.
+              (mevedel-transport-call-as-remote-operation
+               (lambda ()
+                 (setq process
+                       (mevedel-transport-call-with-spawn-channel
+                        remote t
+                        (lambda ()
+                          (make-process
+                           :name "mevedel-control-fs-async" :buffer output
+                           :stderr stderr
+                           :command
+                           (if arguments
+                               (append
+                                (list bash "-p" "-c"
+                                      mevedel-session-control-fs--program-script
+                                      "mevedel-session-control-fs" "" "" "0")
+                                arguments)
+                             (list bash "-p" "-c"
+                                   mevedel-session-control-fs--pipe-bootstrap
+                                   bash "" "" "0"))
+                           :connection-type 'pipe :coding 'no-conversion
+                           :file-handler t :noquery t
+                           :sentinel
+                           (lambda (process _event)
+                             (unless (or settled (process-live-p process))
+                               (setq settled t)
+                               (let ((status (process-exit-status process))
+                                     (text (with-current-buffer output
+                                             (buffer-string))))
+                                 (if (eql 0 status)
+                                     (let (results failure)
+                                       (condition-case err
+                                           (setq results
+                                                 (mevedel-session-control-fs--program-results
+                                                  operations text))
+                                         (error (setq failure err)))
+                                       (funcall complete results failure))
+                                   (remhash (or remote "")
+                                            mevedel-session-control-fs--programs)
+                                   (funcall complete nil
+                                            (list 'file-error
+                                                  "Portable control program failed"
+                                                  path
+                                                  (format "exit status %s" status)))))))))))
+                 (unless arguments
+                   (with-temp-buffer
+                     (insert (encode-coding-string
+                              mevedel-session-control-fs--program-script 'utf-8-unix)
+                             0)
+                     (mevedel-session-control-fs--send-request-buffer process))
+                   (with-temp-buffer
+                     (mevedel-session-control-fs--insert-program-request fields)
+                     (mevedel-session-control-fs--send-request-buffer process)))
+                 (process-send-eof process)
+                 process)))
           ((error quit)
            (unless settled
              (setq settled t)
              (when (process-live-p process) (delete-process process))
-             (funcall release)
+             (condition-case cleanup
+                 (funcall release)
+               (error
+                (display-warning
+                 'mevedel
+                 (format "Control program cleanup failed: %s"
+                         (error-message-string cleanup))
+                 :warning)))
              ;; A program that dies before its request is written failed as a
              ;; whole, just as the sentinel reports an unsuccessful exit.
              (remhash (or remote "") mevedel-session-control-fs--programs)
-             (funcall callback nil
+             (funcall deliver nil
                       (if (eq (car err) 'file-error)
                           err
                         (list 'file-error "Portable control program failed"
-                              (plist-get (car operations) :path)
-                              (error-message-string err)))))
+                              path (error-message-string err)))))
            (when (eq (car err) 'quit) (signal (car err) (cdr err)))
            nil))))))
 

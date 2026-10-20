@@ -1661,7 +1661,7 @@ mouse events in them, which later interactive calls would read."
            (session (test-mevedel-execution--session root))
            (mevedel-execution-event-functions '(mevedel-view-execution--event))
            (mevedel-execution-state-change-hook '(mevedel-view-execution--state-changed))
-           (mevedel-execution-mailbox-delivery-function (lambda (&rest _) t)))
+           (mevedel-execution-mailbox-delivery-function (lambda (_event _context ack) (funcall ack t nil) t)))
       (unwind-protect
           (progn
             (with-current-buffer data-buf (setq-local mevedel--session session))

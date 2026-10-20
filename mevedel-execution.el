@@ -327,6 +327,8 @@ row redraws a second.")
   marker-buffer
   marker-seen-p
   (monitor-count 0)
+  monitor-after
+  monitor-inflight
   monitor-lines
   (monitor-bytes 0)
   (monitor-omitted 0)
@@ -397,10 +399,14 @@ Each function receives the owning session and originating data buffer.  Errors
 are contained by the execution module.")
 
 (defvar mevedel-execution-mailbox-delivery-function nil
-  "Function that synchronously secures one terminal event in its owner mailbox.
-The function receives an immutable event plist and its private owner context,
-then returns non-nil only after durable delivery.  This is deliberately
-separate from passive event hooks; the context is never published to them.")
+  "Function that secures one event in its owner mailbox, then acknowledges it.
+The function receives an immutable event plist, its private owner context and
+an acknowledgement function.  The acknowledgement takes SUCCESS and ERROR and
+must run exactly once: SUCCESS non-nil after durable delivery, nil with ERROR
+after a definitive failure that left nothing queued.  The function returns
+`pending' when the acknowledgement will run later; any other return means it
+already ran.  This is deliberately separate from passive event hooks; the
+context is never published to them.")
 
 ;;
 ;;; State and environment
@@ -1086,29 +1092,63 @@ is."
         (reverse (copy-sequence (mevedel-execution--record-monitor-lines record)))
         :monitor-omitted (mevedel-execution--record-monitor-omitted record)))
 
+(defun mevedel-execution--monitor-batch-settled
+    (record event lines omitted success)
+  "Settle RECORD's in-flight batch of LINES and OMITTED after delivery.
+SUCCESS drops exactly the delivered lines, keeping any that arrived while the
+batch was pending, and publishes EVENT.  Failure keeps every line."
+  (setf (mevedel-execution--record-monitor-inflight record) nil)
+  (when success
+    (let ((kept (butlast (mevedel-execution--record-monitor-lines record)
+                         lines)))
+      (setf (mevedel-execution--record-monitor-lines record) kept
+            (mevedel-execution--record-monitor-bytes record)
+            (cl-loop for line in kept sum (1+ (string-bytes line)))
+            (mevedel-execution--record-monitor-omitted record)
+            (max 0 (- (mevedel-execution--record-monitor-omitted record)
+                      omitted))))
+    (mevedel-execution--emit-event event)
+    (mevedel-execution--notify-state-change record)
+    (when (and (not (mevedel-execution--record-finished-p record))
+               (> (mevedel-agent-control-monitor-unread-bytes
+                   (mevedel-execution--origin-session
+                    (mevedel-execution--record-origin record))
+                   (mevedel-execution--record-execution-id record))
+                  (* 64 1024)))
+      (mevedel-execution--stop-process record 'flood))
+    (when (and (mevedel-execution--record-monitor-lines record)
+               (not (mevedel-execution--record-finished-p record))
+               (not (mevedel-execution--record-stop-p record))
+               (not (mevedel-execution--record-monitor-timer record)))
+      (setf (mevedel-execution--record-monitor-timer record)
+            (mevedel-transport-run-at-time
+             0.2 #'mevedel-execution--monitor-flush record))))
+  (when-let* ((after (mevedel-execution--record-monitor-after record)))
+    (setf (mevedel-execution--record-monitor-after record) nil)
+    (funcall after)))
+
 (defun mevedel-execution--monitor-flush (record)
-  "Secure RECORD's pending batch in its mailbox, retaining it on failure."
+  "Secure RECORD's pending batch in its mailbox, retaining it until acknowledged.
+One batch is in flight at a time; its lines stay in RECORD until the sink
+acknowledges success, and a failure keeps them for the next flush."
   (setf (mevedel-execution--record-monitor-timer record) nil)
   (unless (or (mevedel-execution--record-finished-p record)
               (mevedel-execution--record-stop-p record)
+              (mevedel-execution--record-monitor-inflight record)
               (eq (mevedel-execution--record-delivery-state record) 'discarded))
     (let ((body (mevedel-execution--monitor-body record)))
       (unless (string-empty-p body)
-        (let ((event (apply #'mevedel-execution--event
-                            record 'monitor-batch :body body
-                            (mevedel-execution--monitor-batch record))))
-          (when (mevedel-execution--deliver-mailbox-event record event)
-            (setf (mevedel-execution--record-monitor-lines record) nil
-                  (mevedel-execution--record-monitor-bytes record) 0
-                  (mevedel-execution--record-monitor-omitted record) 0)
-            (mevedel-execution--emit-event event)
-            (mevedel-execution--notify-state-change record)
-            (when (> (mevedel-agent-control-monitor-unread-bytes
-                      (mevedel-execution--origin-session
-                       (mevedel-execution--record-origin record))
-                      (mevedel-execution--record-execution-id record))
-                     (* 64 1024))
-              (mevedel-execution--stop-process record 'flood))))))))
+        (let* ((batch (mevedel-execution--monitor-batch record))
+               (lines (length (plist-get batch :monitor-lines)))
+               (omitted (plist-get batch :monitor-omitted))
+               (event (apply #'mevedel-execution--event
+                             record 'monitor-batch :body body batch)))
+          (setf (mevedel-execution--record-monitor-inflight record) t)
+          (mevedel-execution--deliver-mailbox-event
+           record event
+           (lambda (success _error)
+             (mevedel-execution--monitor-batch-settled
+              record event lines omitted success))))))))
 
 (defun mevedel-execution--monitor-line (record &optional final)
   "Complete RECORD's bounded partial line and update its event limits.
@@ -1335,20 +1375,42 @@ execution's progress cost."
           "Execution event consumer failed: %s"
           (error-message-string err)))))))
 
-(defun mevedel-execution--deliver-mailbox-event (record event)
-  "Return non-nil after the mailbox sink secures RECORD's EVENT."
-  (when (functionp mevedel-execution-mailbox-delivery-function)
-    (condition-case err
-        (funcall mevedel-execution-mailbox-delivery-function
-                 (mevedel-execution--copy-value event)
-                 (mevedel-execution--origin-owner-context
-                  (mevedel-execution--record-origin record)))
-      (error
-       (mevedel--warn-once
-        'execution-mailbox-delivery
-        "Execution mailbox delivery failed: %s"
-        (error-message-string err))
-       nil))))
+(defun mevedel-execution--deliver-mailbox-event (record event acknowledgement)
+  "Hand RECORD's EVENT to the mailbox sink; ACKNOWLEDGEMENT runs exactly once.
+ACKNOWLEDGEMENT receives SUCCESS and ERROR.  A missing sink, a sink that
+signals, and a sink that returns without acknowledging or answering `pending'
+all acknowledge failure.  Errors in ACKNOWLEDGEMENT are contained here and
+never reach the sink.  Return `pending' while the acknowledgement is still
+outstanding, else nil."
+  (let* ((done nil)
+         (ack (lambda (success &optional error)
+                (unless done
+                  (setq done t)
+                  (condition-case err
+                      (funcall acknowledgement (and success t) error)
+                    (error
+                     (mevedel--warn-once
+                      'execution-mailbox-acknowledgement
+                      "Execution mailbox acknowledgement failed: %s"
+                      (error-message-string err))))))))
+    (if (not (functionp mevedel-execution-mailbox-delivery-function))
+        (funcall ack nil "No mailbox consumer")
+      (condition-case err
+          (let ((result
+                 (funcall mevedel-execution-mailbox-delivery-function
+                          (mevedel-execution--copy-value event)
+                          (mevedel-execution--origin-owner-context
+                           (mevedel-execution--record-origin record))
+                          ack)))
+            (unless (or done (eq result 'pending))
+              (funcall ack nil "Mailbox sink returned without acknowledging")))
+        (error
+         (mevedel--warn-once
+          'execution-mailbox-delivery
+          "Execution mailbox delivery failed: %s"
+          (error-message-string err))
+         (funcall ack nil (error-message-string err)))))
+    (and (not done) 'pending)))
 
 (defun mevedel-execution--whole-preview (record)
   "Return RECORD's bounded whole-artifact head-and-tail preview."
@@ -1553,25 +1615,53 @@ it briefly so repeated owner polls return the same result."
     (when (and claim-final
                (mevedel-execution--record-delivery-state record))
       (signal 'mevedel-execution-not-found
-              (list "Execution terminal result is already claimed")))
-    (when claim-final
-      (setf (mevedel-execution--record-delivery-state record) 'model))
-    (let ((range (mevedel-execution--unread-range record)))
-      (mevedel-execution--publish-remote-output record range claim-final)
-      (mevedel-execution--consume-unread-range record range)
-      (let ((observation
-             (mevedel-execution--range-observation record range claim-final)))
-        (when claim-final
-          (setf (mevedel-execution--record-terminal-observation record)
-                (mevedel-execution--copy-value observation))
-          (mevedel-execution--emit-event
-           (mevedel-execution--terminal-event record 'model observation))
-          (mevedel-execution--retire-terminal-record record))
-        observation))))
+              (list (if (mevedel-execution--mailbox-pending-p record)
+                        "Execution terminal result delivery is pending"
+                      "Execution terminal result is already claimed"))))
+    (if (mevedel-execution--mailbox-pending-p record)
+        ;; An acknowledgement is outstanding for this range: observe it
+        ;; without consuming, so a failed delivery loses nothing.
+        (mevedel-execution--range-observation
+         record (mevedel-execution--unread-range record))
+      (when claim-final
+        (setf (mevedel-execution--record-delivery-state record) 'model))
+      (let ((range (mevedel-execution--unread-range record)))
+        (mevedel-execution--publish-remote-output record range claim-final)
+        (mevedel-execution--consume-unread-range record range)
+        (let ((observation
+               (mevedel-execution--range-observation
+                record range claim-final)))
+          (when claim-final
+            (setf (mevedel-execution--record-terminal-observation record)
+                  (mevedel-execution--copy-value observation))
+            (mevedel-execution--emit-event
+             (mevedel-execution--terminal-event record 'model observation))
+            (mevedel-execution--retire-terminal-record record))
+          observation)))))
 
-(defun mevedel-execution--deliver-independent (record)
-  "Secure RECORD's unread terminal result in its owner mailbox."
-  (unless (mevedel-execution--record-delivery-state record)
+(defun mevedel-execution--mailbox-pending-p (record)
+  "Return non-nil while RECORD's terminal mailbox delivery awaits acknowledgement."
+  (and (eq (mevedel-execution--record-delivery-state record) 'mailbox)
+       (null (mevedel-execution--record-terminal-observation record))))
+
+(defun mevedel-execution--deliver-independent (record &optional settled)
+  "Secure RECORD's unread terminal result in its owner mailbox.
+The record keeps its identity, unread output and observation until the sink
+acknowledges success; polls cannot claim the result meanwhile.  A failure
+restores the record for retry.  SETTLED, if given, runs once with the outcome
+when the delivery is resolved, including when nothing needed delivering.
+Return `pending' while acknowledgement is outstanding, else nil."
+  (cond
+   ((mevedel-execution--record-monitor-inflight record)
+    ;; A monitor batch holds lines the terminal event would repeat; resume
+    ;; once its acknowledgement has settled them.
+    (setf (mevedel-execution--record-monitor-after record)
+          (lambda () (mevedel-execution--deliver-independent record settled)))
+    'pending)
+   ((mevedel-execution--record-delivery-state record)
+    (when settled (funcall settled nil))
+    nil)
+   (t
     (setf (mevedel-execution--record-delivery-state record) 'mailbox)
     (let* ((range (mevedel-execution--unread-range record))
            (_ (mevedel-execution--publish-remote-output record range t))
@@ -1579,24 +1669,27 @@ it briefly so repeated owner polls return the same result."
             (mevedel-execution--range-observation record range t t))
            (event
             (mevedel-execution--terminal-event record 'mailbox observation)))
-      (let ((delivered-p
-             (mevedel-execution--deliver-mailbox-event record event)))
-        (mevedel-execution--emit-event event)
-        (if delivered-p
-          (progn
-            (setf (mevedel-execution--record-terminal-observation record)
-                  (mevedel-execution--copy-value observation))
-            (mevedel-execution--consume-unread-range record range)
-            (mevedel-execution--retire-terminal-record record)
-            t)
-          (display-warning
-           'mevedel
-           (format "Execution %s completion has no mailbox consumer"
-                   (mevedel-execution--record-execution-id record))
-           :warning)
-          (setf (mevedel-execution--record-delivery-state record) nil
-                (mevedel-execution--record-terminal-observation record) nil)
-          nil)))))
+      (mevedel-execution--deliver-mailbox-event
+       record event
+       (lambda (success error)
+         (when (eq (mevedel-execution--record-delivery-state record) 'mailbox)
+           (mevedel-execution--emit-event event)
+           (if success
+               (progn
+                 (setf (mevedel-execution--record-terminal-observation record)
+                       (mevedel-execution--copy-value observation))
+                 (mevedel-execution--consume-unread-range record range)
+                 (mevedel-execution--retire-terminal-record record))
+             (display-warning
+              'mevedel
+              (format "Execution %s completion was not delivered: %s"
+                      (mevedel-execution--record-execution-id record)
+                      (or error "unknown failure"))
+              :warning)
+             (setf (mevedel-execution--record-delivery-state record) nil
+                   (mevedel-execution--record-terminal-observation record)
+                   nil)))
+         (when settled (funcall settled success))))))))
 
 (defun mevedel-execution--deliver-observer (record)
   "Deliver RECORD's terminal observation to its waiting observer."
@@ -1718,24 +1811,43 @@ returning: their callers expect the outcome settled."
       (mevedel-execution--release-scheduler record)
       (let ((deliver
              (lambda ()
-               (unwind-protect
-                   (progn
-                    (mevedel-execution--collect-stderr record)
-                    (if (mevedel-execution--record-yielded-p record)
-                       (if (and (mevedel-execution--record-observer record)
-                                (not (eq (mevedel-execution--record-kind record)
-                                         'monitor)))
-                           (mevedel-execution--deliver-observer record)
-                         (when mevedel-execution-mailbox-delivery-function
-                           (mevedel-execution--deliver-independent record))
-                         (when (mevedel-execution--record-observer record)
-                           (mevedel-execution--deliver-observer record)))
-                     (let ((callback (mevedel-execution--record-callback record)))
-                       (unless (eq (mevedel-execution--record-delivery-state record)
-                                   'discarded)
-                         (funcall callback
-                                  (mevedel-execution--observation record t))))))
-                 (setf (mevedel-execution--record-delivery-pending-p record) nil))))
+               (let ((awaiting nil)
+                     (clear
+                      (lambda (&rest _)
+                        (setf (mevedel-execution--record-delivery-pending-p
+                               record)
+                              nil)
+                        (when (mevedel-execution--record-observer record)
+                          (mevedel-execution--deliver-observer record)))))
+                 ;; An independent delivery keeps the record pending until its
+                 ;; sink acknowledges; every other path settles in place.
+                 (unwind-protect
+                     (progn
+                       (mevedel-execution--collect-stderr record)
+                       (if (mevedel-execution--record-yielded-p record)
+                           (if (and (mevedel-execution--record-observer record)
+                                    (not (eq (mevedel-execution--record-kind
+                                              record)
+                                             'monitor)))
+                               (mevedel-execution--deliver-observer record)
+                             (if mevedel-execution-mailbox-delivery-function
+                                 (setq awaiting
+                                       (mevedel-execution--deliver-independent
+                                        record clear))
+                               (when (mevedel-execution--record-observer record)
+                                 (mevedel-execution--deliver-observer record))))
+                         (let ((callback
+                                (mevedel-execution--record-callback record)))
+                           (unless (eq (mevedel-execution--record-delivery-state
+                                        record)
+                                       'discarded)
+                             (funcall callback
+                                      (mevedel-execution--observation
+                                       record t))))))
+                   (unless awaiting
+                     (setf (mevedel-execution--record-delivery-pending-p
+                            record)
+                           nil))))))
             (workdir (mevedel-execution--record-workdir record)))
         ;; Delivery starts the tool's continuation -- result handling and,
         ;; for gptel, the next request -- and for background commands
@@ -2461,51 +2573,60 @@ MANAGED-LIVE-P records whether RECORD was user-visible before teardown."
     (ignore-errors (funcall function))))
 
 (defun mevedel-execution--discard-record (record reason)
-  "Kill and forget RECORD because of lifecycle REASON."
-  (let ((managed-live-p (mevedel-execution--managed-live-p record)))
-    (when (and (mevedel-execution--record-execution-id record)
+  "Kill and forget RECORD because of lifecycle REASON.
+A finished record whose mailbox delivery still awaits its acknowledgement
+survives an owner stop: the acknowledgement retires it on success and a
+failure leaves its output unread for a poll or retry.  Ending the session
+instead discards it, and the late acknowledgement then finds it gone."
+  (unless (and (eq reason 'owner-stopped)
                (mevedel-execution--record-finished-p record)
-               (not (mevedel-execution--record-delivery-state record)))
-      ;; Settlement and delivery are separate event-loop turns.  Teardown
-      ;; can arrive between them: a foreground owner-stop still owes its
-      ;; caller the outcome, but session teardown and yielded work discard it.
-      (mevedel-transport-cancel-pending
-       (list 'execution-delivery (mevedel-execution--record-token record)))
-      (if (and (eq reason 'owner-stopped)
-               (not (mevedel-execution--record-yielded-p record)))
-          (funcall (mevedel-execution--record-callback record)
-                   (mevedel-execution--observation record t))
-        (setf (mevedel-execution--record-delivery-state record) 'discarded)))
-    (unless (mevedel-execution--record-finished-p record)
-      (setf (mevedel-execution--record-termination record) reason)
-      (when managed-live-p
-        (setf (mevedel-execution--record-error-data record)
-              '(mevedel-execution-error "Execution owner was stopped")
-              (mevedel-execution--record-exit-code record) -1)
-        (when (or (mevedel-execution--record-yielded-p record)
-                  (eq reason 'session-ended))
+               (mevedel-execution--mailbox-pending-p record))
+    (when (mevedel-execution--mailbox-pending-p record)
+      (setf (mevedel-execution--record-delivery-state record) 'discarded))
+    (let ((managed-live-p (mevedel-execution--managed-live-p record)))
+      (when (and (mevedel-execution--record-execution-id record)
+		 (mevedel-execution--record-finished-p record)
+		 (not (mevedel-execution--record-delivery-state record)))
+	;; Settlement and delivery are separate event-loop turns.  Teardown
+	;; can arrive between them: a foreground owner-stop still owes its
+	;; caller the outcome, but session teardown and yielded work discard it.
+	(mevedel-transport-cancel-pending
+	 (list 'execution-delivery (mevedel-execution--record-token record)))
+	(if (and (eq reason 'owner-stopped)
+		 (not (mevedel-execution--record-yielded-p record)))
+            (funcall (mevedel-execution--record-callback record)
+                     (mevedel-execution--observation record t))
           (setf (mevedel-execution--record-delivery-state record) 'discarded)))
-      (when-let* ((lease
-                   (mevedel-execution--record-scheduler-lease record)))
-        (mevedel-execution-scheduler-cancel lease))
-      (if (mevedel-execution-process-launch-attempted-p
-           (mevedel-execution--record-child record))
-          (if managed-live-p
-              (progn
-                (mevedel-execution--stop-process record reason)
-                (while (and (not (mevedel-execution--record-finished-p record))
-                            (not (mevedel-execution-process-terminal-p
-                                  (mevedel-execution--record-child record))))
-                  (accept-process-output nil 0.01)))
-            (setf (mevedel-execution--record-finished-p record) t
-                  (mevedel-execution--record-stop-p record) t)
-            (mevedel-execution-process-stop
-             (mevedel-execution--record-child record) reason)
-            (while (not (mevedel-execution-process-terminal-p
-                         (mevedel-execution--record-child record)))
-              (accept-process-output nil 0.01)))
-        (setf (mevedel-execution--record-stop-p record) t)))
-    (mevedel-execution--finalize-discarded-record record managed-live-p)))
+      (unless (mevedel-execution--record-finished-p record)
+	(setf (mevedel-execution--record-termination record) reason)
+	(when managed-live-p
+          (setf (mevedel-execution--record-error-data record)
+		'(mevedel-execution-error "Execution owner was stopped")
+		(mevedel-execution--record-exit-code record) -1)
+          (when (or (mevedel-execution--record-yielded-p record)
+                    (eq reason 'session-ended))
+            (setf (mevedel-execution--record-delivery-state record) 'discarded)))
+	(when-let* ((lease
+                     (mevedel-execution--record-scheduler-lease record)))
+          (mevedel-execution-scheduler-cancel lease))
+	(if (mevedel-execution-process-launch-attempted-p
+             (mevedel-execution--record-child record))
+            (if managed-live-p
+		(progn
+                  (mevedel-execution--stop-process record reason)
+                  (while (and (not (mevedel-execution--record-finished-p record))
+                              (not (mevedel-execution-process-terminal-p
+                                    (mevedel-execution--record-child record))))
+                    (accept-process-output nil 0.01)))
+              (setf (mevedel-execution--record-finished-p record) t
+                    (mevedel-execution--record-stop-p record) t)
+              (mevedel-execution-process-stop
+               (mevedel-execution--record-child record) reason)
+              (while (not (mevedel-execution-process-terminal-p
+                           (mevedel-execution--record-child record)))
+		(accept-process-output nil 0.01)))
+          (setf (mevedel-execution--record-stop-p record) t)))
+      (mevedel-execution--finalize-discarded-record record managed-live-p))))
 
 (defun mevedel-execution-stop-owner (session owner)
   "Discard every execution record belonging to OWNER in SESSION.

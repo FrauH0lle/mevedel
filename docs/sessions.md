@@ -1395,6 +1395,144 @@ such as target-side copy, restore, and rename.  It suppresses timer target I/O
 and checks final ownership but does not itself publish, commit, or drain queued
 artifacts.
 
+### Warm-local asynchronous mailbox publication
+
+Delivering a background command's completion or monitor batch to its owner's
+mailbox is the one acknowledged mutation that does not block the editor on
+target programs. Only a materialized local portable session qualifies: its
+save path is local, its authority is portable, a committed publication with a
+sidecar exists, its root buffer is live, and it is not stopping. Cold
+materialization, remote targets, file-backed and PID-lock sessions use the
+synchronous publication above. Every other acknowledged mutation is
+synchronous too; agent mail, spawn, RESULT and settlement drain the gate first
+(below) and then commit as before.
+
+The mailbox append is one session-owned publication job that holds
+`publication-active-p` from acceptance to acknowledgement, so renewal timers
+stay quiet and cooperative transfer stays blocked. Its phases are admission,
+freeze, reservation, generation, head commit, adoption, acknowledgement and
+cleanup. Each target phase is a pinned control program launched without
+waiting; its result is stored by the sentinel and the next phase is scheduled
+from a timer through the idle transport, never from the sentinel. The
+transaction's clock, asserted-directory and recovery cells are job-owned and
+rebound only while that job advances, so the bounded clock freshness check
+applies across event-loop turns instead of becoming an authority cache; the
+job's own bounded lease proofs run between phases and fail closed after expiry
+or ownership loss.
+
+Local control-program jobs retain their staged payload files until their
+delivery timer cleans up, before invoking the callback. The sentinel performs
+no file deletion or buffer teardown. A stopped-early program's unused payloads
+are removed too; cleanup failure reports a diagnostic without losing the stored
+outcome. Emacs exit also cleans up jobs whose delivery never ran and retries
+failed staged-file deletions. A hard process kill cannot run exit cleanup.
+
+Admission is one program carrying the clock, the lease listing and the bound
+generation's record, the transfer-request listing and the PID-lock and
+recovery-root probes. It admits only the warm case: an owned, newest
+generation with remembered bytes, no recovery marker, no live transfer request
+naming this client, and no quiescing or released state. Anything else fails
+the job, acknowledges the failure, and leaves the producer holding its output;
+a later synchronous attempt reports the reason. Freeze runs only after
+admission, under the gate: it identifies the records (a record already present
+is dropped), marks the new ones `:uncommitted`, prepends them to the live
+queue and captures the fresh sidecar, which is the job's only artifact. The
+reservation program carries the first fixed write, the head-commit program
+carries the immutable generation ahead of the lease update, and that update
+returns the lease to `active`. The commit point is the lease head, as for
+synchronous publication.
+
+On success the records become readable, the job's batches are consumed, the
+producer's acknowledgement runs (execution bookkeeping completes), and only
+then, unless the session is stopping, the owner is woken. Cleanup failures
+after the head committed warn but do not change the outcome. On a definitive
+failure before the head committed, the job normalizes a reserved lease,
+removes only its own record identities from the live queue, preserves
+unrelated arrivals, discards its staged batch, and acknowledges the failure.
+The producer keeps its unread output and may deliver again. An execution's
+terminal result retries with a stable record identity, a hash of its owner and
+execution id. Monitor batches stay pending, with their lines retained, until
+acknowledged, and are retried only after a definitive rollback; a retry builds
+new records, so a monitor batch's mail identities are not guaranteed to repeat.
+An uncertain outcome retains the job instead of retrying (below).
+Acknowledgement happens exactly once, including after a
+synchronous-fallback carrier.
+
+An error or lost result at or after the head commit is not decided locally.
+The job reads the authoritative lease head: the candidate head means adopt
+and acknowledge success; the prior head means roll back as above; any other
+head, or one that cannot be read, retains the job as unresolved, records the
+frozen batches as pending publication and keeps the mail identities unchanged,
+because a successor head may already contain them and rolling back could
+acknowledge the same execution twice. `mevedel-session-publication-retry`
+repeats the reconciliation and `mevedel-session-publication-abandon` ends the
+job as failed. Both are refused while the job is still running.
+
+While a job is accepted its session's mutation gate is held. Work that would
+change acknowledged state or capture a sidecar queues as a preparation
+continuation that runs, outside the current callback, before it mutates or
+captures anything: acknowledged mailbox arrivals, deferred terminal
+settlement, autosave and the observational registry save. Queued entries hold
+no frozen snapshot, so a rolled-back job cannot be resurrected by a sidecar
+frozen earlier, and a committed job cannot be erased by one frozen before it.
+A failed deferral is reported to its owner and never silently dropped.
+Explicitly synchronous operations -- manual and root saves, transcript and
+segment writes, spawn registration and activation, settlement publication, and
+a registry save that requires a commit -- drain the gate first, so none
+reports queued work as committed; an unresolved job makes them fail with the
+recovery instruction. Transcript streaming and composer edits are not gated.
+
+Gate ownership is explicit. A queued preparation runs with a fresh token that
+is held in a session slot only while it runs and is passed to the preparation
+as an argument; only a call carrying that token may reenter the gate. No
+dynamically bound exemption exists, so an unrelated timer or callback running
+during a preparation inherits nothing. The drain fails fast, with an error
+naming an active operation, when a nested transport frame is in flight, a
+preparation is running on the stack, or a synchronous publication on this
+stack owns the gate: waiting there could not let the work advance. Otherwise
+it pumps events in 10 ms steps and signals after 30 seconds
+(`mevedel-session-publication--barrier-seconds`). That limit is checked between
+pumps, so it is not a hard bound on a single blocking operation inside one.
+
+A preparation therefore never runs arbitrary callbacks under its token.
+Notifications -- waiter wakes, root and agent wake offers, and the reoffer after
+a vetoed close -- never enter the mutation preparation queue. Each session owns
+one coalesced first-in-first-out set of pending notifications and at most one
+timer. A notification runs at once only when the publication gate is idle (no
+job, preparation or active publication), the transport is idle and nothing is
+already pending; otherwise it joins the set, so a later acknowledgement cannot
+overtake an earlier one. The timer starts at 50 ms and doubles up to 500 ms
+while the gate or transport stays busy, then flushes the set in order, only
+while the root buffer is live and the session is not stopping. A waiter
+callback can resume tool code and gated operations, so it runs with no token
+and fresh transaction observations, and defers or drains like any other
+caller. A failing notification warns and does not stop the rest. Temporary
+stopping during a close query retains actual suppressed offers without a
+timer. If the close is vetoed, reopening admissions re-arms that same FIFO
+once; an idle close creates no timer. A close that proceeds cancels the timer
+and discards the queue during session teardown, without running callbacks.
+
+On a compiled in-process fixture with a 6000-turn local portable session, an
+explicit drain issued immediately after a submission waited a further
+89.8-115.0 ms (six samples). On the final frozen implementation, asynchronous
+submission returned in 0.22-0.45 ms and acknowledgement arrived 75.4-120.1 ms
+after submission, with a largest 5 ms-timer heartbeat gap of 8.2-10.2 ms,
+against 59.9-73.8 ms of blocked editor for the synchronous commit (heartbeat
+60.0-73.9 ms). A deliberately stalled admission with a 0.25-second drain limit
+signalled after 255.6 ms without acknowledging or discarding the job; releasing
+the stalled callback then completed it. Composer text and point survived all 19
+samples. One fixture, small samples, no live or graphical measurement; this is
+not a hard bound on arbitrary filesystem latency, sidecar size or GC.
+
+Closing the root buffer stops new admissions and drains accepted jobs before
+its final save and lease release; Emacs exit does the same for every live
+session before execution teardown, then waits for control programs still in
+flight. A buffer-close query drains an owned root before teardown begins, and a
+query that vetoes the close reopens admissions. A job that stays unresolved
+refuses the close or exit for that session: it is neither saved nor
+released, so explicit recovery or abandonment remains possible. A lease
+release requested while a job runs is performed when the job completes.
+
 Every committed publication, turn settlement, and lease-acquiring restore schedule publication collection
 without scanning history on the foreground path. The coalesced job reads at
 most eight generations per idle slice, yielding after 50 ms between reads.

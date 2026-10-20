@@ -32,14 +32,18 @@
 (defvar read-eval)
 
 ;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-notify
+                  "mevedel-agent-control" (session key function))
+(autoload 'mevedel-agent-control-notify "mevedel-agent-control")
 (declare-function mevedel-agent-control-enqueue-execution-result
                   "mevedel-agent-control"
-                  (session owner body &optional execution-id wake meta))
+                  (session owner body &optional execution-id wake meta
+                           acknowledgement))
 
 ;; `mevedel-agent-runtime'
 (declare-function mevedel-agent-runtime-queue-execution-completion
                   "mevedel-agent-runtime"
-                  (context owner body &optional meta))
+                  (context owner body &optional meta acknowledgement))
 
 ;; `mevedel-agents'
 (defvar mevedel--agent-invocation)
@@ -457,13 +461,14 @@ Values are plain strings and integers; unknown or nil facts are omitted."
     meta))
 
 (defun mevedel-tool-exec--enqueue-monitor-lines
-    (owner-context facts lines omitted wake &optional terminal)
+    (owner-context facts lines omitted wake &optional terminal acknowledgement)
   "Queue each framed monitor line of LINES as its own record for OWNER-CONTEXT.
 OMITTED lines are summarized on the last record, whose model text carries the
 original omission note.  FACTS identify the monitor; WAKE marks every record.
 TERMINAL, an entry (BODY META t), follows the lines.  All records share one
 durable commit, so a failed flush leaves nothing queued and a retry cannot
-duplicate events."
+duplicate events.  ACKNOWLEDGEMENT, if given, is passed to the mailbox and
+runs once when the commit is secured or has failed."
   (let ((entries nil))
     (when (and (null lines) (> omitted 0))
       (setq lines (list "")))
@@ -480,21 +485,46 @@ duplicate events."
       (push terminal entries))
     (mevedel-agent-control-enqueue-monitor-events
      owner-context (plist-get facts :execution-id)
-     (or (plist-get facts :description) "") (nreverse entries) wake)))
+     (or (plist-get facts :description) "") (nreverse entries) wake
+     acknowledgement)))
 
-(defun mevedel-tool-exec-handle-execution-event (event owner-context)
+(defun mevedel-tool-exec--secured-acknowledgement
+    (acknowledgement owner-context data-buffer wake)
+  "Return an acknowledgement that forwards to ACKNOWLEDGEMENT, then wakes.
+On success the producer's record is secured, ACKNOWLEDGEMENT settles the
+execution, and only then, when WAKE, is OWNER-CONTEXT's root offered the
+event for DATA-BUFFER.  The offer goes through the session's coalesced
+notifier, never the mutation preparation queue: it runs at once when nothing
+is blocked and otherwise after the gate, and offers for one buffer coalesce.
+The notifier contains a failing wake, so it never turns a secured delivery
+into a failure.  The facade is always invoked; the offer itself rechecks at
+run time and never wakes a session that is stopping."
+  (lambda (success error)
+    (funcall acknowledgement success error)
+    (when (and success wake)
+      (mevedel-agent-control-notify
+       owner-context (list 'root-wake data-buffer)
+       (lambda ()
+         (unless (mevedel-session-publication-stopping-p owner-context)
+           (mevedel-pending-inputs-offer-root-event
+            owner-context data-buffer)))))))
+
+(defun mevedel-tool-exec-handle-execution-event
+    (event owner-context acknowledgement)
   "Secure an independently delivered execution EVENT in its owner mailbox.
-Return non-nil only after the record is durable.  A yielded root result
-that ended on its own wakes an idle model; a stopped one does not."
+ACKNOWLEDGEMENT, called with SUCCESS and ERROR exactly once, runs after the
+record is durable or has definitively failed.  Return `pending' when it will
+run later, else t after it ran.  A yielded root result that ended on its own
+wakes an idle model once secured; a stopped one does not."
   (pcase (plist-get event :type)
     ('monitor-batch
      (let ((facts (plist-get event :facts)))
-       (mevedel-tool-exec--enqueue-monitor-lines
-        owner-context facts (plist-get event :monitor-lines)
-        (or (plist-get event :monitor-omitted) 0) t)
-       (mevedel-pending-inputs-offer-root-event
-        owner-context (plist-get event :data-buffer))
-       t))
+       (mevedel-tool-exec--delivery-result
+        (mevedel-tool-exec--enqueue-monitor-lines
+         owner-context facts (plist-get event :monitor-lines)
+         (or (plist-get event :monitor-omitted) 0) t nil
+         (mevedel-tool-exec--secured-acknowledgement
+          acknowledgement owner-context (plist-get event :data-buffer) t)))))
     ((and 'terminal (guard (eq (plist-get event :delivery) 'mailbox)))
      (let* ((args (plist-get event :tool-args))
             (facts (plist-get event :facts))
@@ -506,38 +536,47 @@ that ended on its own wakes an idle model; a stopped one does not."
             (root-p (and (mevedel-session-p owner-context)
                          (equal (plist-get event :owner) "/root")))
             (wake (and root-p
-                       (not (eq (plist-get facts :termination) 'stopped)))))
-       (prog1
-           (cond
-            ((eq (plist-get facts :kind) 'monitor)
-             (mevedel-tool-exec--enqueue-monitor-lines
-              owner-context facts (plist-get event :monitor-lines)
-              (or (plist-get event :monitor-omitted) 0) wake
-              (list (mevedel-tool-exec--monitor-terminal-body event)
-                    (mevedel-tool-exec--facts-meta
-                     facts :event-count :termination :outcome :exit-code)
-                    t)))
-            ((mevedel-session-p owner-context)
-             (mevedel-agent-control-enqueue-execution-result
-              owner-context
-              (plist-get event :owner)
-              (plist-get
-               (mevedel-tool-exec--observation-envelope
-                observation (plist-get args :suppress-sandbox-disclosure-p))
-               :result)
-              (plist-get facts :execution-id) wake meta))
-            (t
-             (mevedel-agent-runtime-queue-execution-completion
-              owner-context
-              (plist-get event :owner)
-              (plist-get
-               (mevedel-tool-exec--observation-envelope
-                observation (plist-get args :suppress-sandbox-disclosure-p))
-               :result)
-              meta)))
-         (when wake
-           (mevedel-pending-inputs-offer-root-event
-            owner-context (plist-get event :data-buffer))))))))
+                       (not (eq (plist-get facts :termination) 'stopped))))
+            (secured
+             (mevedel-tool-exec--secured-acknowledgement
+              acknowledgement owner-context (plist-get event :data-buffer)
+              wake)))
+       (mevedel-tool-exec--delivery-result
+        (cond
+         ((eq (plist-get facts :kind) 'monitor)
+          (mevedel-tool-exec--enqueue-monitor-lines
+           owner-context facts (plist-get event :monitor-lines)
+           (or (plist-get event :monitor-omitted) 0) wake
+           (list (mevedel-tool-exec--monitor-terminal-body event)
+                 (mevedel-tool-exec--facts-meta
+                  facts :event-count :termination :outcome :exit-code)
+                 t)
+           secured))
+         ((mevedel-session-p owner-context)
+          (mevedel-agent-control-enqueue-execution-result
+           owner-context
+           (plist-get event :owner)
+           (plist-get
+            (mevedel-tool-exec--observation-envelope
+             observation (plist-get args :suppress-sandbox-disclosure-p))
+            :result)
+           (plist-get facts :execution-id) wake meta secured))
+         (t
+          (mevedel-agent-runtime-queue-execution-completion
+           owner-context
+           (plist-get event :owner)
+           (plist-get
+            (mevedel-tool-exec--observation-envelope
+             observation (plist-get args :suppress-sandbox-disclosure-p))
+            :result)
+           meta secured))))))
+    (_
+     (funcall acknowledgement nil "Unsupported mailbox event")
+     nil)))
+
+(defun mevedel-tool-exec--delivery-result (result)
+  "Return `pending' when mailbox RESULT awaits acknowledgement, else t."
+  (if (eq result 'pending) 'pending t))
 
 (defun mevedel-tool-exec--monitor-terminal-body (event)
   "Return EVENT's terminal notice."

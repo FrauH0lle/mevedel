@@ -59,6 +59,33 @@ presentation records in `mevedel-execution-transcript.el` keep these facts
 reconstructable across redraw, reload, and compaction; they do not create a
 second process registry or alter delivery to the model or agent.
 
+An independent terminal result or monitor batch reaches its owner's mailbox
+through an acknowledged sink: the execution hands over its frozen observation
+and unread range and is told, exactly once, whether the record is durable. On
+a warm local session the acknowledgement may arrive after several event-loop
+turns ([sessions](../sessions.md#warm-local-asynchronous-mailbox-publication));
+elsewhere it arrives before the call returns. Until then the record is
+delivery-pending: its output is not consumed or retired, a poll observes the
+range without claiming the terminal result, and a monitor keeps its in-flight
+lines and starts no second batch (lines that arrive meanwhile join the next
+one). Only success consumes the range, retires the record, emits the
+delivered event and then offers the root its wake; a failure restores the
+record unconsumed so it can be delivered again. A root wake never turns a
+secured delivery into a failure, and none is offered once the session is
+stopping.
+
+When an agent has already answered but still owns yielded commands, a non-last
+completion keeps the existing held-result semantics.  Its last completion
+instead waits for terminal settlement to publish the RESULT, forwarded output,
+and transcript.  A busy publication gate queues that settlement, not its
+acknowledgement: failure acknowledges failure and removes only that completion's
+tentative held entry, so the producer retains output for a duplicate-free retry.
+Post-commit notification failure cannot undo the successful acknowledgement.
+Agent owner finalization leaves a finished execution with an in-flight mailbox
+acknowledgement registered, with its unread spool intact: success retires it and
+failure leaves it pollable or retryable.  Actual session teardown discards the
+record and makes a later acknowledgement inert, without resurrecting it.
+
 A breadcrumb and the settled tool row are written to the live transcript and
 reach disk with its next checkpoint: the in-flight checkpoint while a request
 runs, including the final one when the last request settles, or one queued
@@ -130,6 +157,22 @@ on elapsed time or on whether a view happened to be open. Distinct executions
 of the same command remain independently navigable.
 
 ## Decision history
+
+- **Delivery waited for the commit inside the producer (2026-10-20).** A
+  completion handed to the mailbox returned only after its synchronous
+  publication, about 120 ms of target waiting on a local session while the
+  user typed. The sink contract changed from "return true when secured" to an
+  acknowledgement callback so the wait can happen between event-loop turns;
+  the record therefore needed an explicit delivery-pending state, since
+  clearing the pending flag when the sink returned would let a poll claim the
+  same terminal result mid-commit. Root wake moved from the sink's return to
+  its success. On a compiled in-process fixture (one 4000-character result per
+  sample, six samples, local portable session of 6000 saved turns, final frozen
+  sources) the producer returned in 0.22-0.45 ms and its acknowledgement arrived
+  75.4-120.1 ms later, against 59.9-73.8 ms of blocked editor for the synchronous
+  sink; the largest heartbeat gap was 8.2-10.2 ms. Completion is not earlier,
+  only the wait no longer blocks. Not a live or graphical measurement, nor a
+  hard bound on arbitrary filesystem latency, sidecar size or GC.
 
 - **Breadcrumbs checkpoint with the transcript (2026-10).** Each yielded
   completion used to re-read, re-parse and republish the whole saved

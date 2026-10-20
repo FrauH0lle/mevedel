@@ -596,6 +596,9 @@
           (mevedel-session-durability-run-owned-program-async
            session (list (list :op 'append :path log :content "a"))
            (lambda (results error) (setq settled (list results error))))
+          (let ((steps 0))
+            (while (and (null settled) (< (cl-incf steps) 500))
+              (accept-process-output nil 0.01)))
           (should (equal 'ok (plist-get (car (car settled)) :status)))
           (should (equal "a" (mevedel-session-control-fs-read-file log)))
           ;; Bytes the target no longer holds fail the proof and are
@@ -607,6 +610,9 @@
           (mevedel-session-durability-run-owned-program-async
            session (list (list :op 'append :path log :content "b"))
            (lambda (results error) (setq settled (list results error))))
+          (let ((steps 0))
+            (while (and (null settled) (< (cl-incf steps) 500))
+              (accept-process-output nil 0.01)))
           (should (equal '(nil nil) settled))
           (should-not (plist-get (mevedel-session-lease session) :bytes))
           (should (equal "a" (mevedel-session-control-fs-read-file log))))
@@ -1864,7 +1870,33 @@
                       (plist-get (mevedel-session-lease session) :status))))
       (mevedel-session-durability--cancel-renewal session)
       (when (file-directory-p local-root)
-        (delete-directory local-root t)))))
+        (delete-directory local-root t))))
+  :doc "a tick defers while a publication job owns the lease, and a token resumes"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-renew-job-" t)))
+         (session (test-mevedel-session-durability--local-session root))
+         (mevedel-session-durability--client-id (make-string 64 ?a))
+         (token (list 'preparation)))
+    (setf (mevedel-session-save-path session) root)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   root "*owner*" session))
+          (mevedel-session-durability--cancel-renewal session)
+          (let ((before (copy-sequence (mevedel-session-lease session))))
+            (setf (mevedel-session-publication-job session) 'job)
+            (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                       (lambda (&rest _) (ert-fail "Tick reached the target"))))
+              (should (mevedel-session-durability-lease-renew session))
+              (should (equal before (mevedel-session-lease session))))
+            ;; The running preparation's own token is not a competing owner.
+            (setf (mevedel-session-publication-preparation-token session) token)
+            (should (mevedel-session-durability-lease-renew session token))))
+      (setf (mevedel-session-publication-job session) nil
+            (mevedel-session-publication-preparation-token session) nil)
+      (mevedel-session-durability--cancel-renewal session)
+      (ignore-errors (mevedel-session-durability-lease-release root session))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-durability-lease-release ()
   ,test
@@ -4230,7 +4262,7 @@
                    'mevedel-session-artifacts-assert-mutation-authority)
                   (lambda (&rest _) t))
                  ((symbol-function 'mevedel-session-publication-publish)
-                  (lambda (_session artifacts &optional require-commit prepared)
+                  (lambda (_session artifacts &optional require-commit prepared _token)
                     (should require-commit)
                     (should prepared)
                     (setq published artifacts)

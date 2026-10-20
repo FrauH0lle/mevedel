@@ -32,6 +32,9 @@
 (defvar gptel-backend)
 (defvar gptel-model)
 
+;; `mevedel-session-recovery'
+(defvar mevedel-session-recovery--mutation-cache)
+
 (defun mevedel-agent-control-test--configuration ()
   "Return a frozen configuration for stubbed retained dispatches."
   (mevedel-agent-configuration--create
@@ -385,12 +388,12 @@
     (setf (mevedel-session-save-path session) temporary-file-directory)
     (cl-letf (((symbol-function
                 'mevedel-session-persistence-save-agent-state)
-               (lambda (value) (setq seen value) t)))
+               (lambda (value &optional _token) (setq seen value) t)))
       (should (mevedel-agent-control-commit-session session)))
     (should (eq session seen))
     (cl-letf (((symbol-function
                 'mevedel-session-persistence-save-agent-state)
-               (lambda (_value) nil)))
+               (lambda (_value &optional _token) nil)))
       (should-error (mevedel-agent-control-commit-session session))))
   :doc "accepts unmaterialized or explicitly staged state"
   (let ((session (mevedel-agent-control-test--session)))
@@ -572,7 +575,17 @@
                      (mevedel-agent-record-path child)))
       (should (equal "/root/first"
                      (mevedel-agent-record-parent-path child)))
-      (should (equal "worker" (mevedel-agent-record-role child))))))
+      (should (equal "worker" (mevedel-agent-record-role child)))))
+  :doc "drains publication before reserving a child path or capacity"
+  (let ((session (mevedel-agent-control-test--session)) drained)
+    (cl-letf (((symbol-function 'mevedel-session-publication-barrier)
+               (lambda (actual &optional _token)
+                 (should (eq actual session))
+                 (should-not (mevedel-session-agent-reservations session))
+                 (setq drained t))))
+      (mevedel-agent-control--reserve session "/root" "first" "default"))
+    (should drained)
+    (should (assoc "/root/first" (mevedel-session-agent-reservations session)))))
 
 (mevedel-deftest mevedel-agent-control-context-path ()
   ,test
@@ -2239,7 +2252,7 @@
                       ;; included.
                       ((symbol-function
                         'mevedel-session-artifacts-publish-agent-terminal-state)
-                       (lambda (_invocation)
+                       (lambda (_invocation &optional _token)
                          (when publication-fails
                            (error "Injected terminal publication failure"))
                          t))
@@ -2287,7 +2300,7 @@
           (let (runner-called)
             (cl-letf (((symbol-function
                         'mevedel-agent-conversation-save)
-                       (lambda (_invocation) nil))
+                       (lambda (_invocation &optional _deferred _token) nil))
                       ((symbol-function 'mevedel-agent-exec-run)
                        (lambda (&rest _)
                          (setq runner-called t)
@@ -2757,6 +2770,78 @@
                    (plist-get (mevedel-session-checkpoint-project session nil)
                               :messages)))))
 
+(mevedel-deftest mevedel-agent-control-notify ()
+  ,test
+  (test)
+  :doc "immediate notification runs with fresh transaction observations"
+  (let ((session (mevedel-agent-control-test--session))
+        (mevedel-session-durability--transaction-clock '(clock))
+        (mevedel-session-durability--asserted-directories '(directories))
+        (mevedel-session-durability--commit-riders '(riders))
+        (mevedel-session-durability--final-commit t)
+        (mevedel-session-durability-async-process-function #'ignore)
+        (mevedel-session-recovery--mutation-cache '(recovery))
+        observed)
+    (mevedel-agent-control-notify
+     session 'immediate
+     (lambda ()
+       (setq observed
+             (list mevedel-session-durability--transaction-clock
+                   mevedel-session-durability--asserted-directories
+                   mevedel-session-durability--commit-riders
+                   mevedel-session-durability--final-commit
+                   mevedel-session-durability-async-process-function
+                   mevedel-session-recovery--mutation-cache))))
+    (should (equal '(nil nil nil nil nil nil) observed))
+    (should (equal '(clock) mevedel-session-durability--transaction-clock))
+    (should-not (mevedel-session-mail-notifications session)))
+
+  :doc "a busy preparation coalesces one FIFO outside the mutation queue"
+  (let ((session (mevedel-agent-control-test--session)) calls)
+    (with-temp-buffer
+      (mevedel-session-set-root-buffer session (current-buffer))
+      (setf (mevedel-session-publication-preparation-token session) '(owner))
+      (unwind-protect
+          (progn
+            (mevedel-agent-control-notify
+             session 'first (lambda () (push 'first calls)))
+            (let ((timer (mevedel-session-mail-notification-timer session)))
+              (should (timerp timer))
+              (mevedel-agent-control-notify
+               session 'first (lambda () (push 'duplicate calls)))
+              (mevedel-agent-control-notify
+               session 'second (lambda () (push 'second calls)))
+              (should (eq timer (mevedel-session-mail-notification-timer session))))
+            (should-not calls)
+            (should-not (mevedel-session-publication-preparations session))
+            (setf (mevedel-session-publication-preparation-token session) nil)
+            (let ((deadline (+ (float-time) 2)))
+              (while (and (mevedel-session-mail-notifications session)
+                          (< (float-time) deadline))
+                (accept-process-output nil 0.01)))
+            (should (equal '(first second) (reverse calls)))
+            (should-not (mevedel-session-mail-notifications session))
+            (should-not (mevedel-session-mail-notification-timer session)))
+        (setf (mevedel-session-publication-preparation-token session) nil)
+        (mevedel-agent-control--cancel-notifications session))))
+
+  :doc "stopping retains offers without timers and immediate callback failure is diagnostic"
+  (let ((session (mevedel-agent-control-test--session)) calls diagnostics)
+    (setf (mevedel-session-publication-stopping-p session) t)
+    (mevedel-agent-control-notify session 'stopped (lambda () (push 'stopped calls)))
+    (should-not calls)
+    (should-not (mevedel-session-mail-notification-timer session))
+    (should (= 1 (length (mevedel-session-mail-notifications session))))
+    (mevedel-agent-control--cancel-notifications session)
+    (setf (mevedel-session-publication-stopping-p session) nil)
+    (mevedel-test--with-captured-diagnostics diagnostics
+      (mevedel-agent-control-notify
+       session 'failure (lambda () (error "Injected notification failure"))))
+    (should (string-match-p "Mailbox notification failed: Injected notification failure"
+                            diagnostics))
+    (mevedel-agent-control-notify session 'next (lambda () (push 'next calls)))
+    (should (equal '(next) calls))))
+
 (mevedel-deftest mevedel-agent-control-send-message ()
   ,test
   (test)
@@ -3086,7 +3171,7 @@
 
   :doc "retains the waiter when its callback fails after durable enqueue"
   (let ((session (mevedel-agent-control-test--session))
-        (attempts 0))
+        (attempts 0) diagnostics)
     (cl-letf (((symbol-function 'run-at-time)
                (lambda (&rest _) 'fake-timer)))
       (mevedel-agent-control-wait
@@ -3096,8 +3181,11 @@
          (when (= attempts 1)
            (error "Injected delivery failure")))
        10000)
-      (should-error
-       (mevedel-agent-control-send-message session "/root" "arrived"))
+      (mevedel-test--with-captured-diagnostics diagnostics
+        (should (equal '(:path "/root" :delivery queued)
+                       (mevedel-agent-control-send-message session "/root" "arrived"))))
+      (should (string-match-p "Mailbox notification failed: Injected delivery failure"
+                              diagnostics))
       (should (= 1 attempts))
       (should (mevedel-session-agent-root-waiter session))
       (should (= 1 (length (mevedel-agent-control--mailbox session "/root"))))

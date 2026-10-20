@@ -17,9 +17,9 @@
 (mevedel-deftest mevedel-session-fork-clone-session
   (:doc "covers every session slot and isolates both clone policies")
   (progn
-		   (should (= 93
-             (length
-              (cdr (cl-struct-slot-info 'mevedel-session)))))
+    (should (= 100
+               (length
+                (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-fork--assert-clone-slot-completeness))
     (let* ((workspace
           (mevedel-workspace--create
@@ -92,6 +92,13 @@
            :publication-queue '(publication-queue)
            :publication-uncommitted-batches '(uncommitted)
            :publication-active-p t
+           :publication-job 'publication-job
+           :publication-preparations '(preparation)
+           :publication-preparation-token 'preparation-token
+           :publication-stopping-p t
+           :mail-notifications '((notification . ignore))
+           :mail-notification-timer 'notification-timer
+           :mail-notification-delay 0.5
            :checkpoint-state 'source-checkpoint
            :control-transfer 'control-transfer
            :control-transfer-drains '(drain)
@@ -161,6 +168,13 @@
                      (mevedel-session-publication-queue candidate)
                      (mevedel-session-publication-uncommitted-batches candidate)
                      (mevedel-session-publication-active-p candidate)
+                     (mevedel-session-publication-job candidate)
+                     (mevedel-session-publication-preparations candidate)
+                     (mevedel-session-publication-preparation-token candidate)
+                     (mevedel-session-publication-stopping-p candidate)
+                     (mevedel-session-mail-notifications candidate)
+                     (mevedel-session-mail-notification-timer candidate)
+                     (mevedel-session-mail-notification-delay candidate)
                      (mevedel-session-control-transfer candidate)
                      (mevedel-session-control-transfer-drains candidate)
                      (mevedel-session-lease candidate)

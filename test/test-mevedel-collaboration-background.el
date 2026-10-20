@@ -213,7 +213,7 @@
          (foreign (test-mevedel-execution--session root))
          (room (list :session session))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution-mailbox-delivery-function (lambda (&rest _) t))
+         (mevedel-execution-mailbox-delivery-function (lambda (_event _context ack) (funcall ack t nil) t))
          (mevedel-execution-event-functions (list #'mevedel-collaboration--background-event))
          initial id started)
     (unwind-protect
@@ -378,7 +378,7 @@
            (room (list :session session :data-buffer parent :transport 'transport
                        :guests guests))
            (mevedel-sandbox-mode 'off)
-           (mevedel-execution-mailbox-delivery-function (lambda (&rest _) t))
+           (mevedel-execution-mailbox-delivery-function (lambda (_event _context ack) (funcall ack t nil) t))
            observation id sent)
       (puthash 1 (list :ready t :writable nil) guests)
       (setf (mevedel-session-agent-registry session)

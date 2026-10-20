@@ -21,18 +21,27 @@
 (defconst mevedel-session-control-fs-test--file (or load-file-name buffer-file-name)
   "This file, which the SIGPIPE-ignoring child loads.")
 
+(defun mevedel-session-control-fs-test--streamed-operations ()
+  "Return operations too large for the argument carrier, writing under /tmp.
+Used with `mevedel-session-control-fs--stage-local' nil so the request
+streams over stdin."
+  (list (list :op 'write
+              :path (make-temp-name "/tmp/mevedel-control-streamed-")
+              :content (make-string 200000 ?x))))
+
 (mevedel-deftest mevedel-session-control-fs--send-request-buffer
   (:doc "sync and async carriers send bounded pieces without losing binary bytes or authority fencing")
   (let* ((root (make-temp-file "mevedel-control-chunks-" t))
          (path (file-name-concat root "payload"))
          (binary (concat (make-string (* 128 1024) ?x) (unibyte-string 0 128 255)))
-         (mevedel-session-control-fs--pipe-local t)
          (mevedel-session-control-fs--stage-local nil)
          (send (symbol-function 'process-send-region)))
     (unwind-protect
         (dolist (async '(nil t))
           (let ((writes 0) results failure done)
-            (cl-letf (((symbol-function 'process-send-region)
+            (cl-letf (((symbol-function 'mevedel-session-control-fs--pipe-capable-p)
+                       (lambda (_) t))
+                      ((symbol-function 'process-send-region)
                        (lambda (process start end)
                          (should (<= (- end start) 1024))
                          (should (mevedel-transport-busy-p))
@@ -138,7 +147,6 @@
   :doc "runs a program without waiting and delivers its results"
   (let* ((root (make-temp-file "mevedel-control-async-" t))
          (path (file-name-concat root "log"))
-         (mevedel-session-control-fs--pipe-local t)
          settled)
     (unwind-protect
         (progn
@@ -158,7 +166,6 @@
 
   :doc "runs synchronously where the editor is about to exit"
   (let* ((root (make-temp-file "mevedel-control-async-" t))
-         (mevedel-session-control-fs--pipe-local t)
          (mevedel-session-control-fs--async-wait t)
          settled)
     (unwind-protect
@@ -175,7 +182,7 @@
    "\\`mevedel-session-control-fs-run-program-async/closed-input")
 
   :doc "quitting during a streamed request releases the child and buffers before propagating quit"
-  (let ((mevedel-session-control-fs--pipe-local t)
+  (let ((mevedel-session-control-fs--stage-local nil)
         (send (symbol-function 'process-send-region))
         (spawn (symbol-function 'make-process))
         (chunks 0) (callbacks 0) child buffers failure)
@@ -191,7 +198,7 @@
       (should (eq 'quit
                   (condition-case nil
                       (mevedel-session-control-fs-run-program-async
-                       (list (list :op 'path-exists-p :path "/tmp"))
+                       (mevedel-session-control-fs-test--streamed-operations)
                        (lambda (_results err) (cl-incf callbacks) (setq failure err)))
                     (quit 'quit)))))
     (should (= callbacks 1))
@@ -201,7 +208,7 @@
     (should-not (mevedel-transport-busy-p)))
 
   :doc "counts its dispatch as a remote operation, so work a filter starts defers"
-  (let ((mevedel-session-control-fs--pipe-local t)
+  (let ((mevedel-session-control-fs--stage-local nil)
         busy settled)
     (cl-letf* ((original (symbol-function 'process-send-region))
                ((symbol-function 'process-send-region)
@@ -209,7 +216,7 @@
                   (setq busy (mevedel-transport-busy-p))
                   (apply original args))))
       (mevedel-session-control-fs-run-program-async
-       (list (list :op 'path-exists-p :path "/tmp"))
+       (mevedel-session-control-fs-test--streamed-operations)
        (lambda (results error) (setq settled (list results error)))))
     (should busy)
     (should-not (mevedel-transport-busy-p))
@@ -217,13 +224,406 @@
       (while (not settled) (accept-process-output nil 0.02)))))
 
 ;; Closed-input writes must run with the interactive editor's SIGPIPE policy.
+(mevedel-deftest mevedel-session-control-fs-run-program-async/local ()
+  ,test
+  (test)
+  :doc "a small local request rides as arguments and writes nothing to stdin"
+  (let* ((root (make-temp-file "mevedel-control-async-local-" t))
+         (path (file-name-concat root "file"))
+         (sent 0) settled)
+    (unwind-protect
+        (cl-letf* ((send (symbol-function 'process-send-region))
+                   ((symbol-function 'process-send-region)
+                    (lambda (&rest args) (cl-incf sent) (apply send args))))
+          (should (processp
+                   (mevedel-session-control-fs-run-program-async
+                    (list (list :op 'write :path path :content "hello"))
+                    (lambda (results error) (setq settled (list results error))))))
+          (with-timeout (10 (ert-fail "Local program never settled"))
+            (while (not settled) (accept-process-output nil 0.02)))
+          (should-not (nth 1 settled))
+          (should (= 0 sent))
+          (should (equal "hello" (mevedel-session-control-fs-read-file path)))
+          (should-not (cl-some (lambda (name) (string-prefix-p ".mevedel-control-fs-staged-" name))
+                               (directory-files root))))
+      (delete-directory root t)))
+
+  :doc "a large local write is staged, never inlined, and its file lives until exit"
+  (let* ((root (make-temp-file "mevedel-control-async-local-" t))
+         (path (file-name-concat root "file"))
+         (payload (make-string 300000 ?y))
+         (spawn (symbol-function 'make-process))
+         (sent 0) staged-at-spawn command settled)
+    (unwind-protect
+        (cl-letf* ((send (symbol-function 'process-send-region))
+                   ((symbol-function 'process-send-region)
+                    (lambda (&rest args) (cl-incf sent) (apply send args)))
+                   ((symbol-function 'make-process)
+                    (lambda (&rest args)
+                      (setq command (plist-get args :command)
+                            staged-at-spawn
+                            (directory-files root nil "\\`\\.mevedel-control-fs-staged-"))
+                      (apply spawn args))))
+          (mevedel-session-control-fs-run-program-async
+           (list (list :op 'write :path path :content payload))
+           (lambda (results error) (setq settled (list results error))))
+          (should (= 1 (length staged-at-spawn)))
+          (should-not (cl-some (lambda (arg) (and (stringp arg) (string-search "yyyyyyyy" arg)))
+                               command))
+          (with-timeout (10 (ert-fail "Local program never settled"))
+            (while (not settled) (accept-process-output nil 0.02)))
+          (should-not (nth 1 settled))
+          (should (= 0 sent))
+          (should (equal payload (mevedel-session-control-fs-read-file path)))
+          (should-not (directory-files root nil "\\`\\.mevedel-control-fs-staged-")))
+      (delete-directory root t)))
+
+  :doc "staged files are removed when the program fails as a whole"
+  (let* ((root (make-temp-file "mevedel-control-async-local-" t))
+         settled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-control-fs--programs)
+                   (lambda (_) (cons "false" "stat"))))
+          (mevedel-session-control-fs-run-program-async
+           (list (list :op 'write :path (file-name-concat root "file")
+                       :content "payload"))
+           (lambda (results error) (setq settled (list results error))))
+          (with-timeout (10 (ert-fail "Failed program never settled"))
+            (while (not settled) (accept-process-output nil 0.02)))
+          (should-not (car settled))
+          (should (eq 'file-error (car (nth 1 settled))))
+          (should-not (directory-files root nil "\\`\\.mevedel-control-fs-staged-")))
+      (delete-directory root t)))
+
+  :doc "the callback waits for an idle transport, runs once, and never in the sentinel's nesting"
+  (let* ((root (make-temp-file "mevedel-control-async-local-" t))
+         (mevedel-transport--enabled-p t)
+         (mevedel-transport-retry-seconds 0.02)
+         (busy nil) (calls 0) settled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+                   (lambda (&optional _path) busy)))
+          (let ((process (mevedel-session-control-fs-run-program-async
+                          (list (list :op 'path-exists-p :path root))
+                          (lambda (results error)
+                            (cl-incf calls) (setq settled (list results error))))))
+            (setq busy t)
+            (with-timeout (10 (ert-fail "Program never exited"))
+              (while (process-live-p process) (accept-process-output nil 0.02)))
+            (accept-process-output nil 0.2)
+            (should (= 0 calls))
+            (should mevedel-session-control-fs--async-jobs)
+            (setq busy nil)
+            (with-timeout (10 (ert-fail "Callback never delivered"))
+              (while (not settled) (accept-process-output nil 0.02)))
+            (accept-process-output nil 0.1)
+            (should (= 1 calls))
+            (should-not (nth 1 settled))
+            (should (eq 'ok (plist-get (car (car settled)) :status)))
+            (should-not mevedel-session-control-fs--async-jobs)))
+      (mevedel-transport-cancel-pending)
+      (delete-directory root t)))
+
+  :doc "even an idle or disabled transport never runs the callback inside the sentinel"
+  (let ((root (make-temp-file "mevedel-control-async-local-" t)))
+    (unwind-protect
+        (dolist (enabled '(t nil))
+          (let ((mevedel-transport--enabled-p enabled)
+                (in-sentinel nil) (calls 0) nested settled)
+            (let ((process (mevedel-session-control-fs-run-program-async
+                            (list (list :op 'path-exists-p :path root))
+                            (lambda (results error)
+                              (cl-incf calls)
+                              (setq nested in-sentinel
+                                    settled (list results error))))))
+              (let ((sentinel (process-sentinel process)))
+                (set-process-sentinel
+                 process
+                 (lambda (&rest args)
+                   (setq in-sentinel t)
+                   (unwind-protect (apply sentinel args)
+                     (setq in-sentinel nil)))))
+              (with-timeout (10 (ert-fail "Callback never delivered"))
+                (while (not settled) (accept-process-output nil 0.02)))
+              (should-not nested)
+              (should (= 1 calls))
+              (should (eq 'ok (plist-get (car (car settled)) :status)))
+              (should-not mevedel-session-control-fs--async-jobs))))
+      (mevedel-transport-cancel-pending)
+      (delete-directory root t)))
+
+  :doc "a cancelled retry delivers the stored outcome exactly once"
+  (let* ((root (make-temp-file "mevedel-control-async-local-" t))
+         (mevedel-transport--enabled-p t)
+         (busy nil) (calls 0) settled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+                   (lambda (&optional _path) busy)))
+          (let ((process (mevedel-session-control-fs-run-program-async
+                          (list (list :op 'path-exists-p :path root))
+                          (lambda (results error)
+                            (cl-incf calls) (setq settled (list results error))))))
+            (setq busy t)
+            (with-timeout (10 (ert-fail "Program never exited"))
+              (while (process-live-p process) (accept-process-output nil 0.02)))
+            (should (= 0 calls))
+            (mevedel-transport-cancel-pending)
+            (should (= 0 calls))
+            (with-timeout (10 (ert-fail "Cancelled outcome never delivered"))
+              (while (not settled) (accept-process-output nil 0.02)))
+            (should (= 1 calls))
+            (should-not (nth 1 settled))
+            (should (eq 'ok (plist-get (car (car settled)) :status)))
+            (mevedel-transport-cancel-pending)
+            (setq busy nil)
+            (accept-process-output nil 0.1)
+            (should (= 1 calls))
+            (should-not mevedel-session-control-fs--async-jobs)))
+      (mevedel-transport-cancel-pending)
+      (delete-directory root t)))
+
+  :doc "wait-async lets programs in flight deliver and reports when none remain"
+  (let* ((root (make-temp-file "mevedel-control-async-local-" t))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (should (mevedel-session-control-fs-wait-async 0.1))
+          (dotimes (_ 3)
+            (mevedel-session-control-fs-run-program-async
+             (list (list :op 'path-exists-p :path root))
+             (lambda (_results _error) (cl-incf calls))))
+          (should mevedel-session-control-fs--async-jobs)
+          (should (mevedel-session-control-fs-wait-async 10))
+          (should (= 3 calls))
+          (should-not mevedel-session-control-fs--async-jobs))
+      (delete-directory root t)))
+
+  :doc "concurrent programs that stage nothing each deliver exactly once"
+  ;; Their deliveries share the transport's delayed queue, whose keys compare
+  ;; with `equal'; structurally equal keys coalesced 30 callbacks into 9.
+  (let* ((root (make-temp-file "mevedel-control-async-concurrent-" t))
+         (file (file-name-concat root "input"))
+         delivered)
+    (unwind-protect
+        (progn
+          (write-region "x" nil file nil 'silent)
+          (dotimes (id 30)
+            (mevedel-session-control-fs-run-program-async
+             (list (list :op 'read :path file))
+             (lambda (results error)
+               (should-not error)
+               (should (equal "x" (plist-get (car results) :value)))
+               (push id delivered))))
+          (should (mevedel-session-control-fs-wait-async 10))
+          (should (equal (number-sequence 0 29) (sort delivered #'<)))
+          (should-not mevedel-session-control-fs--async-jobs))
+      (delete-directory root t)))
+
+  :doc "cleanup runs from the delivery timer, never the sentinel, and precedes the callback"
+  (let* ((root (make-temp-file "mevedel-control-async-local-" t))
+         (path (file-name-concat root "file"))
+         (in-sentinel nil) (in-sentinel-cleanup nil) leftover settled)
+    (unwind-protect
+        (cl-letf* ((delete (symbol-function 'delete-file))
+                   (kill (symbol-function 'kill-buffer))
+                   ((symbol-function 'delete-file)
+                    (lambda (file &rest args)
+                      (when in-sentinel (setq in-sentinel-cleanup t))
+                      (apply delete file args)))
+                   ((symbol-function 'kill-buffer)
+                    (lambda (&rest args)
+                      (when in-sentinel (setq in-sentinel-cleanup t))
+                      (apply kill args))))
+          (let ((process (mevedel-session-control-fs-run-program-async
+                          (list (list :op 'write :path path :content "payload"))
+                          (lambda (results error)
+                            (setq leftover
+                                  (directory-files
+                                   root nil "\\`\\.mevedel-control-fs-staged-")
+                                  settled (list results error))))))
+            (let ((sentinel (process-sentinel process)))
+              (set-process-sentinel
+               process
+               (lambda (&rest args)
+                 (setq in-sentinel t)
+                 (unwind-protect (apply sentinel args)
+                   (setq in-sentinel nil)))))
+            (with-timeout (10 (ert-fail "Callback never delivered"))
+              (while (not settled) (accept-process-output nil 0.02)))
+            (should-not in-sentinel-cleanup)
+            (should-not leftover)
+            (should-not (nth 1 settled))
+            (should (eq 'ok (plist-get (car (car settled)) :status)))))
+      (delete-directory root t)))
+
+  :doc "a failed cleanup is reported, keeps the result, and its file is retried at exit"
+  (let* ((root (make-temp-file "mevedel-control-async-local-" t))
+         (path (file-name-concat root "file"))
+         (mevedel-session-control-fs--orphaned-staged nil)
+         diagnostics settled)
+    (unwind-protect
+        (progn
+          (mevedel-test--with-captured-diagnostics diagnostics
+            (cl-letf* ((delete (symbol-function 'delete-file))
+                       ((symbol-function 'delete-file)
+                        (lambda (file &rest args)
+                          (if (string-match-p "\\.mevedel-control-fs-staged-" file)
+                              (signal 'file-error (list "Injected cleanup failure" file))
+                            (apply delete file args)))))
+              (mevedel-session-control-fs-run-program-async
+               (list (list :op 'write
+                           :path (file-name-concat root "missing" "first")
+                           :content "one")
+                     (list :op 'write :path path :content "payload"))
+               (lambda (results error) (setq settled (list results error))))
+              (with-timeout (10 (ert-fail "Callback never delivered"))
+                (while (not settled) (accept-process-output nil 0.02)))))
+          (should (string-match-p "cleanup failed" diagnostics))
+          (should-not (nth 1 settled))
+          (should (equal '(absent skipped)
+                         (mapcar (lambda (r) (plist-get r :status)) (car settled))))
+          ;; Both payloads were staged and the stopped program consumed neither.
+          (should (= 2 (length mevedel-session-control-fs--orphaned-staged)))
+          (should (cl-every #'file-exists-p
+                            mevedel-session-control-fs--orphaned-staged))
+          (should-not mevedel-session-control-fs--async-jobs)
+          (mevedel-session-control-fs--exit-cleanup)
+          (should-not mevedel-session-control-fs--orphaned-staged)
+          (should-not (directory-files root nil "\\`\\.mevedel-control-fs-staged-")))
+      (setq mevedel-session-control-fs--orphaned-staged nil)
+      (delete-directory root t)))
+
+  :doc "a failing kill hook still releases both private buffers and keeps the outcome"
+  (let* ((root (make-temp-file "mevedel-control-async-local-" t))
+         (spawn (symbol-function 'make-process))
+         buffers diagnostics settled hook)
+    (setq hook (lambda ()
+                 (when (string-prefix-p " *mevedel-control-fs-async*" (buffer-name))
+                   (error "Injected kill hook failure"))))
+    (unwind-protect
+        (progn
+          (mevedel-test--with-captured-diagnostics diagnostics
+            (add-hook 'kill-buffer-hook hook)
+            (cl-letf (((symbol-function 'make-process)
+                       (lambda (&rest args)
+                         (setq buffers (list (plist-get args :buffer)
+                                             (plist-get args :stderr)))
+                         (apply spawn args))))
+              (mevedel-session-control-fs-run-program-async
+               (list (list :op 'path-exists-p :path root))
+               (lambda (results error) (setq settled (list results error))))
+              (with-timeout (10 (ert-fail "Callback never delivered"))
+                (while (not settled) (accept-process-output nil 0.02)))))
+          (should (string-match-p "cleanup failed" diagnostics))
+          (should-not (nth 1 settled))
+          (should (eq 'ok (plist-get (car (car settled)) :status)))
+          (should (= 2 (length buffers)))
+          (should-not (cl-some #'buffer-live-p buffers))
+          (should-not mevedel-session-control-fs--async-jobs))
+      (remove-hook 'kill-buffer-hook hook)
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer)
+          (let ((kill-buffer-hook nil)) (kill-buffer buffer))))
+      (delete-directory root t)))
+
+  :doc "private buffer query vetoes cannot leak resources or lose the stored outcome"
+  (let* ((root (make-temp-file "mevedel-control-async-local-" t))
+         (spawn (symbol-function 'make-process))
+         buffers settled query)
+    (setq query (lambda ()
+                  (not (string-prefix-p " *mevedel-control-fs-async" (buffer-name)))))
+    (unwind-protect
+        (progn
+          (add-hook 'kill-buffer-query-functions query)
+          (cl-letf (((symbol-function 'make-process)
+                     (lambda (&rest args)
+                       (setq buffers (list (plist-get args :buffer)
+                                           (plist-get args :stderr)))
+                       (apply spawn args))))
+            (mevedel-session-control-fs-run-program-async
+             (list (list :op 'path-exists-p :path root))
+             (lambda (results error) (setq settled (list results error))))
+            (with-timeout (10 (ert-fail "Callback never delivered"))
+              (while (not settled) (accept-process-output nil 0.02))))
+          (should-not (nth 1 settled))
+          (should (eq 'ok (plist-get (car (car settled)) :status)))
+          (should (= 2 (length buffers)))
+          (should-not (cl-some #'buffer-live-p buffers))
+          (should-not mevedel-session-control-fs--async-jobs))
+      (remove-hook 'kill-buffer-query-functions query)
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer)
+          (let ((kill-buffer-query-functions nil)) (kill-buffer buffer))))
+      (delete-directory root t)))
+
+  :doc "a program that stopped early leaves no later payload staged"
+  (let* ((root (make-temp-file "mevedel-control-async-local-" t))
+         (second (file-name-concat root "second"))
+         settled)
+    (unwind-protect
+        (progn
+          (mevedel-session-control-fs-run-program-async
+           (list (list :op 'write :path (file-name-concat root "missing" "first")
+                       :content "one")
+                 (list :op 'write :path second :content "two"))
+           (lambda (results error) (setq settled (list results error))))
+          (with-timeout (10 (ert-fail "Callback never delivered"))
+            (while (not settled) (accept-process-output nil 0.02)))
+          (should-not (nth 1 settled))
+          (should (equal '(absent skipped)
+                         (mapcar (lambda (r) (plist-get r :status)) (car settled))))
+          (should-not (file-exists-p second))
+          (should-not (directory-files root nil "\\`\\.mevedel-control-fs-staged-")))
+      (delete-directory root t)))
+
+  :doc "a delivery that never runs leaves its staged file only until exit cleanup"
+  (let* ((root (make-temp-file "mevedel-control-async-local-" t))
+         (path (file-name-concat root "file"))
+         (mevedel-transport--enabled-p nil)
+         (calls 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-transport-run-at-time)
+                   (lambda (&rest _) nil)))
+          (let ((process (mevedel-session-control-fs-run-program-async
+                          (list (list :op 'write
+                                      :path (file-name-concat root "missing" "first")
+                                      :content "one")
+                                (list :op 'write :path path :content "payload"))
+                          (lambda (&rest _) (cl-incf calls)))))
+            (with-timeout (10 (ert-fail "Program never exited"))
+              (while (process-live-p process) (accept-process-output nil 0.02)))
+            (accept-process-output nil 0.1)
+            (should (= 0 calls))
+            (should mevedel-session-control-fs--async-jobs)
+            (should (directory-files root nil "\\`\\.mevedel-control-fs-staged-"))
+            (mevedel-session-control-fs--exit-cleanup)
+            (should-not mevedel-session-control-fs--async-jobs)
+            (should-not (directory-files root nil "\\`\\.mevedel-control-fs-staged-"))))
+      (setq mevedel-session-control-fs--async-jobs nil)
+      (delete-directory root t)))
+
+  :doc "a request that cannot launch reports once and leaves no job or staged file"
+  (let* ((root (make-temp-file "mevedel-control-async-local-" t))
+         (calls 0) failure)
+    (unwind-protect
+        (cl-letf (((symbol-function 'make-process)
+                   (lambda (&rest _) (signal 'file-error '("Cannot spawn")))))
+          (should-not (mevedel-session-control-fs-run-program-async
+                       (list (list :op 'write :path (file-name-concat root "file")
+                                   :content "payload"))
+                       (lambda (_results error) (cl-incf calls) (setq failure error))))
+          (should (= 1 calls))
+          (should (eq 'file-error (car failure)))
+          (should-not mevedel-session-control-fs--async-jobs)
+          (should-not (directory-files root nil "\\`\\.mevedel-control-fs-staged-")))
+      (delete-directory root t))))
+
 (when (mevedel-test-sigpipe-child-p)
   (mevedel-deftest mevedel-session-control-fs-run-program-async/closed-input ()
     ,test
     (test)
     :doc "reports a program that failed as a whole"
-    (let ((mevedel-session-control-fs--pipe-local t)
-          settled)
+    (let (settled)
       (cl-letf (((symbol-function 'mevedel-session-control-fs--programs)
                  (lambda (_) (cons "false" "stat"))))
         (mevedel-session-control-fs-run-program-async
@@ -235,7 +635,7 @@
       (should (eq 'file-error (car (nth 1 settled)))))
 
     :doc "reports a program that exits before its request is written as failed"
-    (let ((mevedel-session-control-fs--pipe-local t)
+    (let ((mevedel-session-control-fs--stage-local nil)
           (send (symbol-function 'process-send-region))
           settled)
       (cl-letf (((symbol-function 'mevedel-session-control-fs--programs)
@@ -252,7 +652,7 @@
                      (when (file-exists-p path) (ert-fail "Program never exited")))
                    (funcall send process start end))))
         (mevedel-session-control-fs-run-program-async
-         (list (list :op 'path-exists-p :path "/tmp"))
+         (mevedel-session-control-fs-test--streamed-operations)
          (lambda (results error) (setq settled (list results error)))))
       (with-timeout (10 (ert-fail "Failed program never settled"))
         (while (not settled) (accept-process-output nil 0.02)))
@@ -1011,11 +1411,12 @@
          (second (file-name-concat root "second"))
          (binary (concat (make-string (* 512 1024) ?x) (unibyte-string 0 128 255)))
          (text "Unicode: λ\nsecond line\0")
-         (mevedel-session-control-fs--pipe-local t)
          (mevedel-session-control-fs--stage-local nil)
          (spawns 0))
     (unwind-protect
-        (cl-letf* (((symbol-function 'process-file)
+        (cl-letf* (((symbol-function 'mevedel-session-control-fs--pipe-capable-p)
+                    (lambda (_) t))
+                   ((symbol-function 'process-file)
                     (lambda (&rest _) (error "Request file carrier used")))
                    (original (symbol-function 'make-process))
                    ((symbol-function 'make-process)

@@ -259,6 +259,13 @@ workspace."
   publication-uncommitted-batches ; transient staged session-local writes
   checkpoint-state ; transient committed projection owned by `mevedel-session-checkpoint'
   publication-active-p ; non-nil while this session publishes target state
+  publication-job ; transient acknowledged local publication owner
+  publication-preparations ; transient FIFO of mutation preparation continuations
+  publication-preparation-token ; transient explicit owner of the running preparation
+  publication-stopping-p ; teardown rejects new jobs and suppresses their wakes
+  mail-notifications ; transient FIFO of coalesced post-publication notifications
+  mail-notification-timer ; transient single gate-idle notification retry timer
+  mail-notification-delay ; transient bounded retry backoff in seconds
   control-transfer ; transient cooperative lease-transfer state; never persisted
   control-transfer-drains ; transient predicates that block lease handoff
   root-buffer       ; transient authoritative chat data buffer, or nil

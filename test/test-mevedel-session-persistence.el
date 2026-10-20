@@ -416,7 +416,296 @@
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (setq buffer-read-only nil))
-        (kill-buffer buffer)))))
+        (kill-buffer buffer))))
+
+  :doc "an unresolved publication job vetoes exit, a drainable one does not"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-exit-job-" t)))
+         (session (test-mevedel-session-persistence--gate-session root))
+         (buffer (generate-new-buffer " *test-exit-job*"))
+         (kill-emacs-query-functions
+          '(mevedel-session-persistence--allow-emacs-exit-p))
+         drained during message)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local mevedel--session session))
+          (setf (mevedel-session-publication-preparations session)
+                (list (cons #'ignore nil)))
+          (cl-letf (((symbol-function 'buffer-list)
+                     (lambda (&optional _frame) (list buffer)))
+                    ((symbol-function 'run-at-time) #'ignore)
+                    ((symbol-function 'mevedel-session-publication-barrier)
+                     (lambda (s &optional _token)
+                       (push s drained)
+                       (push (mevedel-session-publication-stopping-p s) during)
+                       (setf (mevedel-session-publication-preparations s) nil))))
+            ;; Admissions and wakes stop while draining, then reopen: another
+            ;; query may veto the exit.
+            (should (run-hook-with-args-until-failure
+                     'kill-emacs-query-functions))
+            (should (equal (list session) drained))
+            (should (equal '(t) during))
+            (should-not (mevedel-session-publication-stopping-p session))
+            (setf (mevedel-session-publication-preparations session)
+                  (list (cons #'ignore nil)))
+            (cl-letf (((symbol-function 'mevedel-session-publication-barrier)
+                       (lambda (_ &optional _token)
+                         (user-error "Outcome is unresolved"))))
+              (mevedel-test--with-captured-diagnostics message
+                (should-not (run-hook-with-args-until-failure
+                             'kill-emacs-query-functions)))
+              (should (string-search "unresolved" message)))
+            (should-not (mevedel-session-publication-stopping-p session))))
+      (setf (mevedel-session-publication-preparations session) nil)
+      (kill-buffer buffer)
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t))))
+
+(defun test-mevedel-session-persistence--gate-session (root)
+  "Return a portable session at ROOT with its save path set."
+  (let ((session (mevedel-session-create
+                  "main"
+                  (test-mevedel-session-persistence--make-workspace root))))
+    (setf (mevedel-session-save-path session) root)
+    session))
+
+(mevedel-deftest mevedel-session-persistence-autosave-buffer/gate (:quiet t)
+  ,test
+  (test)
+  :doc "an owned gate defers the save before capture, and failures mark the buffer"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-auto-gate-" t)))
+         (session (test-mevedel-session-persistence--gate-session root))
+         (buffer (generate-new-buffer " *auto-gate*"))
+         (saves 0) message)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-publication--schedule)
+                   #'ignore)
+                  ((symbol-function 'mevedel-session-artifacts-save)
+                   (lambda (&rest _) (cl-incf saves) root)))
+          (setf (mevedel-session-root-buffer session) buffer)
+          (with-current-buffer buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--agent-invocation nil)
+            (insert "text"))
+          (setf (mevedel-session-publication-preparations session)
+                (list (cons #'ignore nil)))
+          (should-not (mevedel-session-persistence-autosave-buffer buffer))
+          (should (= 0 saves))
+          (should-not (buffer-local-value 'mevedel-session--save-failed buffer))
+          (let ((entry (cadr (mevedel-session-publication-preparations
+                              session))))
+            (should entry)
+            (mevedel-test--with-captured-diagnostics message
+              (funcall (cdr entry) '(error "Boom")))
+            (should (string-search "Boom" message))
+            (should (buffer-local-value 'mevedel-session--save-failed buffer))
+            ;; The queued preparation proceeds once the gate runner owns it.
+            (let ((token (list session)))
+              (setf (mevedel-session-publication-preparation-token session)
+                    token)
+              (mevedel-test--with-captured-diagnostics message
+                (should (equal root (funcall (car entry) token))))
+              (should (equal "" message))
+              (setf (mevedel-session-publication-preparation-token session)
+                    nil))
+            (should (= 1 saves))
+            (should-not (buffer-local-value 'mevedel-session--save-failed
+                                            buffer))))
+      (setf (mevedel-session-publication-preparations session) nil
+            (mevedel-session-root-buffer session) nil)
+      (kill-buffer buffer)
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-persistence--drain-for-close (:quiet t)
+  ,test
+  (test)
+  :doc "gate tokens reach every nested save entry"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-token-" t)))
+         (session (test-mevedel-session-persistence--gate-session root))
+         (buffer (generate-new-buffer " *token*"))
+         (token (list session))
+         seen)
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'mevedel-session-artifacts-artifact-present-p)
+                   (lambda (&rest _) t))
+                  ((symbol-function
+                    'mevedel-session-artifacts-publish-sidecar-state)
+                   (lambda (_s _b &optional tok) (push (cons 'sidecar tok) seen) t))
+                  ((symbol-function 'mevedel-session-artifacts-save)
+                   (lambda (_s _b &optional _settled _force tok)
+                     (push (cons 'save tok) seen) root)))
+          (setf (mevedel-session-root-buffer session) buffer)
+          (should (mevedel-session-persistence-save-agent-state session token))
+          (setf (mevedel-session-save-path session) nil)
+          (should (mevedel-session-persistence-save-agent-state session token))
+          (should (equal `((save . ,token) (sidecar . ,token)) seen)))
+      (setf (mevedel-session-root-buffer session) nil)
+      (kill-buffer buffer)
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t)))
+  :doc "a root buffer stops admissions, other buffers only wait, ungated sessions skip"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-drain-" t)))
+         (session (test-mevedel-session-persistence--gate-session root))
+         (root-buffer (generate-new-buffer " *drain-root*"))
+         (other (generate-new-buffer " *drain-other*"))
+         calls)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-publication-stopping)
+                   (lambda (_) (push 'stopping calls)))
+                  ((symbol-function 'mevedel-session-publication-barrier)
+                   (lambda (_ &optional _token) (push 'barrier calls))))
+          (setf (mevedel-session-root-buffer session) root-buffer)
+          (should (mevedel-session-persistence--drain-for-close
+                   session root-buffer))
+          (should (mevedel-session-persistence--drain-for-close session other))
+          (setf (mevedel-session-save-path session) nil)
+          (should (mevedel-session-persistence--drain-for-close
+                   session root-buffer))
+          (should (equal '(barrier stopping) calls)))
+      (setf (mevedel-session-root-buffer session) nil)
+      (mapc #'kill-buffer (list root-buffer other))
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t)))
+  :doc "an unresolved job warns and returns nil"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-drain-" t)))
+         (session (test-mevedel-session-persistence--gate-session root))
+         (buffer (generate-new-buffer " *drain-fail*"))
+         message)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-root-buffer session) buffer
+                (mevedel-session-publication-job session)
+                (mevedel-session-publication--job-create
+                 :session session :phase 'unresolved))
+          (mevedel-test--with-captured-diagnostics message
+            (should-not (mevedel-session-persistence--drain-for-close
+                         session buffer)))
+          (should (string-search "unresolved" message))
+          ;; Recovery must be able to admit work again.
+          (should-not (mevedel-session-publication-stopping-p session)))
+      (setf (mevedel-session-publication-job session) nil
+            (mevedel-session-root-buffer session) nil)
+      (kill-buffer buffer)
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-persistence-allow-buffer-close-p (:quiet t)
+  ,test
+  (test)
+  :doc "closing the root buffer drains and vetoes only an unresolved job"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-close-" t)))
+         (session (test-mevedel-session-persistence--gate-session root))
+         (buffer (generate-new-buffer " *close-root*"))
+         (other (generate-new-buffer " *close-other*"))
+         reoffered message)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-agent-control-reoffer-mail)
+                   (lambda (s) (push s reoffered))))
+          (setf (mevedel-session-root-buffer session) buffer)
+          (with-current-buffer other (setq-local mevedel--session session))
+          (with-current-buffer buffer
+            (setq-local mevedel--session session)
+            ;; Nothing was suppressed: nothing is re-armed.
+            (should (mevedel-session-persistence-allow-buffer-close-p))
+            (should-not reoffered)
+            ;; A notification actually suppressed during the drain.
+            (setf (mevedel-session-mail-notifications session) (list 'offer))
+            (should (mevedel-session-persistence-allow-buffer-close-p))
+            ;; Another query may veto: admissions are not left stopped.
+            (should-not (mevedel-session-publication-stopping-p session))
+            (should (equal (list session) reoffered))
+            ;; A session that was already stopping re-arms nothing.
+            (setf (mevedel-session-publication-stopping-p session) t)
+            (should (mevedel-session-persistence-allow-buffer-close-p))
+            (should (= 1 (length reoffered)))
+            (setf (mevedel-session-publication-stopping-p session) nil)
+            (setf (mevedel-session-mail-notifications session) nil)
+            (setf (mevedel-session-publication-job session)
+                  (mevedel-session-publication--job-create
+                   :session session :phase 'unresolved))
+            (mevedel-test--with-captured-diagnostics message
+              (should-not (mevedel-session-persistence-allow-buffer-close-p)))
+            (should (string-search "publication-abandon" message)))
+          (should-not (mevedel-session-publication-stopping-p session))
+          ;; A non-root buffer never decides the session's fate.
+          (with-current-buffer other
+            (should (mevedel-session-persistence-allow-buffer-close-p))))
+      (setf (mevedel-session-publication-job session) nil
+            (mevedel-session-root-buffer session) nil)
+      (mapc #'kill-buffer (list buffer other))
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-persistence--stop-publications (:quiet t)
+  ,test
+  (test)
+  :doc "drains every gated session and reports only the unresolved ones"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-stop-" t)))
+         (good (test-mevedel-session-persistence--gate-session root))
+         (bad (test-mevedel-session-persistence--gate-session root))
+         (ungated (mevedel-session-create
+                   "main" (test-mevedel-session-persistence--make-workspace
+                           root)))
+         (buffers (mapcar (lambda (s)
+                            (with-current-buffer (generate-new-buffer " *stop*")
+                              (setq-local mevedel--session s)
+                              (current-buffer)))
+                          (list good bad ungated)))
+         stopped message blocked)
+    (unwind-protect
+        (cl-letf (((symbol-function 'buffer-list)
+                   (lambda (&optional _frame) buffers))
+                  ((symbol-function 'mevedel-session-publication-stopping)
+                   (lambda (s)
+                     (push s stopped)
+                     (when (eq s bad) (user-error "Outcome is unresolved")))))
+          (mevedel-test--with-captured-diagnostics message
+            (setq blocked (mevedel-session-persistence--stop-publications)))
+          (should (equal (list bad) blocked))
+          (should (memq good stopped))
+          (should (memq bad stopped))
+          (should-not (memq ungated stopped))
+          (should (string-search "unresolved" message)))
+      (mapc #'kill-buffer buffers)
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-persistence-release-on-kill/gate (:quiet t)
+  ,test
+  (test)
+  :doc "an unresolved job keeps the session unsaved and its lease unreleased"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-kill-" t)))
+         (session (test-mevedel-session-persistence--gate-session root))
+         (buffer (generate-new-buffer " *kill-gate*"))
+         saved released message)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-persistence-autosave-buffer)
+                   (lambda (_) (setq saved t)))
+                  ((symbol-function 'mevedel-session-persistence-lock-release)
+                   (lambda (&rest _) (setq released t)))
+                  ((symbol-function 'mevedel-journal-capture-seal-and-schedule)
+                   #'ignore))
+          (setf (mevedel-session-root-buffer session) buffer)
+          (with-current-buffer buffer
+            (setq-local mevedel--session session)
+            (mevedel-test--with-captured-diagnostics message
+              (setf (mevedel-session-publication-job session)
+                    (mevedel-session-publication--job-create
+                     :session session :phase 'unresolved))
+              (mevedel-session-persistence-release-on-kill))
+            (should-not (or saved released))
+            (should (string-search "unresolved" message))
+            (setf (mevedel-session-publication-job session) nil)
+            (mevedel-session-persistence-release-on-kill)
+            (should (and saved released))))
+      (setf (mevedel-session-publication-job session) nil
+            (mevedel-session-root-buffer session) nil)
+      (kill-buffer buffer)
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t))))
+
 
 
 (mevedel-deftest mevedel-session-persistence--kill-emacs-hook
@@ -529,6 +818,56 @@
                (lambda (&optional _frame) nil)))
       (mevedel-session-persistence--kill-emacs-hook))
     (should torn-down))
+  :doc "drains publication before teardown and spares an unresolved session its save and release"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-exit-gate-" t)))
+         (good (test-mevedel-session-persistence--gate-session root))
+         (bad (test-mevedel-session-persistence--gate-session root))
+         (buffers (mapcar (lambda (s)
+                            (with-current-buffer (generate-new-buffer " *exit-gate*")
+                              (setq-local mevedel--session s)
+                              (insert "dirty")
+                              (current-buffer)))
+                          (list good bad)))
+         (mevedel-workspace--registry nil)
+         events message quit-inhibited)
+    (unwind-protect
+        (cl-letf (((symbol-function 'buffer-list)
+                   (lambda (&optional _frame) buffers))
+                  ((symbol-function 'mevedel-session-publication-stopping)
+                   (lambda (s)
+                     (push 'stopping events)
+                     (push inhibit-quit quit-inhibited)
+                     (when (eq s bad) (user-error "Outcome is unresolved"))))
+                  ((symbol-function 'mevedel-execution-teardown-all)
+                   (lambda () (push 'teardown events)))
+                  ((symbol-function
+                    'mevedel-session-persistence-authoritative-buffer)
+                   #'identity)
+                  ((symbol-function 'mevedel-session-persistence-autosave-buffer)
+                   (lambda (b)
+                     (push (cons 'save (buffer-local-value 'mevedel--session b))
+                           events)))
+                  ((symbol-function 'mevedel-session-persistence-lock-release)
+                   (lambda (&rest _) (push 'release events)))
+                  ((symbol-function 'mevedel-journal-capture-seal-and-schedule)
+                   #'ignore)
+                  ((symbol-function
+                    'mevedel-session-persistence--flush-diagnostic-logs-now)
+                   #'ignore))
+          (mevedel-test--with-captured-diagnostics message
+            (mevedel-session-persistence--kill-emacs-hook))
+          (setq events (nreverse events))
+          (should (string-search "unresolved" message))
+          (should (equal '(t t) quit-inhibited))
+          (should (equal '(stopping stopping teardown)
+                         (seq-take events 3)))
+          (should (member (cons 'save good) events))
+          (should-not (member (cons 'save bad) events))
+          (should (= 1 (cl-count 'release events))))
+      (mapc (lambda (b) (with-current-buffer b (set-buffer-modified-p nil))
+              (kill-buffer b))
+            buffers)
+      (delete-directory root t)))
   :doc "modified view buffers are persisted through data buffers on exit"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -6018,7 +6357,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
           (mevedel-session-control-transfer-register-root-buffer
            session root)
           (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
-                     (lambda (seen-session seen-buffer settled force)
+                     (lambda (seen-session seen-buffer settled force &optional _token)
                        (setq calls
                              (list seen-session seen-buffer settled force)
                              required
@@ -6278,7 +6617,7 @@ BOOT replaces the fixed fixture boot id, standing in for another boot."
                ((symbol-function 'mevedel-session-publication-prune-committed)
                 (lambda (_session artifacts) artifacts))
                ((symbol-function 'mevedel-session-publication-publish)
-                (lambda (_session _artifacts &optional require-commit _prepared)
+                (lambda (_session _artifacts &optional require-commit _prepared _token)
                   (should require-commit)
                   (setq published t)))
                ((symbol-function

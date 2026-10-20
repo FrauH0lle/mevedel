@@ -32,7 +32,9 @@
 
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-active-turn-p "mevedel-agent-control" (session))
+(declare-function mevedel-agent-control-reoffer-mail "mevedel-agent-control" (session))
 (autoload 'mevedel-agent-control-active-turn-p "mevedel-agent-control")
+(autoload 'mevedel-agent-control-reoffer-mail "mevedel-agent-control")
 
 ;; `mevedel-agent-conversation'
 (autoload 'mevedel-agent-conversation-save "mevedel-agent-conversation")
@@ -119,11 +121,11 @@
 (declare-function mevedel-session-artifacts-inspect-cold-session "mevedel-session-artifacts" (save-path authority-mode &optional publication))
 (declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session buffer &optional turn directive-records preserve-directives-p))
 (declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
-(declare-function mevedel-session-artifacts-publish-sidecar-state "mevedel-session-artifacts" (session root-buffer))
-(declare-function mevedel-session-artifacts-publish-text "mevedel-session-artifacts" (session path content &optional coding))
+(declare-function mevedel-session-artifacts-publish-sidecar-state "mevedel-session-artifacts" (session root-buffer &optional token))
+(declare-function mevedel-session-artifacts-publish-text "mevedel-session-artifacts" (session path content &optional coding prepared token))
 (declare-function mevedel-session-artifacts-reconcile-relocation "mevedel-session-artifacts" (session saved-workspace-plist))
-(declare-function mevedel-session-artifacts-save "mevedel-session-artifacts" (session buffer &optional settled force))
-(declare-function mevedel-session-artifacts-save-agent-registry "mevedel-session-artifacts" (session buffer))
+(declare-function mevedel-session-artifacts-save "mevedel-session-artifacts" (session buffer &optional settled force token))
+(declare-function mevedel-session-artifacts-save-agent-registry "mevedel-session-artifacts" (session buffer &optional token))
 (declare-function mevedel-session-artifacts-segment-path "mevedel-session-artifacts" (save-path n))
 (declare-function mevedel-session-artifacts-self-heal-segment-counter "mevedel-session-artifacts" (session save-path))
 (declare-function mevedel-session-artifacts-sessions-dir "mevedel-session-artifacts" (workspace))
@@ -163,6 +165,7 @@
 (declare-function mevedel-session-control-fs-program-value "mevedel-session-control-fs" (result))
 (declare-function mevedel-session-control-fs-run-program "mevedel-session-control-fs" (operations &optional lock-directory))
 (declare-function mevedel-session-control-fs-tree-sizes "mevedel-session-control-fs" (paths))
+(declare-function mevedel-session-control-fs-wait-async "mevedel-session-control-fs" (&optional seconds))
 (declare-function mevedel-session-control-fs-write-file "mevedel-session-control-fs" (path content))
 (autoload 'mevedel-session-control-fs-path-exists-p
   "mevedel-session-control-fs")
@@ -187,7 +190,7 @@
 (declare-function mevedel-session-durability-disclose "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability-lease-acquire "mevedel-session-durability" (session-dir buffer-name &optional session))
 (declare-function mevedel-session-durability-lease-owned-p "mevedel-session-durability" (session))
-(declare-function mevedel-session-durability-lease-release "mevedel-session-durability" (session-dir &optional session))
+(declare-function mevedel-session-durability-lease-release "mevedel-session-durability" (session-dir &optional session token))
 (declare-function mevedel-session-durability-lease-status "mevedel-session-durability" (session-dir))
 (defvar mevedel-session-durability--asserted-directories)
 (defvar mevedel-session-durability--transaction-clock)
@@ -220,12 +223,25 @@
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-call-with-diagnostic-batch
                   "mevedel-session-publication" (session function))
-(declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit prepared))
+(declare-function mevedel-session-publication-barrier
+                  "mevedel-session-publication" (session &optional token))
+(declare-function mevedel-session-publication-busy-p
+                  "mevedel-session-publication" (session))
+(declare-function mevedel-session-publication-defer
+                  "mevedel-session-publication"
+                  (session preparation &optional failure token))
+(declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit prepared token))
 (declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir &optional head names))
 (declare-function mevedel-session-publication-read-batch
                   "mevedel-session-publication" (directories listings))
+(declare-function mevedel-session-publication-stopping
+                  "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-diagnostic-backlog-p
                   "mevedel-session-publication" (session))
+(autoload 'mevedel-session-publication-barrier "mevedel-session-publication")
+(autoload 'mevedel-session-publication-busy-p "mevedel-session-publication")
+(autoload 'mevedel-session-publication-defer "mevedel-session-publication")
+(autoload 'mevedel-session-publication-stopping "mevedel-session-publication")
 (autoload 'mevedel-session-publication-diagnostic-backlog-p
   "mevedel-session-publication")
 (autoload 'mevedel-session-publication-call-with-diagnostic-batch
@@ -274,11 +290,13 @@
 (declare-function mevedel-session-forked-from-turn "mevedel-structs" (cl-x))
 (declare-function mevedel-session-generate-id "mevedel-structs" ())
 (declare-function mevedel-session-lease "mevedel-structs" (cl-x))
+(declare-function mevedel-session-mail-notifications "mevedel-structs" (cl-x))
 (declare-function mevedel-session-name "mevedel-structs" (cl-x))
 (declare-function mevedel-session-pending-publication "mevedel-structs" (cl-x))
 (declare-function mevedel-session-permission-log-pending "mevedel-structs" (cl-x))
 (declare-function mevedel-session-publication "mevedel-structs" (cl-x))
 (declare-function mevedel-session-publication-active-p "mevedel-structs" (cl-x))
+(declare-function mevedel-session-publication-stopping-p "mevedel-structs" (cl-x))
 (declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x))
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x))
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x))
@@ -683,7 +701,7 @@ The argument UPDATES is the change plist."
                            nil nil #'equal)
                 merged))))))
 
-(defun mevedel-session-persistence-write-sidecar-now (session buffer &optional prepared checkpoint)
+(defun mevedel-session-persistence-write-sidecar-now (session buffer &optional prepared checkpoint token)
   "Best-effort sidecar rewrite for SESSION and BUFFER.
 
 Only writes when the sidecar file already exists on disk -- i.e.
@@ -691,7 +709,8 @@ a full root snapshot has written `session.meta.el'.  Before that, the session
 may be shallowly materialized (directory + lock + agents/ but no sidecar), so
 this observational rewrite remains deferred to the next critical agent commit
 or root autosave.  PREPARED admits the owning checkpoint's final sidecar.
-CHECKPOINT captures a matching transcript already written by the caller."
+CHECKPOINT captures a matching transcript already written by the caller.
+TOKEN is the caller's gate token."
   (when (and (memq session (bound-and-true-p mevedel-session-artifacts--terminal-sessions))
              (not prepared))
     (user-error "Session checkpoint is being prepared"))
@@ -711,14 +730,17 @@ CHECKPOINT captures a matching transcript already written by the caller."
                 ;; Admission and publication share one transaction's
                 ;; recovery and clock observations rather than each
                 ;; running its own target programs.
-                (mevedel-session-durability-with-transaction
-                  (mevedel-session-artifacts-assert-mutation-authority
-                   session buffer)
-                  (mevedel-session-publication-publish
-                   session
-                   (list (mevedel-session-artifacts--sidecar-artifact
-                          session buffer checkpoint))
-                   nil prepared))
+                (progn
+                  ;; Drain async work before the sidecar is captured.
+                  (mevedel-session-publication-barrier session token)
+                  (mevedel-session-durability-with-transaction
+                    (mevedel-session-artifacts-assert-mutation-authority
+                     session buffer)
+                    (mevedel-session-publication-publish
+                     session
+                     (list (mevedel-session-artifacts--sidecar-artifact
+                            session buffer checkpoint))
+                     nil prepared token)))
               (mevedel-session-codec-write
                sidecar
                (mevedel-session-artifacts-build-sidecar session buffer checkpoint))
@@ -729,18 +751,20 @@ CHECKPOINT captures a matching transcript already written by the caller."
            nil)
           (:success t))))))
 
-(defun mevedel-session-persistence-save-agent-state (session)
+(defun mevedel-session-persistence-save-agent-state (session &optional token)
   "Commit SESSION's agent state through its authoritative root buffer.
 Keep root transcript fields at the last committed checkpoint.  Before the
-first root snapshot, materialize the complete root rather than a bare sidecar."
+first root snapshot, materialize the complete root rather than a bare sidecar.
+TOKEN is the caller's gate token."
   (when-let* ((buffer (mevedel-session-root-buffer session))
               ((buffer-live-p buffer)))
     (let ((mevedel-session-artifacts-require-agent-commit-p t))
       (when (if (and (mevedel-session-save-path session)
                      (mevedel-session-artifacts-artifact-present-p
                       session "session.meta.el" t))
-                (mevedel-session-artifacts-publish-sidecar-state session buffer)
-              (mevedel-session-artifacts-save session buffer nil t))
+                (mevedel-session-artifacts-publish-sidecar-state
+                 session buffer token)
+              (mevedel-session-artifacts-save session buffer nil t token))
         ;; The committed sidecar already carries the current registry,
         ;; so a pending observational save is absorbed.
         (mevedel-session-persistence-cancel-deferred-agent-save session)
@@ -1098,14 +1122,15 @@ PID-lock table.  File-workspace sessions use the following lock table:
             (?r nil)
             (?a (user-error "Session resume aborted")))))))))
 
-(defun mevedel-session-persistence-lock-release (session-dir &optional session)
+(defun mevedel-session-persistence-lock-release (session-dir &optional session token)
   "Release this client's mutation authority for SESSION-DIR.
-SESSION supplies the live lease owner when SESSION-DIR is portable."
+SESSION supplies the live lease owner when SESSION-DIR is portable.  TOKEN is
+the caller's gate token."
   (if (eq (mevedel-session-codec-authority-mode-for-path
            session-dir session)
           'portable)
       (progn
-        (mevedel-session-durability-lease-release session-dir session))
+        (mevedel-session-durability-lease-release session-dir session token))
     (let* ((lock-path (mevedel-session-persistence--lock-path session-dir))
            (existing  (mevedel-session-persistence--read-lock lock-path)))
       (when (and existing
@@ -1158,15 +1183,93 @@ Called opportunistically from the `mevedel' session chooser."
                 (error nil)))))))))
 
 (defun mevedel-session-persistence-release-on-kill ()
-  "Buffer-local `kill-buffer-hook' that releases session mutation authority."
+  "Buffer-local `kill-buffer-hook' that releases session mutation authority.
+Publication work is drained before the final save and lease release.  A root
+buffer also stops new admissions.  An unresolved job keeps the session's
+state and lease for explicit publication recovery."
   (when (and (boundp 'mevedel--session)
              mevedel--session)
-    (mevedel-session-persistence-autosave-buffer (current-buffer))
-    (when-let* ((dir (mevedel-session-save-path mevedel--session)))
-      (mevedel-journal-capture-seal-and-schedule mevedel--session (current-buffer) 'session-end)
-      (condition-case _
-          (mevedel-session-persistence-lock-release dir mevedel--session)
-        (error nil)))))
+    (when (mevedel-session-persistence--drain-for-close
+           mevedel--session (current-buffer))
+      (mevedel-session-persistence-autosave-buffer (current-buffer))
+      (when-let* ((dir (mevedel-session-save-path mevedel--session)))
+        (mevedel-journal-capture-seal-and-schedule mevedel--session (current-buffer) 'session-end)
+        (mevedel-session-persistence--wait-async)
+        (condition-case _
+            (mevedel-session-persistence-lock-release dir mevedel--session)
+          (error nil))))))
+
+(defun mevedel-session-persistence--wait-async ()
+  "Let already-running asynchronous control programs deliver their callbacks.
+Closing and exit call it after their last write, before a lease is released."
+  (when (featurep 'mevedel-session-control-fs)
+    (mevedel-session-control-fs-wait-async)))
+
+(defun mevedel-session-persistence--drain-temporarily (session)
+  "Drain SESSION's publication work with admissions and wakes stopped.
+The previous stopping state is restored on every exit, so a later veto leaves
+the session usable.  Notifications retained while stopped are re-armed through
+`mevedel-agent-control-reoffer-mail', which never offers inline, and only when
+some were actually suppressed.  An unresolved job signals."
+  (let ((was-stopping (mevedel-session-publication-stopping-p session)))
+    (unwind-protect (mevedel-session-publication-stopping session)
+      (setf (mevedel-session-publication-stopping-p session) was-stopping)
+      (when (and (not was-stopping)
+                 (mevedel-session-mail-notifications session))
+        (mevedel-agent-control-reoffer-mail session)))))
+
+(defun mevedel-session-persistence--gate-owner-p (session)
+  "Return non-nil when SESSION can own asynchronous publication work.
+Only materialized portable sessions publish through the session gate."
+  (and session
+       (mevedel-session-save-path session)
+       (mevedel-session-codec-portable-authority-p session)))
+
+(defun mevedel-session-persistence--drain-for-close (session buffer)
+  "Drain SESSION's publication work for closing BUFFER.
+The root buffer stops new admissions; other buffers only wait.  Return non-nil
+when closing may proceed with its save and lease release.  An unresolved job
+warns and returns nil, leaving explicit recovery or abandonment possible."
+  (or (not (mevedel-session-persistence--gate-owner-p session))
+      (let ((was-stopping (mevedel-session-publication-stopping-p session)))
+        (condition-case err
+            (progn
+              (if (eq buffer (mevedel-session-root-buffer session))
+                  (mevedel-session-publication-stopping session)
+                (mevedel-session-publication-barrier session))
+              t)
+          (error
+           ;; Recovery may admit work again, so admissions reopen.
+           (setf (mevedel-session-publication-stopping-p session) was-stopping)
+           (display-warning
+          'mevedel
+          (format "Session publication is unresolved; not saving or releasing: %s"
+                  (error-message-string err))
+          :warning)
+           nil)))))
+
+(defun mevedel-session-persistence-allow-buffer-close-p ()
+  "Return non-nil when closing the current session buffer may proceed.
+A `kill-buffer-query-functions' member: it drains an owned root buffer's
+publication work while teardown has not yet started, and refuses the close
+with a message when a job stays unresolved, so explicit recovery remains
+possible."
+  (or (not (and (boundp 'mevedel--session) mevedel--session))
+      (not (mevedel-session-persistence--gate-owner-p mevedel--session))
+      (not (eq (current-buffer) (mevedel-session-root-buffer mevedel--session)))
+      ;; The drain is the decision.  Another query may still veto the close,
+      ;; so admissions reopen; the kill hook stops them for good.
+      (condition-case err
+          (progn
+            (mevedel-session-persistence--drain-temporarily mevedel--session)
+            t)
+        (error
+         (message
+          (concat "mevedel: session publication is unresolved (%s); run "
+                  "mevedel-session-publication-retry or "
+                  "mevedel-session-publication-abandon before closing")
+          (error-message-string err))
+         nil))))
 
 
 ;;
@@ -1179,10 +1282,26 @@ cleared on the next successful save.  Surfaced by
 `mevedel-session-persistence-header-segment' so the user has a
 visible cue in addition to the `display-warning'.")
 
-(defun mevedel-session-persistence-autosave-buffer (buffer)
+(defun mevedel-session-persistence--note-autosave-failure (buffer err)
+  "Mark BUFFER's auto-save failed with ERR and warn."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq-local mevedel-session--save-failed t)
+      (force-mode-line-update)))
+  (display-warning
+   'mevedel
+   (format "Could not auto-save %s: %s"
+           (if (buffer-live-p buffer) (buffer-name buffer) "buffer")
+           (error-message-string err))
+   :warning))
+
+(defun mevedel-session-persistence-autosave-buffer (buffer &optional token)
   "Save BUFFER's owned conversation, containing and reporting save failures.
 Retained agents use their transcript writer.  Root buffers use session
-publication.  Views and read-only inspection buffers never write."
+publication.  Views and read-only inspection buffers never write.  While the
+session's publication gate is owned the save is deferred before anything is
+captured, and the return value is nil.  TOKEN is the caller's gate token; a
+deferred save runs with its own."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (when (and (bound-and-true-p mevedel--session)
@@ -1196,6 +1315,16 @@ publication.  Views and read-only inspection buffers never write."
                  (not (bound-and-true-p mevedel-session--inspection-buffer-p))
                  (or mevedel--agent-invocation
                      (eq buffer (mevedel-session-root-buffer mevedel--session))))
+        (unless (and (mevedel-session-persistence--gate-owner-p mevedel--session)
+                     (mevedel-session-publication-defer
+                      mevedel--session
+                      (lambda (prepared-token)
+                        (mevedel-session-persistence-autosave-buffer
+                         buffer prepared-token))
+                      (lambda (err)
+                        (mevedel-session-persistence--note-autosave-failure
+                         buffer err))
+                      token))
         (let ((inhibit-quit t))
           (condition-case err
               (let* ((agent mevedel--agent-invocation)
@@ -1207,9 +1336,9 @@ publication.  Views and read-only inspection buffers never write."
                           (setf (mevedel-agent-invocation-sidecar-dirty agent) t)))
                      (saved
                       (if agent
-                          (mevedel-agent-conversation-save agent)
+                          (mevedel-agent-conversation-save agent nil token)
                         (mevedel-session-artifacts-save
-                         mevedel--session buffer))))
+                         mevedel--session buffer nil nil token))))
                 (unless saved
                   (error "Conversation was not saved"))
                 ;; Agent writes can be retained publication batches awaiting
@@ -1224,23 +1353,17 @@ publication.  Views and read-only inspection buffers never write."
                     (if (mevedel-session-artifacts-artifact-present-p
                          mevedel--session "session.meta.el" t)
                         (mevedel-session-artifacts-publish-sidecar-state
-                         mevedel--session root)
+                         mevedel--session root token)
                       (unless (with-current-buffer root
                                 (mevedel-session-artifacts-save
-                                 mevedel--session root))
+                                 mevedel--session root nil nil token))
                         (error "Agent checkpoint has no saved root")))))
                 (setq-local mevedel-session--save-failed nil)
                 (force-mode-line-update)
                 saved)
             ((error quit)
-             (setq-local mevedel-session--save-failed t)
-             (force-mode-line-update)
-             (display-warning
-              'mevedel
-              (format "Could not auto-save %s: %s"
-                      (buffer-name buffer) (error-message-string err))
-              :warning)
-             nil)))))))
+             (mevedel-session-persistence--note-autosave-failure buffer err)
+             nil))))))))
 
 (defvar mevedel-session-persistence--autosaves (make-hash-table :test #'eq)
   "Conversation buffers with a queued auto-save opportunity.")
@@ -3014,7 +3137,8 @@ workspace was swept too recently."
 
 (defun mevedel-session-persistence--allow-emacs-exit-p ()
   "Return non-nil when every live session may exit safely."
-  (let ((blocker
+  (let* ((unresolved nil)
+         (blocker
          (cl-some
           (lambda (buffer)
             (and (buffer-live-p buffer)
@@ -3022,6 +3146,21 @@ workspace was swept too recently."
                    (when (and (boundp 'mevedel--session)
                               mevedel--session)
                      (cond
+                      ;; Queued and in-flight async publication drains here,
+                      ;; leaving the session usable if another query vetoes.
+                      ((and (mevedel-session-persistence--gate-owner-p
+                             mevedel--session)
+                            (mevedel-session-publication-busy-p
+                             mevedel--session)
+                            (condition-case err
+                                (progn
+                                  (mevedel-session-persistence--drain-temporarily
+                                   mevedel--session)
+                                  nil)
+                              (error (setq unresolved
+                                           (error-message-string err))
+                                     t)))
+                       'publication-job)
                       ((mevedel-session-pending-publication
                         mevedel--session)
                        'publication)
@@ -3036,6 +3175,14 @@ workspace was swept too recently."
                        'mutation))))))
           (buffer-list))))
     (pcase blocker
+      ('publication-job
+       (message
+        (concat
+         "mevedel: session publication is unresolved (%s); run "
+         "mevedel-session-publication-retry or "
+         "mevedel-session-publication-abandon first")
+        unresolved)
+       nil)
       ('publication
        (message
         (concat
@@ -3051,16 +3198,44 @@ workspace was swept too recently."
        nil)
       (_ t))))
 
+(defun mevedel-session-persistence--stop-publications ()
+  "Stop admissions and drain publication jobs of every live session.
+Return the sessions whose job stayed unresolved; each is warned about once.
+Their state and leases are left for explicit publication recovery."
+  (let (sessions blocked)
+    (dolist (buffer (buffer-list))
+      (when (buffer-live-p buffer)
+        (when-let* ((session (buffer-local-value 'mevedel--session buffer)))
+          (cl-pushnew session sessions :test #'eq))))
+    (maphash (lambda (session _) (cl-pushnew session sessions :test #'eq))
+             mevedel-session-persistence--deferred-agent-saves)
+    (dolist (session sessions)
+      (when (mevedel-session-persistence--gate-owner-p session)
+        (condition-case err
+            (mevedel-session-publication-stopping session)
+          (error
+           (push session blocked)
+           (display-warning
+            'mevedel
+            (format "Session publication is unresolved at exit; not saving or releasing: %s"
+                    (error-message-string err))
+            :warning)))))
+    blocked))
+
 (defun mevedel-session-persistence--kill-emacs-hook ()
   "Save sessions, clean expired state, and release locks on Emacs exit.
 
 Runs unconditionally so that locks don't outlive the Emacs process
 that wrote them.  Best-effort: individual errors are swallowed so one
-bad buffer can't block exit."
-  (let ((mevedel-journal-process--inhibit-scheduling t)
+bad buffer can't block exit.  Publication jobs are drained and their
+admissions stopped before execution teardown.  A session whose job stays
+unresolved is neither saved, flushed nor released, so explicit recovery
+remains possible; execution teardown still runs."
+  (let* ((mevedel-journal-process--inhibit-scheduling t)
         (mevedel-memory-decision--inhibit-recovery t)
         (mevedel-memory-pass--inhibit-scheduling t)
-        (inhibit-quit t))
+        (inhibit-quit t)
+        (blocked (mevedel-session-persistence--stop-publications)))
     (mevedel-transport-cancel-idle
      mevedel-session-persistence--autosaves 'conversation-autosave)
     (when (featurep 'mevedel-journal-process)
@@ -3077,14 +3252,16 @@ bad buffer can't block exit."
       (when (and (buffer-live-p buffer)
                  (with-current-buffer buffer
                    mevedel--agent-invocation))
-        (mevedel-session-persistence-autosave-buffer buffer)))
+        (unless (memq (buffer-local-value 'mevedel--session buffer) blocked)
+          (mevedel-session-persistence-autosave-buffer buffer))))
     ;; A debounced agent-state save left in its window would be lost, and
     ;; registry mutations do not mark the root buffer modified, so the
     ;; modified-only save loop below cannot cover them.
     (maphash (lambda (session timer)
                (cancel-timer timer)
-               (mevedel-session-persistence-autosave-buffer
-                (mevedel-session-root-buffer session)))
+               (unless (memq session blocked)
+                 (mevedel-session-persistence-autosave-buffer
+                  (mevedel-session-root-buffer session))))
              mevedel-session-persistence--deferred-agent-saves)
     (clrhash mevedel-session-persistence--deferred-agent-saves)
     (let (lock-dirs)
@@ -3093,7 +3270,8 @@ bad buffer can't block exit."
           (with-current-buffer buf
             (when (and (boundp 'mevedel--session)
                        mevedel--session
-                       (not mevedel--agent-invocation))
+                       (not mevedel--agent-invocation)
+                       (not (memq mevedel--session blocked)))
               (when (or (buffer-modified-p)
                         mevedel-session--save-failed
                         (mevedel-session-publication-uncommitted-batches
@@ -3126,6 +3304,7 @@ bad buffer can't block exit."
            (ignore-errors
              (mevedel-session-persistence-cleanup-expired workspace)))
          mevedel-workspace--registry))
+      (mevedel-session-persistence--wait-async)
       (dolist (dir lock-dirs)
         (condition-case _
             (mevedel-session-persistence-lock-release dir)

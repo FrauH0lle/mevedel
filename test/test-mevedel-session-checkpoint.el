@@ -212,6 +212,60 @@
         (dolist (key '(:goal :plan-metadata :external-conversations))
           (should (equal (plist-get raw key) (plist-get projected key))))))))
 
+(mevedel-deftest mevedel-session-checkpoint-pending-message-p ()
+  ,test
+  (test)
+  :doc "a session with no checkpoint state has no pending message and stays uninitialized"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock)))
+    (should-not
+     (mevedel-session-checkpoint-pending-message-p session "/root" "m1"))
+    (should-not (mevedel-session-checkpoint-state session)))
+  :doc "a consumed message is pending for its conversation only"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock)))
+    (mevedel-session-checkpoint-consume
+     session "/root" (list (test-mevedel-session-checkpoint--mail "m1")))
+    (should (mevedel-session-checkpoint-pending-message-p session "/root" "m1"))
+    (should-not
+     (mevedel-session-checkpoint-pending-message-p session "/root" "m2"))
+    (should-not
+     (mevedel-session-checkpoint-pending-message-p session "/root/a" "m1"))
+    (should-not
+     (mevedel-session-checkpoint-pending-message-p session "/root" nil)))
+  :doc "an installed candidate retires the message unless a publication proof remains"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock
+                                          :publication-active-p t)))
+    (mevedel-session-checkpoint-consume
+     session "/root" (list (test-mevedel-session-checkpoint--mail "m1")))
+    (mevedel-session-checkpoint-install
+     session (mevedel-session-checkpoint-capture session "/root"))
+    ;; Retired from the ledger but proven retired for stale sidecars.
+    (should (mevedel-session-checkpoint-pending-message-p
+             session "/root" "m1"))
+    (setf (mevedel-session-publication-active-p session) nil)
+    (should (mevedel-session-checkpoint-release-proofs session))
+    (should-not (mevedel-session-checkpoint-pending-message-p
+                 session "/root" "m1")))
+  :doc "an installed candidate with no outstanding publication retires the message"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock)))
+    (mevedel-session-checkpoint-consume
+     session "/root" (list (test-mevedel-session-checkpoint--mail "m1")))
+    (mevedel-session-checkpoint-install
+     session (mevedel-session-checkpoint-capture session "/root"))
+    (should-not (mevedel-session-checkpoint-pending-message-p
+                 session "/root" "m1")))
+  :doc "queued preparations retain retirement proofs until their drain ends"
+  (let ((session (mevedel-session--create
+                  :publication-preparations (list (cons #'ignore nil)))))
+    (mevedel-session-checkpoint-consume
+     session "/root" (list (test-mevedel-session-checkpoint--mail "m1")))
+    (mevedel-session-checkpoint-install
+     session (mevedel-session-checkpoint-capture session "/root"))
+    (should-not (mevedel-session-checkpoint-release-proofs session))
+    (should (mevedel-session-checkpoint-pending-message-p session "/root" "m1"))
+    (setf (mevedel-session-publication-preparations session) nil)
+    (should (mevedel-session-checkpoint-release-proofs session))
+    (should-not (mevedel-session-checkpoint-pending-message-p session "/root" "m1"))))
+
 (mevedel-deftest mevedel-session-checkpoint-defer-ptc ()
   ,test
   (test)

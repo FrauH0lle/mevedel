@@ -736,8 +736,9 @@
         (let ((mevedel-execution-event-functions
                (list (lambda (event) (push event events))))
               (mevedel-execution-mailbox-delivery-function
-               (lambda (_event _context)
+               (lambda (_event _context ack)
                  (setq mailbox-calls (1+ (or mailbox-calls 0)))
+                 (funcall ack t nil)
                  t)))
           (setq initial
                 (test-mevedel-execution--start-managed
@@ -780,9 +781,10 @@
          nested-deliveries mailbox-calls)
     (unwind-protect
         (let ((mevedel-execution-mailbox-delivery-function
-               (lambda (_event _context)
+               (lambda (_event _context ack)
                  (when (mevedel-transport-busy-p) (setq nested-deliveries t))
                  (setq mailbox-calls (1+ (or mailbox-calls 0)))
+                 (funcall ack t nil)
                  t)))
           ;; Settlement runs from a sentinel, which can fire while another
           ;; remote command is in flight.
@@ -815,7 +817,7 @@
                   (plist-put (plist-get event :observation)
                              :output "corrupted"))))
               (mevedel-execution-mailbox-delivery-function
-               (lambda (event context)
+               (lambda (event context ack)
                  (setq mailbox-event event
                        mailbox-context context)
                  (aset (plist-get (plist-get event :observation) :output)
@@ -824,6 +826,7 @@
                        (plist-get (plist-get event :observation) :output))
                  (plist-put (plist-get event :observation)
                             :output "mailbox-mutated")
+                 (funcall ack t nil)
                  t)))
           (setq initial
                 (test-mevedel-execution--start-managed
@@ -859,9 +862,10 @@
                   (push event events)
                   'rerender-timer)))
               (mevedel-execution-mailbox-delivery-function
-               (lambda (_event _context)
+               (lambda (_event _context ack)
                  (setq live-during-delivery
                        (mevedel-execution-session-live-p session))
+                 (funcall ack nil "Rejected")
                  nil)))
           (setq initial
                 (test-mevedel-execution--start-managed
@@ -907,7 +911,7 @@
         (let ((mevedel-execution-event-functions
                (list (lambda (event) (push event events))))
               (mevedel-execution-mailbox-delivery-function
-               (lambda (_event _context)
+               (lambda (_event _context ack)
                  (condition-case err
                      (mevedel-execution-observe
                       session "main" id #'ignore)
@@ -916,6 +920,7 @@
                  (should-error
                   (mevedel-execution-stop-user session id)
                   :type 'mevedel-execution-not-found)
+                 (funcall ack t nil)
                  t)))
           (setq initial
                 (test-mevedel-execution--start-managed
@@ -946,7 +951,7 @@
         (let ((mevedel-execution-event-functions
                (list (lambda (event) (push event events))))
               (mevedel-execution-mailbox-delivery-function
-               (lambda (_event _context) t)))
+               (lambda (_event _context ack) (funcall ack t nil) t)))
           (setq initial
                 (test-mevedel-execution--start-managed
                  session root '("sh" "-c" "sleep .05; printf observed")))

@@ -831,14 +831,43 @@
                       (mevedel-agent-record-conversation-location record))
                      (text (with-current-buffer initial-buffer
                              (buffer-string))))
+                (cl-flet
+                    ((snapshot ()
+                       (list :activity (mevedel-agent-record-activity record)
+                             :invocation (mevedel-agent-record-invocation record)
+                             :location
+                             (mevedel-agent-record-conversation-location record)
+                             :mailbox (copy-tree (mevedel-agent-record-mailbox record))
+                             :messages (copy-tree (mevedel-session-messages session))
+                             :registry
+                             (mapcar (lambda (entry)
+                                       (cons (car entry)
+                                             (mevedel-agent-record-activity
+                                              (cdr entry))))
+                                     (mevedel-session-agent-registry session))
+                             :transcripts
+                             (copy-tree (mevedel-session-agent-transcripts session))
+                             :lease (copy-tree (mevedel-session-lease session))
+                             :publication
+                             (copy-tree (mevedel-session-publication session))
+                             :pending
+                             (mevedel-session-pending-publication session)
+                             :queue (mevedel-session-publication-queue session)
+                             :uncommitted
+                             (mevedel-session-publication-uncommitted-batches
+                              session)
+                             :active
+                             (mevedel-session-publication-active-p session))))
+                (let ((before (snapshot)))
                 (cl-letf
                     (((symbol-function
                        'mevedel-agent-conversation-save)
-                      (lambda (_invocation) nil)))
+                      (lambda (&rest _) nil)))
                   (should-error
                    (mevedel-tool-ui--send-message
                     '(:target "worker"
                       :message "This task must roll back."))))
+                (should (equal before (snapshot))))
                 (should (= 2 (length launches)))
                 (should (eq 'idle (mevedel-agent-record-activity record)))
                 (should (equal location
@@ -861,7 +890,7 @@
                     :message "Record a failed launch.")))
                 (should (= 2 (length launches)))
                 (should (eq 'idle (mevedel-agent-record-activity record)))
-                (should-not (mevedel-agent-record-invocation record))))))
+                (should-not (mevedel-agent-record-invocation record)))))))
       (dolist (launch launches)
         (when-let* ((buffer (plist-get launch :buffer))
                     ((buffer-live-p buffer)))

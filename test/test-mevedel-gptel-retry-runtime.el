@@ -58,7 +58,7 @@ runtime.  BEFORE-RESULT can interrupt inside an accepted terminal callback."
                    (mevedel-session-agent-transcripts session)
                    (list (cons "retry-runtime" (list :status 'running)))
                    (mevedel-agent-invocation-runtime-settle-callback invocation)
-                   (lambda (_invocation visible event)
+                   (lambda (_invocation visible event &optional _token)
                      (push (list :visible visible :event event) results)
                      nil))
              (with-current-buffer parent-buffer

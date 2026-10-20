@@ -53,10 +53,10 @@
                   (session logical &optional inspection committed-only))
 (declare-function mevedel-session-artifacts-publish-text
                   "mevedel-session-artifacts"
-                  (session path content &optional coding prepared))
+                  (session path content &optional coding prepared token))
 (declare-function mevedel-session-artifacts-publish-transcript-state
                   "mevedel-session-artifacts"
-                  (session root-buffer transcript-path content checkpoint &optional coding prepared))
+                  (session root-buffer transcript-path content checkpoint &optional coding prepared token))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds
                   "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-strip-gptel-config-properties
@@ -87,7 +87,7 @@
 (declare-function mevedel-session-persistence-update-transcript-entry
                   "mevedel-session-persistence" (session agent-id updates))
 (declare-function mevedel-session-persistence-write-sidecar-now
-                  "mevedel-session-persistence" (session buffer &optional prepared checkpoint))
+                  "mevedel-session-persistence" (session buffer &optional prepared checkpoint token))
 (autoload 'mevedel-session-persistence-update-transcript-entry
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-write-sidecar-now
@@ -764,8 +764,9 @@ Return nil when INVOCATION has no live conversation buffer."
         (cancel-timer timer))
       (setf (mevedel-agent-invocation-transcript-save-timer invocation) nil))))
 
-(defun mevedel-agent-conversation--write (invocation)
-  "Write INVOCATION's retained conversation, returning non-nil on success."
+(defun mevedel-agent-conversation--write (invocation &optional token)
+  "Write INVOCATION's retained conversation, returning non-nil on success.
+TOKEN is the caller's publication gate ownership, handed to gated writers."
   (when (mevedel-agent-invocation-p invocation)
     (mevedel-session-artifacts-call-with-checkpoint
      (mevedel-agent-invocation-parent-session invocation)
@@ -826,11 +827,11 @@ Return nil when INVOCATION has no live conversation buffer."
                                            session "session.meta.el" t))
                                      (progn
                                        (mevedel-session-artifacts-publish-transcript-state
-						session root buffer-file-name content checkpoint 'utf-8-unix t)
+						session root buffer-file-name content checkpoint 'utf-8-unix t token)
 	                                       (setq checkpoint nil)
                                        (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil))
                                    (mevedel-session-artifacts-publish-text
-                                    session buffer-file-name content 'utf-8-unix t))
+                                    session buffer-file-name content 'utf-8-unix t token))
                                (set-visited-file-modtime 0)
                                (when (= frozen-tick (buffer-chars-modified-tick))
                                  (set-buffer-modified-p nil)))
@@ -848,7 +849,7 @@ Return nil when INVOCATION has no live conversation buffer."
                                         (mevedel-agent-invocation-sidecar-dirty invocation))
                             (buffer-live-p parent)
                             (mevedel-session-persistence-write-sidecar-now
-	                             session parent t checkpoint))
+	                             session parent t checkpoint token))
                        (setf (mevedel-agent-invocation-sidecar-dirty invocation)
                              nil))
 	                     t))
@@ -867,9 +868,11 @@ Return nil when INVOCATION has no live conversation buffer."
                            (mevedel-agent-invocation-agent-id invocation) err)
 		  nil))))))))))
 
-(defun mevedel-agent-conversation-save (invocation &optional deferred)
+(defun mevedel-agent-conversation-save (invocation &optional deferred token)
   "Save INVOCATION's retained conversation.
-When DEFERRED is non-nil, coalesce writes through an idle timer."
+When DEFERRED is non-nil, coalesce writes through an idle timer.  TOKEN is the
+caller's publication gate ownership for an immediate write; a timer write runs
+later and never carries it."
   (if (and deferred
            (numberp mevedel-agent-conversation-save-debounce)
            (> mevedel-agent-conversation-save-debounce 0))
@@ -885,7 +888,7 @@ When DEFERRED is non-nil, coalesce writes through an idle timer."
               (mevedel-agent-conversation--write inv)))
           invocation)))
     (mevedel-agent-conversation--cancel-save invocation)
-    (mevedel-agent-conversation--write invocation)))
+    (mevedel-agent-conversation--write invocation token)))
 
 (defun mevedel-agent-conversation--on-buffer-kill ()
   "Persist and abort any live request owned by the current conversation."

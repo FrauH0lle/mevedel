@@ -2090,7 +2090,7 @@
             (mevedel-request-begin session)
             (cl-letf (((symbol-function
                         'mevedel-session-artifacts-save)
-                       (lambda (s b)
+                       (lambda (s b &rest _)
                          (setq saved
                                (list s b mevedel--current-request))
                          "saved")))

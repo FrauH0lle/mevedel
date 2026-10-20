@@ -4259,13 +4259,14 @@ rotation never saves through a rebound temporary visited filename or prompts"
                 :content "sidecar"
                 :commit-marker t)))
            ((symbol-function 'mevedel-session-publication-publish)
-            (lambda (_session artifacts &optional require-commit)
+            (lambda (_session artifacts &optional require-commit _prepared token)
               (should (plist-get (car artifacts) :commit-marker))
               (should require-commit)
+              (should (eq 'gate-token token))
               (user-error "Required session publication cannot be queued"))))
         (should-error
          (mevedel-session-artifacts-publish-sidecar-state
-          session (current-buffer))
+          session (current-buffer) 'gate-token)
          :type 'user-error)))))
 
 
@@ -4975,6 +4976,125 @@ rotation never saves through a rebound temporary visited filename or prompts"
                                session (list :number 1 :logical logical)))))
           (should-not (mevedel-session-artifacts-transcript-segment-identity
                        session '(:number 2))))
+      (delete-directory root t))))
+
+(defun test-mevedel-session-artifacts--gate-session (root)
+  "Return a portable session at ROOT whose save path is already set."
+  (let ((session (mevedel-session-create
+                  "main"
+                  (test-mevedel-session-persistence--make-workspace root))))
+    (setf (mevedel-session-save-path session) root)
+    session))
+
+(mevedel-deftest mevedel-session-artifacts--barrier (:quiet t)
+  ,test
+  (test)
+  :doc "only a materialized portable session consults the gate"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-barrier-" t)))
+         (session (test-mevedel-session-artifacts--gate-session root))
+         calls)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-publication-barrier)
+                   (lambda (s &optional _token) (push s calls) t)))
+          (mevedel-session-artifacts--barrier session)
+          (should (equal (list session) calls))
+          (setf (mevedel-session-save-path session) nil)
+          (mevedel-session-artifacts--barrier session)
+          (should (equal (list session) calls)))
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t)))
+  :doc "explicitly synchronous entries signal on an unresolved job before capture"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-barrier-" t)))
+         (session (test-mevedel-session-artifacts--gate-session root))
+         (buffer (generate-new-buffer " *barrier*"))
+         (before (copy-tree (mevedel-session-publication session)))
+         captured)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-publication-job session)
+                (mevedel-session-publication--job-create
+                 :session session :phase 'unresolved))
+          (cl-letf (((symbol-function 'mevedel-session-artifacts--live-sidecar)
+                     (lambda (&rest _) (setq captured t) nil))
+                    ((symbol-function 'mevedel-session-checkpoint-capture)
+                     (lambda (&rest _) (setq captured t) nil)))
+            (should-error (mevedel-session-artifacts-save session buffer)
+                          :type 'user-error)
+            (should-error
+             (mevedel-session-artifacts-publish-sidecar-state session buffer)
+             :type 'user-error)
+            (should-error
+             (mevedel-session-artifacts-publish-text
+              session (file-name-concat root "x.txt") "x")
+             :type 'user-error)
+            (should-error
+             (mevedel-session-artifacts-publish-transcript-state
+              session buffer (file-name-concat root "t.chat.org") "x" nil)
+             :type 'user-error)
+            (should-error
+             (let ((mevedel-session-artifacts-require-agent-commit-p t))
+               (mevedel-session-artifacts-save-agent-registry session buffer))
+             :type 'user-error))
+          (should-not captured)
+          (should (equal before (mevedel-session-publication session))))
+      (setf (mevedel-session-publication-job session) nil)
+      (kill-buffer buffer)
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-artifacts--defer (:quiet t)
+  ,test
+  (test)
+  :doc "nothing defers without a held gate or for an ungated session"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-defer-" t)))
+         (session (test-mevedel-session-artifacts--gate-session root)))
+    (unwind-protect
+        (progn
+          (should-not (mevedel-session-artifacts--defer session #'ignore))
+          (setf (mevedel-session-publication-preparations session)
+                (list (cons #'ignore nil)))
+          (setf (mevedel-session-save-path session) nil)
+          (should-not (mevedel-session-artifacts--defer session #'ignore))
+          (should (= 1 (length (mevedel-session-publication-preparations
+                                session)))))
+      (setf (mevedel-session-publication-preparations session) nil)
+      (mevedel-workspace-clear-registry)
+      (delete-directory root t)))
+  :doc "an observational registry save queues its preparation and does not publish"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-defer-" t)))
+         (session (test-mevedel-session-artifacts--gate-session root))
+         (buffer (generate-new-buffer " *defer*"))
+         published)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-publication--schedule)
+                   #'ignore)
+                  ((symbol-function 'mevedel-session-publication-publish)
+                   (lambda (&rest _) (setq published t))))
+          (setf (mevedel-session-publication-preparations session)
+                (list (cons #'ignore nil)))
+          (should-not
+           (mevedel-session-artifacts-save-agent-registry session buffer))
+          (should-not published)
+          (let ((queue (mevedel-session-publication-preparations session)))
+            (should (= 2 (length queue)))
+            ;; The queued preparation receives the gate runner's token and
+            ;; re-enters the entry without deferring again.
+            (let ((token (list session)))
+              (setf (mevedel-session-publication-preparation-token session)
+                    token)
+              (should-not (mevedel-session-artifacts--defer
+                           session #'ignore nil token))
+              (funcall (car (cadr queue)) token)
+              (should (= 2 (length (mevedel-session-publication-preparations
+                                    session)))))))
+      (setf (mevedel-session-publication-preparations session) nil)
+      (setf (mevedel-session-publication-preparation-token session) nil)
+      (kill-buffer buffer)
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (provide 'test-mevedel-session-artifacts)

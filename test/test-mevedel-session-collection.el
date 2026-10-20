@@ -48,6 +48,7 @@
           (steps 0))
       (while (gethash session mevedel-session-collection--jobs)
         (mevedel-session-collection--step session job)
+        (accept-process-output nil 0.01)
         (should (< (cl-incf steps) 100))))
     (should (= 1 (length (mevedel-session-publication--generation-names
                          (mevedel-session-save-path session))))))
@@ -201,6 +202,7 @@
         (let ((steps 0))
           (while (gethash session mevedel-session-collection--jobs)
             (mevedel-session-collection--step session job)
+            (accept-process-output nil 0.01)
             (should (< (cl-incf steps) 200))))
         (should (string-search "A new publication" (mevedel-session-artifacts-read-artifact
                                                     session "segment-0001.chat.org" t))))))
@@ -305,6 +307,7 @@
         (let ((steps 0))
           (while (gethash session mevedel-session-collection--jobs)
             (mevedel-session-collection--step session job)
+            (accept-process-output nil 0.01)
             (should (< (cl-incf steps) 100))))
         (should-not (gethash session mevedel-session-collection--jobs))
         (should (< (length (mevedel-session-publication--generation-names directory))
@@ -332,6 +335,7 @@
               (mevedel-session-artifacts-save session buffer))
             (unless (plist-get job :pending)
               (mevedel-session-collection--step session job))
+            (accept-process-output nil 0.01)
             (should (< (cl-incf steps) 600))))
         (should (< (length (mevedel-session-publication--generation-names directory))
                    (+ before publications))))
@@ -389,7 +393,6 @@
   :doc "deletes through background programs on a pipe-capable target"
   (test-mevedel-collection--with-session
     (let* ((mevedel-session-collection--slice-seconds 0)
-           (mevedel-session-control-fs--pipe-local t)
            (directory (mevedel-session-save-path session))
            (before (length (mevedel-session-publication--generation-names directory)))
            (steps 0)

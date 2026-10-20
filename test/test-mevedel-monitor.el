@@ -87,7 +87,11 @@
               ((symbol-function 'mevedel-execution--event)
                (lambda (_ type &rest properties) (cons :type (cons type properties))))
               ((symbol-function 'mevedel-execution--deliver-mailbox-event)
-               (lambda (_ event) (when accept (push event events) t)))
+               (lambda (_ event ack)
+                 (if accept
+                     (progn (push event events) (funcall ack t nil))
+                   (funcall ack nil "Rejected"))
+                 nil))
               ((symbol-function 'mevedel-execution--emit-event) #'ignore)
               ((symbol-function 'mevedel-execution--notify-state-change) #'ignore)
               ((symbol-function 'mevedel-agent-control-monitor-unread-bytes)
@@ -156,7 +160,7 @@
          initial events progress)
     (unwind-protect
         (let ((mevedel-execution-mailbox-delivery-function
-               (lambda (event _) (push event events) t))
+               (lambda (event _ ack) (push event events) (funcall ack t nil) t))
               (mevedel-execution-event-functions
                (list (lambda (event)
                        (when (eq (plist-get event :type) 'progress)
@@ -201,7 +205,7 @@
          initial events)
     (unwind-protect
         (let ((mevedel-execution-mailbox-delivery-function
-               (lambda (event _) (push event events) t)))
+               (lambda (event _ ack) (push event events) (funcall ack t nil) t)))
           (cl-letf (((symbol-function 'mevedel-execution-process-start)
                      (lambda (child &rest args)
                        (prog1 (apply start child args)
@@ -268,7 +272,7 @@
            initial events stopped)
       (unwind-protect
           (let ((mevedel-execution-mailbox-delivery-function
-                 (lambda (event _) (push event events) t)))
+                 (lambda (event _ ack) (push event events) (funcall ack t nil) t)))
             (mevedel-execution-start-bash
              (lambda (observation) (setq initial observation))
              :kind 'monitor :description "lifetime" :timeout-ms 1000
@@ -328,7 +332,7 @@
            initial events)
       (unwind-protect
           (let ((mevedel-execution-mailbox-delivery-function
-                 (lambda (event _) (push event events) t)))
+                 (lambda (event _ ack) (push event events) (funcall ack t nil) t)))
             (mevedel-execution-start-bash
              (lambda (observation) (setq initial observation))
              :kind 'monitor :description "final" :timeout-ms 1000

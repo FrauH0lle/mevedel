@@ -34,7 +34,7 @@
         (let ((mevedel-execution-event-functions
                (list (lambda (event) (push event events))))
               (mevedel-execution-mailbox-delivery-function
-               (lambda (_event _context) t)))
+               (lambda (_event _context ack) (funcall ack t nil) t)))
           (setq initial
                 (test-mevedel-execution--start-managed
                  session root '("sh" "-c" "printf ready; sleep 30")))

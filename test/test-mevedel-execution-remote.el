@@ -705,7 +705,7 @@ connection charges for, so the program path is proved here too."
           (mevedel-test--with-local-shell-tramp nil
            (setq session (test-mevedel-execution--session remote-root))
            (let ((mevedel-execution-mailbox-delivery-function
-                  (lambda (event _) (push event events) t)))
+                  (lambda (event _ ack) (push event events) (funcall ack t nil) t)))
              (mevedel-execution-start-bash
               #'ignore
               :kind 'monitor :description "remote" :session session

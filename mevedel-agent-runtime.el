@@ -39,10 +39,11 @@
 (declare-function mevedel-agent-control-clear-agent-wakes
                   "mevedel-agent-control" (session path))
 (declare-function mevedel-agent-control-commit-session
-                  "mevedel-agent-control" (session))
+                  "mevedel-agent-control" (session &optional token))
 (declare-function mevedel-agent-control-enqueue-execution-result
                   "mevedel-agent-control"
-                  (session owner body &optional execution-id wake meta))
+                  (session owner body &optional execution-id wake meta
+                           acknowledgement))
 (declare-function mevedel-agent-control-settlement-finished
                   "mevedel-agent-control" (session))
 (autoload 'mevedel-agent-control-clear-agent-wakes "mevedel-agent-control")
@@ -66,7 +67,7 @@
 (declare-function mevedel-agent-conversation-refresh
                   "mevedel-agent-conversation" (invocation))
 (declare-function mevedel-agent-conversation-save
-                  "mevedel-agent-conversation" (invocation &optional deferred))
+                  "mevedel-agent-conversation" (invocation &optional deferred token))
 (autoload 'mevedel-agent-conversation-configure "mevedel-agent-conversation")
 (autoload 'mevedel-agent-conversation-final-response
   "mevedel-agent-conversation")
@@ -136,7 +137,7 @@
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-publish-agent-terminal-state
-                  "mevedel-session-artifacts" (invocation))
+                  "mevedel-session-artifacts" (invocation &optional token))
 (autoload 'mevedel-session-artifacts-artifact-present-p
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-publish-agent-terminal-state
@@ -156,7 +157,8 @@
 (declare-function mevedel-session-persistence-update-transcript-entry
                   "mevedel-session-persistence" (session agent-id updates))
 (declare-function mevedel-session-persistence-write-sidecar-now
-                  "mevedel-session-persistence" (session buffer))
+                  "mevedel-session-persistence"
+                  (session buffer &optional prepared checkpoint token))
 (autoload 'mevedel-session-persistence-record-running-transcript
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-shallow-ensure-files
@@ -166,6 +168,12 @@
 (autoload 'mevedel-session-persistence-write-sidecar-now
   "mevedel-session-persistence")
 (defvar mevedel-session--read-only-mode)
+
+;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-defer
+                  "mevedel-session-publication"
+                  (session preparation &optional failure token))
+(autoload 'mevedel-session-publication-defer "mevedel-session-publication")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-agent-transcripts
@@ -407,8 +415,9 @@
               (error-message-string err))
       :warning))))
 
-(defun mevedel-agent-runtime--finalize (invocation status)
-  "Persist terminal STATUS and lifecycle effects for INVOCATION."
+(defun mevedel-agent-runtime--finalize (invocation status &optional token)
+  "Persist terminal STATUS and lifecycle effects for INVOCATION.
+TOKEN is the caller's publication gate ownership, handed to gated writers."
   ;; `incomplete' is terminal like the other three: finalizing over it
   ;; would run terminal lifecycle effects twice for a hydrated agent.
   (unless (memq (mevedel-agent-invocation-transcript-status invocation)
@@ -435,7 +444,7 @@
       (unless mevedel-agent-runtime--defer-terminal-publication-p
         (mevedel-agent-runtime--finalize-step
          invocation 'transcript-save
-         (lambda () (mevedel-agent-conversation-save invocation))))
+         (lambda () (mevedel-agent-conversation-save invocation nil token))))
       (mevedel-agent-runtime--finalize-step
        invocation 'activity
        (lambda ()
@@ -462,7 +471,7 @@
          (lambda ()
            (when (and session (buffer-live-p parent-buffer))
              (mevedel-session-persistence-write-sidecar-now
-              session parent-buffer)))))
+              session parent-buffer nil nil token)))))
       (setf (mevedel-agent-invocation-activity invocation) nil)
       (mevedel-agent-runtime--finalize-step
        invocation 'hook
@@ -473,22 +482,107 @@
          (when (fboundp 'mevedel-view-agent-live-transcript-finalize)
            (mevedel-view-agent-live-transcript-finalize invocation)))))))
 
-(defun mevedel-agent-runtime--settle (invocation response &optional event)
-  "Finalize INVOCATION and deliver RESPONSE and EVENT exactly once."
-  (unless (mevedel-agent-invocation-runtime-settled-p invocation)
-    (if (memq invocation mevedel-agent-control-settling)
-        ;; A nested terminal callback for the same turn; the outer call
-        ;; reports when settlement ends.
-        (mevedel-agent-runtime--settle-1 invocation response event)
-      (unwind-protect
-          (let ((mevedel-agent-control-settling
-                 (cons invocation mevedel-agent-control-settling)))
-            (mevedel-agent-runtime--settle-1 invocation response event))
-        (when-let* ((session (mevedel-agent-invocation-parent-session invocation)))
-          (mevedel-agent-control-settlement-finished session))))))
+(defun mevedel-agent-runtime--settle
+    (invocation response &optional event token acknowledgement)
+  "Finalize INVOCATION and deliver RESPONSE and EVENT exactly once.
+TOKEN proves the caller already owns the session's publication gate, as a
+queued preparation does.  Without it, a held gate queues settlement as a
+preparation that runs before any registry mutation or sidecar capture, in the
+buffer that requested it, and a failure is reported without losing the turn.
+ACKNOWLEDGEMENT receives (SUCCESS ERROR) exactly once after durable settlement
+or definitive failure, including when the preparation runs later."
+  (let* (acknowledged
+         (acknowledge
+          (lambda (success error)
+            (unless acknowledged
+              (setq acknowledged t)
+              (when acknowledgement
+                (funcall acknowledgement success error))))))
+    (condition-case err
+        (if (mevedel-agent-invocation-runtime-settled-p invocation)
+            (funcall acknowledge t nil)
+          (cond
+           ((memq invocation mevedel-agent-control-settling)
+            ;; A nested terminal callback for the same turn; the outer call
+            ;; reports when settlement ends.
+            (prog1 (mevedel-agent-runtime--settle-1 invocation response event token)
+              (funcall acknowledge t nil)))
+           ((mevedel-agent-runtime--defer-settlement
+             invocation response event token acknowledge)
+            ;; Queued: the turn is not settled yet, so report no response.
+            nil)
+           (t
+            (prog1
+                (unwind-protect
+                    (let ((mevedel-agent-control-settling
+                           (cons invocation mevedel-agent-control-settling)))
+                      (mevedel-agent-runtime--settle-1 invocation response event token))
+                  (when-let* ((session (mevedel-agent-invocation-parent-session invocation)))
+                    (mevedel-agent-control-settlement-finished session)))
+              (funcall acknowledge t nil)))))
+      ((error quit)
+       ;; Post-commit notification/cleanup failure cannot undo authoritative
+       ;; adoption.  Before that point, the producer must retain its output.
+       (if (or (mevedel-agent-invocation-runtime-settled-p invocation)
+               (let ((pending (mevedel-agent-invocation-runtime-pending-response
+                               invocation)))
+                 (and (listp pending) (eq 'committed (plist-get pending :phase)))))
+           (funcall acknowledge t nil)
+         (funcall acknowledge nil (error-message-string err)))
+       (signal (car err) (cdr err))))))
 
-(defun mevedel-agent-runtime--settle-1 (invocation response event)
-  "Finalize INVOCATION and deliver RESPONSE and EVENT; see the caller."
+(defun mevedel-agent-runtime--defer-until-gate
+    (invocation what function &optional token failure)
+  "Queue FUNCTION for INVOCATION behind its session's publication gate.
+Return non-nil when queued, nil when the gate is open and the caller proceeds.
+The publication owner decides whether TOKEN proves the caller already owns
+the gate; such a caller is not queued.  FUNCTION receives the fresh token of
+its queued run, before any registry mutation or sidecar capture, in the
+buffer that requested it.  A failure is passed to FAILURE, if supplied, and
+warned as WHAT, never dropped silently."
+  (when-let* ((session (mevedel-agent-invocation-parent-session invocation)))
+    (let ((buffer (current-buffer)))
+      (mevedel-session-publication-defer
+       session
+       (lambda (queued-token)
+         (with-current-buffer (if (buffer-live-p buffer) buffer
+                                (current-buffer))
+           (funcall function queued-token)))
+       (lambda (err)
+         (when failure (funcall failure err))
+         (display-warning
+          'mevedel
+          (format "Deferred %s of %s failed: %s" what
+                  (or (mevedel-agent-invocation-path invocation) "unknown")
+                  (error-message-string err))
+          :warning))
+       token))))
+
+(defun mevedel-agent-runtime--defer-settlement
+    (invocation response event &optional token acknowledgement)
+  "Queue INVOCATION's settlement with RESPONSE and EVENT behind the gate.
+Return non-nil when queued; the failure leaves the invocation unsettled.
+A caller holding TOKEN is never queued.  ACKNOWLEDGEMENT follows settlement
+or a failed preparation exactly once.  Teardown drains accepted preparations."
+  (let* (acknowledged
+         (acknowledge
+          (lambda (success error)
+            (unless acknowledged
+              (setq acknowledged t)
+              (when acknowledgement
+                (funcall acknowledgement success error))))))
+    (mevedel-agent-runtime--defer-until-gate
+     invocation "settlement"
+     (lambda (queued-token)
+       (mevedel-agent-runtime--settle
+        invocation response event queued-token acknowledge))
+     token
+     (lambda (err)
+       (funcall acknowledge nil (error-message-string err))))))
+
+(defun mevedel-agent-runtime--settle-1 (invocation response event token)
+  "Finalize INVOCATION and deliver RESPONSE and EVENT; see the caller.
+TOKEN, possibly nil, is the gate ownership its mutations hand on explicitly."
   (let* ((pending
           (mevedel-agent-invocation-runtime-pending-response invocation))
          (committed-p
@@ -553,17 +647,17 @@
                      (mevedel-agent-invocation-require-path invocation)) nil)))
         (let ((mevedel-agent-runtime--defer-terminal-publication-p
                terminal-publication-p))
-          (mevedel-agent-runtime--finalize invocation status))
+          (mevedel-agent-runtime--finalize invocation status token))
         (when callback
           (let ((mevedel-agent-control-suppress-persistence t))
             (setq transaction
-                  (funcall callback invocation visible event))))
+                  (funcall callback invocation visible event token))))
         (condition-case err
             (if terminal-publication-p
                 (mevedel-session-artifacts-publish-agent-terminal-state
-                 invocation)
+                 invocation token)
               (when (consp transaction)
-                (mevedel-agent-control-commit-session session)))
+                (mevedel-agent-control-commit-session session token)))
           ;; A quit must not leave the staged idle record and its
           ;; uncommitted RESULT behind either.
           ((error quit)
@@ -657,27 +751,55 @@ next turn started in the same buffer; that turn's state is left alone."
                                    (and (listp response) response))))
 
 (defun mevedel-agent-runtime-queue-execution-completion
-    (context owner body &optional meta)
+    (context owner body &optional meta acknowledgement)
   "Secure yielded Bash BODY for invocation CONTEXT owned by OWNER.
 META carries structural facts for the delivered record's opening tag.
 While the agent still works, BODY goes to its own mailbox and reaches it at
 its next provider request.  Once it has answered, BODY goes to its caller with
-the result, and a held response settles after its last owned execution."
-  (when (and (mevedel-agent-invocation-p context)
-             (equal owner (mevedel-agent-invocation-require-path context))
-             (stringp body)
-             (not (mevedel-agent-invocation-runtime-settled-p context)))
+the result, and a held response settles after its last owned execution.
+ACKNOWLEDGEMENT, called with SUCCESS and ERROR exactly once, runs when the
+mailbox secures BODY or definitively fails; a held response with other live
+executions acknowledges after BODY joins its results, while the last execution
+waits for durable terminal settlement.  Return `pending' when acknowledgement
+runs later, t when it already ran, and nil, after acknowledging failure,
+when CONTEXT no longer accepts BODY."
+  (if (not (and (mevedel-agent-invocation-p context)
+                (equal owner (mevedel-agent-invocation-require-path context))
+                (stringp body)
+                (not (mevedel-agent-invocation-runtime-settled-p context))))
+      (progn
+        (when acknowledgement
+          (funcall acknowledgement nil "Execution owner no longer accepts results"))
+        nil)
     (if-let* ((response
                (mevedel-agent-invocation-runtime-pending-response context)))
-        (progn
-          (push (cons body meta)
+        (let ((entry (cons body meta)) acknowledged)
+          (push entry
                 (mevedel-agent-invocation-runtime-execution-results context))
-          (unless (mevedel-agent-runtime--execution-live-p context)
-            (mevedel-agent-runtime--settle context response)))
-      (mevedel-agent-control-enqueue-execution-result
-       (mevedel-agent-invocation-parent-session context) owner body
-       nil nil meta))
-    t))
+          (if (mevedel-agent-runtime--execution-live-p context)
+              (progn
+                (when acknowledgement (funcall acknowledgement t nil))
+                t)
+            (mevedel-agent-runtime--settle
+             context response nil nil
+             (lambda (success error)
+               (unless acknowledged
+                 (setq acknowledged t)
+                 (unless success
+                   ;; Retry must stage this output only once, without removing
+                   ;; a sibling completion retained by the held response.
+                   (setf (mevedel-agent-invocation-runtime-execution-results context)
+                         (delq entry (mevedel-agent-invocation-runtime-execution-results
+                                      context))))
+                 (when acknowledgement
+                   (funcall acknowledgement success error)))))
+            (if acknowledged t 'pending)))
+      (if (eq (mevedel-agent-control-enqueue-execution-result
+               (mevedel-agent-invocation-parent-session context) owner body
+               nil nil meta acknowledgement)
+              'pending)
+          'pending
+        t))))
 
 
 ;;
@@ -695,14 +817,25 @@ the result, and a held response settles after its last owned execution."
               (eq (and info (plist-get info :buffer)) buffer)))
           gptel--request-alist))))
 
-(defun mevedel-agent-runtime-interrupt (invocation reason)
+(defun mevedel-agent-runtime-interrupt (invocation reason &optional token)
   "Interrupt INVOCATION for REASON and settle its turn once.
+TOKEN is the caller's publication gate ownership; without it a held gate
+queues the whole interrupt.
 A native runtime canceller may return `deferred' when it owns asynchronous
 terminal acknowledgement and will settle the invocation itself."
   (unless (mevedel-agent-invocation-p invocation)
     (error "Interrupt target has no live invocation"))
   (if (mevedel-agent-invocation-runtime-settled-p invocation)
       (mevedel-agent-runtime--interrupted-response invocation reason)
+    (if (mevedel-agent-runtime--defer-until-gate
+         invocation "interrupt"
+         (lambda (queued-token)
+           (mevedel-agent-runtime-interrupt invocation reason queued-token))
+         token)
+        ;; The abort and the settlement must stay together: aborting the
+        ;; provider request now would leave a dead window in which the turn
+        ;; still reads as live.  Both happen once the gate opens.
+        (mevedel-agent-runtime--interrupted-response invocation reason)
     ;; Mail queued before the interrupt must not restart the stopped agent;
     ;; mail sent afterwards still does.
     (when-let* ((session (mevedel-agent-invocation-parent-session invocation))
@@ -737,8 +870,9 @@ terminal acknowledgement and will settle the invocation itself."
       (or (unless deferred
             (mevedel-agent-runtime--settle
              invocation response
-             (list :mevedel-agent-terminal-status 'aborted :response response)))
-          response))))
+             (list :mevedel-agent-terminal-status 'aborted :response response)
+             token))
+          response)))))
 
 
 ;;
@@ -944,8 +1078,9 @@ plist carrying either `:turn' and `:start-hook-audits' or `:error'."
 
 (defun mevedel-agent-runtime--insert-prompt
     (invocation buffer description prompt context-snapshot retained-p
-                &optional hook-audits)
+                &optional hook-audits token)
   "Append PROMPT and optional CONTEXT-SNAPSHOT to INVOCATION's BUFFER.
+TOKEN is the caller's publication gate ownership for the persisting save.
 HOOK-AUDITS are hidden transcript records associated with this user turn.
 Return a marker at the start of the turn's Agent Task heading."
   (with-current-buffer buffer
@@ -971,7 +1106,7 @@ Return a marker at the start of the turn's Agent Task heading."
         (dolist (audit hook-audits)
           (insert (mevedel--format-hook-audit-record audit))))
       (when (mevedel-agent-invocation-transcript-relative-path invocation)
-        (unless (mevedel-agent-conversation-save invocation)
+        (unless (mevedel-agent-conversation-save invocation nil token)
           (if retained-p
               (progn
                 (delete-region start (point-max))
@@ -988,13 +1123,16 @@ Return a marker at the start of the turn's Agent Task heading."
            on-invocation on-settle path frozen-configuration
            retained-id retained-buffer retained-transcript
            pending-hook-context on-hook-context parent-tool-use-id
-           plan-read-only)
+           plan-read-only token)
   "Start one asynchronous retained agent turn and return its invocation.
 AGENT starts a new conversation; FROZEN-CONFIGURATION and the three retained
 identity values continue one.  PATH is the conversation's canonical address.
-ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once.  The turn is
-Plan read-only when PLAN-READ-ONLY is non-nil or its caller works under Plan
-read-only authority."
+ON-SETTLE receives (INVOCATION RESPONSE EVENT TOKEN) exactly once.
+TOKEN, when the caller runs under a queued publication preparation, is its
+gate ownership: every persisting step of the turn setup and of its error
+settlement carries it, so the error cleanup cannot wait on its own gate.
+The turn is Plan read-only when PLAN-READ-ONLY is non-nil or its caller
+works under Plan read-only authority."
   (unless (and (stringp path) (string-match-p "\\`/root/" path))
     (error "Agent requires a canonical path below /root"))
   (when (and frozen-configuration
@@ -1046,10 +1184,10 @@ read-only authority."
           (list nil)
           (mevedel-agent-invocation-transcript-status invocation) 'running
           (mevedel-agent-invocation-runtime-settle-callback invocation)
-          (lambda (settled-invocation response event)
+          (lambda (settled-invocation response event token)
             (if publication-ready
                 (when on-settle
-                  (funcall on-settle settled-invocation response event))
+                  (funcall on-settle settled-invocation response event token))
               (error "Agent invocation publication is pending"))))
     (when (fboundp 'mevedel-telemetry-record)
       (mevedel-telemetry-record
@@ -1102,7 +1240,7 @@ read-only authority."
                                :mevedel-agent-prompt-start
                                (mevedel-agent-runtime--insert-prompt
                                 invocation buffer description (plist-get turn :prompt)
-                                context-snapshot retained-p (plist-get turn :audits))))
+                                context-snapshot retained-p (plist-get turn :audits) token)))
               (when (and pending-hook-context on-hook-context)
                 (funcall on-hook-context nil))
               ;; Only an external engine sends the turn as one text; gptel
@@ -1171,7 +1309,8 @@ read-only authority."
                  (mevedel-agent-runtime--settle
                   invocation nil
                   (list :mevedel-agent-terminal-status 'error
-                        :error-details (error-message-string err))))
+                        :error-details (error-message-string err))
+                  token))
              (when (or (mevedel-agent-invocation-runtime-fsm invocation)
                        (mevedel-agent-invocation-runtime-cancel invocation))
                ;; This handler owns settlement.  Mark it first so the abort a
@@ -1180,7 +1319,7 @@ read-only authority."
                (setf (mevedel-agent-invocation-runtime-settled-p invocation) t)
                (when-let* ((cancel (mevedel-agent-invocation-runtime-cancel invocation)))
                  (funcall cancel))
-               (mevedel-agent-runtime--finalize invocation 'error)
+               (mevedel-agent-runtime--finalize invocation 'error token)
                (setf (mevedel-agent-invocation-runtime-fsm invocation) nil
                      (mevedel-agent-invocation-runtime-cancel invocation) nil))
              (unless retained-p

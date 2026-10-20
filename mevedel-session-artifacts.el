@@ -180,13 +180,19 @@
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-committed-p "mevedel-session-publication" (session artifacts))
+(declare-function mevedel-session-publication-barrier "mevedel-session-publication" (session &optional token))
+(declare-function mevedel-session-publication-defer "mevedel-session-publication" (session preparation &optional failure token))
 (declare-function mevedel-session-publication-discard-rolled-back "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-logical-path-p "mevedel-session-publication" (path))
 (declare-function mevedel-session-publication-prune-committed "mevedel-session-publication" (session artifacts))
-(declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit prepared))
+(declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit prepared token))
 (declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir &optional head names))
 (declare-function mevedel-session-publication-uncommitted-artifact "mevedel-session-publication" (session logical))
 (autoload 'mevedel-session-publication-committed-p
+  "mevedel-session-publication")
+(autoload 'mevedel-session-publication-barrier
+  "mevedel-session-publication")
+(autoload 'mevedel-session-publication-defer
   "mevedel-session-publication")
 (autoload 'mevedel-session-publication-discard-rolled-back
   "mevedel-session-publication")
@@ -1960,6 +1966,30 @@ separately excludes them while its tentative state must commit atomically."
          (cons session mevedel-session-artifacts--preparing-sessions)))
     (funcall function)))
 
+(defun mevedel-session-artifacts--gated-p (session)
+  "Return non-nil when SESSION can own asynchronous publication work.
+Only materialized portable sessions publish through the session gate."
+  (and session
+       (mevedel-session-save-path session)
+       (mevedel-session-codec-portable-authority-p session)))
+
+(defun mevedel-session-artifacts--barrier (session &optional token)
+  "Drain SESSION's queued and in-flight publication work.
+TOKEN is the gate token of the running preparation or job, which is exempt.
+Call before capturing sidecar, transcript or session state, so an explicitly
+synchronous operation never observes or reports queued work as committed.  An
+unresolved job signals."
+  (when (mevedel-session-artifacts--gated-p session)
+    (mevedel-session-publication-barrier session token)))
+
+(defun mevedel-session-artifacts--defer (session preparation &optional failure token)
+  "Queue PREPARATION behind SESSION's publication gate when it is owned.
+Return non-nil when deferred, nil when the caller may proceed now.  PREPARATION
+receives a fresh gate token; FAILURE receives the error of a deferred
+preparation.  TOKEN is the caller's own gate token, which bypasses deferral."
+  (and (mevedel-session-artifacts--gated-p session)
+       (mevedel-session-publication-defer session preparation failure token)))
+
 (defun mevedel-session-artifacts-printed-value (value)
   "Return VALUE in the package's durable Lisp representation."
   (with-temp-buffer
@@ -1971,15 +2001,19 @@ separately excludes them while its tentative state must commit atomically."
     (buffer-string)))
 
 (defun mevedel-session-artifacts-publish-text
-    (session path content &optional coding prepared)
+    (session path content &optional coding prepared token)
   "Publish SESSION's durability-critical CONTENT atomically at PATH.
 CONTENT is text, or a unibyte string written as its raw bytes.  CODING
 encodes text for portable writes; direct writes encode text as UTF-8.
 
-PREPARED is reserved for the owning checkpoint's final write.
+PREPARED is reserved for the owning checkpoint's final write.  TOKEN is the
+caller's gate token.
 Portable project writes enter the session publication queue.  File-workspace
 writes retain the existing same-filesystem temporary-file and rename
 behavior.  Return the publication outcome, or PATH after a direct write."
+  ;; A PREPARED batch was frozen by its owner, which drained the gate first.
+  (unless prepared
+    (mevedel-session-artifacts--barrier session token))
   (if (mevedel-session-codec-portable-authority-p session)
       ;; Admission and publication share one transaction's recovery and
       ;; clock observations.
@@ -1987,7 +2021,7 @@ behavior.  Return the publication outcome, or PATH after a direct write."
         (mevedel-session-artifacts-assert-mutation-authority session)
         (mevedel-session-publication-publish
         session (list (list :path path :content content :coding coding))
-        nil prepared))
+        nil prepared token))
     (progn
       (make-directory (file-name-directory (expand-file-name path)) t)
       (with-temp-buffer
@@ -2028,37 +2062,42 @@ is checked before the artifact is built."
   (mevedel-session-artifacts--sidecar-artifact session root-buffer checkpoint))
 
 (defun mevedel-session-artifacts-publish-sidecar-state
-    (session root-buffer)
+    (session root-buffer &optional token)
   "Publish SESSION's freshly built sidecar as one strict commit.
 
-ROOT-BUFFER must be SESSION's live root data buffer. Reentrant calls are
+ROOT-BUFFER must be SESSION's live root data buffer.  TOKEN is the caller's
+gate token.  Reentrant calls are
 rejected before staging. Pre-commit failures propagate; post-commit cleanup
 failures remain diagnostic under the publisher's strict commit contract.
 PID-lock sessions write their fixed sidecar after the same authority check."
   (when (memq session mevedel-session-artifacts--terminal-sessions)
     (user-error "Session checkpoint is being prepared"))
+  (mevedel-session-artifacts--barrier session token)
   (mevedel-session-durability-with-transaction
     (let ((artifact (mevedel-session-artifacts--sidecar-publication-artifact
                      session root-buffer)))
       (if (mevedel-session-codec-portable-authority-p session)
-          (mevedel-session-publication-publish session (list artifact) t)
+          (mevedel-session-publication-publish session (list artifact) t nil token)
         (mevedel-session-control-fs-write-file
          (mevedel-session-control-fs-physical-path (plist-get artifact :path))
          (plist-get artifact :content))))))
 
 (defun mevedel-session-artifacts-publish-transcript-state
-    (session root-buffer transcript-path content checkpoint &optional coding prepared)
+    (session root-buffer transcript-path content checkpoint
+     &optional coding prepared token)
   "Publish portable SESSION transcript CONTENT and its sidecar atomically.
 
 ROOT-BUFFER must be SESSION's live root data buffer.  TRANSCRIPT-PATH must be
 a logical artifact below SESSION's save path.  The current authoritative
 sidecar is rebuilt from SESSION and ROOT-BUFFER and commits the two-artifact
 batch.  Reentrant publication is rejected before any bytes are queued.
-PREPARED admits only the owning checkpoint's final frozen batch.
+PREPARED admits only the owning checkpoint's final frozen batch.  TOKEN is the
+caller's gate token.
 CHECKPOINT was captured when CONTENT was frozen; explicit nil means CONTENT
 only patches already committed bytes and retires no live delivery state."
   (unless (stringp content)
     (error "Transcript publication requires string content"))
+  (mevedel-session-artifacts--barrier session token)
   (let* ((save-path (file-name-as-directory
                      (mevedel-session-save-path session)))
          (path (expand-file-name transcript-path))
@@ -2077,12 +2116,14 @@ only patches already committed bytes and retires no live delivery state."
          (list
           (list :path path :content content :coding coding)
           sidecar-artifact)
-         t prepared)))))
+         t prepared token)))))
 
-(defun mevedel-session-artifacts-publish-agent-terminal-state (invocation)
+(defun mevedel-session-artifacts-publish-agent-terminal-state
+    (invocation &optional token)
   "Publish INVOCATION's portable transcript and final session sidecar together.
 
-The authoritative sidecar must already exist.  Shallow first-turn agent state
+TOKEN is the caller's gate token.  The authoritative sidecar must already
+exist.  Shallow first-turn agent state
 continues to wait for the root turn's completed-turn publication boundary."
   (unless (mevedel-agent-invocation-p invocation)
     (error "Invalid agent invocation"))
@@ -2108,6 +2149,8 @@ continues to wait for the root turn's completed-turn publication boundary."
       (unless (and buffer-file-name
                    (equal (expand-file-name buffer-file-name) transcript))
         (error "Agent transcript path does not match its invocation"))
+      ;; Drain before the transcript, registry and checkpoint are frozen.
+      (mevedel-session-artifacts--barrier session token)
       (mevedel-session-artifacts-call-with-checkpoint
        session
        (lambda ()
@@ -2140,7 +2183,7 @@ continues to wait for the root turn's completed-turn publication boundary."
                        :coding (or buffer-file-coding-system 'utf-8-unix))
                  (mevedel-session-artifacts--sidecar-artifact
                   session parent checkpoint))
-                t t))
+                t t token))
              (when modified-p
                (condition-case err
                    (progn
@@ -2229,7 +2272,7 @@ Only apply those tombstones after the replacement sidecar is durable."
     (nreverse artifacts)))
 
 (defun mevedel-session-artifacts--remote-save
-    (session buffer settled &optional force)
+    (session buffer settled &optional force token)
   "Publish portable project SESSION's durability-critical state from BUFFER.
 When SETTLED is non-nil, update the prompt index and latest fork point.
 When FORCE is non-nil, publish even when the state is already committed.
@@ -2313,7 +2356,8 @@ calling this serializer."
                        (list (mevedel-session-artifacts--sidecar-artifact
                               session buffer checkpoint)))))
           (mevedel-session-publication-publish
-           session publication mevedel-session-artifacts-require-agent-commit-p t))
+           session publication mevedel-session-artifacts-require-agent-commit-p t
+           token))
         (when segment-artifact
           (with-current-buffer buffer
             (condition-case err
@@ -2335,7 +2379,7 @@ calling this serializer."
     (mevedel-session-save-path session)))
 
 (defun mevedel-session-artifacts-save
-    (session buffer &optional settled force)
+    (session buffer &optional settled force token)
   "Save SESSION's on-disk state from BUFFER's contents.
 
 Materializes lazily on first call.  Subsequent calls update the
@@ -2346,20 +2390,25 @@ mark the latest assistant response
 
 A portable session whose durable state is byte for byte the committed one
 performs no target transaction.  FORCE publishes anyway, for a caller that
-must materialize a snapshot rather than record a change."
+must materialize a snapshot rather than record a change.  TOKEN is the caller's
+gate token."
+  ;; Explicitly synchronous: drain async work before anything is captured.
+  (mevedel-session-artifacts--barrier session token)
   (mevedel-session-artifacts-call-with-checkpoint
    session
    (lambda ()
      (if (fboundp 'mevedel-telemetry-measure)
 	 (mevedel-telemetry-measure
 	  session 'session-save 0
-	  (lambda () (mevedel-session-artifacts--save session buffer settled force))
+	  (lambda ()
+	    (mevedel-session-artifacts--save session buffer settled force token))
 	  :kind 'full :settled (and settled t))
-       (mevedel-session-artifacts--save session buffer settled force)))))
+       (mevedel-session-artifacts--save session buffer settled force token)))))
 
-(defun mevedel-session-artifacts--save (session buffer settled force)
+(defun mevedel-session-artifacts--save (session buffer settled force &optional token)
   "Save SESSION from BUFFER as `mevedel-session-artifacts-save' documents.
-SETTLED and FORCE are its settlement and forced-publication flags."
+SETTLED and FORCE are its settlement and forced-publication flags; TOKEN is
+the caller's gate token."
   ;; A direct data-buffer caller establishes the session-owned root before
   ;; the projection boundary is consulted.  View callers must pass their
   ;; registered data buffer, never the view projection itself.
@@ -2408,7 +2457,7 @@ SETTLED and FORCE are its settlement and forced-publication flags."
         (prog1
             (if (mevedel-session-codec-portable-authority-p session)
                 (mevedel-session-artifacts--remote-save
-                 session buffer settled force)
+                 session buffer settled force token)
               (mevedel-session-artifacts-ensure-files session buffer)
               (setf (mevedel-session-updated-at session)
                     (format-time-string "%FT%H-%M-%S"))
@@ -2469,7 +2518,7 @@ SETTLED and FORCE are its settlement and forced-publication flags."
               (mevedel-session-save-path session)))
           (mevedel-session-persistence-flush-diagnostic-logs session)))))))
 
-(defun mevedel-session-artifacts-save-agent-registry (session buffer)
+(defun mevedel-session-artifacts-save-agent-registry (session buffer &optional token)
   "Persist SESSION's sidecar from BUFFER without touching the segment.
 
 Observational agent-state saves -- activity transitions, explicit mailbox
@@ -2493,15 +2542,29 @@ committed a sidecar there is nothing to overlay, so the save is skipped
 and the next critical commit carries the registry.
 
 Returns SESSION's save path on success, nil when SESSION is not yet
-materialized or has no committed sidecar."
-  (if (fboundp 'mevedel-telemetry-measure)
-      (mevedel-telemetry-measure
-       session 'session-save 0
-       (lambda () (mevedel-session-artifacts--save-agent-registry session buffer))
-       :kind 'agent-registry)
-    (mevedel-session-artifacts--save-agent-registry session buffer)))
+materialized or has no committed sidecar, or when the save was deferred behind
+the session's publication gate (the deferred preparation repeats this entry).
+An acknowledged commit instead drains the gate first.  TOKEN is the caller's
+gate token; a deferred preparation receives its own."
+  (unless (and (not mevedel-session-artifacts-require-agent-commit-p)
+               (mevedel-session-artifacts--defer
+                session
+                (lambda (prepared-token)
+                  (mevedel-session-artifacts-save-agent-registry
+                   session buffer prepared-token))
+                #'ignore token))
+    (when mevedel-session-artifacts-require-agent-commit-p
+      (mevedel-session-artifacts--barrier session token))
+    (if (fboundp 'mevedel-telemetry-measure)
+        (mevedel-telemetry-measure
+         session 'session-save 0
+         (lambda ()
+           (mevedel-session-artifacts--save-agent-registry
+            session buffer token))
+         :kind 'agent-registry)
+      (mevedel-session-artifacts--save-agent-registry session buffer token))))
 
-(defun mevedel-session-artifacts--save-agent-registry (session buffer)
+(defun mevedel-session-artifacts--save-agent-registry (session buffer &optional token)
   "Persist SESSION's sidecar from BUFFER as the public entry documents."
   (when (memq session mevedel-session-artifacts--terminal-sessions)
     (user-error "Session checkpoint is being prepared"))
@@ -2534,7 +2597,7 @@ materialized or has no committed sidecar."
                  session
                  (list (mevedel-session-artifacts--sidecar-artifact
                         session buffer))
-                 mevedel-session-artifacts-require-agent-commit-p)
+                 mevedel-session-artifacts-require-agent-commit-p nil token)
               (mevedel-session-codec-write
                (mevedel-session-artifacts-sidecar-path save-path)
                (mevedel-session-artifacts-build-sidecar session buffer)))

@@ -19,12 +19,14 @@
 ;; Durability reaches back into publication only from inside functions, so
 ;; this direction is the loadable one.
 (require 'mevedel-session-durability)
+(require 'mevedel-transport)
 
 ;; `files'
 (defvar remote-file-name-inhibit-cache)
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-recover-working-directory "mevedel-session-artifacts" (session))
+(declare-function mevedel-session-artifacts--sidecar-artifact "mevedel-session-artifacts" (session buffer &optional checkpoint))
 (autoload 'mevedel-session-artifacts-recover-working-directory "mevedel-session-artifacts")
 
 ;; `mevedel-session-checkpoint'
@@ -87,18 +89,19 @@
 (declare-function mevedel-session-durability--valid-relative-path-p
                   "mevedel-session-durability" (path))
 (declare-function mevedel-session-durability-call-with-reserved-lease
-                  "mevedel-session-durability" (session function))
+                  "mevedel-session-durability" (session function &optional token))
 (declare-function mevedel-session-durability-commit-publication-head
                   "mevedel-session-durability" (session head))
 (declare-function mevedel-session-durability-lease-owned-p
                   "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability-lease-renew
-                  "mevedel-session-durability" (session))
+                  "mevedel-session-durability" (session &optional token))
 (declare-function mevedel-session-durability-publication-head
                   "mevedel-session-durability" (session-dir &optional names))
 (defvar mevedel-session-durability--asserted-directories)
 (defvar mevedel-session-durability--final-commit)
 (defvar mevedel-session-durability--transaction-clock)
+(defvar mevedel-session-recovery--mutation-cache)
 
 ;; `mevedel-session-recovery'
 (declare-function mevedel-session-recovery--abandon
@@ -134,6 +137,398 @@
 (declare-function mevedel-workspace-state-dir
                   "mevedel-workspace" (workspace))
 (autoload 'mevedel-workspace-state-dir "mevedel-workspace")
+
+(cl-defstruct (mevedel-session-publication--job
+               (:constructor mevedel-session-publication--job-create))
+  session path epoch prepare acknowledge mail-ids batch batches candidate
+  expected-lease expected-head clock assertions recovery riders phase process error
+  (attempts 0) acknowledged-p success-p scheduled-p waiting-p)
+
+(defun mevedel-session-publication-busy-p (session)
+  "Return non-nil when SESSION owns accepted asynchronous publication work."
+  (or (mevedel-session-publication-job session)
+      (mevedel-session-publication-preparation-token session)
+      (mevedel-session-publication-preparations session)))
+
+(defun mevedel-session-publication--schedule (session)
+  "Schedule SESSION's next preparation outside the current callback."
+  (let* ((thunk
+          (lambda ()
+            (unless (or (mevedel-session-publication-job session)
+                        (mevedel-session-publication-preparation-token session))
+              (if (mevedel-session-publication-active-p session)
+                  (mevedel-session-publication--schedule session)
+                (when-let* ((entry (pop (mevedel-session-publication-preparations session))))
+                  (let ((token (list session)))
+                    (setf (mevedel-session-publication-preparation-token session) token)
+                    (unwind-protect
+                        (condition-case err
+                            (funcall (car entry) token)
+                          (error
+                           (condition-case handler-error
+                               (if (cdr entry) (funcall (cdr entry) err)
+                                 (display-warning 'mevedel (error-message-string err) :warning))
+                             (error
+                              (display-warning 'mevedel (error-message-string handler-error) :warning)))))
+                      (setf (mevedel-session-publication-preparation-token session) nil)
+                      (when (and (not (mevedel-session-publication-job session))
+                                 (mevedel-session-publication-preparations session))
+                        (mevedel-session-publication--schedule session)))))))))
+         (later (lambda () (mevedel-transport-run-at-time 0 thunk))))
+    (unless (mevedel-transport-run-when-idle
+             (list 'session-publication-preparation session)
+             (mevedel-session-save-path session) thunk later 0)
+      (funcall later))))
+
+(defun mevedel-session-publication-defer (session preparation &optional failure token)
+  "Defer PREPARATION before it mutates or captures SESSION when its gate is held.
+Return t when queued, nil when the caller may proceed.  FAILURE receives an
+error if the queued preparation fails; no queued entry contains frozen state.
+PREPARATION receives an explicit ownership token.  Only a caller carrying that
+TOKEN may reenter its own gate; unrelated event callbacks cannot inherit it."
+  (when (and (not (and token (eq token (mevedel-session-publication-preparation-token session))))
+             (mevedel-session-publication-busy-p session))
+    (setf (mevedel-session-publication-preparations session)
+          (nconc (mevedel-session-publication-preparations session)
+                 (list (cons preparation failure))))
+    (mevedel-session-publication--schedule session)
+    t))
+
+(defvar mevedel-session-publication--barrier-seconds 30
+  "Drain deadline in seconds, checked between event-pump calls.
+Callbacks run by a wait can exceed it; this is not a hard blocking bound.")
+
+(defun mevedel-session-publication-barrier (session &optional token)
+  "Drain accepted SESSION jobs before an explicitly synchronous operation.
+Never report a queued mutation as committed.  An unresolved publication fails
+closed and remains available to explicit recovery or abandonment.
+TOKEN authorizes only the preparation currently running for this session."
+  (unless (and token (eq token (mevedel-session-publication-preparation-token session)))
+    (let ((deadline (+ (float-time) mevedel-session-publication--barrier-seconds)))
+     (while (mevedel-session-publication-busy-p session)
+      ;; A nested transport frame, or a synchronous publication that owns the
+      ;; gate on this stack, cannot yield the authority a queued advance needs.
+      (when (or (mevedel-transport-busy-p (mevedel-session-save-path session))
+                (mevedel-session-publication-preparation-token session)
+                (and (mevedel-session-publication-active-p session)
+                     (not (mevedel-session-publication-job session))))
+        (user-error "Session publication cannot drain inside an active operation"))
+      (when (>= (float-time) deadline)
+        (user-error "Session publication drain timed out; accepted work is still pending"))
+      (when (and (mevedel-session-publication-job session)
+                 (eq 'unresolved
+                     (mevedel-session-publication--job-phase
+                      (mevedel-session-publication-job session))))
+        (user-error "Session publication outcome is unresolved; retry or abandon it first"))
+      (if-let* ((job (mevedel-session-publication-job session)))
+          (mevedel-session-publication--advance-soon job)
+        (mevedel-session-publication--schedule session))
+      (accept-process-output nil 0.01))))
+  t)
+
+(defun mevedel-session-publication-stopping (session)
+  "Stop new asynchronous admissions and drain SESSION before teardown."
+  (setf (mevedel-session-publication-stopping-p session) t)
+  (mevedel-session-publication-barrier session))
+
+(defun mevedel-session-publication-async-eligible-p (session)
+  "Return non-nil for a materialized local portable SESSION.
+Cold materialization, remote targets and PID-lock sessions stay synchronous."
+  (and (not (mevedel-session-publication-stopping-p session))
+       (mevedel-session-save-path session)
+       (not (file-remote-p (mevedel-session-save-path session)))
+       (mevedel-session-codec-portable-authority-p session)
+       (mevedel-session-publication session)
+       (assoc "session.meta.el"
+              (plist-get (mevedel-session-publication session) :artifacts))
+       (buffer-live-p (mevedel-session-root-buffer session))))
+
+(defun mevedel-session-publication-submit (session prepare acknowledge &optional mail-ids)
+  "Accept an acknowledged local SESSION publication.
+PREPARE runs with the mutation gate held, after asynchronous admission, and
+returns fresh artifacts.  ACKNOWLEDGE receives (SUCCESS ERROR) exactly once
+after head adoption or definitive rollback.  MAIL-IDS retain producer identity.
+An uncertain head outcome retains the job until reconciliation or recovery."
+  (when (mevedel-session-publication-stopping-p session)
+    (user-error "Session publication is stopping"))
+  (let ((launch
+         (lambda (&optional _token)
+           (let ((job (mevedel-session-publication--job-create
+                       :session session :path (mevedel-session-save-path session)
+                       :epoch (mevedel-session-checkpoint-state session)
+                       :prepare prepare :acknowledge acknowledge :mail-ids mail-ids
+                       :expected-lease (copy-sequence (mevedel-session-lease session))
+                       :expected-head (plist-get (mevedel-session-publication session) :head)
+                       :clock (list nil) :assertions (list nil) :recovery (list nil)
+                       :phase 'admission)))
+             (setf (mevedel-session-publication-job session) job
+                   (mevedel-session-publication-active-p session) t)
+             (mevedel-session-publication--advance-soon job)))))
+    (if (or (mevedel-session-publication-busy-p session)
+            (mevedel-session-publication-active-p session))
+        (progn
+          (setf (mevedel-session-publication-preparations session)
+                (nconc (mevedel-session-publication-preparations session)
+                       (list (cons launch (lambda (err) (funcall acknowledge nil err))))))
+          (mevedel-session-publication--schedule session))
+      (funcall launch)))
+  'pending)
+
+(defun mevedel-session-publication--advance-soon (job)
+  "Advance JOB outside the process sentinel and through the idle transport."
+  (unless (or (mevedel-session-publication--job-scheduled-p job)
+              (mevedel-session-publication--job-waiting-p job))
+    (setf (mevedel-session-publication--job-scheduled-p job) t)
+    (let* (done
+           (thunk (lambda ()
+                    (unless done
+                      (setq done t)
+                      (setf (mevedel-session-publication--job-scheduled-p job) nil)
+                      (mevedel-session-publication--advance job))))
+           (later (lambda () (mevedel-transport-run-at-time 0 thunk))))
+      (unless (mevedel-transport-run-when-idle
+               (list 'session-publication-job job)
+               (mevedel-session-publication--job-path job) thunk later 0)
+        (funcall later)))))
+
+(defun mevedel-session-publication--job-complete (job success &optional err)
+  "Finish JOB once with SUCCESS or definitive ERR, releasing its gate."
+  (unless (mevedel-session-publication--job-acknowledged-p job)
+    (let ((session (mevedel-session-publication--job-session job)))
+      (setf (mevedel-session-publication--job-acknowledged-p job) t
+            (mevedel-session-publication--job-success-p job) success
+            (mevedel-session-publication--job-phase job) 'done
+            (mevedel-session-publication-job session) nil
+            (mevedel-session-publication-active-p session) nil)
+      ;; Arbitrary producer callbacks neither inherit this transaction's
+      ;; observations nor receive its explicit preparation ownership token.
+      (unwind-protect
+          (let ((mevedel-session-durability--transaction-clock nil)
+                (mevedel-session-durability--asserted-directories nil)
+                (mevedel-session-durability--commit-riders nil)
+                (mevedel-session-durability--final-commit nil)
+                (mevedel-session-durability-async-process-function nil)
+                (mevedel-session-recovery--mutation-cache nil))
+            (condition-case callback-error
+                (funcall (mevedel-session-publication--job-acknowledge job) success err)
+              (error
+               (display-warning
+                'mevedel (format "Publication acknowledgement failed: %s"
+                                 (error-message-string callback-error)) :warning))))
+        (condition-case cleanup
+            (if success
+                (progn
+                  (setf (mevedel-session-publication-uncommitted-batches session)
+                        (cl-set-difference
+                         (mevedel-session-publication-uncommitted-batches session)
+                         (mevedel-session-publication--job-batches job) :test #'eq))
+                  (mevedel-session-publication--delete-batches
+                   (mevedel-session-publication--job-batches job)))
+              (when (mevedel-session-publication--job-batch job)
+                (mevedel-session-publication--delete-batch
+                 (mevedel-session-publication--job-batch job))))
+          (error
+           (display-warning 'mevedel
+                            (format "Session publication cleanup failed: %s"
+                                    (error-message-string cleanup)) :warning)))
+        (condition-case cleanup
+            (mevedel-session-checkpoint-release-proofs session)
+          (error
+           (display-warning 'mevedel (error-message-string cleanup) :warning)))
+        (when (mevedel-session-publication-preparations session)
+          (mevedel-session-publication--schedule session))
+        (when (and (not (mevedel-session-publication-busy-p session))
+                   (plist-get (mevedel-session-lease session) :release-pending))
+          (condition-case cleanup
+              (mevedel-session-durability-lease-release
+               (mevedel-session-save-path session) session)
+            (error
+             (display-warning 'mevedel (error-message-string cleanup) :warning))))))))
+
+(defun mevedel-session-publication--job-failed (job err)
+  "Roll JOB back after a definitive pre-head failure ERR.
+Normalize a reserved lease asynchronously before releasing the mutation gate."
+  (setf (mevedel-session-publication--job-waiting-p job) nil
+        (mevedel-session-publication--job-error job) err
+        (mevedel-session-publication--job-phase job) 'rollback)
+  (mevedel-session-publication--advance-soon job))
+
+(defun mevedel-session-publication--job-result (job next success err)
+  "Store JOB's asynchronous SUCCESS or ERR and arrange NEXT advancement."
+  (when (eq job (mevedel-session-publication-job
+                 (mevedel-session-publication--job-session job)))
+    (setf (mevedel-session-publication--job-waiting-p job) nil
+          (mevedel-session-publication--job-process job) nil
+          (mevedel-session-publication--job-expected-lease job)
+          (copy-sequence
+           (mevedel-session-lease (mevedel-session-publication--job-session job))))
+    (if (and success (not err))
+        (progn
+          (setf (mevedel-session-publication--job-phase job) next)
+          (mevedel-session-publication--advance-soon job))
+      (if (memq next '(adopt))
+          (progn
+            (setf (mevedel-session-publication--job-error job)
+                  (or err '(user-error "Portable session lease was lost before publication commit"))
+                  (mevedel-session-publication--job-phase job) 'reconcile)
+            (mevedel-session-publication--advance-soon job))
+        (mevedel-session-publication--job-failed
+         job (or err '(user-error "Portable session publication admission failed")))))))
+
+(defun mevedel-session-publication--advance (job)
+  "Advance one phase of JOB with only its transaction cells rebound."
+  (let* ((session (mevedel-session-publication--job-session job))
+         (mevedel-session-durability--transaction-clock
+          (mevedel-session-publication--job-clock job))
+         (mevedel-session-durability--asserted-directories
+          (mevedel-session-publication--job-assertions job))
+         (mevedel-session-durability-async-process-function
+          (lambda (process)
+            (setf (mevedel-session-publication--job-process job) process)))
+         (mevedel-session-recovery--mutation-cache
+          (mevedel-session-publication--job-recovery job)))
+    (when (eq job (mevedel-session-publication-job session))
+      (condition-case err
+          (progn
+            (unless (equal (mevedel-session-save-path session)
+                           (mevedel-session-publication--job-path job))
+              (error "Session path changed during publication"))
+            (unless (or (memq (mevedel-session-publication--job-phase job)
+                              '(reconcile rollback adopt unresolved))
+                        (eq (mevedel-session-checkpoint-state session)
+                            (mevedel-session-publication--job-epoch job)))
+              (error "Session owner epoch changed during publication"))
+            (pcase (mevedel-session-publication--job-phase job)
+              ('admission
+               (when (mevedel-session-pending-publication session)
+                 (user-error "Session has pending publication; retry or abandon it first"))
+               (setf (mevedel-session-publication--job-waiting-p job) t)
+               (mevedel-session-durability-admit-async
+                session (apply-partially #'mevedel-session-publication--job-result job 'freeze)))
+              ('freeze
+               (let* ((batch (mevedel-session-publication--stage-artifacts
+                              session (funcall (mevedel-session-publication--job-prepare job))))
+                      (batches (append (mevedel-session-publication-uncommitted-batches session)
+                                       (list batch))))
+                 (setf (mevedel-session-publication--job-batch job) batch
+                       (mevedel-session-publication--job-batches job) batches
+                       (mevedel-session-publication--job-phase job) 'reserve)
+                 (mevedel-session-publication--advance-soon job)))
+              ('reserve
+               (let* ((artifacts (plist-get (mevedel-session-publication--job-batch job) :artifacts))
+                      (artifact (car artifacts))
+                      (riders (list :before nil
+                                    :after (mevedel-session-publication--prewrite-operations session artifact)
+                                    :consumed nil :before-results nil :after-results nil))
+                      (mevedel-session-durability--commit-riders riders))
+                 (unless (and (= 1 (length artifacts))
+                              (equal "session.meta.el" (plist-get artifact :logical)))
+                   (error "Asynchronous delivery requires one sidecar artifact"))
+                 (setf (mevedel-session-publication--job-riders job) riders)
+                 (setf (mevedel-session-publication--job-waiting-p job) t)
+                 (mevedel-session-durability-reserve-publication-lease-async
+                  session
+                  (lambda (success error)
+                    (mevedel-session-publication--job-result
+                     job 'generation
+                     (and success
+                          (eq 'ok (plist-get (nth 2 (plist-get riders :after-results)) :status)))
+                     error)))))
+              ('generation
+               (mevedel-session-publication--job-generation job))
+              ('head
+               (let ((mevedel-session-durability--final-commit t))
+                 (setf (mevedel-session-publication--job-waiting-p job) t)
+                 (mevedel-session-durability-commit-publication-head-async
+                  session (plist-get (mevedel-session-publication--job-candidate job) :head)
+                  (apply-partially #'mevedel-session-publication--job-result job 'adopt))))
+              ('adopt
+               (setf (mevedel-session-publication session)
+                     (mevedel-session-publication--job-candidate job))
+               (condition-case cleanup
+                   (mevedel-session-collection-schedule session)
+                 (error
+                  (display-warning
+                   'mevedel
+                   (format "Session publication committed before collection failed: %s"
+                           (error-message-string cleanup)) :warning)))
+               (mevedel-session-publication--job-complete job t))
+              ('rollback
+               (setf (mevedel-session-publication--job-waiting-p job) t)
+               (mevedel-session-durability-finish-publication-lease-async
+                session
+                (lambda (_success _error)
+                  (setf (mevedel-session-publication--job-waiting-p job) nil)
+                  (mevedel-session-publication--job-complete
+                   job nil (mevedel-session-publication--job-error job)))))
+              ('reconcile
+               (setf (mevedel-session-publication--job-waiting-p job) t)
+               (mevedel-session-durability-observe-publication-head-async
+                session
+                (lambda (observation error)
+                  (setf (mevedel-session-publication--job-waiting-p job) nil)
+                  (cond
+                   (error
+                    (setf (mevedel-session-publication--job-phase job) 'unresolved)
+                    (mevedel-session-publication--record-pending
+                     session (mevedel-session-publication--job-batches job) error))
+                   ((equal (plist-get observation :publication-head)
+                           (plist-get (mevedel-session-publication--job-candidate job) :head))
+                    (mevedel-session-durability-bind-observed-lease session observation)
+                    (setf (mevedel-session-pending-publication session) nil
+                          (mevedel-session-publication--job-phase job) 'adopt)
+                    (mevedel-session-publication--advance-soon job))
+                   ((equal (plist-get observation :publication-head)
+                           (mevedel-session-publication--job-expected-head job))
+                    (mevedel-session-durability-bind-observed-lease session observation)
+                    (setf (mevedel-session-pending-publication session) nil)
+                    (mevedel-session-publication--job-failed
+                     job (mevedel-session-publication--job-error job)))
+                   (t
+                    ;; Another head may have inherited the candidate's mail.
+                    ;; Without proof, rollback could acknowledge the same
+                    ;; execution again after restoring that successor.
+                    (setf (mevedel-session-publication--job-phase job) 'unresolved)
+                    (mevedel-session-publication--record-pending
+                     session (mevedel-session-publication--job-batches job)
+                     '(error "Publication head changed during reconciliation")))))))))
+        (error
+         (setf (mevedel-session-publication--job-waiting-p job) nil)
+         (if (memq (mevedel-session-publication--job-phase job) '(head reconcile adopt))
+             (progn
+               (setf (mevedel-session-publication--job-error job) err
+                     (mevedel-session-publication--job-phase job) 'reconcile)
+               (mevedel-session-publication--advance-soon job))
+           (if (eq 'rollback (mevedel-session-publication--job-phase job))
+               (mevedel-session-publication--job-complete job nil err)
+             (mevedel-session-publication--job-failed job err))))))))
+
+(defun mevedel-session-publication--job-generation (job)
+  "Prepare JOB's immutable generation and dispatch its head commit."
+  (let* ((session (mevedel-session-publication--job-session job))
+         (session-dir (mevedel-session-publication--job-path job))
+         (artifacts (mevedel-session-publication--deduplicate-artifacts
+                     (apply #'append
+                            (mapcar (lambda (batch) (plist-get batch :artifacts))
+                                    (mevedel-session-publication--job-batches job)))))
+         (entries (mevedel-session-publication--raw-artifacts
+                   (mevedel-session-publication session) session-dir)))
+    (pcase-let* ((`(,directory ,overlaid ,operations)
+                  (mevedel-session-publication--prepare-generation
+                   (file-name-concat session-dir ".publications") artifacts session-dir entries
+                   (mevedel-session-publication--generation-digests artifacts)))
+                 (head (file-relative-name (file-name-concat directory "manifest.el") session-dir))
+                 (mevedel-session-durability--commit-riders
+                  (list :before operations :after nil :consumed nil
+                        :before-results nil :after-results nil))
+                 (mevedel-session-durability--final-commit t))
+      (setf (mevedel-session-publication--job-candidate job)
+            (mevedel-session-publication--capture-publication
+             session-dir (list :head head :sidecar "session.meta.el" :artifacts overlaid))
+            (mevedel-session-publication--job-phase job) 'head)
+      (setf (mevedel-session-publication--job-waiting-p job) t)
+      (mevedel-session-durability-commit-publication-head-async
+       session head (apply-partially #'mevedel-session-publication--job-result job 'adopt)))))
 
 (defun mevedel-session-publication--control-logical-path-p (path)
   "Return non-nil when logical PATH names durability control storage."
@@ -1728,7 +2123,7 @@ as the reservation that opens a publication does."
            (mevedel-session-publication--record-pending session recovery err)))
        (signal (car err) (cdr err))))))
 
-(defun mevedel-session-publication--publish-critical-batches (session batches)
+(defun mevedel-session-publication--publish-critical-batches (session batches &optional token)
   "Publish BATCHES and discard recovery only after SESSION becomes active."
   (unwind-protect
       (let ((publication-before (mevedel-session-publication session))
@@ -1759,7 +2154,7 @@ as the reservation that opens a publication does."
                        (when riders (setf (plist-get riders :consumed) t))
                        (setf (mevedel-session-pending-publication session) nil)
                        ;; The reservation that just ran proved ownership.
-                       (mevedel-session-publication--drain session batches t)))))
+                       (mevedel-session-publication--drain session batches t)) token)))
           (error
            (unless (mevedel-session-pending-publication session)
              (let* ((committed-p
@@ -1794,7 +2189,7 @@ as the reservation that opens a publication does."
 (defvar mevedel-session-artifacts--terminal-sessions)
 
 (defun mevedel-session-publication-publish
-    (session artifacts &optional require-commit prepared)
+    (session artifacts &optional require-commit prepared token)
   "Serialize and publish SESSION's critical ARTIFACTS.
 
 Each artifact is `(:path TARGET-PATH :content STRING [:coding CODING])' or a
@@ -1807,22 +2202,24 @@ reentrant queueing so the caller returns only after its own batch commits, and
 treat a post-commit cleanup error as diagnostic.  Ordinary callers receive
 that error so their lifecycle owner can classify it.
 PREPARED admits the owning terminal checkpoint's final frozen artifacts, never
-a nested writer called while its registry and RESULT are still tentative."
+a nested writer called while its registry and RESULT are still tentative.
+TOKEN explicitly authorizes a preparation reentering its own publication gate."
+  (mevedel-session-publication-barrier session token)
   (when (and (memq session (bound-and-true-p mevedel-session-artifacts--terminal-sessions))
              (not prepared))
     (user-error "Session terminal checkpoint is being prepared"))
   (if (fboundp 'mevedel-telemetry-measure)
       (mevedel-telemetry-measure
        session 'session-publication 0
-       (lambda () (mevedel-session-publication--publish session artifacts require-commit))
+       (lambda () (mevedel-session-publication--publish session artifacts require-commit token))
        :artifact-count (length artifacts)
        :input-bytes (apply #'+ (mapcar (lambda (artifact)
                                          (let ((content (plist-get artifact :content)))
                                            (if (stringp content) (string-bytes content) 0)))
                                        artifacts)))
-    (mevedel-session-publication--publish session artifacts require-commit)))
+    (mevedel-session-publication--publish session artifacts require-commit token)))
 
-(defun mevedel-session-publication--publish (session artifacts require-commit)
+(defun mevedel-session-publication--publish (session artifacts require-commit &optional token)
   "Publish SESSION's ARTIFACTS as `mevedel-session-publication-publish' does.
 REQUIRE-COMMIT is its commit requirement."
   ;; Admission, reservation and commit are one publication transaction.
@@ -1844,7 +2241,7 @@ REQUIRE-COMMIT is its commit requirement."
             ;; separate renewal only matters for one that needs reclaiming.
             (unless (or (mevedel-session-publication-active-p session)
                         (mevedel-session-durability-lease-owned-p session)
-                        (mevedel-session-durability-lease-renew session))
+                        (mevedel-session-durability-lease-renew session token))
               (user-error
                "Portable session lease could not be renewed for publication"))
             (unless (mevedel-session-durability-lease-owned-p session)
@@ -1866,7 +2263,7 @@ REQUIRE-COMMIT is its commit requirement."
               'published)
              (t
               (mevedel-session-publication--publish-critical-batches
-               session (list batch)))))
+               session (list batch) token))))
         (error
          (let ((committed-p
                 (not (equal publication-before
@@ -1886,11 +2283,25 @@ REQUIRE-COMMIT is its commit requirement."
                  (mevedel-session-publication session))
              (signal (car err) (cdr err)))))))))
 
-(defun mevedel-session-publication-retry (&optional session)
+(cl-defun mevedel-session-publication-retry (&optional session)
   "Retry SESSION's pending critical publication."
   (interactive)
   (setq session (or session
                     (mevedel-session-publication--current-session)))
+  (when-let* ((job (mevedel-session-publication-job session)))
+    (unless (eq 'unresolved (mevedel-session-publication--job-phase job))
+      (user-error "Session publication is still running"))
+    (setf (mevedel-session-publication--job-phase job) 'reconcile)
+    (mevedel-session-publication--advance-soon job)
+    (mevedel-session-publication-barrier session)
+    ;; The barrier also drains later accepted jobs, whose successful heads can
+    ;; supersede this candidate.  Judge this job's acknowledgement, not the
+    ;; session's head after all those preparations finish.
+    (unless (mevedel-session-publication--job-success-p job)
+      (let ((err (mevedel-session-publication--job-error job)))
+        (signal (car err) (cdr err))))
+    (cl-return-from mevedel-session-publication-retry
+      (mevedel-session-publication session)))
   ;; A failure caused by a vanished working directory must be retryable.
   (mevedel-session-artifacts-recover-working-directory session)
   (mevedel-session-recovery-refresh session)
@@ -1919,6 +2330,9 @@ REQUIRE-COMMIT is its commit requirement."
   (interactive)
   (setq session (or session
                     (mevedel-session-publication--current-session)))
+  (when-let* ((job (mevedel-session-publication-job session)))
+    (unless (eq 'unresolved (mevedel-session-publication--job-phase job))
+      (user-error "Session publication is still running")))
   (mevedel-session-recovery-refresh session)
   (when-let* ((pending (mevedel-session-pending-publication session)))
     (let ((specialized-p (plist-get pending :manual-recovery-marker)))
@@ -1942,6 +2356,11 @@ REQUIRE-COMMIT is its commit requirement."
            (user-error "Could not remove local recovery: %s"
                        (error-message-string err)))))
       (mevedel-session-publication-clear-transient session)
+      (when-let* ((job (mevedel-session-publication-job session)))
+        (unless (eq 'unresolved (mevedel-session-publication--job-phase job))
+          (user-error "Session publication is still running"))
+        (mevedel-session-publication--job-complete
+         job nil '(error "Session publication was explicitly abandoned")))
       (mevedel-session-recovery-refresh-session-buffers session)
       (display-warning
        'mevedel
@@ -2049,11 +2468,18 @@ pipe nothing waits for the program; an append it did not write, and every
 append collected while it runs, joins the backlog the next batch writes
 first, which keeps each log in order.  The backlog is bounded: past
 `mevedel-session-publication--diagnostic-backlog-max-bytes' the oldest
-appends are dropped with a warning."
-  (let* ((state (or (gethash session mevedel-session-publication--diagnostic-backlog)
-                    (puthash session (cons nil nil)
-                             mevedel-session-publication--diagnostic-backlog)))
-         (entries (append (cdr state) appends)))
+appends are dropped with a warning.
+
+Where the editor is about to exit (`mevedel-session-control-fs--async-wait'),
+an append still in flight is waited for first, so what it leaves and APPENDS
+are written now instead of queueing for a batch that never comes."
+  (let ((state (or (gethash session mevedel-session-publication--diagnostic-backlog)
+                   (puthash session (cons nil nil)
+                            mevedel-session-publication--diagnostic-backlog)))
+        entries)
+    (when (and (car state) mevedel-session-control-fs--async-wait)
+      (mevedel-session-control-fs-wait-async))
+    (setq entries (append (cdr state) appends))
     (cond
      ((null entries))
      ((car state) (setcdr state entries))

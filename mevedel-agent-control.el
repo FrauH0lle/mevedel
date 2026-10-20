@@ -135,6 +135,8 @@
 (autoload 'mevedel-pending-inputs-offer-root-event "mevedel-pending-inputs")
 
 ;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts--sidecar-artifact
+                  "mevedel-session-artifacts" (session buffer &optional checkpoint))
 (declare-function mevedel-session-artifacts-assert-mutation-authority
                   "mevedel-session-artifacts" (session &optional buffer))
 (autoload 'mevedel-session-artifacts-assert-mutation-authority
@@ -143,13 +145,23 @@
 ;; `mevedel-session-checkpoint'
 (declare-function mevedel-session-checkpoint-consume
                   "mevedel-session-checkpoint" (session conversation records))
+(declare-function mevedel-session-checkpoint-pending-message-p
+                  "mevedel-session-checkpoint" (session conversation id))
 (autoload 'mevedel-session-checkpoint-consume "mevedel-session-checkpoint")
+(autoload 'mevedel-session-checkpoint-pending-message-p "mevedel-session-checkpoint")
+
+;; `mevedel-session-durability'
+(defvar mevedel-session-durability--asserted-directories)
+(defvar mevedel-session-durability--commit-riders)
+(defvar mevedel-session-durability--final-commit)
+(defvar mevedel-session-durability--transaction-clock)
+(defvar mevedel-session-durability-async-process-function)
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-cancel-deferred-agent-save
                   "mevedel-session-persistence" (session))
 (declare-function mevedel-session-persistence-save-agent-state
-                  "mevedel-session-persistence" (session))
+                  "mevedel-session-persistence" (session &optional token))
 (declare-function mevedel-session-persistence-save-agent-state-soon
                   "mevedel-session-persistence" (session))
 (autoload 'mevedel-session-persistence-cancel-deferred-agent-save
@@ -158,6 +170,21 @@
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-save-agent-state-soon
   "mevedel-session-persistence")
+
+;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-async-eligible-p "mevedel-session-publication" (session))
+(declare-function mevedel-session-publication-barrier "mevedel-session-publication" (session &optional token))
+(declare-function mevedel-session-publication-busy-p "mevedel-session-publication" (session))
+(declare-function mevedel-session-publication-defer "mevedel-session-publication" (session preparation &optional failure token))
+(declare-function mevedel-session-publication-submit "mevedel-session-publication" (session prepare acknowledge &optional mail-ids))
+(autoload 'mevedel-session-publication-async-eligible-p "mevedel-session-publication")
+(autoload 'mevedel-session-publication-barrier "mevedel-session-publication")
+(autoload 'mevedel-session-publication-busy-p "mevedel-session-publication")
+(autoload 'mevedel-session-publication-defer "mevedel-session-publication")
+(autoload 'mevedel-session-publication-submit "mevedel-session-publication")
+
+;; `mevedel-session-recovery'
+(defvar mevedel-session-recovery--mutation-cache)
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
@@ -196,6 +223,7 @@
 (autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
 
 ;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
 (declare-function mevedel-transport-cancel-pending
                   "mevedel-transport" (&optional key))
 (declare-function mevedel-transport-run-at-time
@@ -203,6 +231,7 @@
 (declare-function mevedel-transport-run-when-idle
                   "mevedel-transport"
                   (key path thunk &optional on-cancel delay))
+(autoload 'mevedel-transport-busy-p "mevedel-transport")
 (autoload 'mevedel-transport-cancel-pending "mevedel-transport")
 (autoload 'mevedel-transport-run-at-time "mevedel-transport")
 (autoload 'mevedel-transport-run-when-idle "mevedel-transport")
@@ -355,11 +384,11 @@ Return the normalized payload stored in the record."
           (mevedel-agent-record-settled-outcome record) outcome)
     payload))
 
-(defun mevedel-agent-control-commit-session (session)
+(defun mevedel-agent-control-commit-session (session &optional token)
   "Commit SESSION's materialized agent state or signal an error."
   (unless mevedel-agent-control-suppress-persistence
     (when (mevedel-session-save-path session)
-      (unless (mevedel-session-persistence-save-agent-state session)
+      (unless (mevedel-session-persistence-save-agent-state session token)
         (error "Agent state could not be persisted"))))
   t)
 
@@ -438,6 +467,7 @@ blockers compose and stale releases cannot alter a later follow-up."
     ;; The caller owns final persistence; a debounced save firing into
     ;; killed buffers would only race it.
     (mevedel-session-persistence-cancel-deferred-agent-save session)
+    (mevedel-agent-control--cancel-notifications session)
     (mevedel-transport-cancel-pending (list 'agent-wake session))
     (mevedel-session--set-agent-reservations session nil)
     (mevedel-agent-control-cancel-wait session "/root")
@@ -669,6 +699,106 @@ Return the caller path when suspended, and nil after an immediate release."
   "Wake SESSION's root WaitAgent for pending user steering."
   (mevedel-agent-control--wake session "/root" 'user))
 
+(defun mevedel-agent-control--notification-blocked-p (session)
+  "Return non-nil while SESSION cannot safely run arbitrary waiter callbacks."
+  (or (mevedel-session-publication-busy-p session)
+      (mevedel-session-publication-active-p session)
+      (mevedel-transport-busy-p (mevedel-session-save-path session))))
+
+(defun mevedel-agent-control--cancel-notifications (session)
+  "Cancel SESSION's notification timer and discard its transient offers."
+  (when-let* ((timer (mevedel-session-mail-notification-timer session)))
+    (cancel-timer timer))
+  (setf (mevedel-session-mail-notification-timer session) nil
+        (mevedel-session-mail-notifications session) nil
+        (mevedel-session-mail-notification-delay session) nil))
+
+(defun mevedel-agent-control--queue-notification (session key function)
+  "Queue FUNCTION under KEY in SESSION's coalesced FIFO notification set.
+Notifications never enter the mutation preparation queue.  One timer retries
+the whole set, backing off from 50 ms to 500 ms while publication stays busy."
+  (unless (assoc key (mevedel-session-mail-notifications session))
+    (setf (mevedel-session-mail-notifications session)
+          (nconc (mevedel-session-mail-notifications session)
+                 (list (cons key function)))))
+  (unless (or (mevedel-session-publication-stopping-p session)
+              (mevedel-session-mail-notification-timer session))
+    (let ((delay (or (mevedel-session-mail-notification-delay session) 0.05)))
+      (setf (mevedel-session-mail-notification-delay session) delay
+            (mevedel-session-mail-notification-timer session)
+            (mevedel-transport-run-at-time
+             delay #'mevedel-agent-control--flush-notifications session))))
+  t)
+
+(defun mevedel-agent-control--flush-notifications (session)
+  "Offer SESSION's pending notifications in order outside the mutation gate."
+  (setf (mevedel-session-mail-notification-timer session) nil)
+  (if (not (buffer-live-p (mevedel-session-root-buffer session)))
+      (mevedel-agent-control--cancel-notifications session)
+    (while (and (mevedel-session-mail-notifications session)
+                (buffer-live-p (mevedel-session-root-buffer session))
+                (not (mevedel-session-publication-stopping-p session))
+                (not (mevedel-agent-control--notification-blocked-p session)))
+      (let ((entry (pop (mevedel-session-mail-notifications session))))
+        (condition-case err
+            ;; Timers can run inside another session's advancing transaction.
+            ;; Arbitrary waiter code must open a fresh transaction of its own.
+            (let ((mevedel-session-durability--transaction-clock nil)
+                  (mevedel-session-durability--asserted-directories nil)
+                  (mevedel-session-durability--commit-riders nil)
+                  (mevedel-session-durability--final-commit nil)
+                  (mevedel-session-durability-async-process-function nil)
+                  (mevedel-session-recovery--mutation-cache nil))
+              (funcall (cdr entry)))
+          (error
+           (display-warning
+            'mevedel (format "Mailbox notification failed: %s"
+                             (error-message-string err)) :warning)))))
+    (cond
+     ((not (buffer-live-p (mevedel-session-root-buffer session)))
+      (mevedel-agent-control--cancel-notifications session))
+     ;; A temporary close query may still be vetoed.  Keep the actual offers,
+     ;; without a timer; reopening admissions re-arms them, teardown drops them.
+     ((mevedel-session-publication-stopping-p session) nil)
+     ((mevedel-session-mail-notifications session)
+      (let ((entry (car (mevedel-session-mail-notifications session))))
+        (setf (mevedel-session-mail-notification-delay session)
+              (min 0.5 (* 2 (or (mevedel-session-mail-notification-delay session) 0.05))))
+        (mevedel-agent-control--queue-notification session (car entry) (cdr entry))))
+     (t (mevedel-agent-control--cancel-notifications session)))))
+
+(defun mevedel-agent-control-notify (session key function)
+  "Run FUNCTION outside SESSION's mutation gate, or queue it under KEY.
+Pending notifications are coalesced by KEY and offered in FIFO order.  They
+never become mutation preparations or inherit transaction observations.
+Stopping sessions retain offers without a timer, for a vetoed close to reoffer
+or teardown to discard.  A callback failure is diagnostic only."
+  (if (or (mevedel-session-publication-stopping-p session)
+          (mevedel-agent-control--notification-blocked-p session)
+          (mevedel-session-mail-notifications session))
+      (mevedel-agent-control--queue-notification session key function)
+    (let ((mevedel-session-durability--transaction-clock nil)
+          (mevedel-session-durability--asserted-directories nil)
+          (mevedel-session-durability--commit-riders nil)
+          (mevedel-session-durability--final-commit nil)
+          (mevedel-session-durability-async-process-function nil)
+          (mevedel-session-recovery--mutation-cache nil))
+      (condition-case err
+          (funcall function)
+        (error
+         (display-warning
+          'mevedel (format "Mailbox notification failed: %s"
+                           (error-message-string err)) :warning))))))
+
+(defun mevedel-agent-control-reoffer-mail (session)
+  "Re-arm SESSION's held notifications after a vetoed close reopens admissions.
+No callback runs inline and an idle session creates no timer.  Teardown drops
+the retained offers if the close proceeds instead."
+  (when (and (buffer-live-p (mevedel-session-root-buffer session))
+             (not (mevedel-session-publication-stopping-p session)))
+    (when-let* ((entry (car (mevedel-session-mail-notifications session))))
+      (mevedel-agent-control--queue-notification session (car entry) (cdr entry)))))
+
 (defun mevedel-agent-control--deliver-mail
     (session recipient record &optional wake-reason)
   "Notify RECIPIENT of committed RECORD in SESSION.
@@ -677,26 +807,26 @@ idle root gets a background-event turn and an idle agent its next turn.
 Mark before releasing a waiter: its callback can synchronously consume mail.
 Recovery repairs neither mark records nor release waits."
   (unless mevedel-agent-control-suppress-persistence
-    (let ((waking
-           (and (memq (plist-get record :type) '(MAIL RESULT))
-                (not (equal (plist-get record :sender) recipient))
-                (memq record (mevedel-agent-control--mailbox-queue
-                              session recipient)))))
-      (when waking
-        (plist-put record :wake t))
-      (mevedel-agent-control--wake
-       session recipient (or wake-reason 'mailbox))
-      (when (and waking
-                 (memq record (mevedel-agent-control--mailbox-queue
-                               session recipient)))
-        (cond
-         ((equal recipient "/root")
-          (mevedel-pending-inputs-offer-root-event session))
-         ;; An active recipient reads it at its next boundary, or its
-         ;; settlement offers the wake.
-         ((not (mevedel-agent-control--active-p
-                (mevedel-agent-control--record-at-path session recipient)))
-          (mevedel-agent-control--schedule-agent-wakes session)))))))
+    (let ((notify
+           (lambda ()
+             (let ((waking
+                    (and (memq (plist-get record :type) '(MAIL RESULT))
+                         (not (equal (plist-get record :sender) recipient))
+                         (memq record (mevedel-agent-control--mailbox-queue session recipient)))))
+               (when waking (plist-put record :wake t))
+               (mevedel-agent-control--wake session recipient (or wake-reason 'mailbox))
+               (when (and waking
+                          (memq record (mevedel-agent-control--mailbox-queue session recipient)))
+                 (cond
+                  ((equal recipient "/root")
+                   (mevedel-pending-inputs-offer-root-event session))
+                  ;; An active recipient reads it at its next boundary, or its
+                  ;; settlement offers the wake.
+                  ((not (mevedel-agent-control--active-p
+                         (mevedel-agent-control--record-at-path session recipient)))
+                   (mevedel-agent-control--schedule-agent-wakes session))))))))
+      (mevedel-agent-control-notify
+       session (list recipient (plist-get record :id) wake-reason) notify))))
 
 (defun mevedel-agent-control--identify-record (record)
   "Assign RECORD a durable message identity once, at its producer boundary."
@@ -709,18 +839,63 @@ Recovery repairs neither mark records nor release waits."
   record)
 
 (defun mevedel-agent-control--enqueue-records
-    (session recipient records &optional wake-reason)
+    (session recipient records &optional wake-reason acknowledge)
   "Durably queue RECORDS (FIFO) for RECIPIENT with one commit, then wake.
-All records are secured or none: a failed commit restores the queue."
+All records are secured or none: a failed commit restores the queue.
+ACKNOWLEDGE, when supplied, receives (SUCCESS ERROR) after authoritative
+adoption or rollback.  Local warm sessions may acknowledge asynchronously."
+  (when (mevedel-session-publication-stopping-p session)
+    (user-error "Session publication is stopping"))
   ;; All producers enter here, including recovery RESULTs and batched monitor
   ;; records.  Assign once before committing; a retry of these same records
   ;; retains their identities.  Readers never manufacture missing identities.
+  (if (and acknowledge
+           (not mevedel-agent-control-suppress-persistence)
+           (mevedel-session-publication-async-eligible-p session))
+      (let (ids)
+        (dolist (record records)
+          (mevedel-agent-control--identify-record record))
+        (mevedel-session-publication-submit
+         session
+         (lambda ()
+           (dolist (record records)
+             (mevedel-agent-control--identify-record record))
+           (let ((present (mapcar (lambda (message) (plist-get message :id))
+                                  (mevedel-agent-control--mailbox-queue session recipient))))
+             (setq records (cl-remove-if
+                            (lambda (record)
+                              (or (member (plist-get record :id) present)
+                                  (mevedel-session-checkpoint-pending-message-p
+                                   session recipient (plist-get record :id)))) records)))
+           (dolist (record records) (plist-put record :uncommitted t))
+           (setq ids (mapcar (lambda (record) (plist-get record :id)) records))
+           (mevedel-agent-control--set-mailbox-queue
+            session recipient
+            (append (reverse records)
+                    (mevedel-agent-control--mailbox-queue session recipient)))
+           (list (mevedel-session-artifacts--sidecar-artifact
+                  session (mevedel-session-root-buffer session))))
+         (lambda (success err)
+           (if success
+               (dolist (record records) (cl-remf record :uncommitted))
+             (mevedel-agent-control--set-mailbox-queue
+              session recipient
+              (cl-remove-if (lambda (message) (member (plist-get message :id) ids))
+                            (mevedel-agent-control--mailbox-queue session recipient))))
+           (funcall acknowledge success err)
+           (when (and success records)
+             (mevedel-agent-control--deliver-mail
+              session recipient (car (last records)) wake-reason)))
+         (mapcar (lambda (record) (plist-get record :id)) records))
+        'pending)
+    (mevedel-session-publication-barrier session)
   (dolist (record records)
     (mevedel-agent-control--identify-record record)
     (plist-put record :uncommitted t))
   (let ((previous
          (mevedel-agent-control--mailbox-queue session recipient))
-        (ids (mapcar (lambda (record) (plist-get record :id)) records)))
+        (ids (mapcar (lambda (record) (plist-get record :id)) records))
+        failure)
     (mevedel-agent-control--set-mailbox-queue
      session recipient (append (reverse records) previous))
     (condition-case err
@@ -732,12 +907,16 @@ All records are secured or none: a failed commit restores the queue."
          (lambda (message)
            (member (plist-get message :id) ids))
          (mevedel-agent-control--mailbox-queue session recipient)))
-       (signal (car err) (cdr err))))
-    (dolist (record records) (cl-remf record :uncommitted))
-    (when records
-      (mevedel-agent-control--deliver-mail
-       session recipient (car (last records)) wake-reason))
-    records))
+       (setq failure err)))
+    (if failure
+        (if acknowledge (funcall acknowledge nil failure)
+          (signal (car failure) (cdr failure)))
+      (dolist (record records) (cl-remf record :uncommitted))
+      (when acknowledge (funcall acknowledge t nil))
+      (when records
+        (mevedel-agent-control--deliver-mail
+         session recipient (car (last records)) wake-reason))
+      records))))
 
 (defun mevedel-agent-control--enqueue
     (session recipient record &optional wake-reason)
@@ -805,20 +984,23 @@ being `started', `queued', or `waiting' for a slot."
       (list :path recipient :delivery (if idle 'waiting 'queued)))))
 
 (defun mevedel-agent-control-enqueue-execution-result
-    (session owner body &optional execution-id wake meta)
+    (session owner body &optional execution-id wake meta acknowledge)
   "Queue yielded execution BODY for its OWNER in SESSION.
 The owner reads it at its next provider request, like the root does.
 EXECUTION-ID correlates the record with its execution while Emacs runs.
 WAKE marks a root record that should start a turn when the model is idle;
 the mark is runtime state and never persisted.  META is a plist of
 structural facts (strings and integers) that the delivery block carries
-as opening-tag attributes."
+as opening-tag attributes.  ACKNOWLEDGE receives (SUCCESS ERROR) exactly once
+when delivery is secured or definitively fails; output ownership stays with
+the producer until this acknowledgement."
   (unless (and (mevedel-agent-path-p owner) (stringp body))
     (error "Invalid execution result"))
-  (mevedel-agent-control--enqueue
+  (mevedel-agent-control--enqueue-records
    session owner
-   (append
-    (list :type 'EXECUTION
+   (list (append
+    (list :id (and execution-id (secure-hash 'sha256 (concat owner ":" execution-id)))
+          :type 'EXECUTION
           :sender owner
           :recipient owner
           :payload body
@@ -826,21 +1008,22 @@ as opening-tag attributes."
     (and execution-id (list :execution-id execution-id))
     (and meta (list :meta meta))
     (and wake (list :wake t))))
-  t)
+   nil acknowledge))
 
 (defun mevedel-agent-control-enqueue-monitor-events
-    (session execution-id description entries wake)
+    (session execution-id description entries wake &optional acknowledge)
   "Queue Monitor ENTRIES for SESSION's root with one durable commit.
 Each entry is (BODY META TERMINAL): BODY is the record text, META a plist of
 structural facts carried as opening-tag attributes, and TERMINAL makes the
 record the monitor's `MONITOR_TERMINAL' notice instead of an event.
+ACKNOWLEDGE receives (SUCCESS ERROR) once after adoption or rollback.
 EXECUTION-ID and DESCRIPTION identify the monitor.  WAKE marks every record
 as one that starts a turn when the model is idle.  The records are secured
 together or not at all, so a retry cannot duplicate a partial batch."
   (unless (and (stringp execution-id) (stringp description)
                (cl-every (lambda (entry) (stringp (car entry))) entries))
     (error "Invalid monitor event"))
-  (when entries
+  (if entries
     (mevedel-agent-control--enqueue-records
      session "/root"
      (mapcar
@@ -855,8 +1038,10 @@ together or not at all, so a retry cannot duplicate a partial batch."
                :timestamp (current-time))
          (and (nth 1 entry) (list :meta (nth 1 entry)))
          (and wake (list :wake t))))
-      entries)))
-  t)
+      entries)
+     nil acknowledge)
+    (when acknowledge (funcall acknowledge t nil))
+    t))
 
 (defun mevedel-agent-control-wake-pending-p (session)
   "Return non-nil while SESSION's root mailbox holds an unread waking record.
@@ -1024,6 +1209,7 @@ positive decimal strings, or \"summary\"."
 (defun mevedel-agent-control--reserve
     (session parent-path task-name role)
   "Atomically reserve TASK-NAME below PARENT-PATH in SESSION for ROLE."
+  (mevedel-session-publication-barrier session)
   (let* ((path (concat parent-path "/" task-name))
          (registry (mevedel-session-agent-registry session))
          (reservations (mevedel-session-agent-reservations session)))
@@ -1161,9 +1347,10 @@ The delivery closure releases this bounded producer state on success."
           id))))
 
 (defun mevedel-agent-control--settle
-    (session record invocation response &optional event)
+    (session record invocation response &optional event token)
   "Stage RECORD's terminal RESPONSE and EVENT in SESSION.
 Return rollback and post-commit delivery closures for INVOCATION."
+  (mevedel-session-publication-barrier session token)
   (when (and (eq invocation (mevedel-agent-record-invocation record))
              (mevedel-agent-control--active-p record)
              (progn
@@ -1301,6 +1488,7 @@ Return rollback and post-commit delivery closures for INVOCATION."
 (defun mevedel-agent-control--record-invocation
     (session record invocation)
   "Publish RECORD with INVOCATION in SESSION's retained registry."
+  (mevedel-session-publication-barrier session)
   (unless (equal (mevedel-agent-invocation-path invocation)
                  (mevedel-agent-record-path record))
     (error "Agent invocation path mismatch: %s"
@@ -1439,6 +1627,7 @@ slot gets its offer."
 PARENT-TOOL-USE-ID identifies the calling tool row.  PLAN-READ-ONLY, or
 unread mail from a Plan read-only sender, stamps the turn read-only even
 without an ambient Plan caller: the turn reads that mail."
+  (mevedel-session-publication-barrier session)
   (let ((previous-result (mevedel-agent-record-settled-result record))
         (previous-outcome (mevedel-agent-record-settled-outcome record))
         (plan-read-only
