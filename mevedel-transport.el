@@ -488,6 +488,10 @@ still be delivered after a suspended timer list is restored."
     (remhash key mevedel-transport--pending)
     (mevedel-transport-run-when-idle key path thunk on-cancel)))
 
+;; Every deferred continuation runs through this one timer function, so
+;; event-loop lag telemetry names the THUNK argument it runs instead.
+(put 'mevedel-transport--retry 'mevedel-telemetry-delegate 3)
+
 (defun mevedel-transport-run-when-idle (key path thunk &optional on-cancel delay)
   "Call THUNK once no remote operation for PATH is in flight.
 

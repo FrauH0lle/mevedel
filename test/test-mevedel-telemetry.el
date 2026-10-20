@@ -15,6 +15,7 @@
 (require 'mevedel-session-publication)
 (require 'mevedel-structs)
 (require 'mevedel-telemetry)
+(require 'mevedel-transport)
 (require 'mevedel-view-render)
 (require 'profiler)
 (require 'helpers
@@ -586,6 +587,53 @@
     ;; Primitives alone name nothing.
     (timer-set-function timer (eval '(lambda () (car (list 1))) t))
     (should (equal "anonymous" (mevedel-telemetry--lag-callback-name timer)))))
+
+(mevedel-deftest mevedel-telemetry--lag-closure-callees
+  ()
+  ,test
+  (test)
+  :doc "names a closure by its first mevedel callees, skipping predicates"
+  (let ((closure (eval '(lambda ()
+                          (when (mevedel-telemetry-detailed-p nil)
+                            (seq-filter #'identity nil)
+                            (mevedel-telemetry-flush nil)
+                            (mevedel-telemetry-finish nil)
+                            (mevedel-telemetry-flush nil)
+                            (mevedel-telemetry-record nil nil)
+                            (mevedel-telemetry-path nil)))
+                       t)))
+    ;; Predicates guard the work; three distinct callees say what it is.
+    (should (equal '(mevedel-telemetry-flush mevedel-telemetry-finish
+                                             mevedel-telemetry-record)
+                   (mevedel-telemetry--lag-closure-callees closure))))
+  :doc "keeps a predicate when it is the only mevedel callee"
+  (should (equal '(mevedel-telemetry-detailed-p)
+                 (mevedel-telemetry--lag-closure-callees
+                  (eval '(lambda () (mevedel-telemetry-detailed-p nil)) t)))))
+
+(mevedel-deftest mevedel-telemetry--lag-function-name
+  ()
+  ,test
+  (test)
+  :doc "names a trampoline by the callback it delegates to"
+  (let ((thunk (eval '(lambda () (mevedel-telemetry-flush nil)) t)))
+    (unwind-protect
+        (progn
+          (put 'mevedel-telemetry-test--trampoline 'mevedel-telemetry-delegate 1)
+          (should (equal "mevedel-telemetry-test--trampoline>closure:mevedel-telemetry-flush"
+                         (mevedel-telemetry--lag-function-name
+                          'mevedel-telemetry-test--trampoline (list 'key thunk))))
+          ;; A non-function at that index leaves the trampoline's own name.
+          (should (equal "mevedel-telemetry-test--trampoline"
+                         (mevedel-telemetry--lag-function-name
+                          'mevedel-telemetry-test--trampoline (list 'key 'unbound-symbol-xyz)))))
+      (put 'mevedel-telemetry-test--trampoline 'mevedel-telemetry-delegate nil)))
+  :doc "names the transport retry by its deferred continuation"
+  (let ((thunk (eval '(lambda () (mevedel-telemetry-flush nil)) t)))
+    (should (equal "mevedel-transport--retry>closure:mevedel-telemetry-flush"
+                   (mevedel-telemetry--lag-function-name
+                    'mevedel-transport--retry
+                    (list (timer-create) '(execution-delivery 1) nil thunk nil))))))
 
 ;; `mevedel-telemetry-measure' records nothing for a batch Emacs's lag
 ;; windows unless a test installs one; these install theirs directly.

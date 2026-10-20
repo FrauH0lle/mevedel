@@ -499,6 +499,23 @@ retains the accepted 8-fps compromise. No Emacs patch or rebuild is required.
         mevedel-view-spinner-battery-framerate 0)
 ```
 
+The view shows session status in its tab line, so it does not need a mode
+line. Consider hiding it in views, especially with an elaborate mode line
+such as doom-modeline. Emacs formats the mode line inside every pixel-position
+query, and the view makes many of those while a request runs; a doom-modeline
+added about 1 ms and 95 KB of allocation to each one, which shows up as more
+frequent garbage collection pauses while scrolling or typing. Set it after
+other packages have installed their mode line, for example with
+`hide-mode-line-mode` or:
+
+```emacs-lisp
+(add-hook 'after-change-major-mode-hook
+          (lambda ()
+            (when (derived-mode-p 'mevedel-view-mode)
+              (setq-local mode-line-format nil)))
+          90)
+```
+
 A recommended `.gitignore` line is `.mevedel/sessions/` (or just `.mevedel/`).
 
 ### Saving & Loading

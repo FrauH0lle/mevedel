@@ -75,6 +75,9 @@ every sample again.")
 (defvar-local mevedel-view-native--checked nil
   "Alist of each window's layout inputs when its surfaces were last verified.")
 
+(defvar mevedel-view-native--ascents (make-hash-table :test #'eq :weakness 'key)
+  "Font objects to their ascent in pixels.")
+
 (defvar-local mevedel-view-native--failed nil
   "Recent surface signatures the module refused, and specs that signaled.
 A signature holds the label, its style, font, colors and geometry, so
@@ -216,6 +219,14 @@ default face, through this buffer's face remapping."
                                 (cl-position :background internal-lisp-face-attributes))))
           (and (stringp background) (color-name-to-rgb background) background))))))
 
+(defun mevedel-view-native--font-ascent (font frame)
+  "Return the ascent in pixels of font object FONT on FRAME.
+`font-info' also builds the font's OpenType capability lists: 80 KB of
+the 190 KB each placement allocated, for a value a font object never
+changes."
+  (or (gethash font mevedel-view-native--ascents)
+      (puthash font (aref (font-info font frame) 8) mevedel-view-native--ascents)))
+
 (defun mevedel-view-native--placement (target window)
   "Return TARGET's unoccluded single-line placement in WINDOW, or nil.
 The placement is (FRAME GEOMETRY FONT BACKGROUND)."
@@ -248,8 +259,7 @@ The placement is (FRAME GEOMETRY FONT BACKGROUND)."
                (y (+ (cadr edges) (cdr xy)))
                (width (car (window-text-pixel-size window start end)))
                (height (cdr (posn-object-width-height first)))
-               (info (font-info font frame))
-               (ascent (aref info 8))
+               (ascent (mevedel-view-native--font-ascent font frame))
                (family (font-get font :family))
                (weight (font-get font :weight))
                (slant (font-get font :slant))

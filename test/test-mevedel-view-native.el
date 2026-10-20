@@ -97,6 +97,23 @@
                 ((symbol-function 'use-region-p) (lambda () t)))
         (should-not (mevedel-view-native--placement target (selected-window)))))))
 
+(mevedel-deftest mevedel-view-native--font-ascent
+  (:doc "Reads each font object's ascent once.")
+  (let ((mevedel-view-native--ascents (make-hash-table :test #'eq :weakness 'key))
+        (first (list 'font 1)) (second (list 'font 2))
+        (calls 0))
+    (cl-letf (((symbol-function 'font-info)
+               (lambda (font _frame)
+                 (cl-incf calls)
+                 (let ((info (make-vector 14 nil)))
+                   (aset info 8 (* 10 (cadr font)))
+                   info))))
+      (should (= 10 (mevedel-view-native--font-ascent first 'frame)))
+      (should (= 10 (mevedel-view-native--font-ascent first 'frame)))
+      (should (= 1 calls))
+      (should (= 20 (mevedel-view-native--font-ascent second 'frame)))
+      (should (= 2 calls)))))
+
 (mevedel-view-native-test--deftest mevedel-view-native-sync
   (:doc "Reuses a stable surface, replaces changed text and closes on stop.")
   (with-temp-buffer

@@ -665,12 +665,20 @@ plist of the delays counted for the running request.")
 (defconst mevedel-telemetry--lag-closure-scan-limit 400
   "Most conses searched in an interpreted closure's body for its callee.")
 
-(defun mevedel-telemetry--lag-closure-callee (function)
-  "Return the function closure FUNCTION calls that best names it, or nil.
+(defconst mevedel-telemetry--lag-closure-callee-count 3
+  "Most callees naming a closure.
+One callee named small wrappers rather than their work: the tool pipeline's
+continuation was reported by its transport check, and the view spinner by
+the timer cancellation it guards with.")
+
+(defun mevedel-telemetry--lag-closure-callees (function)
+  "Return the functions closure FUNCTION calls that best name it.
 A byte-compiled closure, native-compiled ones included, keeps its callees
 among its constants; an interpreted one in its body, searched only up to
-`mevedel-telemetry--lag-closure-scan-limit' conses.  A `mevedel-'
-function wins, else the first non-primitive function."
+`mevedel-telemetry--lag-closure-scan-limit' conses.  Return at most
+`mevedel-telemetry--lag-closure-callee-count' `mevedel-' functions in
+order, predicates only when nothing else names it, else the first
+non-primitive function alone."
   (let ((budget mevedel-telemetry--lag-closure-scan-limit)
         symbols)
     (cond
@@ -688,24 +696,43 @@ function wins, else the first non-primitive function."
               (push (cdr form) stack)
               (push (car form) stack))))))))
     (setq symbols
-          (seq-filter (lambda (symbol)
-                        (and symbol (functionp symbol)
-                             (not (primitive-function-p (indirect-function symbol)))))
-                      (nreverse symbols)))
-    (or (seq-find (lambda (symbol) (string-prefix-p "mevedel-" (symbol-name symbol)))
-                  symbols)
-        (car symbols))))
+          (delete-dups
+           (seq-filter (lambda (symbol)
+                         (and symbol (functionp symbol)
+                              (not (primitive-function-p (indirect-function symbol)))))
+                       (nreverse symbols))))
+    (let* ((own (seq-filter (lambda (symbol)
+                              (string-prefix-p "mevedel-" (symbol-name symbol)))
+                            symbols))
+           (work (seq-remove (lambda (symbol)
+                               (string-suffix-p "-p" (symbol-name symbol)))
+                             own)))
+      (or (seq-take (or work own) mevedel-telemetry--lag-closure-callee-count)
+          (and symbols (list (car symbols)))))))
+
+(defun mevedel-telemetry--lag-function-name (function arguments)
+  "Return a label for FUNCTION called with ARGUMENTS.
+A closure is labelled `closure:' plus the functions it calls, which names
+what it does rather than where it was created.  A named function whose
+`mevedel-telemetry-delegate' property is an argument index runs the
+function at that index; its label continues with that function's, after
+`>', since the trampoline alone does not say what work ran."
+  (cond
+   ((and (symbolp function) function)
+    (let* ((index (get function 'mevedel-telemetry-delegate))
+           (delegate (and (natnump index) (nth index arguments))))
+      (if (and delegate (functionp delegate))
+          (concat (symbol-name function) ">"
+                  (mevedel-telemetry--lag-function-name delegate nil))
+        (symbol-name function))))
+   ((when-let* ((callees (mevedel-telemetry--lag-closure-callees function)))
+      (concat "closure:" (mapconcat #'symbol-name callees ","))))
+   (t "anonymous")))
 
 (defun mevedel-telemetry--lag-callback-name (timer)
-  "Return a label for TIMER's callback.
-A closure is labelled `closure:' plus the function it calls, which names
-what it does rather than where it was created."
-  (let ((function (timer--function timer)))
-    (cond
-     ((and (symbolp function) function) (symbol-name function))
-     ((when-let* ((callee (mevedel-telemetry--lag-closure-callee function)))
-        (concat "closure:" (symbol-name callee))))
-     (t "anonymous"))))
+  "Return a label for TIMER's callback."
+  (mevedel-telemetry--lag-function-name (timer--function timer)
+                                        (timer--args timer)))
 
 (defun mevedel-telemetry--lag-time-callback (original timer)
   "Run ORIGINAL on TIMER, counting its lateness and run time as lag.
