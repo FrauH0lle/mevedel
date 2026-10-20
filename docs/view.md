@@ -1034,6 +1034,11 @@ For unanchored windows, a smaller character tail also permits clamping a start
 later than the last page backward; unchanged or growing tails retain their
 reading position. Equal-length reflow alone does not trigger that fallback.
 
+Spinner start, update, and stop leave logical-position restoration to zone
+reconciliation. They do not restore raw saved markers over it: a selection
+inside the permanent progress rail survives status replacement, while a draft
+and its reading position in another window remain intact.
+
 Draft editing captures blank pixels before the first mutation of a command and
 repairs only new blank space after the complete command. Ordinary self-insertion
 without overwrite or auto-fill skips capture. Short plain deletions whose line
@@ -2023,6 +2028,14 @@ Restoration also runs when a writer exits with an error. Managed-zone updates
 retain fragment-relative selections inside the changed zone and use advancing
 markers for positions in neighboring zones. Growing or removing status rows
 therefore keeps the reader in the same permission prompt below them.
+
+Region-based directive creation uses
+`mevedel-view-call-preserving-window-configuration` around minibuffer input.
+It restores the frame layout before reapplying chat anchors on acceptance,
+cancellation, or error, so a saved window configuration cannot overwrite a
+background reader's position after a redraw. Redraws during the prompt still
+restore the reader immediately; the source window's original scroll is also
+restored when input ends.
 
 The allocation-heavy chokepoints run with garbage collection batched
 (`mevedel--with-gc-batched`, a direct `gc-cons-threshold` and

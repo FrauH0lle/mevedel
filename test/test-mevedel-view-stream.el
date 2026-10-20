@@ -3379,6 +3379,46 @@ turn's later text, live and after reconstruction."
                                'progress 'request)
                               :start)))))))
 
+(mevedel-deftest mevedel-view-stream-spinner-reader-state ()
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer view-buf)
+      (let ((mevedel-view-spinner-animate nil))
+        (mevedel-view--start-spinner "Thinking...")
+        (mevedel-view-test--insert-composer-draft "> unsent draft\nsecond line" 4)
+        (let ((reader (selected-window))
+              (composer (split-window-right)))
+          (set-window-buffer composer view-buf)
+          (set-window-point composer (point))
+          (goto-char (+ (mevedel-view-zone-start 'progress) 5))
+          (set-mark (+ (point) 3))
+          (setq mark-active t deactivate-mark nil)
+          (let ((point-anchor (mevedel-view-zone-position-anchor (point)))
+                (mark-anchor (mevedel-view-zone-position-anchor (mark))))
+            (should point-anchor)
+            (should mark-anchor)
+            ,action
+            (should (= (point) (mevedel-view-zone-anchor-position point-anchor)))
+            (should (= (mark) (mevedel-view-zone-anchor-position mark-anchor)))
+            (should mark-active)
+            (should-not deactivate-mark)
+            (should (= (window-point reader) (point)))
+            (should (= (- (window-point composer) (mevedel-view--input-start)) 4))
+            (should (equal "> unsent draft\nsecond line"
+                           (mevedel-view--input-text))))))))
+  (action)
+  :doc "direct progress reconciliation preserves the reader's selection and draft"
+  (progn
+    (setq mevedel-view--spinner-status "Waiting for tools...")
+    (mevedel-view--render-request-progress))
+  :doc "starting progress preserves a selection inside the existing rail"
+  (mevedel-view--start-spinner "Waiting for tools...")
+  :doc "updating progress preserves a selection inside the existing rail"
+  (mevedel-view--update-spinner "Waiting for tools...")
+  :doc "stopping progress preserves a selection inside the permanent idle rail"
+  (mevedel-view--stop-spinner))
+
 (mevedel-deftest mevedel-view--start-spinner ()
   ,test
   (test)

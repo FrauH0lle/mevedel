@@ -1440,8 +1440,9 @@ STATUS defaults to \"Thinking...\"."
      (cl-incf mevedel-view--spinner-generation)
      (setq mevedel-view--spinner-status (or status "Thinking...")
            mevedel-view--spinner-owner 'request)
-     (save-excursion
-       (mevedel-view--render-request-progress))
+     ;; Reconciliation restores semantic positions inside the replaced rail.
+     ;; An outer `save-excursion' would overwrite that with its collapsed marker.
+     (mevedel-view--render-request-progress)
      (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view--spinner-region-p (start end)
@@ -1481,8 +1482,7 @@ STATUS defaults to \"Thinking...\"."
      (setq mevedel-view--spinner-status status
            mevedel-view--spinner-owner
            (or owner mevedel-view--status-owner-override 'request))
-     (save-excursion
-       (mevedel-view--render-request-progress))
+     (mevedel-view--render-request-progress)
      (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view--spinner-status-snapshot ()

@@ -154,6 +154,8 @@
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-view-composer'
+(autoload 'mevedel-view-call-preserving-window-configuration
+  "mevedel-view-composer")
 (defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-fontify'
@@ -911,16 +913,19 @@ or `mevedel-create-directive' for details on how the resizing works."
                                   (mevedel--create-reference-in buffer
                                                                 (region-beginning)
                                                                 (region-end))
-                                (save-window-excursion
-                                  (let ((pos (region-beginning)))
-                                    (unless (<= (window-start) pos (window-end))
-                                      (set-window-start (selected-window)
-                                                        (max (point-min)
-                                                             (- (region-beginning)
-                                                                (- (window-end) (window-start))))))
-                                    (mevedel--create-directive-in buffer
-                                                                  (region-beginning)
-                                                                  (region-end)))))))
+                                (mevedel-view-call-preserving-window-configuration
+                                 (lambda ()
+                                   ;; Minibuffer input can yield to chat redraws.
+                                   ;; Restore their anchors, not stale raw points.
+                                   (let ((pos (region-beginning)))
+                                     (unless (<= (window-start) pos (window-end))
+                                       (set-window-start (selected-window)
+                                                         (max (point-min)
+                                                              (- (region-beginning)
+                                                                 (- (window-end) (window-start))))))
+                                     (mevedel--create-directive-in buffer
+                                                                   (region-beginning)
+                                                                   (region-end))))))))
             (with-current-buffer buffer
               (deactivate-mark)
               (when (eq type 'reference)
