@@ -886,6 +886,9 @@
            (mevedel-session-max-age-days nil)
            (mevedel--gc-holds (make-hash-table :test #'eq))
            (mevedel--gc-restore nil)
+           (mevedel--gc-percentage-restore nil)
+           (mevedel--gc-floor-applied nil)
+           (gc-cons-percentage 0.1)
            (mevedel--gc-timer nil))
       (unwind-protect
           (progn

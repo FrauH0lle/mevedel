@@ -1624,11 +1624,52 @@ threshold throughout."
 (defvar mevedel--gc-restore nil
   "(PREVIOUS . APPLIED) once mevedel raised `gc-cons-threshold'.")
 
+(defvar mevedel--gc-percentage-restore nil
+  "(PREVIOUS . APPLIED) once mevedel raised `gc-cons-percentage'.")
+
+(defvar mevedel--gc-floor-applied nil
+  "The collection floor in bytes the last maintenance applied, or nil.")
+
+(defun mevedel--gc-live-bytes ()
+  "Return the bytes live after the last collection, without collecting."
+  (let ((total 0))
+    (dolist (entry (garbage-collect-heapsize))
+      (setq total (+ total (* (nth 1 entry) (nth 2 entry)))))
+    total))
+
+(defun mevedel--gc-raise (variable record floor)
+  "Keep VARIABLE at least FLOOR, tracking (PREVIOUS . APPLIED) in RECORD.
+While VARIABLE still holds the value applied last time, it follows FLOOR
+down as well as up, never below PREVIOUS; a value someone else set
+meanwhile is only raised."
+  (let ((cell (symbol-value record)))
+    (if (not cell)
+        (set record (setq cell (cons (symbol-value variable) nil)))
+      (when (eql (symbol-value variable) (cdr cell))
+        (set variable (max floor (car cell)))))
+    (when (< (symbol-value variable) floor)
+      (set variable floor))
+    (setcdr cell (symbol-value variable))))
+
+(defun mevedel--gc-unraise (variable record)
+  "Restore VARIABLE from RECORD unless someone else set it meanwhile."
+  (when-let* ((cell (symbol-value record)))
+    (when (eql (symbol-value variable) (cdr cell))
+      (set variable (car cell)))
+    (set record nil)))
+
 (defun mevedel--gc-maintain ()
   "Apply or release the busy collection threshold for the current holds.
 Holds whose predicate fails are dropped, so an ended request that skipped
 its release cannot keep the threshold raised.  Re-applying every second
-also outlasts tuning that lowers the threshold after an idle collection."
+also outlasts tuning that lowers the threshold after an idle collection.
+
+A collection waits until allocation exceeds both `gc-cons-threshold' and
+`gc-cons-percentage' of the live heap, so the floor is applied to both.
+The percentage keeps it when other tuning resets the threshold: gcmh sets
+its own value before every command, and once allocation had passed it, the
+next allocation collected before any later hook could raise it again --
+while scrolling, a 130 ms stall every few seconds."
   (maphash (lambda (key live-p)
              (unless (ignore-errors (funcall live-p))
                (remhash key mevedel--gc-holds)))
@@ -1636,28 +1677,22 @@ also outlasts tuning that lowers the threshold after an idle collection."
   (let ((floor (mevedel--gc-floor)))
     (if (and floor (> (hash-table-count mevedel--gc-holds) 0))
         (progn
-          (if (not mevedel--gc-restore)
-              (setq mevedel--gc-restore (cons gc-cons-threshold nil))
-            ;; Still our value: follow the floor down as well as up, so a
-            ;; pause in typing lets the deferred collection run.
-            (when (eql gc-cons-threshold (cdr mevedel--gc-restore))
-              (setq gc-cons-threshold
-                    (max floor (car mevedel--gc-restore)))))
-          (when (< gc-cons-threshold floor)
-            (setq gc-cons-threshold floor))
-          (setcdr mevedel--gc-restore gc-cons-threshold)
+          ;; Following the floor down lets a pause in typing run the
+          ;; deferred collection.
+          (mevedel--gc-raise 'gc-cons-threshold 'mevedel--gc-restore floor)
+          (mevedel--gc-raise 'gc-cons-percentage 'mevedel--gc-percentage-restore
+                             (/ (float floor) (max 1 (mevedel--gc-live-bytes))))
+          (setq mevedel--gc-floor-applied floor)
           (add-hook 'pre-command-hook #'mevedel--gc-note-input)
           (unless (timerp mevedel--gc-timer)
             (setq mevedel--gc-timer (mevedel--run-periodic-timer 1 #'mevedel--gc-maintain))))
       (when (timerp mevedel--gc-timer)
         (mevedel--ui-timer-cancel mevedel--gc-timer))
       (setq mevedel--gc-timer nil)
+      (setq mevedel--gc-floor-applied nil)
       (remove-hook 'pre-command-hook #'mevedel--gc-note-input)
-      (when mevedel--gc-restore
-        ;; Someone else chose a value meanwhile; theirs stands.
-        (when (eql gc-cons-threshold (cdr mevedel--gc-restore))
-          (setq gc-cons-threshold (car mevedel--gc-restore)))
-        (setq mevedel--gc-restore nil)))))
+      (mevedel--gc-unraise 'gc-cons-threshold 'mevedel--gc-restore)
+      (mevedel--gc-unraise 'gc-cons-percentage 'mevedel--gc-percentage-restore))))
 
 (defun mevedel--gc-typing-p ()
   "Return non-nil when input arrived within `mevedel--gc-typing-pause'."
@@ -1672,9 +1707,13 @@ also outlasts tuning that lowers the threshold after an idle collection."
       busy)))
 
 (defun mevedel--gc-note-input ()
-  "Raise the collection floor as soon as input resumes during held work."
+  "Raise the collection floor as soon as input resumes during held work.
+Compare the floor last applied, not `gc-cons-threshold': other tuning may
+reset that before every command, and the percentage keeps the floor."
   (when (and mevedel-gc-cons-threshold-while-typing
-             (< gc-cons-threshold mevedel-gc-cons-threshold-while-typing))
+             (< (or mevedel--gc-floor-applied 0)
+                (max (or mevedel-gc-cons-threshold-while-busy 0)
+                     mevedel-gc-cons-threshold-while-typing)))
     (mevedel--gc-maintain)))
 
 (defun mevedel--gc-hold (key live-p)

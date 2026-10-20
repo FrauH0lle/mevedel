@@ -2061,7 +2061,14 @@ settled root refresh allocates about 40 MB, and on a long session's heap one
 collection takes about 200 ms. While any hold exists and input arrived within
 the last second, `mevedel-gc-cons-threshold-while-typing` (256 MB by default,
 nil to disable) raises the floor further; the first command after a pause
-raises it at once. When input pauses, the busy floor returns and the pending
+raises it at once. A collection waits until allocation exceeds both
+`gc-cons-threshold` and `gc-cons-percentage` of the live heap, so each floor is
+applied to both: the percentage is the floor divided by the heap live after the
+last collection. The threshold alone did not hold. gcmh resets it to its own
+value in `pre-command-hook` before every command; once deferred allocation had
+passed that value, the next allocation collected before any later hook could
+raise it again, and scrolling during a request stalled for 130 ms every few
+seconds. When input pauses, the busy floor returns and the pending
 collection runs while nobody types. Scheduled history rebuilds hold the
 threshold for their whole job and five seconds after it. In the compiled
 replay, with a key every 10 ms, this removed the one 57-72 ms collection every

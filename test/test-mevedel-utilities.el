@@ -1363,6 +1363,9 @@ rejects trailing binary operators"
         (noninteractive nil)
         (mevedel--gc-holds (make-hash-table :test #'eq))
         (mevedel--gc-restore nil)
+        (mevedel--gc-percentage-restore nil)
+        (mevedel--gc-floor-applied nil)
+        (gc-cons-percentage 0.1)
         (mevedel--gc-timer nil))
     (unwind-protect
         (progn
@@ -1388,6 +1391,9 @@ rejects trailing binary operators"
         (noninteractive nil)
         (mevedel--gc-holds (make-hash-table :test #'eq))
         (mevedel--gc-restore nil)
+        (mevedel--gc-percentage-restore nil)
+        (mevedel--gc-floor-applied nil)
+        (gc-cons-percentage 0.1)
         (mevedel--gc-timer nil)
         (alive t))
     (unwind-protect
@@ -1408,6 +1414,9 @@ rejects trailing binary operators"
         (noninteractive nil)
         (mevedel--gc-holds (make-hash-table :test #'eq))
         (mevedel--gc-restore nil)
+        (mevedel--gc-percentage-restore nil)
+        (mevedel--gc-floor-applied nil)
+        (gc-cons-percentage 0.1)
         (mevedel--gc-timer nil)
         (idle nil))
     (unwind-protect
@@ -1431,10 +1440,48 @@ rejects trailing binary operators"
       (remove-hook 'pre-command-hook #'mevedel--gc-note-input)
       (when (timerp mevedel--gc-timer) (mevedel--ui-timer-cancel mevedel--gc-timer))))
 
+  :doc "keeps the typing floor when other tuning resets the threshold before commands"
+  (let ((gc-cons-threshold 800000)
+        (mevedel-gc-cons-threshold-while-busy (* 64 1024 1024))
+        (mevedel-gc-cons-threshold-while-typing (* 256 1024 1024))
+        (noninteractive nil)
+        (mevedel--gc-holds (make-hash-table :test #'eq))
+        (mevedel--gc-restore nil)
+        (mevedel--gc-percentage-restore nil)
+        (mevedel--gc-floor-applied nil)
+        (gc-cons-percentage 0.1)
+        (mevedel--gc-timer nil)
+        ;; Like `gcmh-set-high-threshold', installed at the default depth.
+        (pre-command-hook (list (lambda () (setq gc-cons-threshold (* 64 1024 1024)))))
+        (maintained 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'current-idle-time) (lambda () nil))
+                  ((symbol-function 'mevedel--gc-live-bytes) (lambda () (* 100 1024 1024))))
+          (mevedel--gc-hold 'work #'always)
+          (advice-add 'mevedel--gc-maintain :before (lambda () (cl-incf maintained))
+                      '((name . test-count)))
+          (unwind-protect
+              (dotimes (_ 3)
+                (run-hooks 'pre-command-hook)
+                ;; The reset threshold no longer decides: a collection waits
+                ;; for the larger of it and the percentage of the live heap.
+                (should (= (* 64 1024 1024) gc-cons-threshold))
+                (should (>= (* gc-cons-percentage 100 1024 1024) (* 256 1024 1024))))
+            (advice-remove 'mevedel--gc-maintain 'test-count))
+          ;; The floor is already applied; commands do not re-run maintenance.
+          (should (= 0 maintained))
+          (mevedel--gc-release 'work)
+          (should (= 0.1 gc-cons-percentage))
+          (should-not (memq #'mevedel--gc-note-input pre-command-hook)))
+      (when (timerp mevedel--gc-timer) (mevedel--ui-timer-cancel mevedel--gc-timer))))
+
   :doc "changes nothing in a batch Emacs or when disabled"
   (let ((gc-cons-threshold 800000)
         (mevedel--gc-holds (make-hash-table :test #'eq))
         (mevedel--gc-restore nil)
+        (mevedel--gc-percentage-restore nil)
+        (mevedel--gc-floor-applied nil)
+        (gc-cons-percentage 0.1)
         (mevedel--gc-timer nil))
     (let ((noninteractive t)
           (mevedel-gc-cons-threshold-while-busy (* 64 1024 1024)))
@@ -1457,6 +1504,9 @@ rejects trailing binary operators"
         (noninteractive nil)
         (mevedel--gc-holds (make-hash-table :test #'eq))
         (mevedel--gc-restore nil)
+        (mevedel--gc-percentage-restore nil)
+        (mevedel--gc-floor-applied nil)
+        (gc-cons-percentage 0.1)
         (mevedel--gc-timer nil))
     (unwind-protect
         (progn
