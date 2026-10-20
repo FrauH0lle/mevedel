@@ -19,12 +19,12 @@ button,select,input { font:inherit; }
 .project-name:empty { display:none; }
 /* The small line names where the page is: the project, which opens the
    menu of places to go, then the room an open panel covers. */
-.crumb { padding:0; border:0; background:none; font:inherit; color:var(--accent); cursor:pointer; }
+.crumb { padding:0; border:0; background:none; font:inherit; color:var(--accent); cursor:pointer; text-decoration:none; }
 .crumb:hover,.crumb:focus-visible { text-decoration:underline; text-underline-offset:2px; }
 .crumb-sep { margin:0 .45em; color:var(--muted); }
 .crumbs:not(:empty) + .head-meta:not(:empty)::before { content:'·'; margin:0 .45em; }
 /* Back to the page's parent: first in the header, never folded. */
-.back { flex:none; display:grid; place-items:center; width:36px; height:36px; margin-right:-12px; padding:0 0 3px; border:1px solid var(--line); border-radius:4px; background:transparent; color:var(--ink); font:400 24px/1 var(--font-ui); cursor:pointer; }
+.back { flex:none; display:grid; place-items:center; width:36px; height:36px; margin-right:-12px; padding:0 0 3px; border:1px solid var(--line); border-radius:4px; background:transparent; color:var(--ink); font:400 24px/1 var(--font-ui); cursor:pointer; text-decoration:none; }
 .back:hover,.back:focus-visible { border-color:var(--accent); color:var(--accent); }
 .nav-menu { min-width:14rem; }
 .nav-menu-head { padding:.45rem .6rem .15rem; font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); }
@@ -245,7 +245,7 @@ body:has(#editing-panel.docked) .room-button { display:grid; }
 }
 @media (max-width:640px) {
   :root { --topbar-h:56px; }
-  .topbar { padding:0 12px; gap:10px; }
+  .topbar { padding:0 12px; gap:8px; }
   .wordmark { font-size:19px; letter-spacing:-1.3px; }
   .room-heading { padding-left:10px; }
   /* A page's details give way to the title; where it is, and a state, stay. */

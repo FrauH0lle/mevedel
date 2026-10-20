@@ -175,9 +175,9 @@
   const presence = window.mevedelPresence.create(
     {send, el, page: () => editing.page() || artifacts.page()});
   const artifacts = window.mevedelArtifactView.create({
-    send, el, flash: flashNotice, summarize: summarizeSession,
+    send, el, href: destinationURL, flash: flashNotice, summarize: summarizeSession,
     openConversation: id => activeStore().conversation(id),
-    onPage: () => presence.report(),
+    onPage: () => { agents.cancelArtifactResolution(); presence.report(); },
     // A lobby has no welcome; its link tier decides instead.
     canDiscuss: () => (state.connected && !state.readOnly)
       || (lobby.active() && state.writable),
@@ -212,13 +212,13 @@
     send, el, onArtifacts:refreshFilter,
     renderRecord:record => window.mevedelTranscriptRenderer.renderRecord(
       record, scopeChip, artifacts.open, null, openExecutionResult,
-      path => agents.open({path})),
+      path => agents.open({path}), destinationURL),
   });
   const agents = window.mevedelAgentView.create({
     send, el, scopeChip, openArtifact: artifacts.open,
-    openExecution: openExecutionResult, flash: flashNotice,
+    openExecution: openExecutionResult, flash: flashNotice, href: destinationURL,
   });
-  const background = window.mevedelBackgroundView.create({state, send, el,
+  const background = window.mevedelBackgroundView.create({state, send, el, href: destinationURL,
     openAgent: row => agents.open(row), openExecution: openExecutionResult,
     showConversation: locateBackground,
   });
@@ -265,7 +265,7 @@
   }
   const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
   const goal = window.mevedelGoalView.create({el, onChange: renderModeline});
-  const editing = window.mevedelEditingView.create({state, send, el, flash: flashNotice, summarize: summarizeSession,
+  const editing = window.mevedelEditingView.create({state, send, el, href: destinationURL, flash: flashNotice, summarize: summarizeSession,
     onVisibility: () => presence.report(),
     onCatalog: refreshFilter,
     // A docked item is the chat's subject: the chat shows and writes to its
@@ -295,12 +295,12 @@
      notice: flashNotice});
   const uploads = window.mevedelFilesView.uploader({send});
   const files = window.mevedelFilesView.create(
-    {send, el, notice: flashNotice, uploads, openFile: artifacts.openFile});
+    {send, el, notice: flashNotice, uploads, openFile: artifacts.openFile, href: destinationURL});
   // The workspace artifact store: the room's Project artifacts sheet and
   // the lobby's Artifacts tab; one is active at a time.
   const storeSheet = document.getElementById('store-sheet');
   const roomStore = window.mevedelStoreView.create({
-    send, el, state, room: true, notice: flashNotice,
+    send, el, state, room: true, notice: flashNotice, href: destinationURL,
     navigate: link => nav.navigate(link),
     open: record => {
       storeSheet.close();
@@ -313,9 +313,11 @@
   function openStore() {
     roomStore.refresh();
     storeSheet.showModal();
+    nav.note({view: 'artifacts'});
   }
+  storeSheet.addEventListener('close', () => nav.note({view: null}));
   const lobbyStore = window.mevedelStoreView.create({
-    send, el, state, open: artifacts.open, notice: flashNotice,
+    send, el, state, open: artifacts.open, notice: flashNotice, href: destinationURL,
     navigate: link => nav.navigate(link),
     creation: document.getElementById('lobby-store-create'),
     list: document.getElementById('lobby-store-list'),
@@ -332,7 +334,13 @@
     panels: [
       {node: document.getElementById('artifact-panel'), describe: artifacts.describe,
        owns: page => Boolean(page.artifact || page.file),
-       reopen: page => (page.file ? artifacts.openFile(page.file) : artifacts.open(page.artifact)),
+       reopen: page => {
+         if (page.file) artifacts.openFile(page.file);
+         else if (page.artifact.agent) {
+           artifacts.close();
+           agents.resolveArtifact(page.artifact);
+         } else artifacts.open(page.artifact);
+       },
        close: artifacts.close},
       {node: document.getElementById('agent-panel'), describe: agents.describe,
        owns: page => Boolean(page.agent), reopen: page => agents.open(page.agent),
@@ -341,6 +349,64 @@
   });
   const activeStore = () => (lobby.active() ? lobbyStore : roomStore);
   let storeArtifacts = null;
+
+  // Only host-resolved identifiers travel in links, not arbitrary frame
+  // payloads. Keep content selectors in the fragment, out of relay requests.
+  function destinationURL(destination) {
+    const params = {};
+    if (destination.shared) params.shared = destination.shared;
+    else if (destination.file) params.file = destination.file;
+    else if (destination.agent) {
+      params.agent = destination.agent.path;
+      if (destination.agent.segment) params.segment = destination.agent.segment;
+    } else if (destination.artifact) {
+      const record = destination.artifact;
+      if (record.store && record.id === `artifact:${record.store}`) params.artifact = record.store;
+      else params.record = record.id;
+      if (record.version) params.version = record.version;
+      if (record.agent) {
+        params.agent = record.agent.path;
+        if (record.agent.segment) params.segment = record.agent.segment;
+      }
+    }
+    return window.mevedelNav.roomURL(state.fragment, params);
+  }
+
+  // Import a fresh tab's closed destination vocabulary once. Ordinary panel
+  // history then owns it after startup scrubs the fragment.
+  function routeState(fragment) {
+    const separator = fragment.indexOf('?');
+    if (separator < 0) return {};
+    const params = new URLSearchParams(fragment.slice(separator + 1));
+    const positive = key => {
+      const value = params.get(key);
+      const number = Number(value);
+      return /^[1-9][0-9]*$/.test(value || '') && Number.isSafeInteger(number) ? number : null;
+    };
+    const route = {};
+    if (['sessions', 'artifacts', 'files'].includes(params.get('tab'))) route.tab = params.get('tab');
+    if (params.get('view') === 'artifacts') route.view = 'artifacts';
+    if (params.get('file')) route.panel = {file: params.get('file')};
+    else if (params.get('artifact') || params.get('record')) {
+      const store = params.get('artifact');
+      route.panel = {artifact: {id: store ? `artifact:${store}` : params.get('record'),
+        ...(store ? {store} : {}),
+        ...(params.get('agent') ? {agent: {path: params.get('agent'),
+          ...(positive('segment') ? {segment: positive('segment')} : {})}} : {}),
+        ...(positive('version') ? {version: positive('version')} : {})}};
+    } else if (params.get('agent')) {
+      route.panel = {agent: {path: params.get('agent'), ...(positive('segment') ? {segment: positive('segment')} : {})}};
+    }
+    return route;
+  }
+
+  let destinationRestored = false;
+  function restoreDestination() {
+    nav.restore();
+    if (destinationRestored) return;
+    destinationRestored = true;
+    if (!lobby.active() && nav.entry().view === 'artifacts' && !nav.entry().panel) openStore();
+  }
 
   let executionResultSequence = 0;
   let pendingExecutionResult = null;
@@ -710,7 +776,7 @@
     const current = state.elements.get(record.id);
     const turn = window.mevedelTranscriptRenderer.renderRecord(
       record, scopeChip, artifacts.open, previous || current, openExecutionResult,
-      path => agents.open({path}));
+      path => agents.open({path}), destinationURL);
     if (current) {
       turn.hidden = current.hidden;
       current.replaceWith(turn);
@@ -1248,7 +1314,7 @@
       goal.show();
       setConnection('Loading…', 'connected');
       editing.welcome();
-      nav.restore();
+      restoreDestination();
     } else if (frame.t === 'editing' || frame.t === 'editing-presence') {
       editing.receive(frame);
     } else if (frame.t === 'snapshot-chunk') {
@@ -1365,7 +1431,7 @@
       }
       setConnection('Connected', 'connected');
       nav.render();
-      nav.restore();
+      restoreDestination();
     } else if (frame.t === 'lobby-state') {
       showLobbyState(frame.lobby);
     } else if (frame.t === 'presence') {
@@ -1544,8 +1610,9 @@
     document.body.removeAttribute('data-reading');
   });
   window.addEventListener('scroll', updateLiveAffordance, {passive: true});
-  const rawFragment = notificationsApi.resolveShare(parseFragment,
-                                                    window.mevedelNav.historyShare());
+  const linkFragment = notificationsApi.resolveShare(parseFragment,
+                                                     window.mevedelNav.historyShare());
+  const rawFragment = linkFragment.split('?')[0];
   const credentials = parseFragment(`#${rawFragment}`);
   if (!credentials) {
     setConnection('Invalid link', 'ended');
@@ -1571,6 +1638,7 @@
     // entry names the room alone, and the URL loses the key before the
     // socket opens.
     nav.enter(credentials.roomId, rawFragment);
+    if (linkFragment.includes('?')) nav.note({panel: null, tab: null, view: null, ...routeState(linkFragment)});
     nav.render();
     Promise.all([importKey(credentials.keyBytes), names.ready]).then(([key]) => {
       transport = transportApi.create({

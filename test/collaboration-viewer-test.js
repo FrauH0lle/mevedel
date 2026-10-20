@@ -81,12 +81,18 @@ class Element {
     if (index >= 0) this.parent.children[index] = other;
   }
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) {
+    delete this.attributes[name];
+    if (name === 'href') this.href = '';
+  }
   addEventListener(type, callback) {
     (this.listeners[type] ||= []).push(callback);
   }
   dispatchEvent(event) { this.dispatch(event.type, event); }
   dispatch(type, event = {}) {
-    if (!event.preventDefault) event.preventDefault = () => {};
+    if (!event.preventDefault) event.preventDefault = () => { event.defaultPrevented = true; };
+    if (type === 'click' && event.button === undefined) event.button = 0;
+    if (!event.currentTarget) event.currentTarget = this;
     if (!event.type) event.type = type;
     for (const callback of this.listeners[type] || []) callback(event);
   }
@@ -181,13 +187,27 @@ async function unseal(key, data) {
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-// WebCrypto may resolve off the immediate queue; poll briefly.
+// WebCrypto resolves through async I/O, not a fixed number of immediate turns.
+// Allow 500 ms of wall-clock time and yield to timers/I/O between checks.
 async function waitFor(predicate, what) {
-  for (let i = 0; i < 500; i++) {
+  const deadline = performance.now() + 500;
+  do {
     if (predicate()) return;
-    await tick();
-  }
+    await new Promise(resolve => setTimeout(resolve, 1));
+  } while (performance.now() < deadline);
+  if (predicate()) return;
   throw new Error(`timed out waiting for ${what}`);
+}
+
+async function testWaitFor() {
+  let ready = false;
+  const timer = setTimeout(() => { ready = true; }, 20);
+  try {
+    await waitFor(() => ready, 'timer-backed predicate');
+    assert.equal(ready, true);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function testTransportLifecycle() {
@@ -398,6 +418,18 @@ async function testTransportGiveUp() {
   assert.equal(retry, null);
 }
 
+// Focused views use the same link helpers as the complete viewer, with a
+// room bearer and browser location rather than a stubbed navigation action.
+function navigationFixture(context) {
+  Object.assign(context, {URL, URLSearchParams});
+  const location = new URL(context.window.location?.href || 'http://localhost/');
+  context.window.location ||= {};
+  Object.assign(context.window.location, {origin: location.origin, pathname: location.pathname});
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-nav.js', 'utf8'), context);
+  return params => context.window.mevedelNav.roomURL(
+    `roomroomroomroom.${base64url(new Uint8Array(32))}`, params);
+}
+
 async function testItemConversations() {
   const nodes = new Map(), messages = [], state = {records:new Map(), ownQueue:[]};
   const user = (id, item, question) => ({id,kind:'user',shared:{itemId:item,questionId:question}});
@@ -413,8 +445,9 @@ async function testItemConversations() {
       mevedelViewerTransport:{parseFragment:()=>null}},
     MessageChannel:class {constructor(){this.port1={postMessage:m=>messages.push(m),close(){}};this.port2={};}},
   };
+  const href = navigationFixture(context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
-  api=context.window.mevedelEditingView.create({state,el:tag=>new Element(tag),flash:message=>assert.fail(message),summarize(){},
+  api=context.window.mevedelEditingView.create({state,href,el:tag=>new Element(tag),flash:message=>assert.fail(message),summarize(){},
     send:async frame=>{
       const args=JSON.parse(Buffer.from(frame.data,'base64').toString());
       lastArgs=args;
@@ -476,8 +509,9 @@ async function testEditingAvailability() {
     document:{getElementById:node,querySelectorAll:()=>creates},
     window:{matchMedia:()=>({matches:false,addEventListener(){}}),location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
   };
+  const href = navigationFixture(context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
-  api=context.window.mevedelEditingView.create({state,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
+  api=context.window.mevedelEditingView.create({state,href,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
     send:async frame=>{
       const args=JSON.parse(atob(frame.data));
       const reply=args.action==='list' ? {result:[{id:'doc',kind:'document',title:'Notes'}]}
@@ -498,12 +532,14 @@ async function testEditingAvailability() {
   failure=false;
   await node('editing-recheck').onclick();
   assert.match(node('editing-status').textContent,/ready/);
-  assert.equal(node('editing-items').children[0].disabled,false);
+  assert.equal(node('editing-items').children[0].tagName,'a');
+  assert.equal(node('editing-items').children[0].href,href({shared:'doc'}));
   assert.equal(creates[0].disabled,false);
   state.readOnly=true;
   await node('editing-recheck').onclick();
   assert.equal(creates[0].hidden,true);
-  assert.equal(node('editing-items').children[0].disabled,false);
+  assert.equal(node('editing-items').children[0].tagName,'a');
+  assert.equal(node('editing-items').children[0].href,href({shared:'doc'}));
   api.connection(false);
   assert.equal(node('editing-recheck').disabled,true);
   assert.equal(node('editing-items').children[0].disabled,true);
@@ -525,8 +561,9 @@ async function testEditingDock() {
       location:{href:'http://localhost/',hash:''}, history:{replaceState(){}},
       mevedelViewerTransport:{parseFragment:()=>null}},
   };
+  const href = navigationFixture(context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
-  api=context.window.mevedelEditingView.create({state,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
+  api=context.window.mevedelEditingView.create({state,href,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
     onDock:(on,id)=>docks.push([on,id]), onFocusChat:()=>focused++,
     send:async frame=>{
       if (!frame.data) return true;
@@ -540,7 +577,11 @@ async function testEditingDock() {
   const tick = () => new Promise(resolve => setTimeout(resolve, 10));
   await api.welcome();
   api.attachedItems(['doc']);
-  await node('editing-items').children[0].onclick();
+  const itemLink = node('editing-items').children[0];
+  assert.equal(itemLink.tagName, 'a');
+  assert.equal(itemLink.href, href({shared: 'doc'}));
+  itemLink.dispatch('click');
+  await waitFor(() => api.dockedItem() === 'doc', 'item link docks the editor');
   const panel = node('editing-panel');
   assert.equal(panel.hidden,false);
   assert.equal(panel.classList.contains('docked'),true);
@@ -595,10 +636,11 @@ async function testEditingDeletion() {
     document:{getElementById:node,querySelectorAll:()=>[]},
     window:{matchMedia:()=>({matches:false,addEventListener(){}}),location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
   };
+  const href = navigationFixture(context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
   let listFails = false;
   const create = onCatalog => {
-    const view=context.window.mevedelEditingView.create({state:{records:new Map(),ownQueue:[],readOnly:false},
+    const view=context.window.mevedelEditingView.create({state:{records:new Map(),ownQueue:[],readOnly:false},href,
       el:tag=>new Element(tag),flash:message=>flashes.push(message),summarize(){},onCatalog,
       send:async frame=>{
         const args=JSON.parse(atob(frame.data));
@@ -661,8 +703,9 @@ async function testItemDiscussionAsk() {
     document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},querySelectorAll:()=>[]},
     window:{matchMedia:()=>({matches:false,addEventListener(){}}),location:{href:'http://localhost/',hash:''},mevedelViewerTransport:{parseFragment:()=>null}},
   };
+  const href = navigationFixture(context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js','utf8'),context);
-  api=context.window.mevedelEditingView.create({state,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
+  api=context.window.mevedelEditingView.create({state,href,el:tag=>new Element(tag),flash:assert.fail,summarize(){},
     send:async frame=>{
       const args=JSON.parse(atob(frame.data));
       if (args.action==='discussion') asked.push(args);
@@ -689,7 +732,9 @@ async function testItemDiscussionAsk() {
 function testCompletionRendering() {
   const window = {};
   const document = {createElement: tag => new Element(tag)};
-  vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), {window, document});
+  const context = {window, document};
+  const href = navigationFixture(context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), context);
   const render = (record, onExecutionOpen) => window.mevedelTranscriptRenderer.renderRecord(
     record, null, null, null, onExecutionOpen);
   const execution = {owner: '/root', ownPath: '/root', id: 'exec-1', kind: 'bash',
@@ -760,9 +805,23 @@ function testCompletionRendering() {
   assert.equal(event.disclosures.size, 0);
   assert.equal(textOf(findByClass(render({id: 'event-2', kind: 'monitor-event',
     text: 'Ready'}), 'execution-breadcrumb')), '● Monitor event: Ready · monitor');
+
+  const artifact = {id: 'artifact-1', kind: 'tool', artifact: 'page/index.html', store: 'page'};
+  let openedArtifact = null;
+  const card = window.mevedelTranscriptRenderer.renderRecord(artifact, null,
+    record => { openedArtifact = record; }, null, null, null,
+    route => { assert.equal(route.artifact, artifact); return href({artifact: route.artifact.store}); });
+  const artifactLink = findByClass(card, 'artifact-open');
+  assert.equal(artifactLink.tagName, 'a');
+  assert.equal(artifactLink.href, href({artifact: 'page'}));
+  artifactLink.dispatch('click', {ctrlKey: true});
+  assert.equal(openedArtifact, null);
+  artifactLink.dispatch('click');
+  assert.equal(openedArtifact, artifact);
 }
 
 async function main() {
+  await testWaitFor();
   testCompletionRendering();
   await runNotificationTests();
   await testItemConversations();
@@ -979,7 +1038,7 @@ async function main() {
   }
   window.matchMedia = () => ({matches:false, addEventListener(){}});
   const context = {
-    document, window, WebSocket: TestWebSocket, URL, console,
+    document, window, WebSocket: TestWebSocket, URL, URLSearchParams, console,
     crypto, TextEncoder, TextDecoder, atob, btoa, Date, Blob: FakeBlob,
     Event: FakeEvent, Notification: FakeNotification,
     PushManager: class PushManager {},
@@ -1082,6 +1141,23 @@ async function main() {
   assert.equal(owner.keyBytes.length, 32);
   assert.equal(owner.writeToken.length, 16);
   assert.equal(owner.ownerToken.length, 16);
+  // Viewer routes follow the bearer; they never alter its credentials or tier.
+  for (const [secret, expected] of [[base64url(keyBytes), view], [fullSecret, full], [ownerSecret, owner]]) {
+    for (const suffix of ['?view=artifacts', '?tab=files', '?file=src%2Fprivate.el&agent=%2Froot%2Fchild']) {
+      const parsed = api.parseFragment(`#${roomId}.${secret}${suffix}`);
+      assert.equal(parsed.roomId, expected.roomId);
+      assert.deepEqual(Array.from(parsed.keyBytes), Array.from(expected.keyBytes));
+      assert.deepEqual(parsed.writeToken && Array.from(parsed.writeToken),
+                       expected.writeToken && Array.from(expected.writeToken));
+      assert.deepEqual(parsed.ownerToken && Array.from(parsed.ownerToken),
+                       expected.ownerToken && Array.from(expected.ownerToken));
+    }
+  }
+  for (const malformed of ['#short.abc', '#nodotsecret', `#${roomId}.!invalid`,
+                            `#${roomId}.${base64url(new Uint8Array(31))}`, `#${roomId}.`]) {
+    assert.equal(api.parseFragment(`${malformed}?view=artifacts`), null,
+                 'a viewer route must not make malformed credentials valid');
+  }
   assert.equal(api.parseFragment('#short.abc'), null);
   assert.equal(api.parseFragment(`#${roomId}.${base64url(new Uint8Array(31))}`), null);
   assert.equal(api.parseFragment('#nodotsecret'), null);

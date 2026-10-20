@@ -33,6 +33,11 @@ class Element {
     (this.listeners[type] ||= []).push(callback);
   }
   dispatch(type, event = {}) {
+    if (type === 'click') {
+      event.button ??= 0;
+      event.defaultPrevented ??= false;
+      event.preventDefault ??= function () { this.defaultPrevented = true; };
+    }
     (this.listeners[type] || []).forEach(callback => callback(event));
   }
   click() { this.clicked = true; }

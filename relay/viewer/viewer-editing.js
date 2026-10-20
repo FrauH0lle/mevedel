@@ -1,7 +1,7 @@
 /* Trusted room controller. The opaque editor gets only an item-scoped port. */
 'use strict';
 window.mevedelEditingView = {
-  create({ state, send, el, flash, summarize, onVisibility = () => {}, onCatalog = () => {},
+  create({ state, send, el, flash, summarize, href, onVisibility = () => {}, onCatalog = () => {},
            onDock = () => {}, onFocusChat = () => {} }) {
     const box = document.getElementById('editing-box'),
       list = document.getElementById('editing-items');
@@ -295,7 +295,8 @@ window.mevedelEditingView = {
       const shown = [...catalog.values()].filter(
         (item) => attached.has(item.id) || item.local || item.id === current);
       for (const item of shown) {
-        const button = el('button', 'btn quiet');
+        const disabled = !available && !(current === item.id && frame) && !readDraft(item.id);
+        const button = el(disabled ? 'button' : 'a', 'btn quiet');
         // A whiteboard's mark is shapes on a board; a document's, lines of text.
         const symbol = el('span', `item-symbol${item.kind === 'whiteboard' ? ' board' : ''}`);
         symbol.innerHTML = item.kind === 'whiteboard'
@@ -304,11 +305,13 @@ window.mevedelEditingView = {
         symbol.setAttribute('aria-hidden', 'true');
         button.append(symbol, el('span', '', `${item.title}${item.local ? ' (local recovery)' : ''}`));
         button.dataset.itemId = item.id;
-        button.type = 'button';
-        button.disabled = !available && !(current === item.id && frame) && !readDraft(item.id);
-        button.title = button.disabled ? unavailableReason : `Open ${item.title}`;
+        if (disabled) {
+          button.type = 'button';
+          button.disabled = true;
+        }
+        button.title = disabled ? unavailableReason : `Open ${item.title}`;
         button.setAttribute('aria-describedby', 'editing-status');
-        button.onclick = () => openItem(item.id);
+        if (!disabled) window.mevedelNav.link(button, href({shared: item.id}), () => openItem(item.id));
         list.append(button);
       }
       document

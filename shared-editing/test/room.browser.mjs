@@ -186,9 +186,9 @@ test(
       await until(async () => (await frame(pages[0]).locator('html').getAttribute('data-theme')) === null);
       await pages[0].evaluate(() => window.dispatchEvent(new Event('focus')));
       assert.match(await pages[0].title(), /Whiteboard/);
-      await until(async () => (await pages[1].locator('#editing-items button').count()) === 1);
-      await pages[1].locator('#editing-items button').click();
-      await pages[2].locator('#editing-items button').click();
+      await until(async () => (await pages[1].locator('#editing-items a').count()) === 1);
+      await pages[1].locator('#editing-items a').click();
+      await pages[2].locator('#editing-items a').click();
       await Promise.all(
         pages.map((p) => frame(p).locator('#canvas').waitFor({ state: 'visible' })),
       );
@@ -337,9 +337,9 @@ test(
       await pages[0].locator('#editing-close').click();
       await pages[0].locator('[data-create-editor="document"]').click();
       await frame(pages[0]).locator('.tiptap').waitFor({ state: 'visible' });
-      await until(async () => (await pages[1].locator('#editing-items button').count()) === 2);
+      await until(async () => (await pages[1].locator('#editing-items a').count()) === 2);
       await pages[1].locator('#editing-close').click();
-      await pages[1].locator('#editing-items button').filter({ hasText: 'Document' }).click();
+      await pages[1].locator('#editing-items a').filter({ hasText: 'Document' }).click();
       await frame(pages[1]).locator('.tiptap').waitFor({ state: 'visible' });
       await Promise.all(pages.slice(0, 2).map((p) => frame(p).locator('.tiptap').click()));
       await Promise.all([

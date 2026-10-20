@@ -230,6 +230,15 @@ it lists the other rooms of the workspace this browser holds, capped to the
 tab's tier, and **Manage rooms…**, the sheet that copies and forgets them.
 The menu replaced the dock's Rooms and Project artifacts rows.
 
+Navigation destinations are real links: the menu's lobby, rooms and project
+views, the header's lobby link and parent-room breadcrumbs, artifact previews
+and versions, project files, shared editors and agent transcripts. Ordinary
+clicks keep their in-page behavior; middle-click, Ctrl/Cmd-click and the
+browser's link context menu open the destination independently without changing
+the source tab or its draft. Management and mutation controls remain buttons.
+Opening a saved session or an artifact's conversation still requests a link
+from the host, which may first need to resume or share that session.
+
 Every page but the lobby has a back button before its title. In a room it
 returns to the lobby; over a panel it closes the panel. Its label names
 where it leads, such as "Back to the project lobby". An editor tab's back
@@ -247,6 +256,26 @@ A room's key never enters history. Each entry names its room id only, and
 the tab keeps each room's link it used in `sessionStorage`, per tab and gone
 with it; going back finds the link there and reloads into that room. A room
 that ends is dropped from the tab's links, so Back cannot rejoin it.
+
+Fresh-tab destinations use a private suffix on the bearer fragment, for example
+`#ROOM.SECRET?view=artifacts` or `#ROOM.SECRET?file=PATH`. The closed selectors
+are `view=artifacts`, `tab=sessions|artifacts|files`, `artifact=STORE-ID`
+(with optional positive `version`), `record=RECORD-ID`, `file=PATH`, and
+`agent=AGENT-PATH` (with optional positive `segment`). The viewer imports the
+destination into history state and scrubs the whole fragment before connecting.
+Neither credentials nor these content selectors enter relay request URLs.
+Reload restores the selected view from history state. Shared editors retain
+their existing `?shared=ITEM-ID#ROOM.SECRET` URL format. Destination links never
+inherit a source editor's query and never grant a stronger tier than the tab
+already holds; the host still authorizes every data request.
+
+Store links name their primary artifact. Transcript-card links instead retain
+the exact record ID, including cards for secondary files in a store directory.
+Agent-owned cards add `agent=AGENT-PATH` and, for an archive, `segment=N` to
+the record route. The new tab first fetches that agent snapshot, then opens
+the matching published record; it cannot substitute a filename or another
+store artifact when the record is unavailable. This preserves the host's
+per-guest publication boundary on reload as well as first opening.
 
 Which lobby a room leads back to comes from the browser, and from the host
 for an owner. The browser keeps every lobby it opens with its rooms, marked

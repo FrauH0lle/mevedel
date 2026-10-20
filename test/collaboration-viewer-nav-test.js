@@ -8,6 +8,13 @@ const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
 
 const plain = value => JSON.parse(JSON.stringify(value));
 
+function click(node, overrides = {}) {
+  const event = {button: 0, currentTarget: node, defaultPrevented: false,
+                 preventDefault() { this.defaultPrevented = true; }, ...overrides};
+  node.dispatch('click', event);
+  return event;
+}
+
 // A link's fragment is ROOM.SECRET; only the room id matters here.
 function parse(fragment) {
   const match = /^#([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(String(fragment));
@@ -34,7 +41,7 @@ function build({lobbyActive = false, lobbyLink = null, rooms = [], state = {}} =
   };
   const window = {
     history,
-    location: {pathname: '/', search: '?shared=board', reloads: 0,
+    location: {origin: 'https://relay.example', pathname: '/', search: '?shared=board', reloads: 0,
                reload() { this.reloads++; }, replace(link) { this.replaced = link; }},
     listeners: {},
     addEventListener(type, callback) { (this.listeners[type] ||= []).push(callback); },
@@ -42,7 +49,8 @@ function build({lobbyActive = false, lobbyLink = null, rooms = [], state = {}} =
   };
   const sessionStorage = {getItem: key => (tab.has(key) ? tab.get(key) : null),
                           setItem: (key, value) => tab.set(key, value)};
-  load('relay/viewer/viewer-nav.js', {window, document, console, sessionStorage, JSON, Math});
+  load('relay/viewer/viewer-nav.js', {window, document, console, sessionStorage, JSON, Math,
+                                    URL, URLSearchParams});
   const lobbyCalls = [];
   const lobby = {active: () => lobbyActive, tab: () => 'sessions',
                  select: name => lobbyCalls.push(name)};
@@ -51,7 +59,8 @@ function build({lobbyActive = false, lobbyLink = null, rooms = [], state = {}} =
   const opened = [];
   const sheets = [];
   const nav = window.mevedelNav.create({
-    state: {project: 'proj', sessionName: 'Feature work', writable: true, ...state},
+    state: {project: 'proj', sessionName: 'Feature work', writable: true,
+            fragment: 'here.secret', ...state},
     el: (tag, className, text) => element(document, tag, className, text),
     parse, lobby,
     sessions: {lobbyLink: () => lobbyLink, rooms: () => rooms, hasRooms: () => rooms.length > 0},
@@ -69,6 +78,10 @@ function build({lobbyActive = false, lobbyLink = null, rooms = [], state = {}} =
     window.listeners.popstate.forEach(listener => listener({state: next}));
   };
   const menu = body.children.find(child => child.className === 'store-menu nav-menu');
+  menu.querySelector = selector => {
+    assert.equal(selector, '[role="menuitem"]');
+    return menu.children.find(child => child.attributes.role === 'menuitem');
+  };
   return {nav, nodes, window, history, calls, tab, panel, opened, pop, lobbyCalls,
           sheets, menu, historyShare: window.mevedelNav.historyShare};
 }
@@ -209,7 +222,7 @@ const shares = tab => JSON.parse(tab.get('mevedel-tab-shares'));
   assert.equal(nodes['room-back'].attributes['aria-label'], 'Back to the project lobby');
   nodes['room-crumbs'].children[0].dispatch('click', {currentTarget: {}});
   assert.deepEqual(menu.children.map(textOf), ['Project · proj', 'Lobby', 'Project artifacts']);
-  nodes['room-back'].dispatch('click');
+  click(nodes['room-back']);
   assert.deepEqual(calls.at(-1), ['push', {room: 'lobby'}, '/']);
 }
 // A host that says no lobby runs outranks a link the browser still holds.
@@ -225,7 +238,7 @@ const shares = tab => JSON.parse(tab.get('mevedel-tab-shares'));
   nav.enter('here', 'here.secret');
   nav.render();
   assert.equal(nodes['room-back'].hidden, false);
-  nodes['room-back'].dispatch('click');
+  click(nodes['room-back']);
   assert.deepEqual(calls.at(-1), ['push', {room: 'named'}, '/']);
 }
 // In the lobby the project is the page itself: its menu shows its tabs,
@@ -238,8 +251,107 @@ const shares = tab => JSON.parse(tab.get('mevedel-tab-shares'));
   assert.equal(nodes['artifact-close'].attributes['aria-label'], 'Back to the lobby');
   nodes['room-crumbs'].children[0].dispatch('click', {currentTarget: {}});
   assert.deepEqual(menu.children.map(textOf), ['Project · proj', 'Sessions', 'Artifacts', 'Files']);
-  menu.children[2].dispatch('click');
+  click(menu.children[2]);
   assert.deepEqual(lobbyCalls, ['artifacts']);
+}
+
+// Shared link helpers keep the browser's native alternate navigation intact.
+{
+  const {window} = build();
+  const {link, roomURL} = window.mevedelNav;
+  assert.equal(roomURL('here.secret'), 'https://relay.example/#here.secret');
+  assert.equal(roomURL('#here.secret', {view: 'artifacts'}),
+               'https://relay.example/#here.secret?view=artifacts');
+  assert.equal(roomURL('here.secret', {file: 'src/a b.js'}),
+               'https://relay.example/#here.secret?file=src%2Fa+b.js');
+  assert.equal(roomURL('here.secret?file=old', {tab: 'files'}),
+               'https://relay.example/#here.secret?tab=files');
+  assert.equal(roomURL('here.secret', {shared: 'board', agent: '/root/child'}),
+               'https://relay.example/?shared=board#here.secret?agent=%2Froot%2Fchild');
+  const anchor = new Element('a');
+  let activations = 0;
+  assert.equal(link(anchor, roomURL('there.key'), () => activations++), anchor);
+  assert.equal(anchor.href, 'https://relay.example/#there.key');
+  for (const alternate of [{button: 1}, {button: 2}, {ctrlKey: true}, {metaKey: true},
+                           {shiftKey: true}, {altKey: true}]) {
+    assert.equal(click(anchor, alternate).defaultPrevented, false);
+  }
+  click(anchor, {defaultPrevented: true});
+  assert.equal(activations, 0);
+  assert.equal(click(anchor).defaultPrevented, true);
+  assert.equal(activations, 1);
+}
+
+// Menu and header links use the session module's tier-capped destinations
+// verbatim, rather than assembling links from stronger stored credentials.
+{
+  const lobbyLink = 'https://relay.example/#lobby.writer-token';
+  const roomLink = 'https://relay.example/#other.view-token';
+  const {nav, nodes, menu, window, sheets} = build({
+    lobbyLink, rooms: [{name: 'Other', link: roomLink}],
+  });
+  nav.enter('here', 'here.secret');
+  nav.render();
+  click(nodes['room-crumbs'].children[0]);
+  const destinations = menu.children.filter(node => node.tagName === 'a');
+  assert.deepEqual(destinations.map(node => [textOf(node), node.href]), [
+    ['Lobby', lobbyLink],
+    ['Project artifacts', 'https://relay.example/#here.secret?view=artifacts'],
+    ['Other', roomLink],
+  ]);
+  assert.equal(destinations[0].focused, true, 'opening the menu focuses its first anchor');
+  assert.equal(menu.children.at(-1).tagName, 'button', 'Manage rooms remains an action');
+  assert.equal(nodes['room-back'].href, lobbyLink);
+  assert.equal(click(nodes['room-back'], {ctrlKey: true}).defaultPrevented, false);
+  assert.equal(window.location.reloads, 0);
+  const store = destinations[1];
+  click(store, {button: 1});
+  click(store, {metaKey: true});
+  assert.deepEqual(sheets, []);
+  assert.equal(menu.popoverOpen, true);
+  click(store);
+  assert.deepEqual(sheets, ['store']);
+  assert.equal(menu.popoverOpen, false);
+  click(destinations[2]);
+  assert.equal(window.location.reloads, 1);
+}
+
+// A panel's parent is a room URL with no source editor/panel query attached.
+{
+  const {nav, nodes, panel} = build();
+  nav.render();
+  const parent = nodes['artifact-crumbs'].children.at(-1);
+  assert.equal(parent.tagName, 'a');
+  assert.equal(parent.href, 'https://relay.example/#here.secret');
+  panel.node.hidden = false;
+  click(parent, {metaKey: true});
+  assert.equal(panel.closed, 0);
+  click(parent);
+  assert.equal(panel.closed, 1);
+}
+
+// Lobby menu destinations carry their tab in the URL, not only history state.
+{
+  const {nav, nodes, menu, lobbyCalls} = build({lobbyActive: true,
+    state: {fragment: 'lobby.writer-token'}});
+  nav.render();
+  click(nodes['room-crumbs'].children[0]);
+  assert.deepEqual(menu.children.slice(1).map(node => [node.tagName, node.href]), [
+    ['a', 'https://relay.example/#lobby.writer-token?tab=sessions'],
+    ['a', 'https://relay.example/#lobby.writer-token?tab=artifacts'],
+    ['a', 'https://relay.example/#lobby.writer-token?tab=files'],
+  ]);
+  assert.equal(menu.children[1].attributes['aria-current'], 'page');
+  click(menu.children[2], {ctrlKey: true});
+  assert.deepEqual(lobbyCalls, []);
+  click(menu.children[3]);
+  assert.deepEqual(lobbyCalls, ['files']);
+}
+{
+  const {nav, nodes, menu} = build({lobbyActive: true, state: {writable: false}});
+  nav.render();
+  click(nodes['room-crumbs'].children[0]);
+  assert.deepEqual(menu.children.slice(1).map(textOf), ['Sessions', 'Artifacts']);
 }
 
 console.log('viewer navigation passed');

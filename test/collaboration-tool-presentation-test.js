@@ -2,6 +2,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const {Element, load, textOf} = require('./collaboration-viewer-dom');
+const {navigation} = require('./collaboration-viewer-content-links-support');
 const window = {};
 const document = {createElement(tag) {
   const node = new Element(tag);
@@ -10,6 +11,7 @@ const document = {createElement(tag) {
   return node;
 }};
 load('relay/viewer/renderer.js', {window, document});
+const href = navigation({window, document});
 const renderer = window.mevedelTranscriptRenderer;
 const record = {id: 'tool-envelope', kind: 'tool', name: 'ToolCall', status: 'completed',
   result: '<system-reminder>Raw dependency</system-reminder>',
@@ -85,7 +87,7 @@ assert.match(textOf(renderer.renderRecord({id: 'message', kind: 'agent-notice',
 let openedAgent;
 const linkedMail = renderer.renderRecord({id: 'linked', kind: 'agent-notice',
   sender: '/root/reviewer', mailType: 'result', outcome: 'completed', text: 'Report'},
-  null, null, null, null, path => { openedAgent = path; });
+  null, null, null, null, path => { openedAgent = path; }, href);
 linkedMail.disclosures.get('mailbox').children.at(-1).dispatch('click');
 assert.equal(openedAgent, '/root/reviewer');
 console.log('Tool presentation renderer passed');

@@ -9,6 +9,7 @@
 
 const assert = require('node:assert/strict');
 const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
+const {navigation} = require('./collaboration-viewer-content-links-support');
 
 class Box extends Element {
   constructor(tag) {
@@ -73,17 +74,21 @@ const context = {
 };
 load('relay/viewer/viewer-artifact-discussions.js', context);
 load('relay/viewer/viewer-artifact.js', context);
+const href = navigation(context);
 
 const revealed = [];
 const sentFrames = [];
+const pages = [];
 let busy = false;
 const controller = window.mevedelArtifactView.create({
+  href,
   send: frame => { sentFrames.push(frame); return Promise.resolve(true); },
   el: (tag, className, text) => element(document, tag, className, text),
   flash: () => {}, summarize: () => {},
   reveal: id => revealed.push({id, panelHidden: nodes['artifact-panel'].hidden}),
   canDiscuss: () => true,
   busy: () => busy,
+  onPage: () => pages.push(controller.page()),
 });
 
 controller.open({id: 'tool-1', artifact: 'page/page.html', store: 'page'});
@@ -237,5 +242,59 @@ assert.deepEqual(JSON.parse(JSON.stringify(sentFrames.at(-1))),
                   toAssistant: true});
 
 
+
+// Fresh record-only routes receive snapshot metadata independently of bytes.
+// All orderings recover discussions, without another byte fetch or a repeated
+// iframe replacement that would discard position and in-artifact drafts.
+const canonical = {id: 'tool-exact-secondary', kind: 'tool', artifact: 'page/secondary.html',
+  store: 'page', title: 'Secondary design'};
+for (const ordering of ['before-open', 'before-bytes', 'after-bytes']) {
+  controller.close();
+  controller.render([]);
+  const fetchesBefore = sentFrames.filter(frame => frame.t === 'artifact-get').length;
+  if (ordering === 'before-open') controller.render([canonical]);
+  controller.open({id: canonical.id});
+  const reqId = sentFrames.at(-1).reqId;
+  if (ordering === 'before-bytes') controller.render([canonical]);
+  controller.handle({reqId, name: canonical.artifact, mime: 'text/html',
+    data: Buffer.from(html).toString('base64'), final: true});
+  if (ordering === 'after-bytes') {
+    assert.equal(nodes['artifact-discussion'].hidden, true);
+    const beforeHydration = nodes['artifact-body'].children[0];
+    controller.render([{...canonical, id: 'different-id'}]);
+    assert.equal(nodes['artifact-body'].children[0], beforeHydration, 'another ID must not hydrate this artifact');
+    controller.render([canonical]);
+    assert.notEqual(nodes['artifact-body'].children[0], beforeHydration, 'late metadata enables the absent picker once');
+  }
+  assert.equal(nodes['artifact-title'].textContent, canonical.title);
+  assert.equal(controller.describe().artifact.store, canonical.store);
+  assert.equal(pages.at(-1), canonical.store, 'presence observes recovered page identity');
+  assert.equal(nodes['artifact-discussion'].hidden, false, ordering);
+  const hydratedFrame = nodes['artifact-body'].children[0];
+  assert.match(hydratedFrame.srcdoc, /mevedelArtifactDiscussionRuntime/);
+  hydratedFrame.localDraft = 'keep my draft';
+  const pageReports = pages.length;
+  controller.render([canonical]);
+  controller.render([{...canonical, title: 'Updated title'}]);
+  assert.equal(nodes['artifact-body'].children[0], hydratedFrame, 'ordinary snapshots preserve iframe identity');
+  assert.equal(hydratedFrame.localDraft, 'keep my draft');
+  assert.equal(pages.length, pageReports, 'ordinary snapshots do not repeat page transitions');
+  assert.equal(sentFrames.filter(frame => frame.t === 'artifact-get').length, fetchesBefore + 1);
+}
+controller.close();
+controller.render([canonical]);
+controller.open({id: canonical.id, version: 2});
+controller.handle({reqId: sentFrames.at(-1).reqId, mime: 'text/html',
+  data: Buffer.from(html).toString('base64'), final: true});
+assert.equal(controller.describe().artifact.version, 2);
+assert.equal(nodes['artifact-title'].textContent, `${canonical.title} · Version 2`);
+assert.equal(nodes['artifact-discussion'].hidden, true, 'historical versions remain read-only');
+controller.close();
+const child = {...canonical, store: 'child', artifact: 'child/secondary.html', agent: {path: '/root/worker', segment: 3}};
+controller.open(child);
+controller.render([canonical]);
+assert.equal(controller.describe().artifact.store, 'child', 'root records cannot replace exact child metadata');
+assert.deepEqual(plain(controller.describe().artifact.agent), child.agent);
+controller.close();
 
 console.log('viewer artifact discussions passed');

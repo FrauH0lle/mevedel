@@ -25,8 +25,9 @@
   // A link is "<roomId>.<secret>", each tier a prefix of the next: the
   // 32-byte room key alone (view link), followed by the 16-byte write
   // token (full link), followed by the 16-byte owner token (owner link).
+  // A '?' suffix describes a viewer destination, never part of the secret.
   function parseFragment(fragment) {
-    const value = String(fragment || '').replace(/^#/, '');
+    const value = String(fragment || '').replace(/^#/, '').split('?')[0];
     const separator = value.indexOf('.');
     if (separator <= 0 || separator === value.length - 1) return null;
     const roomId = value.slice(0, separator);

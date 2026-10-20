@@ -52,41 +52,101 @@ const lobbyRoom = makeRoom('lobbylobbylobby1', 1);
 const sessionRoom = makeRoom('sessionsession01', 2);
 const forkRoom = makeRoom('forkforkforkfork', 3);
 const PAGE_HTML = '<!doctype html><h1 id="inside">Inside the artifact</h1>';
+const SECONDARY_TEXT = 'Secondary artifact, not the primary page.';
+const AGENT_ARTIFACT_TEXT = 'Artifact resolved through the retained agent transcript.';
+const ARCHIVED_AGENT_ARTIFACT_TEXT = 'Archived agent artifact from segment 3.';
+const FILE_TEXT = 'The project file reached the new tab.';
 
 // What the stand-in host answers in each room.
-function host(lobbyRunning) {
+function host(lobbyRunning, records, sharedItem, coldAgent) {
   const store = {t: 'store-artifacts', artifacts: [
     {id: 'page', title: 'Page', kind: 'html', artifact: 'page/index.html',
      versions: 1, modified: 1, size: PAGE_HTML.length, attached: true},
     {id: 'board', title: 'Board', kind: 'whiteboard', artifact: 'board/board.excalidraw',
      versions: 1, modified: 2, size: 10, item: true}]};
+  if (sharedItem) store.artifacts.push({id: sharedItem.id, title: sharedItem.title,
+    kind: sharedItem.kind, artifact: `${sharedItem.id}/document.json`,
+    versions: 1, modified: 3, item: true, attached: true});
+  function content(frame, reply, guest) {
+    if (frame.t === 'store-list') reply(store);
+    else if (frame.t === 'store-action' && frame.action === 'versions') {
+      reply({t: 'store-action', reqId: frame.reqId, ok: true,
+             versions: [{n: 1, time: 1}]});
+    } else if (frame.t === 'artifact-get') {
+      assert.ok(['artifact:page', 'tool:page', 'tool:notes', 'agent-artifact-notes',
+                 'agent-history-3:agent-artifact-notes'].includes(frame.id),
+                `unexpected artifact identity: ${frame.id}`);
+      const agent = frame.id.includes('agent-artifact-');
+      if (agent && !guest.agentArtifacts.has(frame.id)) {
+        reply({t: 'artifact', reqId: frame.reqId, error: 'Fetch the owning agent transcript first.'});
+        return;
+      }
+      const secondary = frame.id === 'tool:notes';
+      const archived = frame.id.startsWith('agent-history-3:');
+      const text = archived ? ARCHIVED_AGENT_ARTIFACT_TEXT
+        : agent ? AGENT_ARTIFACT_TEXT : secondary ? SECONDARY_TEXT : PAGE_HTML;
+      reply({t: 'artifact', reqId: frame.reqId,
+             name: agent ? 'agent-notes.md' : secondary ? 'page/notes.md' : 'page/index.html',
+             mime: secondary || agent ? 'text/markdown' : 'text/html', size: text.length,
+             data: Buffer.from(text).toString('base64'), final: true});
+    } else if (frame.t === 'files') {
+      reply({t: 'files', reqId: frame.reqId, dir: '',
+             entries: [{name: 'notes & plans.txt', kind: 'file', size: FILE_TEXT.length}]});
+    } else if (frame.t === 'file-get') {
+      reply({t: 'file', reqId: frame.reqId, mime: 'text/plain', size: FILE_TEXT.length,
+             data: Buffer.from(FILE_TEXT).toString('base64'), final: true});
+    } else if (frame.t === 'fetch-agent') {
+      assert.equal(frame.path, '/root/reviewer');
+      assert.ok(frame.segment === undefined || frame.segment === 3);
+      // A cold live host starts hydration but intentionally sends no reply.
+      // Each new peer must poll again; neither another tab nor reload warms it.
+      if (coldAgent && frame.segment === undefined && ++guest.agentFetches === 1) return;
+      const artifactId = frame.segment === 3 ? 'agent-history-3:agent-artifact-notes' : 'agent-artifact-notes';
+      // The real host replaces this guest's cache on each transcript fetch.
+      // A different tab or a reconnect must acquire its own authorization.
+      guest.agentArtifacts = new Set([artifactId]);
+      reply({t: 'agent', reqId: frame.reqId, final: true,
+             records: [{id: 'agent-answer', kind: 'assistant', text: 'The retained agent transcript.'},
+                       {id: artifactId, kind: 'tool', artifact: 'agent-notes.md', title: 'Agent notes'}]});
+    } else if (frame.t === 'editing' && sharedItem) {
+      // These small read-only fixture requests fit a single editing frame.
+      assert.equal(frame.offset, 0);
+      assert.equal(frame.total, frame.data.length);
+      const args = JSON.parse(Buffer.from(frame.data, 'base64').toString());
+      const {id, kind, title, revision} = sharedItem;
+      const result = args.action === 'list' ? [{id, kind, title, revision}]
+        : args.action === 'status' ? {available: true}
+        : args.action === 'read' && args.id === sharedItem.id ? sharedItem : undefined;
+      assert.notEqual(result, undefined, `unexpected shared fixture action: ${JSON.stringify(args)}`);
+      const data = Buffer.from(JSON.stringify({result})).toString('base64');
+      reply({t: 'editing', reqId: frame.reqId, offset: 0, total: data.length, data});
+    }
+  }
   return {
-    [lobbyRoom.id]: (frame, reply) => {
+    [lobbyRoom.id]: (frame, reply, guest) => {
       if (frame.t === 'hello' || frame.t === 'lobby-refresh') {
         reply({t: 'lobby', project: 'proj', workspace: 'ws', omitted: 0, sessions: [
           {id: 's1', name: 'Feature work', updated: 1, preview: 'Hello',
            live: true, shared: true}]});
       } else if (frame.t === 'open-session') {
         reply({t: 'open-session', reqId: frame.reqId, ok: true, link: sessionRoom.link});
-      } else if (frame.t === 'store-list') reply(store);
-      else if (frame.t === 'store-action' && frame.action === 'conversation') {
+      } else if (frame.t === 'store-action' && frame.action === 'conversation') {
         // A whiteboard's conversation link names the item its editor opens.
         const hash = sessionRoom.link.indexOf('#');
         reply({t: 'store-action', reqId: frame.reqId, ok: true,
                link: `${sessionRoom.link.slice(0, hash)}?shared=${frame.id}${sessionRoom.link.slice(hash)}`});
-      }
+      } else content(frame, reply, guest);
     },
-    [sessionRoom.id]: (frame, reply) => {
+    [sessionRoom.id]: (frame, reply, guest) => {
       if (frame.t === 'hello') {
-        reply({t: 'welcome', proto: 3, readOnly: false, workspace: 'ws',
-               project: 'proj', lobby: lobbyRunning, recordCount: 0});
-        reply({t: 'snapshot-chunk', records: [], final: true});
+        reply({t: 'welcome', proto: 3, readOnly: !frame.writeToken, workspace: 'ws',
+               project: 'proj', lobby: lobbyRunning, recordCount: records.length});
+        reply({t: 'snapshot-chunk', records, final: true});
         reply({t: 'status', name: 'Feature work', busy: false});
-      } else if (frame.t === 'store-list') reply(store);
-      else if (frame.t === 'artifact-get') {
-        reply({t: 'artifact', reqId: frame.reqId, mime: 'text/html', size: PAGE_HTML.length,
-               data: Buffer.from(PAGE_HTML).toString('base64'), final: true});
-      }
+        if (frame.ownerToken) reply({t: 'recovery', models: [], model: null,
+                                    efforts: [], effort: null, presets: [], providers: []});
+        if (sharedItem) reply(store);
+      } else content(frame, reply, guest);
     },
     [forkRoom.id]: (frame, reply) => {
       if (frame.t === 'hello') {
@@ -99,10 +159,11 @@ function host(lobbyRunning) {
   };
 }
 
-async function open(browser, {lobbyRunning = true, viewport = {width: 1200, height: 800}} = {}) {
+async function open(browser, {lobbyRunning = true, records = [], sharedItem = null, coldAgent = false,
+                              viewport = {width: 1200, height: 800}} = {}) {
   const context = await browser.newContext({viewport});
   const page = await context.newPage();
-  const answers = host(lobbyRunning);
+  const answers = host(lobbyRunning, records, sharedItem, coldAgent);
   const keys = {};
   for (const room of [lobbyRoom, sessionRoom, forkRoom]) {
     keys[room.id] = await crypto.subtle.importKey(
@@ -110,26 +171,40 @@ async function open(browser, {lobbyRunning = true, viewport = {width: 1200, heig
   }
   page.joined = [];
   page.received = [];
+  page.requests = [];
+  page.network = new Map();
+  page.routes = new Map();
+  context.on('request', request => {
+    page.requests.push(request.url());
+    page.network.set(request, 'requested');
+  });
+  context.on('requestfinished', request => page.network.set(request, 'finished'));
+  context.on('requestfailed', request => page.network.set(request, request.failure()?.errorText));
   // Frames the host sends unprompted, by room.
   page.push = {};
-  await page.routeWebSocket(/\/r\//, socket => {
+  // New tabs start independently: page-only routing misses their first request.
+  await context.routeWebSocket(/\/r\//, socket => {
     const id = new URL(socket.url()).pathname.split('/').pop();
+    const connection = page.joined.length;
+    const guest = {agentArtifacts: new Set(), agentFetches: 0};
     page.joined.push(id);
     page.push[id] = async frame => socket.send(await seal(keys[id], frame));
     socket.onMessage(async message => {
       if (typeof message === 'string') return;
       const frame = await unseal(keys[id], message);
-      page.received.push({room: id, frame});
-      answers[id]?.(frame, async reply => socket.send(await seal(keys[id], reply)));
+      page.received.push({room: id, connection, frame});
+      answers[id]?.(frame, async reply => socket.send(await seal(keys[id], reply)), guest);
     });
   });
-  await page.route('http://localhost:8765/**', async route => {
+  await context.route('http://localhost:8765/**', async route => {
+    page.routes.set(route.request(), 'handling');
     let path = new URL(route.request().url()).pathname;
     if (path === '/') path = '/index.html';
     const type = TYPES[path.split('.').pop()];
-    if (!type) return route.fulfill({status: 204, body: ''});
-    return route.fulfill({body: await readFile(resolve(root, 'relay/viewer', `.${path}`)),
-                          contentType: type});
+    await route.fulfill(type
+      ? {body: await readFile(resolve(root, 'relay/viewer', `.${path}`)), contentType: type}
+      : {status: 204, body: ''});
+    page.routes.set(route.request(), 'fulfilled');
   });
   page.urls = [];
   page.on('framenavigated', frame => {
@@ -140,6 +215,374 @@ async function open(browser, {lobbyRunning = true, viewport = {width: 1200, heig
 
 const title = page => page.locator('#session-label').textContent();
 const visible = (page, selector) => page.locator(selector).isVisible();
+
+const gestures = [
+  {name: 'middle-click', options: {button: 'middle'}},
+  {name: 'modified click', options: {modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control']}},
+];
+
+function tierLink(room, length) {
+  return `http://localhost:8765/#${room.id}.${base64url(room.secret.slice(0, length))}`;
+}
+
+async function sourceState(page) {
+  return page.evaluate(() => {
+    const composer = document.getElementById('composer-input');
+    return {
+      url: location.href, history: history.state, length: history.length,
+      title: document.getElementById('session-label').textContent,
+      composer: {value: composer.value, start: composer.selectionStart,
+                 end: composer.selectionEnd, hidden: composer.closest('form').hidden},
+      panels: [...document.querySelectorAll('.viewer-panel')].map(node => [node.id, node.hidden]),
+      tabs: [...document.querySelectorAll('[role="tab"]')].map(node => [node.id, node.getAttribute('aria-selected')]),
+      store: document.getElementById('store-sheet').open,
+    };
+  });
+}
+
+async function draft(page) {
+  const composer = page.locator('#composer-input');
+  if (!await composer.isVisible()) return;
+  await composer.fill('Keep this unsent draft, including its selection.');
+  await composer.evaluate(node => node.setSelectionRange(5, 21));
+}
+
+async function newTab(source, link, gesture, {room, length, route, ready}) {
+  // Target download/reload checks can activate another tab. Native gestures
+  // originate in the visible source tab, as they do when a person clicks.
+  await source.bringToFront();
+  assert.equal(await link.evaluate(node => node.tagName), 'A', 'navigation uses a native anchor');
+  const destination = new URL(await link.getAttribute('href'));
+  const search = route.shared ? `?${new URLSearchParams({shared: route.shared})}` : '';
+  assert.equal(destination.search, search, 'only the existing shared-editor selector uses an HTTP query');
+  assert.equal(destination.hash.split('?')[0], new URL(tierLink(room, length)).hash);
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(route.shared
+    ? destination.search : destination.hash.split('?')[1])), route);
+  const before = await sourceState(source);
+  const composer = await source.locator('#composer-input').elementHandle();
+  const receivedCount = source.received.length;
+  const helloCount = source.received.filter(({frame}) => frame.t === 'hello').length;
+  const clickedAnchor = await link.elementHandle();
+  await clickedAnchor.evaluate(node => {
+    node.navigationEvents = [];
+    for (const type of ['mousedown', 'mouseup', 'click', 'auxclick']) {
+      node.addEventListener(type, event => node.navigationEvents.push({
+        type, button: event.button, ctrlKey: event.ctrlKey, metaKey: event.metaKey,
+        defaultPrevented: event.defaultPrevented,
+      }), {once: true});
+    }
+  });
+  const [target] = await Promise.all([
+    source.context().waitForEvent('page', {timeout: 10000}),
+    link.click(gesture.options),
+  ]).catch(async error => {
+    const events = await clickedAnchor.evaluate(node => ({
+      connected: node.isConnected, events: node.navigationEvents,
+    })).catch(() => null);
+    throw new Error(`${gesture.name}, ${length}-byte tier, ${JSON.stringify(route)}: native new page failed; events=${JSON.stringify(events)}`, {cause: error});
+  });
+  await target.waitForLoadState('load').catch(async error => {
+    const documentState = await target.evaluate(() => ({
+      readyState: document.readyState, title: document.title,
+      room: history.state?.room, location: `${location.origin}${location.pathname}`,
+    })).catch(() => null);
+    const requests = [...source.network].filter(([request]) => {
+      try { return request.frame().page() === target; } catch { return true; }
+    }).map(([request, state]) => ({url: request.url(), state, route: source.routes.get(request)}));
+    throw new Error(`${gesture.name}, ${length}-byte tier, ${JSON.stringify(route)}: load failed; document=${JSON.stringify(documentState)}; requests=${JSON.stringify(requests)}`, {cause: error});
+  });
+  await ready(target);
+  assert.deepEqual(await sourceState(source), before, `${gesture.name} leaves source URL, state and draft intact`);
+  assert.equal(target.url(), `http://localhost:8765/${search}`, 'bearer and private route are scrubbed');
+  const state = await target.evaluate(() => history.state);
+  assert.equal(state.room, room.id);
+  assert.equal(JSON.stringify(state).includes(base64url(room.secret.slice(0, 32))), false);
+  const hellos = source.received.filter(({frame}) => frame.t === 'hello').slice(helloCount);
+  assert.equal(hellos.length, 1, 'the fresh page joins independently');
+  assert.equal(hellos[0].room, room.id);
+  assert.equal(hellos[0].frame.writeToken,
+               length >= 48 ? base64url(room.secret.slice(32, 48)) : undefined);
+  assert.equal(hellos[0].frame.ownerToken,
+               length === 64 ? base64url(room.secret.slice(48, 64)) : undefined);
+  const requests = source.received.slice(receivedCount)
+    .filter(entry => entry.connection === hellos[0].connection).map(({frame}) => frame);
+  if (route.artifact || route.record) {
+    const request = requests.find(frame => frame.t === 'artifact-get');
+    assert.equal(request?.id, route.artifact ? `artifact:${route.artifact}` : route.record);
+    assert.equal(request.version, route.version ? Number(route.version) : undefined);
+    if (route.agent) {
+      const transcript = requests.find(frame => frame.t === 'fetch-agent');
+      assert.equal(transcript?.path, route.agent);
+      assert.equal(transcript.segment, route.segment ? Number(route.segment) : undefined);
+      assert.ok(requests.indexOf(transcript) < requests.indexOf(request),
+                'the new guest resolves its agent artifact before requesting its bytes');
+    }
+  } else if (route.file) {
+    assert.equal(requests.find(frame => frame.t === 'file-get')?.path, route.file);
+  } else if (route.agent) {
+    assert.equal(requests.find(frame => frame.t === 'fetch-agent')?.path, route.agent);
+  } else if (route.shared) {
+    assert.ok(requests.filter(frame => frame.t === 'editing').some(frame => {
+      const args = JSON.parse(Buffer.from(frame.data, 'base64').toString());
+      return args.action === 'read' && args.id === route.shared;
+    }), 'the fresh editor requests the linked shared item');
+  }
+  if (room === sessionRoom) {
+    assert.equal(await target.locator('#composer').evaluate(node => node.hidden), length === 32);
+    if (length === 64) await target.locator('#modeline .settings-button').waitFor({state: 'attached'});
+    assert.equal(await target.locator('#modeline .settings-button').count(), length === 64 ? 1 : 0);
+  }
+  assert.ok(source.requests.every(address => {
+    const url = new URL(address);
+    return !url.hash && (!url.search || (route.shared && url.search === search));
+  }), 'HTTP requests contain neither credentials nor private destination selectors');
+  // The route must survive without the bearer fragment, rather than opening
+  // correctly once and then losing its destination on refresh.
+  await target.reload();
+  await ready(target);
+  assert.equal(target.url(), `http://localhost:8765/${search}`);
+  assert.deepEqual(await sourceState(source), before, 'target reload does not change the source');
+  assert.equal(await composer.evaluate(node => node === document.getElementById('composer-input')), true,
+               'the source composer is not replaced');
+  await composer.dispose();
+  await target.close();
+}
+
+test('native new-tab project navigation preserves drafts and every access tier', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const length of [32, 48, 64]) {
+      for (const gesture of gestures) {
+        const page = await open(browser);
+        await page.goto(tierLink(sessionRoom, length));
+        await page.waitForFunction(() => document.getElementById('session-label').textContent === 'Feature work');
+        await draft(page);
+        await page.locator('#room-crumbs .crumb').click();
+        await newTab(page, page.getByRole('menuitem', {name: 'Project artifacts'}), gesture, {
+          room: sessionRoom, length, route: {view: 'artifacts'},
+          ready: target => target.locator('#store-list [data-store-id="page"]').waitFor(),
+        });
+        await page.context().close();
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('native new-tab artifact and version links restore the requested content without touching the source', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const length of [32, 48, 64]) {
+      for (const gesture of gestures) {
+        const page = await open(browser);
+        await page.goto(tierLink(sessionRoom, length));
+        await page.waitForFunction(() => document.getElementById('session-label').textContent === 'Feature work');
+        await draft(page);
+        await page.locator('#room-crumbs .crumb').click();
+        await page.getByRole('menuitem', {name: 'Project artifacts'}).click();
+        const row = page.locator('#store-list [data-store-id="page"]');
+        const ready = async target => {
+          await target.frameLocator('#artifact-body iframe').locator('#inside').waitFor();
+          // A fresh tab knows only the store ID. The host's canonical name
+          // must hydrate downloads, including saved versions and reloads.
+          const downloaded = target.waitForEvent('download');
+          await target.locator('#artifact-download').click();
+          const download = await downloaded;
+          assert.equal(download.suggestedFilename(), 'index.html');
+          assert.equal(await readFile(await download.path(), 'utf8'), PAGE_HTML);
+          await download.delete();
+        };
+        await newTab(page, row.getByRole('link', {name: 'Open', exact: true}), gesture, {
+          room: sessionRoom, length, route: {artifact: 'page'}, ready,
+        });
+        await row.getByRole('button', {name: 'More actions for Page'}).click();
+        await page.locator('.store-menu:popover-open').getByRole('button', {name: 'Versions', exact: true}).click();
+        await newTab(page, row.getByRole('link', {name: 'View', exact: true}), gesture, {
+          room: sessionRoom, length, route: {artifact: 'page', version: '1'},
+          ready: async target => {
+            await ready(target);
+            assert.match(await target.locator('#artifact-title').textContent(), /Version 1/);
+          },
+        });
+        await page.context().close();
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('native new-tab transcript artifact and agent links retain their destinations and access tiers', async () => {
+  const browser = await chromium.launch();
+  const records = [
+    {id: 'tool:page', kind: 'tool', artifact: 'page/index.html', title: 'Transcript page'},
+    {id: 'tool:notes', kind: 'tool', artifact: 'page/notes.md', store: 'page', title: 'Secondary notes'},
+    {id: 'agent-notice', kind: 'agent-notice', sender: '/root/reviewer',
+     mailType: 'result', outcome: 'completed', text: 'Review complete.'},
+  ];
+  try {
+    for (const length of [32, 48, 64]) {
+      for (const gesture of gestures) {
+        const page = await open(browser, {records});
+        await page.goto(tierLink(sessionRoom, length));
+        const card = id => page.locator(`#transcript [data-record-id="${id}"] .artifact-open`);
+        await card('tool:page').waitFor();
+        await draft(page);
+        await newTab(page, card('tool:page'), gesture, {
+          room: sessionRoom, length, route: {record: 'tool:page'},
+          ready: target => target.frameLocator('#artifact-body iframe').locator('#inside').waitFor(),
+        });
+        // Membership in a store does not make a secondary file its primary
+        // page. The record identity is necessary to fetch the right bytes.
+        await newTab(page, card('tool:notes'), gesture, {
+          room: sessionRoom, length, route: {record: 'tool:notes'},
+          ready: target => target.locator('#artifact-body').getByText(SECONDARY_TEXT, {exact: true}).waitFor(),
+        });
+        await page.locator('#transcript .agent-notice summary').click();
+        await newTab(page, page.getByRole('link', {name: 'Open transcript', exact: true}), gesture, {
+          room: sessionRoom, length, route: {agent: '/root/reviewer'},
+          ready: async target => {
+            await target.locator('#agent-transcript').getByText('The retained agent transcript.', {exact: true}).waitFor();
+            assert.equal(await target.locator('#agent-title').textContent(), '/root/reviewer');
+          },
+        });
+        await page.context().close();
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('native new-tab agent artifacts restore per-guest authorization for current and archived transcripts', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const length of [32, 48, 64]) {
+      for (const gesture of gestures) {
+        for (const segment of [null, 3]) {
+          const page = await open(browser);
+          const agent = {agent: '/root/reviewer', ...(segment ? {segment: String(segment)} : {})};
+          await page.goto(`${tierLink(sessionRoom, length)}?${new URLSearchParams(agent)}`);
+          const card = page.locator('#agent-transcript .artifact-open');
+          await card.waitFor();
+          const record = segment ? 'agent-history-3:agent-artifact-notes' : 'agent-artifact-notes';
+          await newTab(page, card, gesture, {
+            room: sessionRoom, length, route: {record, ...agent},
+            ready: target => target.locator('#artifact-body').getByText(
+              segment ? ARCHIVED_AGENT_ARTIFACT_TEXT : AGENT_ARTIFACT_TEXT, {exact: true}).waitFor(),
+          });
+          await page.context().close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('a cold live agent artifact polls again in the new tab and after reload', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await open(browser, {coldAgent: true, records: [
+      {id: 'cold-agent-notice', kind: 'agent-notice', sender: '/root/reviewer',
+       mailType: 'result', outcome: 'completed', text: 'Review complete.'},
+    ]});
+    await page.goto(tierLink(sessionRoom, 48));
+    await page.locator('#transcript .agent-notice summary').waitFor();
+    await draft(page);
+    await page.locator('#transcript .agent-notice summary').click();
+    await page.getByRole('link', {name: 'Open transcript', exact: true}).click();
+    const card = page.locator('#agent-transcript .artifact-open');
+    await card.waitFor();
+    const firstTarget = page.joined.length;
+    await newTab(page, card, gestures[0], {
+      room: sessionRoom, length: 48,
+      route: {record: 'agent-artifact-notes', agent: '/root/reviewer'},
+      ready: target => target.locator('#artifact-body').getByText(AGENT_ARTIFACT_TEXT, {exact: true}).waitFor(),
+    });
+    assert.equal(page.joined.length, firstTarget + 2, 'new tab and reload each use a fresh peer');
+    for (const connection of [firstTarget, firstTarget + 1]) {
+      const frames = page.received.filter(entry => entry.connection === connection).map(entry => entry.frame);
+      const resolved = frames.filter(frame => ['fetch-agent', 'artifact-get'].includes(frame.t));
+      assert.deepEqual(resolved.map(frame => frame.t), ['fetch-agent', 'fetch-agent', 'artifact-get'],
+                       'a silent first fetch must be followed by a poll before fetching the artifact');
+      assert.ok(resolved[1].reqId > resolved[0].reqId, 'the second poll is a new request');
+      const hello = frames.find(frame => frame.t === 'hello');
+      assert.equal(hello.writeToken, base64url(sessionRoom.secret.slice(32, 48)));
+      assert.equal(hello.ownerToken, undefined, 'polling and reload preserve the full-control tier');
+    }
+    assert.equal(await page.locator('#modeline .settings-button').count(), 0);
+    await page.context().close();
+  } finally {
+    await browser.close();
+  }
+});
+
+test('native new-tab shared item titles bootstrap the real editor at every access tier', async () => {
+  const {handle} = await import('../shared-editing/host.mjs');
+  const {state: sharedItem} = await handle({action: 'create', id: 'navigation-doc',
+    kind: 'document', title: 'Navigation document', actor: 'Host', opId: 'create',
+    content: {type: 'doc', content: [{type: 'paragraph', attrs: {id: 'intro'},
+      content: [{type: 'text', text: 'The shared document reached the new tab.'}]}]}});
+  const browser = await chromium.launch();
+  try {
+    for (const length of [32, 48, 64]) {
+      for (const gesture of gestures) {
+        const page = await open(browser, {sharedItem});
+        await page.goto(tierLink(sessionRoom, length));
+        await page.locator('#editing-status').getByText('Shared editing is ready.', {exact: true}).waitFor();
+        await draft(page);
+        await newTab(page, page.locator('a[data-item-id="navigation-doc"]'), gesture, {
+          room: sessionRoom, length, route: {shared: 'navigation-doc'},
+          ready: async target => {
+            const document = target.frameLocator('#editing-body iframe').locator('.tiptap');
+            await document.getByText('The shared document reached the new tab.', {exact: true}).waitFor();
+            assert.equal(await document.getAttribute('contenteditable'), length === 32 ? 'false' : 'true');
+            assert.equal(await target.locator('#editing-title').inputValue(), 'Navigation document');
+          },
+        });
+        await page.context().close();
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('native new-tab lobby links preserve the selected tab and open files privately', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const length of [32, 48, 64]) {
+      for (const gesture of gestures) {
+        const page = await open(browser);
+        await page.goto(tierLink(lobbyRoom, length));
+        await page.locator('#lobby-list').getByText('Feature work', {exact: true}).waitFor();
+        await page.locator('#lobby-tab-artifacts').click();
+        await page.locator('#lobby-store-list [data-store-id="page"]').waitFor();
+        await page.locator('#room-crumbs .crumb').click();
+        for (const tab of length >= 48 ? ['sessions', 'artifacts', 'files'] : ['sessions', 'artifacts']) {
+          await newTab(page, page.getByRole('menuitem', {name: tab, exact: false}), gesture, {
+            room: lobbyRoom, length, route: {tab},
+            ready: target => target.waitForFunction(tab =>
+              document.getElementById(`lobby-tab-${tab}`).getAttribute('aria-selected') === 'true', tab),
+          });
+        }
+        await page.keyboard.press('Escape');
+        if (length >= 48) {
+          await page.locator('#lobby-tab-files').click();
+          await newTab(page, page.getByRole('link', {name: 'View notes & plans.txt'}), gesture, {
+            room: lobbyRoom, length, route: {file: 'notes & plans.txt'},
+            ready: target => target.locator('#artifact-body').getByText(FILE_TEXT, {exact: true}).waitFor(),
+          });
+        }
+        await page.context().close();
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+});
 
 test('session reasoning effort follows host choices and confirmation on desktop and phone', async () => {
   const browser = await chromium.launch();
@@ -302,11 +745,12 @@ test('the lobby, a room and its artifact lead back through header and history', 
     // lobby's stored link can be forgotten among the rooms.
     await page.locator('#room-crumbs .crumb').click();
     const menu = page.locator('.nav-menu:popover-open');
-    assert.deepEqual(await menu.locator('button').allTextContents(),
+    assert.deepEqual(await menu.getByRole('menuitem').allTextContents(),
                      ['Lobby', 'Project artifacts', 'Manage rooms…']);
+    assert.deepEqual(await menu.locator('a').allTextContents(), ['Lobby', 'Project artifacts']);
     await menu.getByRole('menuitem', {name: 'Project artifacts'}).click();
     await page.locator('#store-list li', {hasText: 'Page'})
-      .getByRole('button', {name: 'Open', exact: true}).click();
+      .getByRole('link', {name: 'Open', exact: true}).click();
     await page.frameLocator('#artifact-body iframe').locator('#inside').waitFor();
     assert.equal(await page.locator('#artifact-crumbs').textContent(),
                  'proj ▾›Feature work');
@@ -363,7 +807,7 @@ test('the lobby tab survives a reload, and the menu switches tabs', async () => 
     await page.getByRole('button', {name: 'Open Feature work'}).waitFor();
     await page.locator('#room-crumbs .crumb').click();
     const menu = page.locator('.nav-menu:popover-open');
-    assert.deepEqual(await menu.locator('button').allTextContents(),
+    assert.deepEqual(await menu.locator('a').allTextContents(),
                      ['Sessions', 'Artifacts', 'Files']);
     await menu.getByRole('menuitem', {name: 'Artifacts'}).click();
     await page.locator('#lobby-store-list').getByText('Page').waitFor();
@@ -387,7 +831,7 @@ test('a host without a running lobby leaves the project as the only way out', as
     // The browser holds the lobby's link, but the host says it is stopped.
     assert.equal(await visible(page, '#room-back'), false);
     await page.locator('#room-crumbs .crumb').click();
-    assert.deepEqual(await page.locator('.nav-menu:popover-open button').allTextContents(),
+    assert.deepEqual(await page.locator('.nav-menu:popover-open [role="menuitem"]').allTextContents(),
                      ['Project artifacts', 'Manage rooms…']);
   } finally {
     await browser.close();

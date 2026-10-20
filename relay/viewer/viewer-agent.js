@@ -4,7 +4,7 @@
 (() => {
   const POLL_MS = 2500;
 
-  function create({send, el, scopeChip, openArtifact, openExecution, flash}) {
+  function create({send, el, scopeChip, openArtifact, openExecution, flash, href}) {
     const panel = document.getElementById('agent-panel');
     const title = document.getElementById('agent-title');
     const metaEl = document.getElementById('agent-meta');
@@ -12,7 +12,7 @@
     const latestButton = document.getElementById('agent-latest');
     const transcript = document.getElementById('agent-transcript');
     const view = {path: null, row: null, reqId: 0, digest: null, staging: null,
-                  timer: null};
+                  timer: null, artifact: null};
     let requestSequence = 0;
     let roster = [];
 
@@ -38,7 +38,11 @@
       const frame = {t: 'fetch-agent', reqId: view.reqId, path: view.path};
       if (Number.isSafeInteger(view.segment)) frame.segment = view.segment;
       if (view.digest) frame.known = view.digest;
-      send(frame);
+      Promise.resolve(send(frame)).then(ok => {
+        if (ok === false && view.artifact && view.reqId === frame.reqId) {
+          artifactError('Connection lost; the agent artifact could not be resolved.');
+        }
+      });
     }
 
     function renderRecords(records) {
@@ -51,9 +55,10 @@
       transcript.replaceChildren();
       records.forEach(record => {
         if (!record || typeof record.id !== 'string') return;
+        if (record.artifact) record = {...record, agent: agentContext()};
         const turn = renderer.renderRecord(
           record, scopeChip, openArtifact, previous.get(record.id), openExecution,
-          path => open({path}));
+          path => open({path}), href);
         transcript.append(turn);
       });
       renderer.groupActivity(transcript);
@@ -72,7 +77,11 @@
       }
     }
 
-    function open(row) {
+    function agentContext() {
+      return {path: view.path, ...(view.segment === null ? {} : {segment: view.segment})};
+    }
+
+    function open(row, artifact = null) {
       if (!panel) return;
       row = {...roster.find(item => item.path === row.path), ...row};
       view.path = row.path;
@@ -81,16 +90,48 @@
       view.row = {...row};
       view.digest = null;
       view.staging = null;
+      view.artifact = artifact;
       if (title) title.textContent = row.path;
       if (metaEl) metaEl.textContent = (view.segment ? `Segment ${view.segment} · ` : '') + meta(row);
-      if (latestButton) latestButton.hidden = view.segment === null;
+      if (latestButton) latestButton.hidden = !!artifact || view.segment === null;
       if (transcript) {
         transcript.replaceChildren(el('p', 'panel-note', 'Loading…'));
       }
       panel.hidden = false;
       fetch();
       if (view.timer) clearInterval(view.timer);
+      // Cold live agents hydrate without replying to their first fetch. Keep
+      // the existing polling path until resolution succeeds or fails.
       view.timer = view.segment === null ? setInterval(fetch, POLL_MS) : null;
+    }
+
+    // fetch-agent establishes the guest's host-side lookup authority. Never
+    // substitute a store entry or filename for the exact transcript record.
+    function resolveArtifact(record) {
+      if (!record || typeof record.id !== 'string'
+          || typeof record.agent?.path !== 'string' || !record.agent.path) {
+        close();
+        view.artifact = record || null;
+        if (panel) panel.hidden = false;
+        if (title) title.textContent = 'Agent artifact';
+        if (metaEl) metaEl.textContent = '';
+        if (latestButton) latestButton.hidden = true;
+        artifactError('The artifact link has no valid agent context.');
+        return;
+      }
+      open(record.agent, record);
+    }
+
+    function artifactError(message) {
+      if (view.timer) clearInterval(view.timer);
+      view.timer = null;
+      view.reqId = 0;
+      view.staging = null;
+      if (transcript) transcript.replaceChildren(el('p', 'panel-note', message));
+    }
+
+    function cancelArtifactResolution() {
+      if (view.artifact) close();
     }
 
     function close() {
@@ -100,6 +141,7 @@
       view.row = null;
       view.digest = null;
       view.staging = null;
+      view.artifact = null;
       if (panel) panel.hidden = true;
       if (transcript) transcript.replaceChildren();
     }
@@ -112,7 +154,7 @@
           + (watched ? meta(watched) : 'settled');
         if (watched) {
           view.row = {...watched};
-          if (view.segment === null) fetch();
+          if (view.segment === null && !view.artifact) fetch();
         }
       }
     }
@@ -120,19 +162,36 @@
     function handle(frame) {
       if (!view.path || frame.reqId !== view.reqId) return;
       if (typeof frame.error === 'string') {
+        if (view.artifact) { artifactError(frame.error); return; }
         view.toolId = null;
         if (transcript) {
           transcript.replaceChildren(el('p', 'panel-note', frame.error));
         }
         return;
       }
-      if (frame.unchanged === true) return;
+      if (frame.unchanged === true) {
+        if (view.artifact) artifactError('The agent returned no records to resolve this artifact.');
+        return;
+      }
       (view.staging ||= []).push(
         ...(Array.isArray(frame.records) ? frame.records : []));
       if (frame.final === true) {
         const records = view.staging;
         view.staging = null;
         view.digest = typeof frame.digest === 'string' ? frame.digest : null;
+        if (view.artifact) {
+          const requested = view.artifact;
+          const found = records.find(record => record?.id === requested.id && record.artifact && !record.missing);
+          if (!found) {
+            artifactError('This artifact is unavailable in the requested agent transcript.');
+            return;
+          }
+          const resolved = {...found, agent: agentContext()};
+          if (Number.isSafeInteger(requested.version) && requested.version > 0) resolved.version = requested.version;
+          close();
+          openArtifact(resolved);
+          return;
+        }
         renderRecords(records);
       }
     }
@@ -143,11 +202,12 @@
     });
     // The open transcript, as {agent: ROW}, or null.
     function describe() {
+      if (panel && !panel.hidden && view.artifact) return {artifact: view.artifact};
       return panel && !panel.hidden && view.row
         ? {agent: {...view.row, ...(view.segment ? {segment: view.segment} : {})}} : null;
     }
 
-    return Object.freeze({show, handle, close, open, describe});
+    return Object.freeze({show, handle, close, open, describe, resolveArtifact, cancelArtifactResolution});
   }
 
   window.mevedelAgentView = Object.freeze({create});

@@ -5,6 +5,7 @@
 
 const assert = require('node:assert/strict');
 const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
+const {navigation, nativeActivations} = require('./collaboration-viewer-content-links-support');
 
 const plain = value => JSON.parse(JSON.stringify(value));
 
@@ -15,7 +16,9 @@ function build({writable = true, room = false, connected = true, prompt = null} 
   const document = {createElement: tag => new Element(tag)};
   const window = {mevedelTranscriptRenderer: {formatBytes: bytes => `${bytes} B`},
                   addEventListener() {}, prompt};
-  load('relay/viewer/viewer-store.js', {window, document, console, Date});
+  const context = {window, document, console, Date};
+  const href = navigation(context);
+  load('relay/viewer/viewer-store.js', context);
   const sent = [];
   const opened = [];
   const notices = [];
@@ -26,7 +29,7 @@ function build({writable = true, room = false, connected = true, prompt = null} 
   const store = window.mevedelStoreView.create({
     send: frame => (connected ? sent.push(frame) : Promise.resolve(false)),
     el: (tag, className, text) => element(document, tag, className, text),
-    list, empty, creation, state, room,
+    list, empty, creation, state, room, href,
     open: record => opened.push(record),
     notice: text => notices.push(text),
     navigate: link => followed.push(link),
@@ -68,6 +71,7 @@ const press = (row, label) => {
   // Attaching is offered for an artifact the session does not have yet.
   assert.deepEqual(buttons(list.children[1]),
                    ['Open', 'Versions', 'Attach', 'Duplicate', 'Conversation', 'Delete']);
+  nativeActivations(controls(list.children[0])[0], () => assert.equal(opened.length, 0));
   press(list.children[0], 'Open');
   assert.deepEqual(plain(opened), [{id: 'artifact:flow', artifact: 'flow/index.html',
                                     title: 'index.html', store: 'flow', size: 9,
@@ -99,6 +103,9 @@ const press = (row, label) => {
                 versions: [{n: 2, time: 20, bytes: 9}, {n: 1, time: 10, bytes: 5}]});
   const versions = list.children[0].children[0].children.at(-1);
   assert.match(textOf(versions), /Version 2 \(latest saved\).*Version 1/);
+  const preview = versions.children[1].children[1];
+  nativeActivations(preview, () => assert.equal(sent.length, 1));
+  assert.match(decodeURIComponent(preview.href), /"version":1/);
   versions.children[1].children[2].dispatch('click');
   assert.deepEqual(plain(sent.at(-1)), {t: 'store-action', reqId: 2, action: 'restore',
                                         id: 'flow', n: 1});
@@ -151,6 +158,8 @@ const press = (row, label) => {
      modified: 30, versions: 1, missing: false, attached: true, item: true}]};
   const roomView = build({room: true});
   roomView.store.show(board);
+  nativeActivations(controls(roomView.list.children[0])[0],
+                    () => assert.equal(roomView.opened.length, 0));
   assert.deepEqual(buttons(roomView.list.children[0]),
                    ['Open', 'Versions', 'Save version', 'Duplicate', 'Conversation',
                     'Delete']);
@@ -163,6 +172,7 @@ const press = (row, label) => {
   assert.deepEqual(roomView.notices, ['Saved as version 2.']);
   const lobbyView = build();
   lobbyView.store.show(board);
+  assert.equal(controls(lobbyView.list.children[0])[0].tagName, 'button');
   // From the lobby, Open is the item's conversation; the menu does not repeat it.
   assert.deepEqual(buttons(lobbyView.list.children[0]),
                    ['Open', 'Versions', 'Save version', 'Duplicate', 'Delete']);

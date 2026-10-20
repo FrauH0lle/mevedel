@@ -38,6 +38,32 @@
 
   const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
+  // A destination keeps native new-tab, modifier and context-menu behavior.
+  // Only an ordinary activation takes the in-page path supplied by its owner.
+  function link(node, href, action) {
+    node.href = href;
+    node.addEventListener('click', event => {
+      if (event.defaultPrevented || event.button !== 0 || event.ctrlKey
+          || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      action(event);
+    });
+    return node;
+  }
+
+  // Destinations never inherit the source page's editor, panel or tab query.
+  function roomURL(fragment, params = {}) {
+    const url = new URL(window.location.pathname, window.location.origin);
+    const {shared, ...routeParams} = params;
+    // Shared editors already bootstrap from this public, opaque item ID.
+    // Other route values can name private paths and stay in the fragment.
+    if (shared !== undefined) url.searchParams.set('shared', shared);
+    const bearer = String(fragment || '').replace(/^#/, '').split('?')[0];
+    const route = new URLSearchParams(routeParams).toString();
+    url.hash = bearer + (route ? `?${route}` : '');
+    return url.href;
+  }
+
   // PANELS are {node, describe, reopen, close}: DESCRIBE names the open
   // page so REOPEN can show it again after Back, Forward or a reload.
   // SESSIONS knows the rooms this browser holds, LOBBY the lobby page.
@@ -187,16 +213,18 @@
     });
     document.body.append(menu);
 
-    function item(label, action, current = false) {
-      const button = el('button', 'btn quiet', label);
-      button.type = 'button';
-      button.setAttribute('role', 'menuitem');
-      if (current) button.setAttribute('aria-current', 'page');
-      button.addEventListener('click', () => {
+    function item(label, action, href = null, current = false) {
+      const node = el(href ? 'a' : 'button', 'btn quiet', label);
+      if (!href) node.type = 'button';
+      node.setAttribute('role', 'menuitem');
+      if (current) node.setAttribute('aria-current', 'page');
+      const activate = () => {
         menu.hidePopover();
         action();
-      });
-      return button;
+      };
+      if (href) link(node, href, activate);
+      else node.addEventListener('click', activate);
+      return node;
     }
 
     function group(title, items) {
@@ -215,18 +243,19 @@
       if (lobby.active()) {
         const tab = lobby.tab();
         project.push(item('Sessions', () => { closePanel(); lobby.select('sessions'); },
-                          tab === 'sessions'));
+                          roomURL(state.fragment, {tab: 'sessions'}), tab === 'sessions'));
         project.push(item('Artifacts', () => { closePanel(); lobby.select('artifacts'); },
-                          tab === 'artifacts'));
+                          roomURL(state.fragment, {tab: 'artifacts'}), tab === 'artifacts'));
         if (state.writable) {
           project.push(item('Files', () => { closePanel(); lobby.select('files'); },
-                            tab === 'files'));
+                            roomURL(state.fragment, {tab: 'files'}), tab === 'files'));
         }
       } else {
-        if (target) project.push(item('Lobby', () => navigate(target)));
-        project.push(item('Project artifacts', () => openStore()));
+        if (target) project.push(item('Lobby', () => navigate(target), target));
+        project.push(item('Project artifacts', () => openStore(),
+                          roomURL(state.fragment, {view: 'artifacts'})));
       }
-      const rooms = sessions.rooms().map(entry => item(entry.name, () => navigate(entry.link)));
+      const rooms = sessions.rooms().map(entry => item(entry.name, () => navigate(entry.link), entry.link));
       const manage = sessions.hasRooms() ? [item('Manage rooms…', () => openRooms())] : [];
       return [...group(`Project · ${state.project || 'this project'}`, project),
               ...group('Rooms', [...rooms, ...manage])];
@@ -241,15 +270,16 @@
         menu.style.left = `${Math.max(8, Math.min(at.left, window.innerWidth - menu.offsetWidth - 8))}px`;
       }
       menu.dataset.placed = '';
-      menu.querySelector?.('button')?.focus();
+      menu.querySelector?.('[role="menuitem"]')?.focus();
     }
 
-    function crumb(text, title, action) {
-      const button = el('button', 'crumb', text);
-      button.type = 'button';
-      button.title = title;
-      button.addEventListener('click', action);
-      return button;
+    function crumb(text, title, action, href = null) {
+      const node = el(href ? 'a' : 'button', 'crumb', text);
+      if (!href) node.type = 'button';
+      node.title = title;
+      if (href) link(node, href, action);
+      else node.addEventListener('click', action);
+      return node;
     }
 
     // Where the open panel's Back leads.
@@ -266,7 +296,8 @@
         const parts = [menuButton];
         if (holder.id !== 'room-crumbs' && !lobby.active()) {
           parts.push(el('span', 'crumb-sep', '›'),
-                     crumb(parentName(), `Back to ${parentName()}`, closePanel));
+                     crumb(parentName(), `Back to ${parentName()}`, closePanel,
+                           roomURL(state.fragment)));
         }
         holder.replaceChildren(...parts);
       }
@@ -277,13 +308,14 @@
       if (roomBack) {
         const target = lobbyLink();
         roomBack.hidden = !target;
+        roomBack.href = target || '';
         roomBack.title = 'Back to the project lobby';
         roomBack.setAttribute('aria-label', roomBack.title);
       }
     }
 
     if (roomBack) {
-      roomBack.addEventListener('click', () => {
+      link(roomBack, '', () => {
         const target = lobbyLink();
         if (target) navigate(target);
       });
@@ -293,5 +325,5 @@
                           entry, openMenu});
   }
 
-  window.mevedelNav = Object.freeze({create, historyShare});
+  window.mevedelNav = Object.freeze({create, historyShare, link, roomURL});
 })();

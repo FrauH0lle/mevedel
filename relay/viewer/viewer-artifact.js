@@ -34,7 +34,7 @@
       + '});})()<\/script>';
   }
 
-  function create({send, el, flash, summarize, reveal, canDiscuss, canDelete, busy, ask, openConversation,
+  function create({send, el, flash, summarize, reveal, canDiscuss, canDelete, busy, ask, openConversation, href,
                    onPage = () => {}}) {
     const nav = document.getElementById('artifacts');
     const box = document.getElementById('artifacts-box');
@@ -188,9 +188,10 @@
       view.store = typeof record.store === 'string' ? record.store : null;
       // What reopens this page after Back, Forward or a reload.
       view.record = {id: record.id};
-      for (const key of ['artifact', 'title', 'store', 'version', 'size', 'item']) {
+      for (const key of ['artifact', 'title', 'store', 'version', 'size', 'item', 'agent']) {
         if (record[key] !== undefined) view.record[key] = record[key];
       }
+      hydratePublished();
       onPage();
     }
 
@@ -255,6 +256,7 @@
       if (!view.staging) return;
       if (!view.meta) {
         view.meta = {
+          name: typeof frame.name === 'string' ? frame.name : null,
           mime: typeof frame.mime === 'string' ? frame.mime
             : 'application/octet-stream',
           size: typeof frame.size === 'number' ? frame.size : 0,
@@ -281,6 +283,14 @@
           bytes[index] = binary.charCodeAt(index);
         }
         view.bytes = bytes;
+        if (view.record && view.meta.name) {
+          view.filename = view.meta.name;
+          if (!view.record.title && !view.record.artifact) {
+            view.name = view.filename + (view.kind === 'version' ? ` · Version ${view.record.version}` : '');
+            if (title) title.textContent = view.name;
+          }
+          view.record.artifact = view.filename;
+        }
         renderContent();
       } else if (metaEl && view.meta.size > 0) {
         const percent = Math.min(
@@ -319,10 +329,33 @@
     // both list in the sidebar, once per artifact file.
     let published = [];
     let attached = [];
+    function hydratePublished() {
+      if (!view.record || view.record.agent) return;
+      const record = published.find(record => record.id === view.record.id && record.artifact);
+      if (!record) return;
+      const hadStore = view.store !== null;
+      for (const key of ['artifact', 'title', 'store', 'size', 'item']) {
+        if (record[key] !== undefined) view.record[key] = record[key];
+      }
+      view.filename = view.record.artifact || view.filename;
+      view.store = typeof view.record.store === 'string' ? view.record.store : null;
+      view.name = (view.record.title || view.filename)
+        + (view.kind === 'version' ? ` · Version ${view.record.version}` : '');
+      if (title) title.textContent = view.name;
+      // A record-only route can finish loading before its snapshot metadata.
+      // Enable missing discussion wiring once; normal snapshots must not reset
+      // the artifact's iframe, scroll position, or in-frame drafts.
+      if (!hadStore && view.store !== null && view.kind === 'artifact'
+          && view.bytes && view.meta?.mime === 'text/html' && discussions) renderContent();
+      return !hadStore && view.store !== null;
+    }
+
     function render(records) {
       published = records;
       if (discussions) discussions.records(records);
+      const pageChanged = hydratePublished();
       paint();
+      if (pageChanged) onPage();
     }
 
     // Whiteboards and documents list under Shared work, in their editor.
@@ -349,9 +382,11 @@
       if (summarize) summarize('artifacts', byName.size ? label : '');
       byName.forEach(record => {
         const missing = record.missing === true;
-        const chip = el('button', `dock-chip${missing ? ' stuck' : ''}`);
-        chip.type = 'button';
-        chip.disabled = missing;
+        const chip = el(missing ? 'button' : 'a', `dock-chip${missing ? ' stuck' : ''}`);
+        if (missing) {
+          chip.type = 'button';
+          chip.disabled = true;
+        }
         chip.title = missing
           ? `${record.artifact} was deleted on the host`
           : `Open ${record.title || record.artifact}`;
@@ -360,7 +395,7 @@
           : typeof record.size === 'number'
             ? window.mevedelTranscriptRenderer.formatBytes(record.size) : '';
         if (size) chip.append(el('span', 'dock-chip-meta', size));
-        if (!missing) chip.addEventListener('click', () => open(record));
+        if (!missing) window.mevedelNav.link(chip, href({artifact: record}), () => open(record));
         nav.append(chip);
       });
     }

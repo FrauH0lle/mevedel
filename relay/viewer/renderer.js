@@ -474,7 +474,7 @@
   // The model wrote a file into the session's artifacts folder: the card
   // names it and Open fetches its bytes on demand, so a guest who never
   // opens it never downloads it.
-  function renderArtifactCard(record, onArtifactOpen) {
+  function renderArtifactCard(record, onArtifactOpen, href) {
     const card = el('div', 'artifact-card');
     // The badge names the file's type, from its extension.
     const extension = /\.([A-Za-z0-9]{1,5})$/.exec(record.artifact || '')?.[1];
@@ -485,16 +485,19 @@
     } else if (typeof record.size === 'number') {
       card.append(el('span', 'artifact-size', formatBytes(record.size)));
     }
-    const open = el('button', 'btn quiet artifact-open', 'Open');
-    open.type = 'button';
-    open.disabled = record.missing === true;
+    const available = typeof onArtifactOpen === 'function' && record.missing !== true;
+    const open = el(available ? 'a' : 'button', 'btn quiet artifact-open', 'Open');
+    if (!available) {
+      open.type = 'button';
+      open.disabled = true;
+    }
     open.setAttribute(
       'title',
       record.missing === true
         ? 'This artifact was deleted on the host'
         : `Open ${record.title || record.artifact || 'this artifact'}`);
-    if (onArtifactOpen && record.missing !== true) {
-      open.addEventListener('click', () => onArtifactOpen(record));
+    if (available) {
+      window.mevedelNav.link(open, href({artifact: record}), () => onArtifactOpen(record));
     }
     card.append(open);
     return card;
@@ -578,7 +581,7 @@
     return details;
   }
 
-  function renderContent(record, onArtifactOpen, disclosures, onExecutionOpen, onAgentOpen) {
+  function renderContent(record, onArtifactOpen, disclosures, onExecutionOpen, onAgentOpen, href) {
     if (record.kind === 'agent-notice') {
       const details = el('details', 'agent-notice');
       disclosures.set('mailbox', details);
@@ -590,10 +593,14 @@
         record.mailType === 'result' ? `● Agent ${sender} ${verb}` : `Message from ${sender}`));
       details.append(summary);
       details.append(renderMarkdown(record.text || ''));
-      const open = el('button', 'btn quiet', 'Open transcript');
-      open.type = 'button';
-      open.disabled = typeof onAgentOpen !== 'function' || !record.sender;
-      if (!open.disabled) open.addEventListener('click', () => onAgentOpen(record.sender));
+      const available = typeof onAgentOpen === 'function' && !!record.sender;
+      const open = el(available ? 'a' : 'button', 'btn quiet', 'Open transcript');
+      if (available) {
+        window.mevedelNav.link(open, href({agent: {path: record.sender}}), () => onAgentOpen(record.sender));
+      } else {
+        open.type = 'button';
+        open.disabled = true;
+      }
       details.append(open);
       return details;
     }
@@ -651,7 +658,7 @@
     }
     if (record.kind === 'assistant') return renderMarkdown(record.text || '');
     if (record.kind === 'tool' && record.artifact) {
-      return renderArtifactCard(record, onArtifactOpen);
+      return renderArtifactCard(record, onArtifactOpen, href);
     }
     const presentation = record.presentation;
     return renderToolPresentation(
@@ -741,7 +748,7 @@
     while (transcript.children.length > desired.length) transcript.lastElementChild.remove();
   }
 
-  function renderRecord(record, scopeChip, onArtifactOpen, previous, onExecutionOpen, onAgentOpen) {
+  function renderRecord(record, scopeChip, onArtifactOpen, previous, onExecutionOpen, onAgentOpen, href) {
     const turn = el('article', `turn ${roleOf(record)}`);
     turn.dataset.recordId = record.id;
     if (record.toolUseId) turn.dataset.toolUseId = record.toolUseId;
@@ -755,7 +762,7 @@
     const content = el('div', 'content');
     content.append(whoLine(record, scopeChip));
     turn.disclosures = new Map();
-    const rendered = renderContent(record, onArtifactOpen, turn.disclosures, onExecutionOpen, onAgentOpen);
+    const rendered = renderContent(record, onArtifactOpen, turn.disclosures, onExecutionOpen, onAgentOpen, href);
     content.append(rendered);
     turn.append(content);
     // Rebuilding a record owns disclosure continuity. Callers supply the

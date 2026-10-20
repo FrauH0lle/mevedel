@@ -498,6 +498,8 @@ test('store refresh keeps the open artifact menu actionable', async () => {
   try {
     const page = await room(browser);
     await page.addScriptTag({content: await readFile(
+      resolve(root, 'relay/viewer/viewer-nav.js'), 'utf8')});
+    await page.addScriptTag({content: await readFile(
       resolve(root, 'relay/viewer/viewer-store.js'), 'utf8')});
     await page.evaluate(() => {
       window.storeSent = [];
@@ -505,6 +507,7 @@ test('store refresh keeps the open artifact menu actionable', async () => {
         artifact: 'page/index.html', versions: 1, modified: 1, attached: true}]};
       window.mevedelTranscriptRenderer = {formatBytes: bytes => `${bytes} B`};
       window.storeView = window.mevedelStoreView.create({
+        href: destination => '#room.secret?artifact=' + encodeURIComponent(destination.artifact.id),
         send: frame => window.storeSent.push(frame),
         el: (tag, className, text) => {
           const node = document.createElement(tag);

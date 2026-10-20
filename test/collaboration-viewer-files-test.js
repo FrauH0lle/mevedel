@@ -5,6 +5,7 @@
 
 const assert = require('node:assert/strict');
 const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
+const {navigation, nativeActivations} = require('./collaboration-viewer-content-links-support');
 
 const plain = value => JSON.parse(JSON.stringify(value));
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -34,6 +35,7 @@ function build({confirmed = true, sendOk = true} = {}) {
                    setTimeout: callback => { timers.push(callback); return timers.length; },
                    clearTimeout: () => {}};
   load('relay/viewer/viewer-files.js', context);
+  const href = navigation(context);
   const sent = [];
   const notices = [];
   const opened = [];
@@ -42,7 +44,7 @@ function build({confirmed = true, sendOk = true} = {}) {
     send, setTimer: context.setTimeout, clearTimer: context.clearTimeout});
   const files = window.mevedelFilesView.create({
     send, el: (tag, className, text) => element(document, tag, className, text),
-    notice: text => notices.push(text), uploads, openFile: path => opened.push(path),
+    notice: text => notices.push(text), uploads, openFile: path => opened.push(path), href,
   });
   return {files, uploads, nodes, sent, notices, opened, timers, window,
           drop: () => dropTray, api: window.mevedelFilesView};
@@ -72,6 +74,7 @@ const rootListing = reqId => ({
   // Opening a folder asks for it; opening a file hands its path on.
   rows[0].children[0].dispatch('click');
   assert.deepEqual(plain(sent.at(-1)), {t: 'files', reqId: 2, dir: 'docs'});
+  nativeActivations(rows[1].children[0], () => assert.equal(opened.length, 0));
   rows[1].children[0].dispatch('click');
   assert.deepEqual(opened, ['notes.md']);
   // A stale answer does not replace the newer request's view.

@@ -2,7 +2,7 @@
 'use strict';
 (() => {
   const GRACE = 10000;
-  function create({state, send, el, openAgent, openExecution, showConversation,
+  function create({state, send, el, openAgent, openExecution, showConversation, href,
     now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout}) {
     const panel = document.getElementById('background-work');
     const heading = document.getElementById('background-summary');
@@ -55,8 +55,11 @@
       const previewLabel = el('div', 'background-preview-label');
       const preview = el('pre', 'background-preview');
       const controls = el('div', 'background-controls');
-      const open = action('', () => entry.row.kind === 'agent'
-        ? openAgent(entry.row) : openExecution({owner: entry.row.owner, id: entry.row.id}));
+      const open = row.kind === 'agent'
+        ? window.mevedelNav.link(el('a', 'btn quiet'), href({agent: row}), () => {
+          if (state.connected && !settled(entry)) openAgent(entry.row);
+        })
+        : action('', () => openExecution({owner: entry.row.owner, id: entry.row.id}));
       const conversation = action('Show in conversation', () => showConversation(entry.row));
       const stop = action('', () => {
         const current = entry.row;
@@ -105,6 +108,12 @@
       p.preview.textContent = Array.from({length: 3}, (_, n) => flat(row.preview?.[n])).join('\n');
       p.open.textContent = agent ? 'Open transcript' : 'Full output';
       p.open.disabled = !state.connected || (agent && finished);
+      if (agent) {
+        p.open.setAttribute('aria-disabled', String(p.open.disabled));
+        p.open.tabIndex = p.open.disabled ? -1 : 0;
+        if (p.open.disabled) p.open.removeAttribute('href');
+        else p.open.href = href({agent: row});
+      }
       p.conversation.disabled = !state.connected || !row.toolUseId || (agent && finished);
       p.stop.textContent = agent ? 'Interrupt' : 'Stop';
       p.stop.disabled = finished || !state.connected || !state.writable;

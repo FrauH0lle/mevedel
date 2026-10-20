@@ -82,7 +82,7 @@
     return Object.freeze({upload, handle});
   }
 
-  function create({send, el, notice, uploads, openFile, confirm = text => window.confirm(text)}) {
+  function create({send, el, notice, uploads, openFile, href, confirm = text => window.confirm(text)}) {
     const section = document.getElementById('lobby-files');
     const crumbs = document.getElementById('files-path');
     const list = document.getElementById('files-list');
@@ -132,9 +132,9 @@
     function renderEntry(entry) {
       const item = el('li', 'lobby-row files-row');
       const path = join(entry.name);
-      const name = el('button', 'files-name');
-      name.type = 'button';
+      const name = el(entry.kind === 'dir' ? 'button' : 'a', 'files-name');
       if (entry.kind === 'dir') {
+        name.type = 'button';
         name.append(el('span', 'files-icon', '▸'), el('span', '', `${entry.name}/`));
         name.setAttribute('aria-label', `Open folder ${entry.name}`);
         name.addEventListener('click', () => load(path));
@@ -143,7 +143,7 @@
       }
       name.append(el('span', 'files-icon', '·'), el('span', '', entry.name));
       name.setAttribute('aria-label', `View ${entry.name}`);
-      name.addEventListener('click', () => openFile(path));
+      window.mevedelNav.link(name, href({file: path}), () => openFile(path));
       item.append(name);
       if (typeof entry.size === 'number') item.append(el('span', 'lobby-meta', formatBytes(entry.size)));
       const remove = el('button', 'btn quiet danger', 'Remove');

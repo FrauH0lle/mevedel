@@ -5,6 +5,7 @@
 
 const assert = require('node:assert/strict');
 const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
+const {navigation, nativeActivations} = require('./collaboration-viewer-content-links-support');
 
 const ids = ['artifacts-box', 'artifacts-summary', 'artifacts',
              'artifact-panel', 'artifact-title', 'artifact-meta',
@@ -64,9 +65,11 @@ const context = {
   TextDecoder, Uint8Array, atob,
 };
 load('relay/viewer/viewer-artifact.js', context);
+const href = navigation(context);
 const sent = [];
 let summary;
 const controller = window.mevedelArtifactView.create({
+  href,
   send(frame) { sent.push(frame); return Promise.resolve(true); },
   el: (tag, className, text) => element(document, tag, className, text),
   flash: message => flashes.push(message),
@@ -84,6 +87,7 @@ assert.equal(nodes['artifacts-box'].hidden, false);
 assert.equal(nodes['artifacts-summary'].textContent, '2 artifacts');
 assert.deepEqual(summary, {key: 'artifacts', text: '2 artifacts'});
 assert.equal(nodes.artifacts.children.length, 2);
+nativeActivations(nodes.artifacts.children[0], () => assert.equal(sent.length, 0));
 assert.match(textOf(nodes.artifacts), /Architecture review20 B/);
 assert.equal(nodes.artifacts.children[1].disabled, true);
 assert.match(textOf(nodes.artifacts.children[1]), /deleted/);
@@ -146,8 +150,8 @@ nodes['artifact-tab'].dispatch('click');
 assert.match(flashes[0], /Popup blocked/);
 blockPopup = false;
 nodes['artifact-download'].dispatch('click');
-assert.equal(links[0].download, 'mockup.html');
-assert.equal(links[0].clicked, true);
+assert.equal(links.at(-1).download, 'mockup.html');
+assert.equal(links.at(-1).clicked, true);
 
 controller.open({id: 'markdown', artifact: 'notes.md'});
 assert.deepEqual({...sent[1]},
@@ -270,6 +274,32 @@ const aliasDeleteId = sent.at(-1).reqId;
 controller.open({id: 'artifact:first', store: 'first', artifact: 'first/index.html', title: 'Review'});
 controller.handleDelete({reqId: aliasDeleteId, ok: true});
 assert.equal(nodes['artifact-panel'].hidden, true);
+
+// Identifier-only new-tab routes hydrate download names from the matching host
+// transfer, without accepting stale/error responses or losing version labels.
+controller.open({id: 'opaque-deep-link', version: 2, agent: {path: '/root/worker', segment: 3}});
+const deepReq = sent.at(-1).reqId;
+controller.handle({reqId: deepReq - 1, name: 'wrong.html', data: encoded, final: true});
+assert.equal(nodes['artifact-title'].textContent, 'artifact · Version 2');
+controller.handle({reqId: deepReq, name: 'reviews/index.html', mime: 'text/html',
+  data: encoded.slice(0, 8), final: false});
+controller.handle({reqId: deepReq, data: encoded.slice(8), final: true});
+assert.equal(nodes['artifact-title'].textContent, 'reviews/index.html · Version 2');
+assert.equal(controller.describe().artifact.artifact, 'reviews/index.html');
+assert.equal(controller.describe().artifact.version, 2);
+assert.deepEqual({...controller.describe().artifact.agent}, {path: '/root/worker', segment: 3});
+nodes['artifact-download'].dispatch('click');
+assert.equal(links.at(-1).download, 'index.html');
+controller.open({id: 'opaque-deep-link', title: 'Custom review'});
+controller.handle({reqId: sent.at(-1).reqId, name: 'reviews/new.html', mime: 'text/html', data: encoded, final: true});
+assert.equal(nodes['artifact-title'].textContent, 'Custom review');
+nodes['artifact-download'].dispatch('click');
+assert.equal(links.at(-1).download, 'new.html');
+controller.open({id: 'refused-deep-link'});
+controller.handle({reqId: sent.at(-1).reqId, name: 'refused.html', error: 'Unavailable'});
+assert.equal(nodes['artifact-title'].textContent, 'artifact');
+assert.equal(controller.describe().artifact.artifact, undefined);
+controller.close();
 
 console.log('viewer artifact passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

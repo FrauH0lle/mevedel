@@ -21,6 +21,7 @@ test('unified work panel retains expanded completions and checks writable contro
       });
       await page.goto('http://viewer.test/index.html');
       assert.equal(await page.locator('#background-work').count(), 1, 'running work has a visible surface');
+      await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/viewer-nav.js'), 'utf8')});
       await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/viewer-background.js'), 'utf8')});
       await page.evaluate(() => {
         window.bgTime = 1000; window.bgSent = []; window.bgState = {connected: true, writable: true};
@@ -36,6 +37,7 @@ test('unified work panel retains expanded completions and checks writable contro
         const el = (tag, cls, text) => { const node = document.createElement(tag);
           node.className = cls || ''; node.textContent = text || ''; return node; };
         window.bg = window.mevedelBackgroundView.create({state: window.bgState, el,
+          href: destination => '#room.secret?agent=' + encodeURIComponent(destination.agent.path),
           send: frame => window.bgSent.push(frame), now: () => window.bgTime,
           setTimer: fn => { window.bgTick = fn; return 1; }, clearTimer() {},
           openAgent: row => { window.bgOpened = row.path; }, openExecution() {}, showConversation() {}});
@@ -69,6 +71,33 @@ test('unified work panel retains expanded completions and checks writable contro
       assert.equal(await page.locator('[data-key="bash"]').count(), 0);
       await page.locator('[data-key="agent"] .background-toggle').click();
       assert.match(await page.locator('[data-key="agent"]').innerText(), /accurate-model:high/);
+      const agentLink = page.locator('[data-key="agent"] .background-controls a');
+      assert.equal(await agentLink.getAttribute('href'), '#room.secret?agent=%2Froot%2Freviewer');
+      await agentLink.click();
+      assert.equal(await page.evaluate(() => window.bgOpened), '/root/reviewer');
+      assert.equal(new URL(page.url()).hash, '', 'ordinary click stays in the current viewer');
+      for (const options of [{button: 1}, {ctrlKey: true}, {metaKey: true}, {shiftKey: true}, {altKey: true}]) {
+        assert.deepEqual(await agentLink.evaluate((node, options) => {
+          window.bgOpened = null;
+          const event = new MouseEvent('click', {bubbles: true, cancelable: true, ...options});
+          // Observe the link handler, then prevent synthetic navigation in this fixture.
+          let prevented;
+          node.addEventListener('click', e => { prevented = e.defaultPrevented; e.preventDefault(); }, {once: true});
+          node.dispatchEvent(event);
+          return {prevented, opened: window.bgOpened};
+        }, options), {prevented: false, opened: null}, 'native activations bypass local agent opening');
+      }
+      await page.evaluate(() => { window.bgState.connected = false; window.bg.refresh(); });
+      assert.equal(await agentLink.getAttribute('href'), null);
+      assert.equal(await agentLink.getAttribute('aria-disabled'), 'true');
+      assert.equal(await agentLink.evaluate(node => node.tabIndex), -1);
+      await agentLink.dispatchEvent('click');
+      assert.equal(await page.evaluate(() => window.bgOpened), null, 'disconnected links cannot open locally');
+      await page.evaluate(() => { window.bgState.connected = true; window.bg.refresh(); });
+      assert.equal(await agentLink.getAttribute('href'), '#room.secret?agent=%2Froot%2Freviewer');
+      assert.equal(await agentLink.getAttribute('aria-disabled'), 'false');
+      assert.equal(await page.locator('[data-key="monitor"] .background-controls button').count(), 3,
+        'execution output, conversation, and stop controls remain buttons');
       await page.locator('[data-key="agent"] [data-stop]').click();
       assert.equal(await page.evaluate(() => window.bgSent.at(-1).t), 'background-stop');
       await page.evaluate(() => { window.bgState.writable = false; window.bg.refresh(); });
@@ -89,6 +118,10 @@ test('unified work panel retains expanded completions and checks writable contro
       await page.evaluate(() => window.bg.show({rows: [], truncated: true}));
       assert.match(await page.locator('[data-key="agent"]').innerText(), /Unavailable/);
       assert.equal(await page.locator('[data-key="agent"] [data-stop]').isDisabled(), true);
+      assert.equal(await agentLink.getAttribute('href'), null, 'unavailable agents lose native destinations');
+      assert.equal(await agentLink.getAttribute('aria-disabled'), 'true');
+      await page.evaluate(() => window.bg.show({rows: [{...window.bgRows[0], terminal: true, status: 'completed'}]}));
+      assert.equal(await agentLink.getAttribute('href'), null, 'completed agents retain the disabled-control contract');
       await page.evaluate(() => { window.bg.reset(); window.bg.show({rows: [{...window.bgRows[1], terminalAgeSeconds: 25}]}); });
       assert.equal(await page.locator('#background-work').isVisible(), false, 'rejoin does not restart old terminal grace');
       await page.evaluate(() => { window.bg.reset(); window.bg.show({rows: [], truncated: true}); });

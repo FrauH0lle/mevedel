@@ -23,7 +23,7 @@ test('long agent attribution and task owners fit phone and desktop', async () =>
           contentType: path.endsWith('.css') ? 'text/css' : 'text/html'});
       });
       await page.goto('http://viewer.test/index.html');
-      for (const asset of ['renderer.js', 'viewer-agent.js', 'viewer-background.js', 'viewer-task.js']) {
+      for (const asset of ['viewer-nav.js', 'renderer.js', 'viewer-agent.js', 'viewer-background.js', 'viewer-task.js']) {
         await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer', asset), 'utf8')});
       }
       await page.evaluate(() => {
@@ -35,13 +35,14 @@ test('long agent attribution and task owners fit phone and desktop', async () =>
         };
         const path = '/root/' + 'long_agent_name_'.repeat(10);
         const model = 'provider-model-'.repeat(10);
+        const href = destination => '#room.secret?agent=' + encodeURIComponent(destination.agent.path);
         window.agentSent = [];
-        window.agentView = window.mevedelAgentView.create({el, send(frame) { window.agentSent.push(frame); }});
+        window.agentView = window.mevedelAgentView.create({el, href, send(frame) { window.agentSent.push(frame); }});
         window.agentView.show([
           {path, status: 'running', model, effort: 'high'},
           {path: path + '/finished', status: 'done', model, effort: 'high'},
         ]);
-        window.mevedelBackgroundView.create({el, send() {}, state: {connected: true, writable: true},
+        window.mevedelBackgroundView.create({el, href, send() {}, state: {connected: true, writable: true},
           openAgent: row => window.agentView.open(row), openExecution() {}, showConversation() {}}).show({rows: [
           {key: 'running', kind: 'agent', path, owner: path, status: 'running', statusLabel: 'Running', description: path, model, effort: 'high'},
           {key: 'finished', kind: 'agent', path: path + '/finished', status: 'done', statusLabel: 'Finished', description: path + '/finished', model, terminal: true},
@@ -63,7 +64,7 @@ test('long agent attribution and task owners fit phone and desktop', async () =>
       }
       await page.evaluate(() => { document.getElementById('session-box').open = false; });
       await page.locator('[data-key="running"] .background-toggle').click();
-      await page.locator('[data-key="running"] .background-controls button').first().click();
+      await page.locator('[data-key="running"] .background-controls a').click();
       assert.equal(await page.locator('#agent-panel').evaluate(node =>
         node.scrollWidth <= node.clientWidth + 1), true, `inspection fits at ${width}px`);
       await page.locator('#agent-close').click();

@@ -6,7 +6,7 @@
   // store has none. ROOM is true in a session's room, where artifacts can be
   // attached to the session; the lobby has no session of its own. NAVIGATE
   // opens an artifact's conversation room in this tab.
-  function create({send, el, list, empty, state, room = false, open, notice,
+  function create({send, el, list, empty, state, room = false, open, notice, href,
                    creation = null, navigate,
                    ask = (text, value) => window.prompt(text, value),
                    confirm = text => window.confirm(text)}) {
@@ -59,6 +59,12 @@
       return node;
     }
 
+    function destination(label, title, target, action) {
+      const node = el('a', 'btn quiet', label);
+      node.title = title;
+      return window.mevedelNav.link(node, href(target), action);
+    }
+
     const KINDS = {html: 'HTML', markdown: 'Markdown', image: 'Image', file: 'File',
                    whiteboard: 'Whiteboard', document: 'Document'};
 
@@ -74,8 +80,9 @@
         const age = window.mevedelLobbyView ? window.mevedelLobbyView.age(version.time) : '';
         item.append(el('span', 'lobby-meta',
                        `Version ${version.n}${index === 0 ? ' (latest saved)' : ''} · ${age}`));
-        item.append(button('View', `Preview version ${version.n} without changing the artifact`,
-                           () => open({...record(row), version: version.n})));
+        const artifact = {...record(row), version: version.n};
+        item.append(destination('View', `Preview version ${version.n} without changing the artifact`,
+                                {artifact}, () => open(artifact)));
         if (state.writable) {
           item.append(button('Restore', `Make version ${version.n} the newest version`,
                              () => act('restore', row.id, {n: version.n})));
@@ -187,7 +194,11 @@
       if (expanded.has(row.id)) main.append(renderVersions(row));
       item.append(main);
       if (row.missing !== true) {
-        item.append(button('Open', `Open ${row.title || row.id}`, () => openRow(row)));
+        const title = `Open ${row.title || row.id}`;
+        item.append(row.item === true && !room
+          ? button('Open', title, () => openRow(row))
+          : destination('Open', title, row.item === true ? {shared: row.id} : {artifact: record(row)},
+                        () => openRow(row)));
       }
       item.append(...actions(row));
       return item;
@@ -227,7 +238,7 @@
       if (!owner || list.contains(active)) return;
       const again = list.querySelector(`[data-store-id="${CSS.escape(owner.dataset.storeId)}"]`);
       if (!again) return;
-      const controls = [...again.querySelectorAll('button')];
+      const controls = [...again.querySelectorAll('button, a[href]')];
       (controls.find(control => control.textContent === active.textContent)
        || again.querySelector('.store-more'))?.focus();
     }
