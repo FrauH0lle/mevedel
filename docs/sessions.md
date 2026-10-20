@@ -278,6 +278,45 @@ outstanding batches
 even when its text is unmodified.
 These checkpoints preserve unfinished text without marking a turn completed.
 
+The 30-second timer is not a minimum interval between all saves: native Emacs
+auto-save adds opportunities according to its own input/idle settings. Retained
+agents also debounce saves after tool-result cycles by
+`mevedel-agent-conversation-save-debounce` (default 2 seconds of idleness),
+cancelling an earlier pending timer. These sources share modified-state
+rechecks, and the warm-local checkpoint path permits at most one accepted job
+per buffer; there is no fixed global maximum checkpoint frequency. The timer
+and debounce values above are defaults, not a measurement of a running session.
+
+Checkpoint preparation retains derived transcript structure, response bounds,
+prompt units and audit spans per data buffer. Each consumer owns a change
+frontier established by paired modification hooks; unchanged prefixes are reused,
+and known leading metadata writes rebase body-relative coordinates. An
+unobserved edit, changed source or restriction, reordered hooks, or an overlay
+with modification hooks invalidates the relevant proof rather than trusting
+cached text. Cloned buffers do not share proof ownership. Incomplete controls
+and block-depth lookahead also prevent reuse across their unresolved dependency.
+These are disposable computation caches, not durable state or lease authority.
+Generated transcript storage disables font-lock and JIT fontification: the
+rendered view owns normal presentation, and JIT's silent `fontified` writes
+would invalidate otherwise valid change proofs after each edit. Raw transcript
+inspection (`mevedel-view-toggle-transcript` or switching buffers) and the
+temporary data-buffer display behind `gptel-menu` remain unfontified. Enabling
+gptel on storage also unregisters its Org JIT annotator and disables JIT again,
+because that registration otherwise turns JIT back on during restore/activation.
+The stream bridge
+announces gptel's silent string insertions and finishes their proof before
+post-stream observers run. An arbitrary transformer or observer that edits
+the source still invalidates the proof; no hook allowlist exempts foreign edits.
+Foreign code that redirects point or the current buffer also invalidates the
+proof, since gptel inserts at the location its transformer leaves behind.
+The writer still freezes the complete transcript, sidecar and checkpoint
+candidate together, with the same success-only adoption and modified-tick check.
+Synchronous saves freeze encoded bytes; automatic warm-local root checkpoints
+capture native characters and encode in the later staging phase described below.
+Large lines, unresolved controls, full payload encoding and garbage collection
+can still make a phase exceed an event-loop budget; asynchronous target
+publication does not itself bound this main-thread work.
+
 ### Committed conversation checkpoints
 
 Live session state may advance before its corresponding transcript is durable.
@@ -318,9 +357,10 @@ publication and retry, and are released when no active, queued, staged, or
 recoverable publication remains; they are not session-lifetime identity history.
 
 Root, ordinary retained-agent, and terminal retained-agent writers mark a buffer
-clean only if its modification tick still matches the frozen bytes. Text or mail
-injected while publication is in progress stays modified, so the next save
-cannot retire its mailbox record without first persisting its transcript.
+clean only if its full modification tick still matches the freeze. Text, mail
+or property-only gptel changes made during publication stay modified, so the
+next save cannot retire a mailbox record without persisting its transcript or
+silently omit newly changed response bounds.
 
 Terminal retained-agent state and its RESULT remain tentative while the final
 checkpoint is prepared. Mail delivery and native continuation paths cannot
@@ -1007,9 +1047,11 @@ committed manifest, and when every one matches, the save records nothing and
 sidecar differ on every call and defeat the comparison.  When some artifacts
 differ, only those are published. Payload comparison runs once per save and
 its selection is reused for publication, avoiding a second encoding/hash of a
-changed transcript. Root saves freeze the transcript's encoded bytes once after
-save hooks, using the buffer's file coding system. Comparison, staging, and
-publication reuse those bytes, including their original line endings.
+changed transcript. Synchronous root saves freeze the encoded bytes after save
+hooks, using the buffer's file coding system. Automatic warm-local root saves
+instead freeze native characters and encode once while staging; asynchronous
+digests and comparison then use the staged bytes. Both paths preserve the
+captured coding system and original line endings.
 An omitted artifact keeps its existing
 manifest entry, so the logical snapshot is unchanged while whole per-artifact
 ownership proofs are avoided.  The commit marker always publishes, because it is
@@ -1442,6 +1484,97 @@ carries the immutable generation ahead of the lease update, and that update
 returns the lease to `active`. The commit point is the lease head, as for
 synchronous publication.
 
+An automatic root checkpoint, whose payload is the whole transcript, splits
+its freeze from the work that used to run inside it. Freeze runs under the
+gate and only captures: it takes the transcript's native characters as one
+string with the buffer's coding system recorded, the sidecar, a copy
+of the committed manifest entries, the comparability flag, the forced-save flag
+and the timestamp. For multibyte transcripts it defers encoding as well as
+hashing; unusual unibyte buffers retain their explicit-encoding contract. The
+next idle turn stages: each artifact is written once, directly from its string
+through `write-region` in a fundamental temporary buffer with an explicit
+coding system and annotation hooks disabled, so no live buffer state can
+change the staged bytes. There is no eager encoded transcript payload retained
+for comparison; `write-region` still encodes and allocates on the main thread.
+Staging also
+projects the staged sidecar through its checkpoint owner. A further turn runs
+one asynchronous `file-hash` control program over every staged source that has
+no digest yet, across the job's retained earlier batches as well; the digests
+must be well-formed lowercase SHA-256 values or the job fails and rolls back.
+No transcript digest is computed on the main thread, and the generation phase
+refuses to hash for itself. Only then does the selector run, using the digests
+and the frozen snapshot, never live fields: it keeps payloads whose digest
+differs from the frozen manifest, stamps and rewrites the small staged
+sidecar -- the checkpoint-projected local file, which is the frozen
+authoritative snapshot, not a fresh live projection -- computing that
+sidecar's own digest, and returns the batch to publish. A nil selection is an
+exact no-op and completes the job without a
+reservation; it is refused while earlier retained batches are pending. Every
+staged batch, including pruned ones, belongs to the job until acknowledgement
+or failure, and a pruned original is not kept as recovery.
+
+A save first runs its save hooks, serializing property-derived metadata such
+as `GPTEL_BOUNDS` into characters. It may then skip transcript capture,
+staging and hashing only when an acknowledged proof says nothing differs:
+the buffer, owner epoch, file name, character
+modification tick, coding system, multibyte state, restriction, and the digest
+of the transcript's manifest entry must all equal those recorded when an
+earlier save was acknowledged, and no publication is queued or pending. Because
+it compares the post-hook character tick, only changes that leave the saved
+characters alone can be skipped over; a parser frontier that
+advanced before a failed save proves nothing. The proof is recorded only after
+adoption, and only if the buffer's ticks and identity still equal the frozen
+state, so edits made after capture stay modified. The synchronous publication
+path is unchanged.
+
+The 2026-10-20 compiled-copy replay used the complete 95-file real session
+copy (27,795,709 bytes), restoring a 1,069,346-byte root, plus a synthetic
+3,504,146-byte scaling fixture that retains the original control/fork records.
+Each row below has six samples; latency and phase instrumentation are separate
+runs. Every sample checked authoritative saved bytes and successful
+acknowledgement. Times are milliseconds, with a 5 ms heartbeat:
+
+| Fixture/edit | Prepare median | Stage median | ACK median | Heartbeat gap median / max |
+| --- | ---: | ---: | ---: | ---: |
+| Natural response tail | 9.07 | 5.31 | 141.36 | 12.81 / 15.84 |
+| Natural new turn | 10.13 | 4.98 | 143.34 | 14.51 / 61.05 |
+| Synthetic response tail | 10.55 | 15.36 | 162.93 | 17.54 / 51.90 |
+| Synthetic new turn | 11.89 | 14.52 | 159.65 | 16.87 / 57.19 |
+
+Before the preparation changes, prepare medians were 34.77/34.85 ms natural
+and 78.14/77.37 ms synthetic. All 20 non-GC latency samples now have heartbeat
+gaps below 20 ms (largest 17.94 ms); four samples with 36.92-45.66 ms of
+observed GC exceed it. The uninstrumented latency samples do not establish
+the exact GC stacks. A separate phase run directly observes a 40.35 ms GC
+inside preparation and a 51.40 ms freeze phase; its other phase maxima are
+below 20 ms, with staging at most 17.78 ms. The unconditional 20 ms goal is
+therefore still unmet, not explained away as unrelated rendering.
+
+Acknowledgement is slower than with prefix reuse alone: medians increase by
+32.33-37.16 ms (25-36%). Compared with the original baseline, natural ACK is
+17.67-22.86 ms slower while synthetic ACK is 17.02-26.32 ms faster. Digest
+phase dwell is 41.88-44.24 ms median, including worker execution and idle
+handoff, while its main-thread submission is 0.83-0.90 ms. This trades earlier
+durability for editor responsiveness; it does not improve both unconditionally.
+
+GC settings remained 800000 / 1.0, without explicit collection. Allocation
+does not show an overall improvement: cumulative string-character counters
+increase roughly 0.75-0.77 million per checkpoint versus prefix reuse alone
+(instrumentation contributes), and independent memory profiling reports about
+13.08/13.38 MB natural and 33.25/33.40 MB synthetic allocated per checkpoint,
+versus 10.47/10.70 MB and 32.91/33.09 MB respectively. These are allocated
+amounts, not retained heap. Encoding still allocates inside `write-region`.
+The remaining transcript-sized copies are the immutable native capture and
+the staging write's C-side encoding. Synthetic freeze/stage/selector spans
+allocate about 4.06-4.09 / 3.63 / 0.43 million Lisp string characters per
+checkpoint (inclusive counters; nested spans overlap). A byte-checked region
+write from a frozen temporary buffer still allocates the full encoding in this
+runtime and showed no low-risk allocation advantage. No second main-thread
+whole-transcript digest remains; async digest submission allocates about
+12,000 string characters and hands over file paths, not transcript contents.
+The replay proves neither a hard latency bound for arbitrary transcripts nor
+graphical typing/scrolling latency; the running editor was not reloaded.
+
 On success the records become readable, the job's batches are consumed, the
 producer's acknowledgement runs (execution bookkeeping completes), and only
 then, unless the session is stopping, the owner is woken. Cleanup failures
@@ -1556,17 +1689,28 @@ timer. If the close is vetoed, reopening admissions re-arms that same FIFO
 once; an idle close creates no timer. A close that proceeds cancels the timer
 and discards the queue during session teardown, without running callbacks.
 
-On a compiled in-process fixture with a 6000-turn local portable session, an
-explicit drain issued immediately after a submission waited a further
-89.8-115.0 ms (six samples). On the final frozen implementation, asynchronous
-submission returned in 0.22-0.45 ms and acknowledgement arrived 75.4-120.1 ms
-after submission, with a largest 5 ms-timer heartbeat gap of 8.2-10.2 ms,
-against 59.9-73.8 ms of blocked editor for the synchronous commit (heartbeat
-60.0-73.9 ms). A deliberately stalled admission with a 0.25-second drain limit
-signalled after 255.6 ms without acknowledging or discarding the job; releasing
-the stalled callback then completed it. Composer text and point survived all 19
-samples. One fixture, small samples, no live or graphical measurement; this is
-not a hard bound on arbitrary filesystem latency, sidecar size or GC.
+After the checkpoint preparation changes, the original mailbox workload was
+rerun with compiled code: a synthetic 6000-turn local portable session, one
+4000-character result per sample, six samples per mode and a 5 ms heartbeat.
+Asynchronous submission returned in 0.196-0.460 ms and acknowledgement arrived
+105.028-115.540 ms later, with a maximum heartbeat gap of 6.533-7.159 ms,
+against 63.907-70.177 ms of synchronous blocking (heartbeat 63.977-70.228 ms).
+The earlier async ranges were 8.2-10.2 ms heartbeat and 75.4-120.1 ms ACK;
+the rerun shows no blocking regression on this workload, not universally faster
+acknowledgement. A separate phase-instrumented pass measured at most 1.674 ms
+per async advance and 1.704 ms per containing timer; these are not added to
+the uninstrumented latency values.
+
+An immediate explicit drain waited 111.696-119.674 ms. A deliberately stalled
+admission with a 0.25-second drain limit signalled at 250.244 ms without
+acknowledging or discarding the job; releasing the callback completed it, with
+ACK at 355.000 ms from submission. Composer text and point survived all 38
+samples across latency and phase passes. This original recipe explicitly
+collects garbage before each sample; no sample contained GC, unlike the
+streaming-checkpoint replay above. Possible independent verifier load was not
+excluded. One synthetic batch fixture, small samples, no live or graphical
+measurement; this is not a hard bound on arbitrary filesystem latency,
+sidecar size or GC.
 
 The automatic-checkpoint follow-up was measured separately with compiled code
 on a `cp -a` copy of a real session (95 files, 27,795,709 bytes), never the live

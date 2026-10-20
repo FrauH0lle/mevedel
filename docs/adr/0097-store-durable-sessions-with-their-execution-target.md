@@ -107,7 +107,21 @@ buffer's modified flag only if its tick still matches the captured bytes.
 Explicit saves, settlement and teardown remain synchronous and drain accepted
 work first, before transcript capture or checkpoint exclusion. Pending recovery
 blocks teardown even without an in-flight job. Capture itself remains
-main-thread Lisp under the mutation gate. Cancellation is reported through the
+main-thread Lisp under the mutation gate. Disposable per-buffer change proofs
+reuse unchanged transcript structure, bounds, prompt units and audit spans;
+they do not cache lease authority or replace the complete frozen payload.
+Unknown edits or unresolved grammar dependencies fail closed to derivation.
+Hidden canonical transcript buffers disable unused font-lock/JIT machinery;
+an isolated compiled replay proved that JIT's late silent `fontified` property
+write invalidated all prefix proofs on every checkpoint. Removing that one
+hook, or disabling the modes through their APIs, restored suffix derivation
+with identical authoritative bytes. This removes irrelevant storage work,
+not the proof checks protecting against arbitrary hook edits.
+The transcript gptel-enable boundary also undoes gptel's Org JIT registration,
+which otherwise silently re-enables JIT during restore and agent activation.
+Raw transcript inspection and gptel's temporary menu buffer stay unfontified;
+normal presentation remains the rendered view's responsibility.
+Cancellation is reported through the
 asynchronous failure acknowledgement without escaping a timer; explicit
 abandonment discards staging without retaining the discarded checkpoint again.
 Retained-agent buffer queries save or refuse unpublished bytes; a bypassed
@@ -119,6 +133,30 @@ owns the contract; [ADR 0112](0112-debounce-observational-agent-persists.md)
 owns the gate and acknowledgement semantics.
 
 ## Decision history
+
+Phase B of the same work moved the remaining main-thread cost of a warm-local
+transcript checkpoint out of its freeze: freeze captures native characters and
+frozen state only, one staging write per artifact goes straight from the string
+with an explicit coding system, a control-program `file-hash` digests the
+staged files, and a selector over the frozen snapshot prunes unchanged payloads
+and stamps the small sidecar before the lease reservation. The commit point and
+the lease proofs are unchanged. This removes the eager encoded transcript
+payload and its main-thread SHA-256, not the staging write's encoding or
+allocation. A compiled-copy replay of the 1,069,346-byte real root and a
+3,504,146-byte synthetic root reduced preparation medians from
+34.77/34.85 and 78.14/77.37 ms to 9.07/10.13 and 10.55/11.89 ms
+(tail/new turn). Twenty non-GC latency samples stayed below 20 ms, largest
+17.94 ms; four samples with observed GC reached 51.90-61.05 ms, and a
+separate instrumented run placed a 40.35 ms GC inside preparation. The hard
+20 ms goal remains unmet. ACK medians increase 32.33-37.16 ms versus prefix
+reuse alone because the digest adds worker/idle handoffs; that latency cost
+buys shorter non-GC blocking. Allocation is not reduced overall, and native
+encoding remains on the main thread. The immutable capture and staging encoding
+are the remaining transcript-sized copies; a byte-checked frozen-buffer region
+write still allocates that encoding, so it showed no low-risk copy reduction.
+[Sessions](../sessions.md#warm-local-asynchronous-mailbox-publication)
+records the full comparison and limitations. The figures below predate this
+phase split.
 
 The 2026-10-20 follow-up found that the 30-second automatic checkpoint still
 blocked the editor for 280-314 ms on a live 1.6 MB session. Scheduling a
@@ -149,13 +187,16 @@ completion's publication was measured at about 98 of 135 ms on a local session
 source of the roughly 120 ms stalls observed while typing. The assumption that
 serialized publication requires the caller to wait turned out not to hold:
 serialization is a property of ordering and the lease, which a continuation
-chain preserves. On a compiled in-process fixture after the final source freeze
-(six samples, one local portable session of 6000 saved turns), the synchronous
-commit held the editor 59.9-73.8 ms; the asynchronous job returned its submission
-in 0.22-0.45 ms, acknowledged after 75.4-120.1 ms, and left a largest heartbeat
-gap of 8.2-10.2 ms. The acknowledgement is not earlier, only the editor is free
-meanwhile; these are not live-session or graphical measurements, nor a hard
-bound on arbitrary filesystem latency, sidecar size or GC.
+chain preserves. A compiled in-process rerun after the checkpoint preparation
+changes (six samples, one synthetic local portable session of 6000 saved turns)
+held the editor 63.907-70.177 ms synchronously; the asynchronous job returned its
+submission in 0.196-0.460 ms, acknowledged after 105.028-115.540 ms, and left a
+largest heartbeat gap of 6.533-7.159 ms. Earlier async ranges were 8.2-10.2 ms
+gap and 75.4-120.1 ms ACK, so no blocking regression was observed on this
+workload; acknowledgement is not earlier. The original recipe collects garbage
+before each sample and none contained GC; possible independent verifier load
+was not excluded. These are not live-session or graphical measurements, nor a
+hard bound on arbitrary filesystem latency, sidecar size or GC.
 
 The final September 23 pass found that root publication still encoded the same
 transcript for comparison and staging. Root saves now freeze encoded bytes once

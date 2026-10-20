@@ -818,15 +818,18 @@ Return (:content STRING :frozen-tick TICK :checkpoint CHECKPOINT)."
         (message-log-max nil)
         (before-save-hook (remq 'gptel--save-state before-save-hook)))
     (run-hooks 'before-save-hook)
-    (list :frozen-tick (buffer-chars-modified-tick)
+    ;; The full modification tick: a property-only edit after the freeze
+    ;; changes `gptel' bounds the frozen content does not carry.
+    (list :frozen-tick (buffer-modified-tick)
           :content (buffer-substring-no-properties (point-min) (point-max))
           :checkpoint (mevedel-session-checkpoint-capture
                        session (mevedel-agent-invocation-path invocation)))))
 
 (defun mevedel-agent-conversation--finish-save (frozen-tick)
-  "Mark the current transcript buffer saved if unchanged since FROZEN-TICK."
+  "Mark the current transcript buffer saved if unchanged since FROZEN-TICK.
+FROZEN-TICK is a `buffer-modified-tick', so text and property edits count."
   (set-visited-file-modtime 0)
-  (when (= frozen-tick (buffer-chars-modified-tick))
+  (when (= frozen-tick (buffer-modified-tick))
     (set-buffer-modified-p nil))
   (let ((inhibit-message t) (message-log-max nil))
     (run-hooks 'after-save-hook)))

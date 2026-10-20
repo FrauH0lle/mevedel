@@ -2259,8 +2259,8 @@
                        "main"
                        (test-mevedel-session-persistence--make-workspace root)))
           (let ((gptel-system-prompt "Frozen prompt"))
-            (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
-                         (lambda () nil)))
+            (cl-letf (((symbol-function 'mevedel-session-bounds-get)
+                         (lambda (_original) nil)))
               (mevedel-session-artifacts--save-gptel-state-around
                (lambda () nil)))
             (let ((text (buffer-substring-no-properties
@@ -2284,8 +2284,8 @@
                        "main"
                        (test-mevedel-session-persistence--make-workspace root)))
           (let ((gptel-system-prompt "Frozen prompt"))
-            (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
-                         (lambda () nil)))
+            (cl-letf (((symbol-function 'mevedel-session-bounds-get)
+                         (lambda (_original) nil)))
               (mevedel-session-artifacts--save-gptel-state-around
                (lambda () nil))))
           (let ((text (buffer-substring-no-properties
@@ -2315,8 +2315,8 @@
                    (lambda ()
                      (org-entry-put (point-min) "GPTEL_MODEL" "fake-model")
                      (org-entry-delete (point-min) "GPTEL_SYSTEM"))))
-              (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
-                         (lambda () `((response (,start ,end)))))
+              (cl-letf (((symbol-function 'mevedel-session-bounds-get)
+                         (lambda (_original) `((response (,start ,end)))))
                         ((symbol-function 'org-entry-put)
                          (lambda (&rest _)
                            (error "Slow org-entry-put should not run")))
@@ -2407,8 +2407,8 @@
               (unwind-protect
                   (progn
                     (insert "Transcript body\n")
-                    (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
-                               (lambda () '((response (1 2)))))
+                    (cl-letf (((symbol-function 'mevedel-session-bounds-get)
+                               (lambda (_original) '((response (1 2)))))
                               ((symbol-function
                                 'mevedel-view--rebase-data-sources)
                                (lambda (delta) (push delta deltas))))
@@ -2431,8 +2431,8 @@
                       (mevedel-session-create
                        "main"
                        (test-mevedel-session-persistence--make-workspace root)))
-          (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
-                     (lambda () '((response (1 2))))))
+          (cl-letf (((symbol-function 'mevedel-session-bounds-get)
+                     (lambda (_original) '((response (1 2))))))
             (mevedel-session-artifacts--save-gptel-state-around
              (lambda ()
                ;; Mimic `gptel-org-set-properties' + bounds.
@@ -2461,8 +2461,8 @@
                       (mevedel-session-create
                        "main"
                        (test-mevedel-session-persistence--make-workspace root)))
-          (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
-                     (lambda () nil)))
+          (cl-letf (((symbol-function 'mevedel-session-bounds-get)
+                     (lambda (_original) nil)))
             (should-error
              (mevedel-session-artifacts--save-gptel-state-around
               (lambda ()
@@ -4451,6 +4451,506 @@ rotation never saves through a rebound temporary visited filename or prompts"
                                    prompts)))))))
 
 
+(defun test-mevedel-prompt-cache--turn (n &optional directive)
+  "Insert turn N: prompt, tool block, response and fork point.
+With DIRECTIVE, wrap the turn in directive boundary records."
+  (when directive
+    (insert (mevedel--format-hook-audit-record
+             (list :type 'directive-turn-boundary :edge 'start
+                   :directive-id (format "directive-%d" n)
+                   :action 'discuss :turn n))))
+  (insert (format "Question %d\n" n))
+  (insert (propertize (format "Answer %d.\n" n) 'gptel 'response))
+  (insert "#+begin_tool (Read :file \"x\")\n")
+  (insert (propertize "(:name \"Read\" :args (:file \"x\"))\n\nbody\n"
+                      'gptel (cons 'tool (format "call_%d" n))))
+  (insert "#+end_tool\n")
+  (insert (propertize "Done.\n" 'gptel 'response))
+  (insert (mevedel--format-hook-audit-record
+           (list :type 'fork-point :fork-point-id (format "fork-%d" n)
+                 :turn n)))
+  (when directive
+    (insert (mevedel--format-hook-audit-record
+             (list :type 'directive-turn-boundary :edge 'end
+                   :directive-id (format "directive-%d" n)
+                   :action 'discuss :turn n :outcome 'success :sequence 1)))))
+
+(defun test-mevedel-prompt-cache--oracle ()
+  "Return the uncached prompts and fork points of the current buffer."
+  (cons (mevedel-session-artifacts-collect-prompts (current-buffer))
+        (mevedel-session-artifacts-fork-point-spans (current-buffer))))
+
+(defmacro test-mevedel-prompt-cache--counting (var &rest body)
+  "Run BODY with VAR counting prompt-start scans."
+  (declare (indent 1))
+  `(let ((original (symbol-function 'mevedel-transcript--user-prompt-start)))
+     (setq ,var 0)
+     (cl-letf (((symbol-function 'mevedel-transcript--user-prompt-start)
+                (lambda (&rest args) (cl-incf ,var) (apply original args))))
+       ,@body)))
+
+(mevedel-deftest mevedel-session-artifacts--prompt-derive (:quiet t)
+  ,test
+  (test)
+  :doc "appends equal the uncached scans and rescan only the tail"
+  (with-temp-buffer
+    (let (scans)
+      (dotimes (n 12) (test-mevedel-prompt-cache--turn (1+ n)))
+      (should (equal (test-mevedel-prompt-cache--oracle)
+                     (mevedel-session-artifacts--prompt-derive (current-buffer))))
+      (dotimes (n 3)
+        (test-mevedel-prompt-cache--turn (+ 13 n))
+        (test-mevedel-prompt-cache--counting scans
+          (should (equal (test-mevedel-prompt-cache--oracle)
+                         (progn
+                           (setq scans 0)
+                           (prog1 (mevedel-session-artifacts--prompt-derive
+                                   (current-buffer))
+                             (should (<= scans 3)))))))))
+    (should (= 15 (length (car (mevedel-session-artifacts--prompt-derive
+                                (current-buffer)))))))
+  :doc "an append neither rescans the whole audit trail nor the parser's fork points"
+  (with-temp-buffer
+    (dotimes (n 10) (test-mevedel-prompt-cache--turn (1+ n)))
+    (mevedel-session-artifacts--prompt-derive (current-buffer))
+    (test-mevedel-prompt-cache--turn 11)
+    (let ((original (symbol-function 'mevedel-transcript-audit-buffer-spans))
+          calls)
+      (cl-letf (((symbol-function 'mevedel-transcript-audit-buffer-spans)
+                 (lambda (&optional type start end)
+                   (push (list type start end) calls)
+                   (funcall original type start end))))
+        (should (equal (test-mevedel-prompt-cache--oracle)
+                       (progn (setq calls nil)
+                              (mevedel-session-artifacts--prompt-derive
+                               (current-buffer))))))
+      ;; The oracle above ran with the spy too, but its call came first as
+      ;; an argument; only the derivation's calls remain after the reset.
+      (should-not (cl-find 'fork-point calls :key #'car))
+      (should (cl-every (lambda (call) (> (or (nth 1 call) 0) 1)) calls))))
+  :doc "middle edits, deletions and insertions equal the uncached scans"
+  (with-temp-buffer
+    (dotimes (n 8) (test-mevedel-prompt-cache--turn (1+ n)))
+    (mevedel-session-artifacts--prompt-derive (current-buffer))
+    (dolist (edit
+             (list
+              (lambda () (goto-char (point-min)) (search-forward "Question 3")
+                (insert " edited in the middle"))
+              (lambda () (goto-char (point-min)) (search-forward "Question 5")
+                (delete-region (line-beginning-position)
+                               (progn (search-forward "Question 6")
+                                      (line-beginning-position))))
+              (lambda () (goto-char (point-min)) (search-forward "Question 2")
+                (forward-line 1)
+                (test-mevedel-prompt-cache--turn 99))
+              (lambda () (goto-char (point-min)) (search-forward "Answer 1")
+                (replace-match "Answer 1 rewritten"))
+              (lambda () (goto-char (point-min))
+                (insert "Leading prompt\n"))
+              (lambda () (erase-buffer)
+                (dotimes (n 3) (test-mevedel-prompt-cache--turn (1+ n))))))
+      (funcall edit)
+      (should (equal (test-mevedel-prompt-cache--oracle)
+                     (mevedel-session-artifacts--prompt-derive (current-buffer))))))
+  :doc "tool, reasoning and summary blocks opened and closed across the edit point"
+  (with-temp-buffer
+    (dotimes (n 5) (test-mevedel-prompt-cache--turn (1+ n)))
+    (mevedel-session-artifacts--prompt-derive (current-buffer))
+    (dolist (edit
+             (list
+              (lambda () (goto-char (point-min)) (search-forward "Question 2")
+                (end-of-line) (insert "\n#+begin_summary\n"))
+              (lambda () (goto-char (point-min)) (search-forward "Question 4")
+                (end-of-line) (insert "\n#+end_summary\n"))
+              (lambda () (goto-char (point-min)) (search-forward "Question 1")
+                (end-of-line) (insert "\n#+begin_reasoning\n"))
+              (lambda () (goto-char (point-max))
+                (insert "#+end_reasoning\nTail prompt\n"))
+              (lambda () (goto-char (point-min)) (search-forward "Question 5")
+                (end-of-line) (insert "\n#+begin_tool (Read)\n"))))
+      (funcall edit)
+      (should (equal (test-mevedel-prompt-cache--oracle)
+                     (mevedel-session-artifacts--prompt-derive (current-buffer))))))
+  :doc "directive boundaries and an unpaired audit opener that later closes"
+  (with-temp-buffer
+    (test-mevedel-prompt-cache--turn 1)
+    (test-mevedel-prompt-cache--turn 2 t)
+    (test-mevedel-prompt-cache--turn 3)
+    (mevedel-session-artifacts--prompt-derive (current-buffer))
+    (let ((record (mevedel--format-hook-audit-record
+                   '(:type fork-point :fork-point-id "late" :turn 9))))
+      ;; An opener alone, then its remainder, far behind the first change.
+      (goto-char (point-min)) (search-forward "Question 2")
+      (end-of-line)
+      (insert (substring record 0 (length mevedel--hook-audit-open)))
+      (should (equal (test-mevedel-prompt-cache--oracle)
+                     (mevedel-session-artifacts--prompt-derive (current-buffer))))
+      (goto-char (point-max))
+      (insert (substring record (length mevedel--hook-audit-open)))
+      (should (equal (test-mevedel-prompt-cache--oracle)
+                     (mevedel-session-artifacts--prompt-derive (current-buffer))))
+      (test-mevedel-prompt-cache--turn 4)
+      (should (equal (test-mevedel-prompt-cache--oracle)
+                     (mevedel-session-artifacts--prompt-derive (current-buffer))))))
+  :doc "a metadata drawer rewritten as known metadata keeps the body cached"
+  (with-temp-buffer
+    (insert ":PROPERTIES:\n:GPTEL_BOUNDS: ((response))\n:END:\n")
+    (dotimes (n 10) (test-mevedel-prompt-cache--turn (1+ n)))
+    (let (scans)
+      (should (equal (test-mevedel-prompt-cache--oracle)
+                     (mevedel-session-artifacts--prompt-derive (current-buffer))))
+      (mevedel-transcript-source-call-with-metadata-change
+       (lambda ()
+         (goto-char (point-min)) (search-forward "((response))")
+         (insert " longer")))
+      (test-mevedel-prompt-cache--counting scans
+        (should (equal (test-mevedel-prompt-cache--oracle)
+                       (progn
+                         (setq scans 0)
+                         (prog1 (mevedel-session-artifacts--prompt-derive
+                                 (current-buffer))
+                           (should (= 0 scans)))))))))
+  :doc "seeded random edit scripts keep every step equal to the uncached scans"
+  (dolist (seed '(1 7 42 2026))
+    (with-temp-buffer
+      (insert ":PROPERTIES:\n:GPTEL_BOUNDS: ((response))\n:END:\n")
+      (dotimes (n 6) (test-mevedel-prompt-cache--turn (1+ n)))
+      (let ((state seed) (next 7))
+        (cl-flet ((rnd (limit)
+                    (setq state (% (+ (* state 1103515245) 12345) 2147483648))
+                    (% (ash state -8) (max 1 limit)))
+                  (at-line ()
+                    (setq state (% (+ (* state 1103515245) 12345) 2147483648))
+                    (goto-char (+ (point-min)
+                                  (% (ash state -8)
+                                     (max 1 (- (point-max) (point-min))))))
+                    (beginning-of-line)))
+          (mevedel-session-artifacts--prompt-derive (current-buffer))
+          (dotimes (step 60)
+            (pcase (rnd 12)
+              (0 (goto-char (point-max))
+                 (test-mevedel-prompt-cache--turn (cl-incf next)))
+              (1 (goto-char (point-max))
+                 (test-mevedel-prompt-cache--turn (cl-incf next) t))
+              (2 (at-line) (insert "Typed prompt\n"))
+              (3 (at-line) (delete-region (point)
+                                          (min (point-max)
+                                               (+ (point) (rnd 120)))))
+              (4 (at-line) (insert "#+begin_summary\nbody\n#+end_summary\n"))
+              (5 (at-line) (insert "#+begin_tool (Read)\n"))
+              (6 (at-line) (insert "#+end_tool\n"))
+              (7 (at-line)
+                 (insert (propertize "inserted answer\n" 'gptel 'response)))
+              (8 (mevedel-transcript-source-call-with-metadata-change
+                  (lambda ()
+                    (goto-char (point-min))
+                    (when (search-forward "((response" nil t)
+                      (insert " x")))))
+              (9 (let ((inhibit-modification-hooks t))
+                   (at-line) (insert "quiet\n")))
+              (10 (delete-region
+                   (min (point-max) (+ (point-min) 60 (rnd 4000)))
+                   (point-max)))
+              (11 (at-line)
+                  (insert (mevedel--format-hook-audit-record
+                           (list :type 'fork-point :fork-point-id
+                                 (format "r%d" step) :turn step)))))
+            ;; A script may corrupt a directive pair: both must then fail
+            ;; the same way, and the cache must recover once repaired.
+            (should (equal (condition-case err
+                               (test-mevedel-prompt-cache--oracle)
+                             (error err))
+                           (condition-case err
+                               (mevedel-session-artifacts--prompt-derive
+                                (current-buffer))
+                             (error err)))))))))
+  :doc "depth lookahead across the frontier equals a whole scan byte by byte"
+  (dolist (scenario
+           '(;; An indented opener whose plist arrives later.
+             ("First\n  #+begin_tool\n\n"
+              ("(:name \"Read\")\n" . response) ("Later prompt\n"))
+             ;; The same with blank lines before the plist.
+             ("Q\n#+begin_tool\n\n   "
+              ("\n(:name \"Read\")\n" . response) ("After\n"))
+             ;; An incomplete render-data block that closes afterwards.
+             ("Q\n<!-- mevedel-render-data -->\n"
+              ("#+begin_tool (X)\n") ("<!-- /mevedel-render-data -->\n")
+              ("Next prompt\n"))
+             ;; A render-data marker with trailing text.
+             ("Q\n<!-- mevedel-render-data --> trailing\n"
+              ("#+begin_reasoning\n") ("#+end_reasoning\n") ("Then\n"))))
+    (with-temp-buffer
+      (insert (car scenario))
+      (mevedel-session-artifacts--prompt-derive (current-buffer))
+      (dolist (part (cdr scenario))
+        (dotimes (index (length (car part)))
+          (goto-char (point-max))
+          (let ((character (substring (car part) index (1+ index))))
+            (insert (if (cdr part)
+                        (propertize character 'gptel 'response)
+                      character)))
+          (should (equal (test-mevedel-prompt-cache--oracle)
+                         (mevedel-session-artifacts--prompt-derive
+                          (current-buffer))))))))
+  :doc "unobserved edits, narrowing and a changed buffer fall back to a full scan"
+  (with-temp-buffer
+    (dotimes (n 6) (test-mevedel-prompt-cache--turn (1+ n)))
+    (mevedel-session-artifacts--prompt-derive (current-buffer))
+    (let ((inhibit-modification-hooks t))
+      (goto-char (point-min)) (search-forward "Question 2")
+      (insert " silently"))
+    (should (equal (test-mevedel-prompt-cache--oracle)
+                   (mevedel-session-artifacts--prompt-derive (current-buffer))))
+    (save-restriction
+      (goto-char (point-min)) (search-forward "Question 3")
+      (narrow-to-region (line-beginning-position) (point-max))
+      (should (equal (test-mevedel-prompt-cache--oracle)
+                     (mevedel-session-artifacts--prompt-derive (current-buffer)))))
+    (test-mevedel-prompt-cache--turn 7)
+    (should (equal (test-mevedel-prompt-cache--oracle)
+                   (mevedel-session-artifacts--prompt-derive (current-buffer))))))
+
+
+(defun test-mevedel-prompt-cache--spans (origin)
+  "Return every audit span of the current buffer relative to ORIGIN."
+  (mapcar (lambda (span)
+            (list (- (plist-get span :start) origin)
+                  (- (plist-get span :end) origin)
+                  (plist-get span :record)))
+          (mevedel-transcript-audit-buffer-spans nil (point-min) (point-max))))
+
+(mevedel-deftest mevedel-session-artifacts--prompt-record ()
+  ,test
+  (test)
+  :doc "builds an ordinary prompt entry"
+  (should (equal '(:turn 2 :pos 10 :preview "hello")
+                 (mevedel-session-artifacts--prompt-record 2 10 "hello" nil)))
+  :doc "places a directive prompt at its boundary and carries its identity"
+  (let ((record (mevedel-session-artifacts--prompt-record
+                 3 50 "run"
+                 '(:start 40 :directive-id "d" :action discuss
+                   :outcome success :sequence 1 :turn 3))))
+    (should (= 40 (plist-get record :pos)))
+    (should (eq 'directive (plist-get record :kind)))
+    (should (equal "d" (plist-get record :directive-id)))
+    (should (= 3 (plist-get record :reserved-turn)))))
+
+(mevedel-deftest mevedel-session-artifacts--prompt-cache-eligible-p ()
+  ,test
+  (test)
+  :doc "is true for a whole buffer and false for a narrowed one"
+  (with-temp-buffer
+    (insert "one\ntwo\n")
+    (should (mevedel-session-artifacts--prompt-cache-eligible-p))
+    (save-restriction
+      (narrow-to-region 1 4)
+      (should-not (mevedel-session-artifacts--prompt-cache-eligible-p)))))
+
+(mevedel-deftest mevedel-session-artifacts--prompt-cache-ensure ()
+  ,test
+  (test)
+  :doc "creates one cache per buffer and reuses it"
+  (let (first)
+    (with-temp-buffer
+      (insert "text\n")
+      (setq first (mevedel-session-artifacts--prompt-cache-ensure 1))
+      (should (eq first (mevedel-session-artifacts--prompt-cache-ensure 1)))
+      (should (mevedel-session-artifacts--prompt-cache-source first)))
+    (with-temp-buffer
+      (should-not (eq first (mevedel-session-artifacts--prompt-cache-ensure 1))))))
+
+(mevedel-deftest mevedel-session-artifacts--audit-spans-cached ()
+  ,test
+  (test)
+  :doc "rescans from just before the change, not from the last reused span"
+  (with-temp-buffer
+    (test-mevedel-prompt-cache--turn 1)
+    (insert (propertize (make-string 200000 ?x) 'gptel 'response) "\n")
+    (test-mevedel-prompt-cache--turn 2)
+    (mevedel-session-artifacts--prompt-derive (current-buffer))
+    (let ((original (symbol-function 'mevedel-transcript-audit-buffer-spans))
+          starts)
+      (goto-char (point-max))
+      (insert "tail")
+      (cl-letf (((symbol-function 'mevedel-transcript-audit-buffer-spans)
+                 (lambda (&optional type start end)
+                   (push start starts)
+                   (funcall original type start end))))
+        (mevedel-session-artifacts--prompt-derive (current-buffer)))
+      (should (cl-every (lambda (start) (> start (- (point-max) 1000)))
+                        starts))))
+  :doc "a record appended byte by byte equals a whole scan at every step"
+  (with-temp-buffer
+    (test-mevedel-prompt-cache--turn 1)
+    (mevedel-session-artifacts--prompt-derive (current-buffer))
+    (let ((record (with-temp-buffer
+                    (test-mevedel-prompt-cache--turn 2)
+                    (buffer-string))))
+      (dotimes (index (length record))
+        (goto-char (point-max))
+        (insert (substring record index (1+ index)))
+        (mevedel-session-artifacts--prompt-derive (current-buffer))
+        (should (equal (test-mevedel-prompt-cache--spans 1)
+                       (mevedel-session-artifacts--prompt-cache-spans
+                        mevedel-session-artifacts--prompt-cache))))))
+  :doc "edits inside a span, a late close and a rejected opener equal a whole scan"
+  (with-temp-buffer
+    (dotimes (n 4) (test-mevedel-prompt-cache--turn (1+ n)))
+    (mevedel-session-artifacts--prompt-derive (current-buffer))
+    (let ((record (mevedel--format-hook-audit-record
+                   '(:type fork-point :fork-point-id "late" :turn 9)))
+          (check (lambda ()
+                   (mevedel-session-artifacts--prompt-derive (current-buffer))
+                   (should (equal (test-mevedel-prompt-cache--spans 1)
+                                  (mevedel-session-artifacts--prompt-cache-spans
+                                   mevedel-session-artifacts--prompt-cache))))))
+      ;; Edit inside the second span's payload.
+      (goto-char (point-min))
+      (search-forward mevedel--hook-audit-open)
+      (search-forward mevedel--hook-audit-open)
+      (forward-char 3)
+      (delete-char 1)
+      (funcall check)
+      (insert "A")
+      (funcall check)
+      ;; An untrusted opener, then a close far after it.
+      (goto-char (point-min))
+      (search-forward "Question 2")
+      (insert (substring-no-properties
+               (substring record 0 (length mevedel--hook-audit-open))))
+      (funcall check)
+      (goto-char (point-max))
+      (insert record)
+      (funcall check)
+      ;; A trusted opener completed by a later close.
+      (goto-char (point-min))
+      (search-forward "Question 3")
+      (insert (substring record 0 (length mevedel--hook-audit-open)))
+      (funcall check)
+      (goto-char (point-max))
+      (insert (substring record (length mevedel--hook-audit-open)))
+      (funcall check))))
+
+(mevedel-deftest mevedel-session-artifacts--depth-lookahead-closed-p ()
+  ,test
+  (test)
+  :doc "plain text and a tool opener whose plist ends well before TO are closed"
+  (with-temp-buffer
+    (insert "prompt\n#+begin_tool\n(:name \"Read\")\nmore text here\n")
+    (should (mevedel-session-artifacts--depth-lookahead-closed-p
+             1 (point-max))))
+  :doc "an opener whose plist could still arrive at TO is open, indented or not"
+  (dolist (text '("p\n#+begin_tool\n" "p\n  #+begin_tool\n\n" "p\n#+begin_tool\n("
+                  "p\n#+begin_tool\n(:na"
+                  "First\n  #+begin_tool\n(\n\n\n\n\n\n\n\n\n\n"))
+    (with-temp-buffer
+      (insert text)
+      (should-not (mevedel-session-artifacts--depth-lookahead-closed-p
+                   1 (point-max)))))
+  :doc "an incomplete render-data marker, even with trailing text, is open"
+  (dolist (text '("p\n<!-- mevedel-render-data -->\nbody\n"
+                  "p\n<!-- mevedel-render-data --> x\nbody\n"))
+    (with-temp-buffer
+      (insert text)
+      (should-not (mevedel-session-artifacts--depth-lookahead-closed-p
+                   1 (point-max))))))
+
+(mevedel-deftest mevedel-session-artifacts--prompt-units ()
+  ,test
+  (test)
+  :doc "returns a unit per user segment with the depth frontier"
+  (with-temp-buffer
+    (dotimes (n 3) (test-mevedel-prompt-cache--turn (1+ n)))
+    (let* ((cache (mevedel-session-artifacts--prompt-cache-ensure 1))
+           (result (mevedel-session-artifacts--prompt-units cache 1 0 t)))
+      (should (consp result))
+      (should (>= (length (car result)) 3))
+      (should (equal '("Question 1" "Question 2" "Question 3")
+                     (cl-loop for unit in (car result)
+                              when (aref unit 6) collect (aref unit 6))))
+      (should (= 3 (length (cdr result))))))
+  :doc "reports a mismatch when a reused unit no longer lines up"
+  (with-temp-buffer
+    (dotimes (n 3) (test-mevedel-prompt-cache--turn (1+ n)))
+    (mevedel-session-artifacts--prompt-derive (current-buffer))
+    (let ((cache mevedel-session-artifacts--prompt-cache))
+      (aset (car (mevedel-session-artifacts--prompt-cache-units cache)) 1 -5)
+      (setf (mevedel-session-artifacts--prompt-cache-units cache)
+            (cons (vector 0 1 0 0 0 nil nil)
+                  (mevedel-session-artifacts--prompt-cache-units cache)))
+      (goto-char (point-max))
+      (insert "x")
+      (should (eq 'mismatch
+                  (mevedel-session-artifacts--prompt-units
+                   cache 1 (1- (point-max)) nil)))))
+  :doc "no unit is reused while the previous derivation proved no frontier"
+  (with-temp-buffer
+    (dotimes (n 3) (test-mevedel-prompt-cache--turn (1+ n)))
+    (insert "z\n  #+begin_tool\n\n")
+    (mevedel-session-artifacts--prompt-derive (current-buffer))
+    (should-not (mevedel-session-artifacts--prompt-cache-frontier
+                 mevedel-session-artifacts--prompt-cache))
+    (insert "w\n")
+    (let (scans)
+      (test-mevedel-prompt-cache--counting scans
+        (setq scans 0)
+        (should (equal (test-mevedel-prompt-cache--oracle)
+                       (progn (setq scans 0)
+                              (mevedel-session-artifacts--prompt-derive
+                               (current-buffer)))))
+        (should (>= scans 4)))))
+  :doc "an appended prompt after a huge response counts block depth only locally"
+  (with-temp-buffer
+    (dotimes (n 2) (test-mevedel-prompt-cache--turn (1+ n)))
+    (insert "Question 3\n")
+    (insert (propertize (concat (mapconcat (lambda (_) (make-string 60 ?y))
+                                           (make-list 20000 nil) "\n")
+                                "\n")
+                        'gptel 'response))
+    (mevedel-session-artifacts--prompt-derive (current-buffer))
+    (insert "Question 4\n")
+    (let ((original (symbol-function 'mevedel-transcript--org-block-depths-before))
+          widest)
+      (setq widest 0)
+      (cl-letf (((symbol-function 'mevedel-transcript--org-block-depths-before)
+                 (lambda (pos &optional start &rest more)
+                   (setq widest (max widest (- pos (or start 1))))
+                   (apply original pos start more))))
+        (should (equal (test-mevedel-prompt-cache--oracle)
+                       (mevedel-session-artifacts--prompt-derive
+                        (current-buffer)))))
+      ;; The oracle above scanned in full before the derivation; only the
+      ;; derivation matters, so measure it separately.
+      (insert (propertize "answer\n" 'gptel 'response) "Question 5\n")
+      (setq widest 0)
+      (cl-letf (((symbol-function 'mevedel-transcript--org-block-depths-before)
+                 (lambda (pos &optional start &rest more)
+                   (setq widest (max widest (- pos (or start 1))))
+                   (apply original pos start more))))
+        (mevedel-session-artifacts--prompt-derive (current-buffer)))
+      (should (< widest 5000)))))
+
+(mevedel-deftest mevedel-session-artifacts--prompts-from-units ()
+  ,test
+  (test)
+  :doc "numbers only units with prompts and links the enclosing directive"
+  (let* ((units (list (vector 0 5 0 0 0 nil nil)
+                      (vector 5 20 5 0 0 8 "first")
+                      (vector 20 40 20 0 0 30 "second")
+                      (vector 40 60 40 0 0 50 "third")))
+         (prompts (mevedel-session-artifacts--prompts-from-units
+                   units 100
+                   (list (list :start 125 :body-start 128 :body-end 135
+                               :directive-id "d" :action 'discuss :turn 2)))))
+    (should (equal '(1 2 3) (mapcar (lambda (prompt) (plist-get prompt :turn))
+                                    prompts)))
+    (should (equal '(108 125 150) (mapcar (lambda (prompt) (plist-get prompt :pos))
+                                          prompts)))
+    (should (equal '(nil directive nil)
+                   (mapcar (lambda (prompt) (plist-get prompt :kind))
+                           prompts)))))
+
+
 (mevedel-deftest mevedel-session-artifacts-update-prompt-index ()
   ,test
   (test)
@@ -4485,6 +4985,33 @@ rotation never saves through a rebound temporary visited filename or prompts"
              buf session)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
+  :doc "an incrementally cached index equals a fresh derivation at every step"
+  (let ((incremental (mevedel-session--create :current-segment 1)))
+    (with-temp-buffer
+      (dotimes (n 5) (test-mevedel-prompt-cache--turn (1+ n)))
+      (dolist (edit
+               (list
+                #'ignore
+                (lambda () (goto-char (point-max))
+                  (test-mevedel-prompt-cache--turn 6 t))
+                (lambda () (goto-char (point-min)) (search-forward "Question 2")
+                  (insert " changed"))
+                (lambda () (goto-char (point-min)) (search-forward "Question 3")
+                  (beginning-of-line) (insert "Inserted prompt\n"))
+                (lambda () (goto-char (point-max))
+                  (test-mevedel-prompt-cache--turn 7))
+                (lambda () (delete-region (point-min) (+ (point-min) 40)))))
+        (funcall edit)
+        (mevedel-session-artifacts-update-prompt-index
+         incremental (current-buffer))
+        (let ((fresh (mevedel-session--create :current-segment 1))
+              (text (buffer-substring (point-min) (point-max))))
+          (with-temp-buffer
+            (insert text)
+            (mevedel-session-artifacts-update-prompt-index
+             fresh (current-buffer)))
+          (should (equal (mevedel-session-prompt-index fresh)
+                         (mevedel-session-prompt-index incremental)))))))
   :doc "uses the directive boundary as the canonical cumulative turn"
   (let ((session (mevedel-session--create :current-segment 1)))
     (with-temp-buffer

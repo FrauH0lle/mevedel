@@ -494,6 +494,29 @@
         (should (equal "" (buffer-string)))
         (should (equal 0 status)))))
 
+  :doc "disabling transcript fontification does not run the user's mode hook"
+  (let ((calls 0)
+        (font-lock-mode-hook (list (lambda () (cl-incf calls)))))
+    (with-temp-buffer (mevedel--transcript-org-mode))
+    (should (= 0 calls)))
+
+  :doc "transcript storage does not run silent JIT fontification after an edit"
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (should-not font-lock-mode)
+    (should-not jit-lock-mode)
+    (should-not (memq #'jit-lock-after-change after-change-functions))
+    (require 'mevedel-transcript-source)
+    (insert "Prompt\nAnswer\n")
+    (let ((proof (mevedel-transcript-source-create (point-min))))
+      (mevedel-transcript-source-accept proof)
+      (goto-char (point-max))
+      (let ((start (point)))
+        (insert "Tail\n")
+        (should (= (1- start) (mevedel-transcript-source-change proof)))
+        (should (= (buffer-modified-tick)
+                   (mevedel-transcript-source-tick proof))))))
+
   :doc "transcript startup skips persistent Org cache without changing user settings"
   (progn
     (require 'org)

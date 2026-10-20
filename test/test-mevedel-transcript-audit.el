@@ -204,6 +204,62 @@
                                          :record)
                               :fork-point-id)))))
 
+(mevedel-deftest mevedel-transcript-directive-ranges-from-spans ()
+  ,test
+  (test)
+  :doc "pairs caller-supplied spans exactly as the scanning entry point does"
+  (let* ((boundary
+          (lambda (edge id turn)
+            (mevedel--format-hook-audit-record
+             (list :type 'directive-turn-boundary :edge edge
+                   :directive-id id :action 'discuss :turn turn
+                   :outcome 'success :sequence 1))))
+         (text (concat "a" (funcall boundary 'start "d1" 1) "one\n"
+                       (funcall boundary 'end "d1" 1)
+                       "b" (funcall boundary 'start "d2" 3) "two\n"
+                       (funcall boundary 'end "d2" 3) "c"))
+         (spans (mevedel-transcript-audit-spans text 'directive-turn-boundary)))
+    (should (= 2 (length (mevedel-transcript-directive-ranges-from-spans
+                          spans text))))
+    (should (equal (mevedel-transcript-directive-ranges text)
+                   (mevedel-transcript-directive-ranges-from-spans spans text)))
+    ;; A prefix of complete pairs pairs on its own.
+    (should (equal (list (car (mevedel-transcript-directive-ranges text)))
+                   (mevedel-transcript-directive-ranges-from-spans
+                    (seq-take spans 2) text))))
+  :doc "reports the same errors and running range for the same spans"
+  (let* ((start (mevedel--format-hook-audit-record
+                 '(:type directive-turn-boundary :edge start
+                   :directive-id "d" :action discuss :turn 1)))
+         (text (concat "x" start "streaming"))
+         (spans (mevedel-transcript-audit-spans text 'directive-turn-boundary)))
+    (should-error (mevedel-transcript-directive-ranges-from-spans spans text)
+                  :type 'error)
+    (should (eq 'running
+                (plist-get (car (mevedel-transcript-directive-ranges-from-spans
+                                 spans text t))
+                           :outcome)))
+    (should-error
+     (mevedel-transcript-directive-ranges-from-spans
+      (append spans spans) (concat text start) t)
+     :type 'error))
+  :doc "reads buffer spans against the current buffer and its end"
+  (with-temp-buffer
+    (insert "before")
+    (insert (mevedel--format-hook-audit-record
+             '(:type directive-turn-boundary :edge start
+               :directive-id "d" :action discuss :turn 2)))
+    (insert "body")
+    (let ((spans (mevedel-transcript-audit-buffer-spans
+                  'directive-turn-boundary)))
+      (should (equal (mevedel-transcript-directive-ranges (current-buffer) t)
+                     (mevedel-transcript-directive-ranges-from-spans
+                      spans (current-buffer) t)))
+      (should (= (point-max)
+                 (plist-get (car (mevedel-transcript-directive-ranges-from-spans
+                                  spans (current-buffer) t))
+                            :body-end))))))
+
 (mevedel-deftest mevedel-transcript-directive-ranges ()
   ,test
   (test)

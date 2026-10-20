@@ -383,10 +383,22 @@ TEXT may also be the current buffer."
 Signal when directive boundaries are unmatched, nested, or disagree on
 directive identity or reserved turn.  When ALLOW-OPEN is non-nil, include
 one unmatched final start as a running range through the end of TEXT."
-  (let ((spans (if (bufferp text)
-                   (mevedel-transcript-audit-buffer-spans 'directive-turn-boundary)
-                 (mevedel-transcript-audit-spans text 'directive-turn-boundary)))
-        open
+  (mevedel-transcript-directive-ranges-from-spans
+   (if (bufferp text)
+       (mevedel-transcript-audit-buffer-spans 'directive-turn-boundary)
+     (mevedel-transcript-audit-spans text 'directive-turn-boundary))
+   text allow-open))
+
+(defun mevedel-transcript-directive-ranges-from-spans
+    (spans text &optional allow-open)
+  "Return directive turn ranges for the boundary SPANS found in TEXT.
+SPANS are `directive-turn-boundary' audit spans in document order, as
+`mevedel-transcript-audit-spans' or `mevedel-transcript-audit-buffer-spans'
+return them.  TEXT is the string they index, or the current buffer, whose
+end closes a running range.  A caller holding spans it already scanned pairs
+them here without scanning again; the pairing, its errors and ALLOW-OPEN are
+those of `mevedel-transcript-directive-ranges'."
+  (let (open
         ranges)
     (dolist (span spans)
       (let* ((record (plist-get span :record))

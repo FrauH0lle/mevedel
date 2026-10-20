@@ -109,6 +109,7 @@ Chat / view
   mevedel-directive-frame.el  directive-anchored child frame and transcript filter
   mevedel-directive-plan.el   directive-owned planning and approval workflow
   mevedel-transcript.el       transcript span classification for view/persistence/compaction
+  mevedel-transcript-source.el per-consumer hook-proven transcript change frontiers
   mevedel-transcript-audit.el hidden audit record encoding and structural parsing
   mevedel-transcript-restore.el  transcript property restoration via the canonical grammar
   mevedel-context-summary.el  stateless validated continuation/handoff/digest summary generation
@@ -186,12 +187,13 @@ Chat / view
   mevedel-session-codec.el    closed session sidecar codec and validation
   mevedel-session-checkpoint.el committed root projection, conversation consumption, and deferred ToolCall retirement
   mevedel-session-artifacts.el  paths, artifacts, snapshots, and segment writes
+  mevedel-session-bounds.el   writer-scoped incremental gptel response bounds
   mevedel-artifact-store.el   workspace artifact store: metadata, versions, attachment, conversations
   mevedel-artifact-lease.el   cross-Emacs leases on store whiteboards and documents
   mevedel-session-durability.el lease and storage primitives
   mevedel-session-recovery.el  specialized recovery protocol and markers
   mevedel-session-transfer.el  durable cooperative control transfer protocol
-  mevedel-session-publication.el immutable publication, retention/deletion, diagnostics
+  mevedel-session-publication.el immutable publication (async jobs stage, digest and select), retention/deletion, diagnostics
   mevedel-session-collection.el  coalesced idle generation scans and cleanup lifecycle
   mevedel-session-save-as.el portable Save As transaction and adoption
   mevedel-session-persistence.el  lifecycle/resume/listing/locking/cleanup facade

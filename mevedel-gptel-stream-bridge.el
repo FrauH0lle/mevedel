@@ -13,6 +13,7 @@
                   "ext:gptel-request" (process output))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar gptel--request-alist)
+(defvar gptel-post-stream-hook)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-path "mevedel-agents" (cl-x))
@@ -48,6 +49,8 @@
 (autoload 'mevedel--timer-pending-p "mevedel-utilities")
 (autoload 'mevedel--warn-once "mevedel-utilities")
 (eval-when-compile (require 'mevedel-utilities))
+
+(require 'mevedel-transcript-source)
 
 (defcustom mevedel-gptel-stream-bridge-insert-batch-delay 0.4
   "Seconds to batch consecutive string stream inserts in data buffers.
@@ -184,7 +187,59 @@ chunk when that stale transformer fails."
           (mevedel-gptel-stream-bridge--insert-batching-suspended
            (or mevedel-gptel-stream-bridge--insert-batching-suspended
                (not (stringp response)))))
-      (funcall orig-fn response info raw)))))
+      (mevedel-gptel-stream-bridge--insert-tracked
+       orig-fn response info raw)))))
+
+(defun mevedel-gptel-stream-bridge--insert-tracked (orig-fn response info raw)
+  "Call ORIG-FN with RESPONSE, INFO and RAW, tracking its silent insert.
+Under `inhibit-modification-hooks', a string insert is announced to transcript
+change proofs as one change from the tracking marker, or the initial position
+before that marker exists.  The transformer and post-stream hooks are foreign
+code that may edit anywhere or redirect insertion, so each runs under
+`mevedel-transcript-source-call-with-unproven-changes': an edit by either
+fails the proofs closed whatever its range, as does a point or buffer change.
+A transformer that downstream
+code replaced meanwhile is not restored over that replacement."
+  (let ((position (plist-get info :position)))
+    (if (not (and (stringp response)
+                  inhibit-modification-hooks
+                  (markerp position)
+                  (marker-position position)
+                  (buffer-live-p (marker-buffer position))))
+        (funcall orig-fn response info raw)
+      (with-current-buffer (marker-buffer position)
+        (let* ((tracking (plist-get info :tracking-marker))
+               (start (if tracking
+                          (if (and (markerp tracking)
+                                   (eq (marker-buffer tracking) (current-buffer)))
+                              (marker-position tracking)
+                            (point-min))
+                        (marker-position position)))
+               (finish (mevedel-transcript-source-begin-change start (point-max)))
+               (transformer (plist-get info :transformer))
+               (hooks gptel-post-stream-hook)
+               (wrapped
+                (and (functionp transformer)
+                     (lambda (text)
+                       (mevedel-transcript-source-call-with-unproven-changes
+                        (lambda () (funcall transformer text)))))))
+          (when wrapped
+            (plist-put info :transformer wrapped))
+          (unwind-protect
+              (let ((gptel-post-stream-hook
+                     (list
+                      (lambda ()
+                        ;; Observers can derive caches now.  Adopt the insert's
+                        ;; tick first, but never adopt later hook edits.
+                        (funcall finish)
+                        (mevedel-transcript-source-call-with-unproven-changes
+                         (lambda ()
+                           (let ((gptel-post-stream-hook hooks))
+                             (run-hooks 'gptel-post-stream-hook))))))))
+                (funcall orig-fn response info raw))
+            (funcall finish)
+            (when (and wrapped (eq (plist-get info :transformer) wrapped))
+              (plist-put info :transformer transformer))))))))
 
 (defun mevedel-gptel-stream-bridge--queue-gptel-stream-insert-batch
     (orig-fn response info)
@@ -253,9 +308,8 @@ early falls in step with this one, sharing its passes from then on."
           (mevedel-gptel-stream-bridge--insert-batching-suspended t))
       (mevedel-gptel-stream-bridge--repair-gptel-stream-info info)
       (when (mevedel-gptel-stream-bridge--gptel-stream-info-p info)
-        (funcall orig-fn
-                 (apply #'concat (nreverse parts))
-                 info nil)))))
+        (mevedel-gptel-stream-bridge--insert-tracked
+         orig-fn (apply #'concat (nreverse parts)) info nil)))))
 
 (defun mevedel-gptel-stream-bridge-discard-batch (info)
   "Discard provisional inserts owned by the failed attempt INFO."

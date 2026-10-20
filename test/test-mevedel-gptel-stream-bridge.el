@@ -48,6 +48,103 @@
       (mevedel-gptel-stream-bridge-uninstall)
       (should-not mevedel-gptel-stream-bridge--gptel-stream-advice-installed))))
 
+(mevedel-deftest mevedel-gptel-stream-bridge--insert-tracked
+  (:vars ((installed
+           (advice-member-p
+            #'mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice
+            'gptel-curl--stream-insert-response)))
+   :before-each
+   (advice-remove
+    'gptel-curl--stream-insert-response
+    #'mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice)
+   :after-each
+   (when installed
+     (advice-add
+      'gptel-curl--stream-insert-response :around
+      #'mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice)))
+  ,test
+  (test)
+  :doc "real gptel insert is visible to read-only observers as a proven tail edit"
+  (with-temp-buffer
+    (insert (make-string 2048 ?x) "\nAnswer")
+    (let* ((start (point-max))
+           (source (mevedel-transcript-source-create 1))
+           (info (list :position (copy-marker 2000)
+                       :tracking-marker (copy-marker start)
+                       :transformer #'identity))
+           observed
+           (gptel-post-stream-hook
+            (list (lambda ()
+                    (setq observed (mevedel-transcript-source-change source)))))
+           (inhibit-modification-hooks t))
+      (mevedel-transcript-source-accept source)
+      (mevedel-gptel-stream-bridge--insert-tracked
+       #'gptel-curl--stream-insert-response " more" info nil)
+      (should (= (1- start) observed))
+      (should (= observed (mevedel-transcript-source-change source)))
+      (should (eq #'identity (plist-get info :transformer)))
+      (should (string-suffix-p "Answer more" (buffer-string)))))
+  :doc "a point-only transformer cannot hide a relocated prefix insertion"
+  (with-temp-buffer
+    (insert "Original prefix\nAnswer")
+    (let* ((source (mevedel-transcript-source-create 1))
+           (info (list :position (copy-marker (point-max))
+                       :tracking-marker (copy-marker (point-max))
+                       :transformer (lambda (text) (goto-char 1) text)))
+           observed
+           (gptel-post-stream-hook
+            (list (lambda ()
+                    (setq observed (mevedel-transcript-source-change source)))))
+           (inhibit-modification-hooks t))
+      (mevedel-transcript-source-accept source)
+      (mevedel-gptel-stream-bridge--insert-tracked
+       #'gptel-curl--stream-insert-response "Relocated " info nil)
+      (should (string-prefix-p "Relocated Original" (buffer-string)))
+      (should (eql 0 observed))
+      (should (eql 0 (mevedel-transcript-source-change source)))))
+  :doc "arbitrary transformer and hook edits fail closed, including their errors"
+  (dolist (phase '(transformer hook))
+    (dolist (fail '(nil t))
+      (with-temp-buffer
+        (insert "Original prefix\nAnswer")
+        (let* ((source (mevedel-transcript-source-create 1))
+               (foreign (lambda (&optional text)
+                          (save-excursion (goto-char 1) (insert "Changed"))
+                          (when fail (error "Foreign failure"))
+                          text))
+               (info (list :position (copy-marker (point-max))
+                           :tracking-marker (copy-marker (point-max))
+                           :transformer (and (eq phase 'transformer) foreign)))
+               (gptel-post-stream-hook (and (eq phase 'hook) (list foreign)))
+               (inhibit-modification-hooks t))
+          (mevedel-transcript-source-accept source)
+          (if fail
+              (should-error
+               (mevedel-gptel-stream-bridge--insert-tracked
+                #'gptel-curl--stream-insert-response " tail" info nil)
+               :type 'error)
+            (mevedel-gptel-stream-bridge--insert-tracked
+             #'gptel-curl--stream-insert-response " tail" info nil))
+          (should (= 0 (mevedel-transcript-source-change source)))
+          (should-not (mevedel-transcript-source-before source))
+          (should (eq (and (eq phase 'transformer) foreign)
+                      (plist-get info :transformer)))))))
+  :doc "preserves a downstream transformer replacement and bypasses non-string responses"
+  (with-temp-buffer
+    (insert "Answer")
+    (let* ((info (list :position (copy-marker (point-max))
+                       :tracking-marker (copy-marker (point-max))
+                       :transformer #'identity))
+           (gptel-post-stream-hook
+            (list (lambda () (plist-put info :transformer #'upcase))))
+           (inhibit-modification-hooks t))
+      (mevedel-gptel-stream-bridge--insert-tracked
+       #'gptel-curl--stream-insert-response " tail" info nil)
+      (should (eq #'upcase (plist-get info :transformer)))
+      (should (eq 'delegated
+                  (mevedel-gptel-stream-bridge--insert-tracked
+                   (lambda (&rest _) 'delegated) '(tool-call) info nil))))))
+
 (mevedel-deftest mevedel-gptel-stream-bridge--repair-gptel-stream-info ()
   ,test
   (test)

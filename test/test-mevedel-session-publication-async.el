@@ -1523,5 +1523,287 @@ QUEUED adds a second completion while the first job is unresolved."
                         (insert-file-contents path)
                         (buffer-string))))))))
 
+(defun test-mevedel-publication-async--staged-submit
+    (session buffer select &optional logical content retain)
+  "Submit LOGICAL's CONTENT through SESSION with SELECT; return the ack list."
+  (let (acknowledgements)
+    (mevedel-session-publication-submit
+     session
+     (lambda ()
+       (test-mevedel-publication-async--transcript-artifacts
+        session buffer (or logical "segment-8.chat.org") (or content "Staged text")))
+     (lambda (ok err) (push (list ok err) acknowledgements))
+     nil retain select)
+    (test-mevedel-publication-async--wait (lambda () acknowledgements))
+    acknowledgements))
+
+(mevedel-deftest mevedel-session-publication--write-staged-content ()
+  ,test
+  (test)
+  :doc "writes exactly the encoded bytes for Unicode, codings, raw and unibyte content"
+  (let ((file (make-temp-file "mevedel-staged-write-"))
+        (annotated nil))
+    (unwind-protect
+        (cl-letf (((default-value 'write-region-annotate-functions)
+                   (list (lambda (&rest _) (setq annotated t) nil))))
+          (dolist (spec `(("λ ünï \U0001F600\nline" utf-8-unix)
+                          ("one\ntwo\n" utf-8-dos)
+                          (,(string-to-multibyte "raw\200\377") utf-8-unix)
+                          (,(unibyte-string 0 1 128 255 10) nil)))
+            (let ((content (car spec)) (coding (cadr spec)))
+              (with-temp-buffer
+                (setq-local buffer-file-coding-system 'iso-8859-1)
+                (insert "live buffer text")
+                (let ((before (buffer-string)) (point (point)))
+                  (mevedel-session-publication--write-staged-content
+                   file content coding)
+                  (should (equal before (buffer-string)))
+                  (should (= point (point)))))
+              (should (equal (if (multibyte-string-p content)
+                                 (encode-coding-string content (or coding 'utf-8-unix))
+                               content)
+                             (with-temp-buffer
+                               (set-buffer-multibyte nil)
+                               (insert-file-contents-literally file)
+                               (buffer-string))))))
+          (should-not annotated))
+      (delete-file file))))
+
+(mevedel-deftest mevedel-session-publication--valid-digest-p ()
+  ,test
+  (test)
+  :doc "accepts only lowercase 64-character hexadecimal digests"
+  (should (mevedel-session-publication--valid-digest-p (secure-hash 'sha256 "x")))
+  (dolist (bad (list nil 1 "" (make-string 64 ?A) (make-string 63 ?a)
+                     (make-string 65 ?a) (concat (make-string 63 ?a) "g")
+                     (concat (make-string 64 ?a) "\n")))
+    (should-not (mevedel-session-publication--valid-digest-p bad))))
+
+(mevedel-deftest mevedel-session-publication--require-digests ()
+  ,test
+  (test)
+  :doc "demands a valid digest on every written artifact and ignores deletions"
+  (let ((digest (secure-hash 'sha256 "x")))
+    (should-not (mevedel-session-publication--require-digests
+                 (list (list :logical "a" :source-sha256 digest)
+                       (list :logical "b" :delete t))))
+    (dolist (bad (list (list :logical "a")
+                       (list :logical "a" :source-sha256 "short")))
+      (should-error (mevedel-session-publication--require-digests (list bad))))))
+
+(mevedel-deftest mevedel-session-publication--job-digest (:quiet t)
+  ,test
+  (test)
+  :doc "hashes staged files with the real control program and never on the main thread"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let (acknowledgements)
+       (cl-letf (((symbol-function 'mevedel-session-publication--files-sha256)
+                  (lambda (&rest _) (error "Main-thread hash")))
+                 ((symbol-function 'mevedel-session-publication--file-sha256)
+                  (lambda (&rest _) (error "Main-thread hash")))
+                 ((symbol-function 'mevedel-session-publication--generation-digests)
+                  (lambda (&rest _) (error "Main-thread hash"))))
+         (setq acknowledgements
+               (test-mevedel-publication-async--staged-submit
+                session buffer nil "segment-9.chat.org" "λ digest me")))
+       (should (equal '((t nil)) acknowledgements))
+       (should (equal (encode-coding-string "λ digest me" 'utf-8-unix)
+                      (mevedel-session-artifacts-read-artifact
+                       session "segment-9.chat.org" t))))))
+
+  :doc "fails the job and rolls back on a failed, missing or malformed result"
+  (dolist (outcome (list (lambda (_ops callback)
+                           (funcall callback nil '(file-error "Injected hash failure")) nil)
+                         (lambda (_ops callback) (funcall callback nil nil) nil)
+                         (lambda (ops callback)
+                           (funcall callback
+                                    (mapcar (lambda (_) (list :status 'ok :value (list :sha256 "bad")))
+                                            ops)
+                                    nil)
+                           nil)
+                         (lambda (ops callback)
+                           (funcall callback
+                                    (mapcar (lambda (_) (list :status 'failed)) ops) nil)
+                           nil)))
+    (test-mevedel-publication-async--fixture
+     (lambda (session buffer)
+       (let ((head (plist-get (mevedel-session-publication session) :head)))
+         (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program-async)
+                    outcome))
+           (let ((acknowledgements
+                  (test-mevedel-publication-async--staged-submit
+                   session buffer nil "segment-9.chat.org" "never published")))
+             (should-not (caar acknowledgements))
+             (should (cadar acknowledgements))))
+         (should (equal head (plist-get (mevedel-session-publication session) :head)))
+         (should-not (mevedel-session-publication-busy-p session))))))
+  :doc "hashes undigested sources of retained earlier batches with the same program"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let* ((save-path (mevedel-session-save-path session))
+            (retained (mevedel-session-publication--stage-artifacts
+                       session
+                       (list (list :path (file-name-concat save-path "segment-6.chat.org")
+                                   :content "λ retained"))))
+            (hashed nil))
+       (should-not (plist-get (car (plist-get retained :artifacts)) :source-sha256))
+       (mevedel-session-publication--retain-uncommitted-batch session retained)
+       (cl-letf* ((orig (symbol-function 'mevedel-session-control-fs-run-program-async))
+                  ((symbol-function 'mevedel-session-control-fs-run-program-async)
+                   (lambda (operations callback)
+                     (setq hashed (append hashed
+                                          (mapcar (lambda (op) (plist-get op :path))
+                                                  operations)))
+                     (funcall orig operations callback))))
+         (should (equal '((t nil))
+                        (test-mevedel-publication-async--staged-submit
+                         session buffer nil "segment-5.chat.org" "new"))))
+       (should (cl-some (lambda (path) (string-match-p "mevedel-publication-" path)) hashed))
+       ;; Retained and new sources both went through the one program.
+       (should (>= (length hashed) 2))
+       (should (equal (encode-coding-string "λ retained" 'utf-8-unix)
+                      (mevedel-session-artifacts-read-artifact
+                       session "segment-6.chat.org" t)))
+       (should (equal "new" (mevedel-session-artifacts-read-artifact
+                             session "segment-5.chat.org" t))))))
+
+  :doc "a live root edit during the digest cannot change the frozen published bytes"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let ((orig (symbol-function 'mevedel-session-control-fs-run-program-async))
+           edited)
+       (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program-async)
+                  (lambda (operations callback)
+                    (unless edited
+                      (setq edited t)
+                      (with-current-buffer buffer
+                        (goto-char (point-max))
+                        (insert "LIVE EDIT DURING DIGEST")))
+                    (funcall orig operations callback))))
+         (should (equal '((t nil))
+                        (test-mevedel-publication-async--staged-submit
+                         session buffer nil "segment-4.chat.org" "frozen text"))))
+       (should edited)
+       (should (equal "frozen text"
+                      (mevedel-session-artifacts-read-artifact
+                       session "segment-4.chat.org" t)))
+       (with-current-buffer buffer
+         (should (string-match-p "LIVE EDIT DURING DIGEST" (buffer-string))))))))
+
+(mevedel-deftest mevedel-session-publication--job-select (:quiet t)
+  ,test
+  (test)
+  :doc "a nil selector is a clean no-op that commits nothing and leaves no staging"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let ((head (plist-get (mevedel-session-publication session) :head))
+           directories)
+       (cl-letf* ((orig (symbol-function 'mevedel-session-publication--stage-artifacts))
+                  ((symbol-function 'mevedel-session-publication--stage-artifacts)
+                   (lambda (&rest args)
+                     (let ((batch (apply orig args)))
+                       (push (plist-get batch :directory) directories)
+                       batch))))
+         (should (equal '((t nil))
+                        (test-mevedel-publication-async--staged-submit
+                         session buffer (lambda (_batch) nil)))))
+       (should (equal head (plist-get (mevedel-session-publication session) :head)))
+       (should directories)
+       (dolist (directory directories) (should-not (file-exists-p directory)))
+       (should-not (mevedel-session-publication-busy-p session)))))
+
+  :doc "the selector sees digests, its batch alone is published and the original is cleaned"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let (seen original-directory)
+       (should (equal
+                '((t nil))
+                (test-mevedel-publication-async--staged-submit
+                 session buffer
+                 (lambda (batch)
+                   (setq seen (mapcar (lambda (artifact) (plist-get artifact :source-sha256))
+                                      (plist-get batch :artifacts))
+                         original-directory (plist-get batch :directory))
+                   (let ((copy (copy-sequence batch)))
+                     (setf (plist-get copy :artifacts)
+                           (cl-remove-if
+                            (lambda (artifact)
+                              (equal (plist-get artifact :logical) "notes/deep/extra.txt"))
+                            (plist-get batch :artifacts)))
+                     copy))
+                 "segment-7.chat.org" "kept")))
+       (should (cl-every #'mevedel-session-publication--valid-digest-p seen))
+       (should-not (file-exists-p original-directory))
+       (should (equal "kept" (mevedel-session-artifacts-read-artifact
+                              session "segment-7.chat.org" t)))
+       (should-not (mevedel-session-artifacts-artifact-present-p
+                    session "notes/deep/extra.txt" t)))))
+
+  :doc "a selected batch without a valid digest fails before anything is reserved"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let ((head (plist-get (mevedel-session-publication session) :head))
+           reserved)
+       (cl-letf (((symbol-function 'mevedel-session-durability-reserve-publication-lease-async)
+                  (lambda (&rest _) (setq reserved t))))
+         ;; The same batch comes back, but its commit marker was pruned.
+         (let ((acknowledgements
+                (test-mevedel-publication-async--staged-submit
+                 session buffer
+                 (lambda (batch)
+                   (setf (plist-get batch :artifacts)
+                         (cl-remove-if (lambda (artifact) (plist-get artifact :commit-marker))
+                                       (plist-get batch :artifacts)))
+                   batch))))
+           (should-not (caar acknowledgements))
+           (should (cadar acknowledgements))))
+       (should-not reserved)
+       (should (equal head (plist-get (mevedel-session-publication session) :head))))))
+
+  :doc "a selected batch without a valid digest fails before anything is reserved"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let ((head (plist-get (mevedel-session-publication session) :head))
+           reserved)
+       (cl-letf (((symbol-function 'mevedel-session-durability-reserve-publication-lease-async)
+                  (lambda (&rest _) (setq reserved t))))
+         (let ((acknowledgements
+                (test-mevedel-publication-async--staged-submit
+                 session buffer
+                 (lambda (batch)
+                   (let ((copy (copy-sequence batch)))
+                     (setf (plist-get copy :artifacts)
+                           (mapcar (lambda (artifact)
+                                     (let ((a (copy-sequence artifact)))
+                                       (setf (plist-get a :source-sha256) "forged")
+                                       a))
+                                   (plist-get batch :artifacts)))
+                     copy)))))
+           (should-not (caar acknowledgements))
+           (should (cadar acknowledgements))))
+       (should-not reserved)
+       (should (equal head (plist-get (mevedel-session-publication session) :head))))))
+  :doc "a nil selector is refused while retained recovery is pending and keeps it"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let* ((save-path (mevedel-session-save-path session))
+            (retained (mevedel-session-publication--stage-artifacts
+                       session
+                       (list (list :path (file-name-concat save-path "segment-3.chat.org")
+                                   :content "retained recovery"))))
+            (head (plist-get (mevedel-session-publication session) :head)))
+       (mevedel-session-publication--retain-uncommitted-batch session retained)
+       (let ((acknowledgements
+              (test-mevedel-publication-async--staged-submit
+               session buffer (lambda (_batch) nil))))
+         (should-not (caar acknowledgements))
+         (should (cadar acknowledgements)))
+       (should (equal head (plist-get (mevedel-session-publication session) :head)))
+       (should (= 1 (length (mevedel-session-publication-uncommitted-batches session))))
+       (should (file-exists-p (plist-get retained :directory)))
+       (should-not (mevedel-session-publication-busy-p session)))))
+)
+
 (provide 'test-mevedel-session-publication-async)
 ;;; test-mevedel-session-publication-async.el ends here

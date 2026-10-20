@@ -724,6 +724,36 @@ head and the unreadable observation are injected only while the job runs."
                     "typed during the job"
                     (mevedel-session-artifacts-read-artifact session relative t))))))
   :doc "supersedes a pending debounced save and declines when not applicable"
+  :doc "a property-only change after the freeze stays dirty and the next save serializes it"
+  (test-mevedel-agent-conversation-publication--with-agent
+   (lambda (session _parent child inv)
+     (let* ((plan (mevedel-agent-conversation-prepare-save inv))
+            (chars-before (with-current-buffer child (buffer-chars-modified-tick)))
+            start end)
+       (with-current-buffer child
+         (save-excursion
+           (goto-char (point-min))
+           (re-search-forward "Prepared task")
+           (setq start (match-beginning 0) end (match-end 0)))
+         ;; Characters are untouched; only the gptel classification changes.
+         (let ((inhibit-read-only t))
+           (put-text-property start end 'gptel 'ignore))
+         (should (= chars-before (buffer-chars-modified-tick))))
+       (test-mevedel-agent-conversation-publication--commit
+        session (plist-get plan :artifacts))
+       (funcall (plist-get plan :finish))
+       ;; The frozen artifacts predate the change, so the buffer must stay dirty.
+       (should (with-current-buffer child (buffer-modified-p)))
+       (let* ((next (mevedel-agent-conversation-prepare-save inv))
+              (content (plist-get (car (plist-get next :artifacts)) :content)))
+         (should (string-match-p "GPTEL_BOUNDS" content))
+         ;; Bounds are positions in the saved text, drawer included.
+         (let ((saved-start (1+ (string-match "Prepared task" content))))
+           (should (string-match-p
+                    (format "(ignore (%d %d))" saved-start
+                            (+ saved-start (- end start)))
+                    content)))))))
+  :doc "supersedes a pending debounced save and declines when not applicable"
   (test-mevedel-agent-conversation-publication--with-agent
    (lambda (_session _parent child inv)
      (let ((mevedel-agent-conversation-save-debounce 1000))

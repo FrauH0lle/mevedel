@@ -166,12 +166,16 @@ of the same command remain independently navigable.
   the record therefore needed an explicit delivery-pending state, since
   clearing the pending flag when the sink returned would let a poll claim the
   same terminal result mid-commit. Root wake moved from the sink's return to
-  its success. On a compiled in-process fixture (one 4000-character result per
-  sample, six samples, local portable session of 6000 saved turns, final frozen
-  sources) the producer returned in 0.22-0.45 ms and its acknowledgement arrived
-  75.4-120.1 ms later, against 59.9-73.8 ms of blocked editor for the synchronous
-  sink; the largest heartbeat gap was 8.2-10.2 ms. Completion is not earlier,
-  only the wait no longer blocks. Not a live or graphical measurement, nor a
+  its success. On a compiled in-process rerun after checkpoint preparation
+  changes (one 4000-character result per sample, six samples, synthetic local
+  portable session of 6000 saved turns), the producer returned in
+  0.196-0.460 ms and its acknowledgement arrived 105.028-115.540 ms later,
+  against 63.907-70.177 ms of blocked editor for the synchronous sink; the
+  largest heartbeat gap was 6.533-7.159 ms. Earlier async ranges were
+  8.2-10.2 ms gap and 75.4-120.1 ms ACK, so no blocking regression was observed
+  on this workload, not an earlier completion. The original recipe explicitly
+  collects garbage before each sample; none contained GC. Possible independent
+  verifier load was not excluded. Not a live or graphical measurement, nor a
   hard bound on arbitrary filesystem latency, sidecar size or GC.
 
 - **Breadcrumbs checkpoint with the transcript (2026-10).** Each yielded

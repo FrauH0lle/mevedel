@@ -173,12 +173,17 @@ protocol, extraction directory, or generic resolver cache is needed.
   the transport was idle; the sentinel can be inside another remote command and
   the callback launches the next phase, so dispatch became unconditional and
   deferred, including the disabled-transport fallback. On a compiled
-  in-process fixture (a local portable session of 6000 saved turns, one
-  4000-character result per sample, six samples, final frozen sources), the
-  publication that held the editor 59.9-73.8 ms synchronously returned its
-  submission in 0.22-0.45 ms and acknowledged 75.4-120.1 ms later with a
-  largest 5 ms-timer heartbeat gap of 8.2-10.2 ms. Launch, staging and parsing
-  stay on the main thread, so
+  in-process fixture rerun after checkpoint preparation changes (a synthetic
+  local portable session of 6000 saved turns, one 4000-character result per
+  sample, six samples), the publication that held the editor 63.907-70.177 ms
+  synchronously returned its submission in 0.196-0.460 ms and acknowledged
+  105.028-115.540 ms later with a largest 5 ms-timer heartbeat gap of
+  6.533-7.159 ms. Earlier async ranges were 8.2-10.2 ms gap and
+  75.4-120.1 ms ACK: no blocking regression was observed, not a general ACK
+  improvement. Separate phase instrumentation measured at most 1.674 ms per
+  async advance. The original recipe collects garbage before each sample;
+  none contained GC, and possible independent verifier load was not excluded.
+  Launch, staging and parsing stay on the main thread, so
   the 98 ms is an upper bound on waiting removed, not a measured saving, and
   acknowledgement latency is not shorter. One fixture and small samples, not a
   live or graphical measurement, nor a hard bound on arbitrary filesystem

@@ -218,11 +218,11 @@ anew.  The result is a plist of :transcript, :turns, :latest and :mail IDs."
                     (condition-case nil (funcall advance job)
                       (quit (setq escaped t)))))
                  ((symbol-function 'mevedel-session-publication-submit)
-                  (lambda (owner prepare acknowledge &optional ids retain)
+                  (lambda (owner prepare acknowledge &optional ids retain select)
                     (funcall submit owner prepare
                              (lambda (ok err)
                                (push (list ok err) acknowledgements)
-                               (funcall acknowledge ok err)) ids retain))))
+                               (funcall acknowledge ok err)) ids retain select))))
          (mevedel-test--with-captured-diagnostics warned
            (mevedel-session-persistence-checkpoint-buffer buffer)
            (test-mevedel-publication-async--wait (lambda () (or escaped acknowledgements))))

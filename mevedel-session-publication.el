@@ -57,6 +57,8 @@
                   "mevedel-session-control-fs" (result))
 (declare-function mevedel-session-control-fs-run-program
                   "mevedel-session-control-fs" (operations))
+(declare-function mevedel-session-control-fs-run-program-async
+                  "mevedel-session-control-fs" (operations callback))
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-portable-authority-p
@@ -143,6 +145,9 @@
   session path epoch prepare acknowledge mail-ids batch batches candidate
   expected-lease expected-head clock assertions recovery riders phase process error
   retain-failure checkpoint
+  ;; Raw frozen artifacts awaiting staging, the staged batch as first built,
+  ;; and the optional selector run once digests are known.
+  artifacts original selector
   (attempts 0) acknowledged-p success-p scheduled-p waiting-p)
 
 (defun mevedel-session-publication-busy-p (session)
@@ -249,7 +254,7 @@ Cold materialization, remote targets and PID-lock sessions stay synchronous."
        (buffer-live-p (mevedel-session-root-buffer session))))
 
 (defun mevedel-session-publication-submit
-    (session prepare acknowledge &optional mail-ids retain-failure)
+    (session prepare acknowledge &optional mail-ids retain-failure select-staged)
   "Accept an acknowledged local SESSION publication.
 PREPARE runs with the mutation gate held, after asynchronous admission, and
 returns fresh artifacts as `mevedel-session-publication-publish' takes them,
@@ -264,7 +269,17 @@ producer re-derives from its live state.  With RETAIN-FAILURE the batch and
 any earlier retained ones become pending recovery instead, as a synchronous
 publication failure leaves them: later mutation waits for retry or abandon,
 and a successful retry commits without calling ACKNOWLEDGE again.  An
-uncertain head outcome retains the job until reconciliation or recovery."
+uncertain head outcome retains the job until reconciliation or recovery.
+
+PREPARE only freezes: its artifacts are staged, then hashed by a control
+program, in later turns.  SELECT-STAGED, when non-nil, is then called with
+the staged batch, every artifact carrying its `:source-sha256', and returns
+the batch to publish or nil.  It compares against frozen state it closed
+over, never live buffers, and may rewrite a frozen sidecar if it also records
+that sidecar's exact digest.  Nil is a clean no-op success: nothing is
+reserved or committed.  It is refused while earlier retained batches exist,
+which a no-op would otherwise consume.  Every staged batch belongs to the job
+until acknowledgement."
   (when (mevedel-session-publication-stopping-p session)
     (user-error "Session publication is stopping"))
   (let ((launch
@@ -273,7 +288,7 @@ uncertain head outcome retains the job until reconciliation or recovery."
                        :session session :path (mevedel-session-save-path session)
                        :epoch (mevedel-session-checkpoint-state session)
                        :prepare prepare :acknowledge acknowledge :mail-ids mail-ids
-                       :retain-failure retain-failure
+                       :retain-failure retain-failure :selector select-staged
                        :expected-lease (copy-sequence (mevedel-session-lease session))
                        :expected-head (plist-get (mevedel-session-publication session) :head)
                        :clock (list nil) :assertions (list nil) :recovery (list nil)
@@ -353,11 +368,20 @@ ABANDONED explicitly discards recovery instead of retaining a failed checkpoint.
                          (mevedel-session-publication-uncommitted-batches session)
                          (mevedel-session-publication--job-batches job) :test #'eq))
                   (mevedel-session-publication--delete-batches
-                   (mevedel-session-publication--job-batches job)))
+                   (mevedel-session-publication--job-batches job))
+                  ;; A selector may have replaced or dropped the staged batch.
+                  (when-let* ((original (mevedel-session-publication--job-original job)))
+                    (mevedel-session-publication--delete-batch original)))
               (when (and (mevedel-session-publication--job-batch job)
                          (not retained))
                 (mevedel-session-publication--delete-batch
-                 (mevedel-session-publication--job-batch job))))
+                 (mevedel-session-publication--job-batch job)))
+              ;; A pruned original is no longer part of the transaction, unless
+              ;; the retained batch lives in its directory.
+              (when-let* ((original (mevedel-session-publication--job-original job))
+                          ((not (equal (plist-get original :directory)
+                                       (plist-get retained :directory)))))
+                (mevedel-session-publication--delete-batch original)))
           ((error quit)
            (display-warning 'mevedel
                             (format "Session publication cleanup failed: %s"
@@ -437,32 +461,46 @@ Normalize a reserved lease asynchronously before releasing the mutation gate."
                (mevedel-session-durability-admit-async
                 session (apply-partially #'mevedel-session-publication--job-result job 'freeze)))
               ('freeze
+               ;; Capture only: staging and hashing follow in their own turns.
                (let ((artifacts
                       (funcall (mevedel-session-publication--job-prepare job))))
                  (if (null artifacts)
                      (mevedel-session-publication--job-complete job t)
-                   (let* ((batch (mevedel-session-publication--stage-artifacts
-                                  session artifacts))
-                          (marker (mevedel-session-publication--batch-marker batch))
-                          (checkpoint (plist-get marker :checkpoint)))
-                     ;; The batch is the job's before any check, so a refusal
-                     ;; below cleans it up or retains it like any failure.
-                     (setf (mevedel-session-publication--job-batch job) batch
-                           (mevedel-session-publication--job-batches job)
-                           (append (mevedel-session-publication-uncommitted-batches session)
-                                   (list batch))
-                           (mevedel-session-publication--job-checkpoint job) checkpoint)
-                     (unless marker
-                       (error "Asynchronous publication requires a commit marker"))
-                     (when (plist-get marker :replace)
-                       (error "Asynchronous publication cannot replace history"))
-                     (when (and checkpoint
-                                (not (mevedel-session-checkpoint-valid-p session checkpoint)))
-                       (error "Checkpoint candidate belongs to a different owner epoch"))
-                     (mevedel-session-publication--project-staged-sidecar
-                      session marker checkpoint)
-                     (setf (mevedel-session-publication--job-phase job) 'reserve)
-                     (mevedel-session-publication--advance-soon job)))))
+                   (setf (mevedel-session-publication--job-artifacts job) artifacts
+                         (mevedel-session-publication--job-phase job) 'stage)
+                   (mevedel-session-publication--advance-soon job))))
+              ('stage
+               (let* ((artifacts (mevedel-session-publication--job-artifacts job))
+                      (batch (mevedel-session-publication--stage-artifacts
+                              session artifacts t))
+                      (marker (mevedel-session-publication--batch-marker batch))
+                      (checkpoint (plist-get marker :checkpoint)))
+                 ;; The batch is the job's before any check, so a refusal
+                 ;; below cleans it up or retains it like any failure.
+                 (setf (mevedel-session-publication--job-artifacts job) nil
+                       (mevedel-session-publication--job-batch job) batch
+                       (mevedel-session-publication--job-original job) batch
+                       (mevedel-session-publication--job-batches job)
+                       (append (mevedel-session-publication-uncommitted-batches session)
+                               (list batch))
+                       (mevedel-session-publication--job-checkpoint job) checkpoint)
+                 (unless marker
+                   (error "Asynchronous publication requires a commit marker"))
+                 (when (plist-get marker :replace)
+                   (error "Asynchronous publication cannot replace history"))
+                 (when (and checkpoint
+                            (not (mevedel-session-checkpoint-valid-p session checkpoint)))
+                   (error "Checkpoint candidate belongs to a different owner epoch"))
+                 ;; Projection rewrites the small sidecar, so it precedes the
+                 ;; digest taken of its final bytes.
+                 (mevedel-session-publication--project-staged-sidecar
+                  session marker checkpoint)
+                 (setf (mevedel-session-publication--job-phase job) 'digest)
+                 (mevedel-session-publication--advance-soon job)))
+              ('digest
+               (mevedel-session-publication--job-digest job))
+              ('select
+               (mevedel-session-publication--job-select job))
               ('reserve
                (let* ((plan (mevedel-session-publication--async-fixed-operations
                              session (mevedel-session-publication--job-batch job)))
@@ -556,6 +594,112 @@ Normalize a reserved lease asynchronously before releasing the mutation gate."
                (mevedel-session-publication--job-complete job nil err)
              (mevedel-session-publication--job-failed job err))))))))
 
+(defun mevedel-session-publication--valid-digest-p (digest)
+  "Return non-nil when DIGEST is a lowercase hexadecimal SHA-256."
+  (and (stringp digest)
+       (let ((case-fold-search nil))
+         (string-match-p "\\`[0-9a-f]\\{64\\}\\'" digest))))
+
+(defun mevedel-session-publication--require-digests (artifacts)
+  "Signal unless every written artifact in ARTIFACTS has a valid digest."
+  (dolist (artifact artifacts)
+    (unless (or (plist-get artifact :delete)
+                (mevedel-session-publication--valid-digest-p
+                 (plist-get artifact :source-sha256)))
+      (error "Publication artifact has no valid digest: %s"
+             (or (plist-get artifact :logical) (plist-get artifact :path))))))
+
+(defun mevedel-session-publication--job-digest (job)
+  "Hash every undigested staged source of JOB with one control program.
+Retained batches are included.  Digests are installed only from a complete,
+well-formed result; any other outcome fails the job."
+  (let* ((pending
+          (cl-loop for batch in (mevedel-session-publication--job-batches job)
+                   append (cl-loop for artifact in (plist-get batch :artifacts)
+                                   unless (or (plist-get artifact :delete)
+                                              (plist-get artifact :source-sha256))
+                                   collect artifact)))
+         (sources (delete-dups
+                   (mapcar (lambda (artifact) (plist-get artifact :source))
+                           pending))))
+    (if (null sources)
+        (progn
+          (setf (mevedel-session-publication--job-phase job) 'select)
+          (mevedel-session-publication--advance-soon job))
+      (setf (mevedel-session-publication--job-waiting-p job) t)
+      (let ((process
+             (mevedel-session-control-fs-run-program-async
+              (mapcar (lambda (source)
+                        (list :op 'file-hash
+                              :path (mevedel-session-control-fs-physical-path
+                                     (file-truename source))))
+                      sources)
+              (lambda (results error)
+                (condition-case err
+                    (progn
+                      (when error (signal (car error) (cdr error)))
+                      (unless (= (length results) (length sources))
+                        (error "Incomplete staged digest result"))
+                      (let ((table (make-hash-table :test #'equal)))
+                        (cl-mapc
+                         (lambda (source result)
+                           (let ((digest (plist-get (plist-get result :value)
+                                                    :sha256)))
+                             (unless (and (eq 'ok (plist-get result :status))
+                                          (mevedel-session-publication--valid-digest-p
+                                           digest))
+                               (error "Invalid staged digest for %s" source))
+                             (puthash source digest table)))
+                         sources results)
+                        (dolist (artifact pending)
+                          (plist-put artifact :source-sha256
+                                     (gethash (plist-get artifact :source) table))))
+                      (mevedel-session-publication--job-result
+                       job 'select t nil))
+                  ((error quit)
+                   (mevedel-session-publication--job-result
+                    job 'select nil err)))))))
+        (when (mevedel-session-publication--job-waiting-p job)
+          (setf (mevedel-session-publication--job-process job) process))))))
+
+(defun mevedel-session-publication--job-select (job)
+  "Run JOB's selector over its digested staged batch, then reserve.
+Nil from the selector completes the job as a clean no-op, refused while
+earlier retained batches exist.  A selected batch replaces the staged one and
+all digests are validated before anything is reserved.  The staged original
+stays the job's for cleanup either way."
+  (let* ((original (mevedel-session-publication--job-original job))
+         (select (mevedel-session-publication--job-selector job))
+         (selected (if select (funcall select original) original)))
+    (cond
+     ((null selected)
+      (unless (equal (mevedel-session-publication--job-batches job)
+                     (list original))
+        (error "Publication selector declined with retained recovery pending"))
+      (setf (mevedel-session-publication--job-batches job) nil
+            (mevedel-session-publication--job-batch job) nil
+            (mevedel-session-publication--job-checkpoint job) nil)
+      (mevedel-session-publication--job-complete job t))
+     (t
+      (unless (eq selected original)
+        (setf (mevedel-session-publication--job-batches job)
+              (cl-substitute selected original
+                             (mevedel-session-publication--job-batches job)
+                             :test #'eq)
+              (mevedel-session-publication--job-batch job) selected))
+      ;; A selector may also have pruned or replaced the marker of the very
+      ;; batch it returned, so the marker is always revalidated.
+      (let ((marker (mevedel-session-publication--batch-marker selected)))
+        (unless marker
+          (error "Selected publication lacks a commit marker"))
+        (setf (mevedel-session-publication--job-checkpoint job)
+              (plist-get marker :checkpoint)))
+      (mevedel-session-publication--require-digests
+       (cl-loop for batch in (mevedel-session-publication--job-batches job)
+                append (plist-get batch :artifacts)))
+      (setf (mevedel-session-publication--job-phase job) 'reserve)
+      (mevedel-session-publication--advance-soon job)))))
+
 (defun mevedel-session-publication--job-generation (job)
   "Prepare JOB's immutable generation and dispatch its head commit."
   (let* ((session (mevedel-session-publication--job-session job))
@@ -570,10 +714,13 @@ Normalize a reserved lease asynchronously before releasing the mutation gate."
     (when (and checkpoint
                (not (mevedel-session-checkpoint-valid-p session checkpoint)))
       (error "Checkpoint candidate belongs to a different owner epoch"))
+    ;; Never hash on the main thread here: every digest was installed by the
+    ;; digest phase, and a missing one is a defect.
+    (mevedel-session-publication--require-digests artifacts)
     (pcase-let* ((`(,directory ,overlaid ,operations)
                   (mevedel-session-publication--prepare-generation
                    (file-name-concat session-dir ".publications") artifacts session-dir entries
-                   (mevedel-session-publication--generation-digests artifacts)))
+                   (make-hash-table :test #'equal)))
                  (head (file-relative-name (file-name-concat directory "manifest.el") session-dir))
                  (mevedel-session-durability--commit-riders
                   (list :before operations :after nil :consumed nil
@@ -599,7 +746,14 @@ does.  CHECKPOINT is the marker's candidate, or nil.  Local files only."
                  (mevedel-session-publication--read-staged-sidecar source)))
            (projected (mevedel-session-checkpoint-project session raw checkpoint)))
       (unless (equal raw projected)
-        (mevedel-session-codec-write source projected)
+        ;; A local job-owned file: write it directly, never through a control
+        ;; program, and let the digest phase hash its final bytes.
+        (mevedel-session-publication--write-staged-content
+         source
+         (let ((print-length nil) (print-level nil)
+               (print-circle t) (print-quoted t))
+           (prin1-to-string projected))
+         'utf-8-unix)
         (setf (plist-get marker :source-sha256) nil)))))
 
 (defun mevedel-session-publication--async-fixed-operations (session batch)
@@ -1668,8 +1822,24 @@ when they read those artifacts."
           (error "Invalid session publication sidecar: %s" sidecar))))
     captured))
 
-(defun mevedel-session-publication--stage-artifacts (session artifacts)
+(defun mevedel-session-publication--write-staged-content (source content coding)
+  "Write CONTENT to local staged file SOURCE as exactly its encoded bytes.
+A unibyte CONTENT is written unconverted, a multibyte one through CODING.
+The string goes straight to `write-region' from a fundamental temporary
+buffer, so no live buffer's locals, point or annotation hooks can alter the
+captured bytes."
+  (with-temp-buffer
+    (let ((coding-system-for-write
+           (if (multibyte-string-p content) (or coding 'utf-8-unix) 'no-conversion))
+          (write-region-annotate-functions nil)
+          (write-region-post-annotation-function nil))
+      (write-region content nil source nil 'silent))))
+
+(defun mevedel-session-publication--stage-artifacts
+    (session artifacts &optional defer-digest)
   "Copy SESSION publication ARTIFACTS into one local recovery batch.
+With DEFER-DIGEST no digest is computed here, even for raw bytes: the caller
+hashes the staged files itself.
 
 Each input artifact is a plist containing `:path', `:content', and optional
 `:coding'; `:path' and a `:source-file' holding its raw bytes; or `:path' and
@@ -1703,17 +1873,11 @@ batch whose written artifacts name local `:source' files."
             (source-file (copy-file source-file source t))
             (t
              ;; Raw bytes hash now, so the generation need not reread them.
-             (unless (multibyte-string-p content)
+             (unless (or defer-digest (multibyte-string-p content))
                (setq normalized
                      (plist-put normalized :source-sha256 (secure-hash 'sha256 content))))
-             (with-temp-buffer
-               (set-buffer-multibyte (multibyte-string-p content))
-               (insert content)
-               (let ((coding-system-for-write
-                      (if (multibyte-string-p content)
-                          (or (plist-get normalized :coding) 'utf-8-unix)
-                        'no-conversion)))
-                 (write-region (point-min) (point-max) source nil 'silent)))))
+             (mevedel-session-publication--write-staged-content
+              source content (plist-get normalized :coding))))
            (setq normalized
                  (cl-loop for (key value) on normalized by #'cddr
                           unless (memq key '(:content :source-file))

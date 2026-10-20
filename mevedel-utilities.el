@@ -542,7 +542,13 @@ The transcript is mevedel's canonical record, so its shape does not
 follow the user's gptel chat-buffer settings: no prompt or response
 prefixes, and every tool call and result stays in the buffer."
   (setq-local change-major-mode-hook nil)
-  (mevedel--call-with-bare-transcript-mode #'org-mode)
+  (mevedel--call-with-bare-transcript-mode
+   (lambda ()
+     (org-mode)
+     ;; The rendered view owns presentation; raw inspection stays unfontified.
+     ;; JIT's silent `fontified' writes invalidate transcript change proofs.
+     (font-lock-mode -1)
+     (jit-lock-mode nil)))
   (setq-local org-element-cache-persistent nil
               ;; Only our own handler, without the user's global TAB hooks.
               org-cycle-tab-first-hook (list #'mevedel--transcript-cycle-skip)

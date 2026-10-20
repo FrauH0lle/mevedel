@@ -176,7 +176,7 @@
 (declare-function mevedel-session-publication-barrier "mevedel-session-publication" (session &optional token))
 (declare-function mevedel-session-publication-busy-p "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-defer "mevedel-session-publication" (session preparation &optional failure token))
-(declare-function mevedel-session-publication-submit "mevedel-session-publication" (session prepare acknowledge &optional mail-ids))
+(declare-function mevedel-session-publication-submit "mevedel-session-publication" (session prepare acknowledge &optional mail-ids retain-failure select-staged))
 (autoload 'mevedel-session-publication-async-eligible-p "mevedel-session-publication")
 (autoload 'mevedel-session-publication-barrier "mevedel-session-publication")
 (autoload 'mevedel-session-publication-busy-p "mevedel-session-publication")

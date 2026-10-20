@@ -7,8 +7,10 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-session-bounds)
 (require 'mevedel-ptc-checkpoint)
 (require 'mevedel-session-checkpoint)
+(require 'mevedel-transcript-source)
 
 (eval-when-compile
   (require 'mevedel-agents)
@@ -179,8 +181,11 @@
   "mevedel-session-persistence")
 
 ;; `mevedel-session-publication'
-(declare-function mevedel-session-publication-committed-p "mevedel-session-publication" (session artifacts))
+(declare-function mevedel-session-publication--comparable-p "mevedel-session-publication" (session))
+(declare-function mevedel-session-publication--read-staged-sidecar "mevedel-session-publication" (source))
+(declare-function mevedel-session-publication--write-staged-content "mevedel-session-publication" (source content coding))
 (declare-function mevedel-session-publication-barrier "mevedel-session-publication" (session &optional token))
+(declare-function mevedel-session-publication-committed-p "mevedel-session-publication" (session artifacts))
 (declare-function mevedel-session-publication-defer "mevedel-session-publication" (session preparation &optional failure token))
 (declare-function mevedel-session-publication-discard-rolled-back "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-logical-path-p "mevedel-session-publication" (path))
@@ -244,8 +249,18 @@
 (declare-function mevedel-telemetry-start "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-transcript'
+(declare-function mevedel-transcript--org-block-depths-before
+                  "mevedel-transcript" (pos &optional start tool-depth summary-depth))
+(declare-function mevedel-transcript--render-data-block-at
+                  "mevedel-transcript" (position &optional limit literal))
 (declare-function mevedel-transcript--user-prompt-start
                   "mevedel-transcript" (pos next prop &optional state))
+(declare-function mevedel-transcript-cache-create
+                  "mevedel-transcript" (&rest args))
+(declare-function mevedel-transcript-cache-restart
+                  "mevedel-transcript" (cache))
+(declare-function mevedel-transcript-cached-segments
+                  "mevedel-transcript" (cache &optional origin))
 (declare-function mevedel-transcript-leading-property
                   "mevedel-transcript" (name))
 (declare-function mevedel-transcript-normalize-properties
@@ -254,7 +269,12 @@
                   "mevedel-transcript" ())
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
+(defvar mevedel-transcript--prepared-audit-spans)
+(autoload 'mevedel-transcript--org-block-depths-before "mevedel-transcript")
+(autoload 'mevedel-transcript--render-data-block-at "mevedel-transcript")
 (autoload 'mevedel-transcript--user-prompt-start "mevedel-transcript")
+(autoload 'mevedel-transcript-cache-create "mevedel-transcript")
+(autoload 'mevedel-transcript-cached-segments "mevedel-transcript")
 (autoload 'mevedel-transcript-leading-property "mevedel-transcript")
 (autoload 'mevedel-transcript-normalize-properties "mevedel-transcript")
 (autoload 'mevedel-transcript-prompt-scan-state "mevedel-transcript")
@@ -265,9 +285,13 @@
 (declare-function mevedel-transcript-audit-buffer-spans
                   "mevedel-transcript-audit" (&optional type start end))
 (declare-function mevedel-transcript-buffer-directive-ranges "mevedel-transcript-audit" (&optional allow-open))
+(declare-function mevedel-transcript-directive-ranges-from-spans "mevedel-transcript-audit" (spans text &optional allow-open))
+(defvar mevedel--hook-audit-open)
 (autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
 (autoload 'mevedel-transcript-audit-buffer-spans "mevedel-transcript-audit")
 (autoload 'mevedel-transcript-buffer-directive-ranges
+  "mevedel-transcript-audit")
+(autoload 'mevedel-transcript-directive-ranges-from-spans
   "mevedel-transcript-audit")
 
 ;; `mevedel-transcript-restore'
@@ -991,31 +1015,363 @@ PREVIEW-LENGTH defaults to 80 display characters."
                              directive-ranges)))
                       (when preview
                         (cl-incf turn)
-                        (push (append
-                               (list :turn turn
-                                     :pos (if directive
-                                              (plist-get directive :start)
-                                            prompt-start)
-                                     :preview
-                                     (mevedel--truncate-display
-                                      preview (or preview-length 80) "..."))
-                               (and directive
-                                    (list
-                                     :kind 'directive
-                                     :directive-id
-                                     (plist-get directive :directive-id)
-                                     :action
-                                     (plist-get directive :action)
-                                     :outcome
-                                     (plist-get directive :outcome)
-                                     :activity-kind
-                                     (plist-get directive :activity-kind)
-                                     :sequence
-                                     (plist-get directive :sequence)
-                                     :reserved-turn
-                                     (plist-get directive :turn))))
+                        (push (mevedel-session-artifacts--prompt-record
+                               turn prompt-start
+                               (mevedel--truncate-display
+                                preview (or preview-length 80) "...")
+                               directive)
                               results)))))))
             (nreverse results)))))))
+
+(defun mevedel-session-artifacts--prompt-record
+    (turn prompt-start preview directive)
+  "Return the index plist of prompt TURN starting at PROMPT-START.
+PREVIEW is its display line and DIRECTIVE the enclosing directive range, or
+nil for an ordinary prompt."
+  (append
+   (list :turn turn
+         :pos (if directive (plist-get directive :start) prompt-start)
+         :preview preview)
+   (and directive
+        (list :kind 'directive
+              :directive-id (plist-get directive :directive-id)
+              :action (plist-get directive :action)
+              :outcome (plist-get directive :outcome)
+              :activity-kind (plist-get directive :activity-kind)
+              :sequence (plist-get directive :sequence)
+              :reserved-turn (plist-get directive :turn)))))
+
+;;;; Incremental prompt index
+
+(cl-defstruct (mevedel-session-artifacts--prompt-cache
+               (:constructor mevedel-session-artifacts--prompt-cache-create)
+               (:copier nil))
+  "Derived prompt-index state of one transcript buffer, never persisted.
+SOURCE proves which suffix changed and SEGMENTS is the parser cache.  ORIGIN
+is the body origin of the last derivation, nil before the first.  UNITS holds
+one vector per user segment and SPANS every audit span, with positions
+relative to ORIGIN.  UNRESOLVED is the earliest relative audit opener that no
+span consumed: a later close could still pair it.  FRONTIER is
+\(POSITION TOOL SUMMARY), relative to ORIGIN: the org block depths counted up
+to a position near the
+buffer end, so the next prompt scan resumes there instead of at the last
+prompt."
+  source segments origin units spans unresolved frontier)
+
+(defvar-local mevedel-session-artifacts--prompt-cache nil
+  "Incremental prompt-index state of the current transcript buffer.")
+
+(defun mevedel-session-artifacts--prompt-cache-eligible-p ()
+  "Return non-nil when the current buffer is accessible whole."
+  (and (= (point-min) 1) (= (point-max) (1+ (buffer-size)))))
+
+(defun mevedel-session-artifacts--prompt-cache-ensure (origin)
+  "Return the current buffer's prompt cache, creating it for ORIGIN."
+  (let ((cache mevedel-session-artifacts--prompt-cache))
+    (unless (and cache
+                 (eq (marker-buffer
+                      (mevedel-transcript-source-origin
+                       (mevedel-session-artifacts--prompt-cache-source cache)))
+                     (current-buffer)))
+      (setq cache (mevedel-session-artifacts--prompt-cache-create
+                   :source (mevedel-transcript-source-create origin)
+                   :segments (mevedel-transcript-cache-create))
+            mevedel-session-artifacts--prompt-cache cache))
+    cache))
+
+(defun mevedel-session-artifacts--audit-spans-cached (cache origin d full)
+  "Return (SPANS . UNRESOLVED) for the current buffer, updating nothing.
+SPANS are every audit span relative to ORIGIN, as one whole-buffer scan finds
+them.  D is the first dirty offset relative to ORIGIN, nil when the source is
+unchanged; FULL forces a complete scan.  A cached span ending at or before the
+restart point is reused: its end is where the sequential scan stood, so
+scanning on from there is the scan the whole buffer would have run.  The
+restart point is the first change or the earliest opener without a span,
+whichever comes first, because a later close can pair such an opener."
+  (let ((old (and (not full)
+                  (mevedel-session-artifacts--prompt-cache-origin cache)
+                  (mevedel-session-artifacts--prompt-cache-spans cache)))
+        (old-p (and (not full)
+                    (mevedel-session-artifacts--prompt-cache-origin cache)))
+        (unresolved (mevedel-session-artifacts--prompt-cache-unresolved cache)))
+    (if (and old-p (null d))
+        (cons old unresolved)
+      (let* ((limit (if old-p (min d (or unresolved d)) -1))
+             (reused (cl-loop for span in old
+                              while (<= (nth 1 span) limit)
+                              collect span))
+             ;; Rescan only from just before the first change, far enough
+             ;; back to catch an opener it completes, and no later than
+             ;; the first span the change crosses or the last one reused.
+             ;; Everything between holds no opener outside a reused span:
+             ;; unresolved ones bound LIMIT above.
+             (from (max (point-min)
+                        (min (max (if reused
+                                      (+ origin (nth 1 (car (last reused))))
+                                    (point-min))
+                                  (- (+ origin limit)
+                                     (1- (length mevedel--hook-audit-open))))
+                             (if-let* ((next (nth (length reused) old)))
+                                 (+ origin (nth 0 next))
+                               (point-max)))))
+             (fresh (mevedel-transcript-audit-buffer-spans nil from (point-max)))
+             (rest fresh)
+             first-open)
+        (save-excursion
+          (goto-char from)
+          (while (and (not first-open)
+                      (search-forward mevedel--hook-audit-open nil t))
+            (let ((open (match-beginning 0)))
+              (while (and rest (<= (plist-get (car rest) :end) open))
+                (pop rest))
+              (unless (and rest (<= (plist-get (car rest) :start) open))
+                (setq first-open (- open origin))))))
+        (cons (append reused
+                      (mapcar (lambda (span)
+                                (list (- (plist-get span :start) origin)
+                                      (- (plist-get span :end) origin)
+                                      (plist-get span :record)))
+                              fresh))
+              first-open)))))
+
+(defun mevedel-session-artifacts--depth-lookahead-closed-p (from to)
+  "Return non-nil when no block marker in FROM..TO reads text at or past TO.
+The org block depths counted up to TO are then fixed by the text before TO.
+Two kinds of marker decide from text after themselves: `#+begin_tool' (the
+serialized plist after it, past any whitespace, makes it structural) and a
+render-data marker (a complete block is skipped as a whole, an incomplete one
+is not).  Both are judged with the depth counter's own grammar: leading
+whitespace allowed, any trailing text after the render-data marker."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char from)
+      (let ((closed t)
+            (regexp (concat "^[ \t]*#\\+begin_tool\\b"
+                            "\\|^<!-- mevedel-render-data -->")))
+        (while (and closed (< (point) to) (re-search-forward regexp to t))
+          (let ((marker (match-beginning 0)))
+            (if (eq (char-after marker) ?<)
+                (let ((block (mevedel-transcript--render-data-block-at
+                              marker nil)))
+                  (if (and block (<= (cadr block) to))
+                      (goto-char (max (point) (cadr block)))
+                    (setq closed nil)))
+              (when (>= (save-excursion
+                          (goto-char marker)
+                          (forward-line 1)
+                          (skip-chars-forward " \t\n")
+                          (forward-char (min 1 (- (point-max) (point))))
+                          ;; The discriminator's `\s-*' takes any whitespace
+                          ;; syntax, newlines included.
+                          (skip-syntax-forward "-")
+                          (+ (point) 6))
+                        to)
+                (setq closed nil)))))
+        closed))))
+
+(defun mevedel-session-artifacts--prompt-units (cache origin d full)
+  "Return user-segment units of the current buffer, deriving only the suffix.
+Each unit is [START END STATE-POS TOOL SUMMARY PROMPT PREVIEW] with positions
+relative to ORIGIN: the segment, the prompt scan state after it, and the
+prompt start and preview, nil when it holds no prompt.  D and FULL are as for
+`mevedel-session-artifacts--audit-spans-cached'.  A unit is reused when its
+segment ends at or before the parser cache's restart point for the change:
+segments before it are then as parsed before, and the scan state carried out
+of it depends only on earlier text.  Return `mismatch' when a reused unit
+does not line up with the fresh segments, so the caller derives everything."
+  (let* ((segments (mevedel-session-artifacts--prompt-cache-segments cache))
+         (old-p (and (not full)
+                     (mevedel-session-artifacts--prompt-cache-origin cache)))
+         (user (cl-loop for seg in (mevedel-transcript-cached-segments
+                                    segments origin)
+                        when (and (eq (car seg) 'user) (> (nth 2 seg) origin))
+                        collect seg))
+         ;; The parser re-parsed from its restart point in current
+         ;; coordinates, after rebasing over any leading metadata change.
+         (previous (and old-p (mevedel-session-artifacts--prompt-cache-frontier
+                               cache)))
+         (restart-limit (and d (min d (- (or (mevedel-transcript-cache-restart
+                                              segments)
+                                             (point-min))
+                                         origin))))
+         ;; Saved scan states count block depth through markers that read
+         ;; ahead.  Only text proven closed (the frontier) may anchor them
+         ;; after a change; with no proof every unit is derived again.
+         (limit (cond ((not old-p) -1)
+                      ((null d) most-positive-fixnum)
+                      ((null previous) -1)
+                      (t (min restart-limit (car previous)))))
+         (frontier (and previous restart-limit
+                        (<= (car previous) restart-limit)
+                        previous))
+         (remaining (and old-p
+                         (cl-loop for unit in (mevedel-session-artifacts--prompt-cache-units cache)
+                                  while (<= (aref unit 1) limit)
+                                  collect unit)))
+         units state result)
+    (setq result
+     (catch 'mismatch
+      (dolist (seg user)
+        (let ((unit (car remaining))
+              (start (- (nth 1 seg) origin))
+              (end (- (nth 2 seg) origin)))
+          (cond
+           ((and unit (= (aref unit 0) start) (= (aref unit 1) end))
+            (setq remaining (cdr remaining)
+                  state (list (+ origin (aref unit 2)) (aref unit 3) (aref unit 4)))
+            (push unit units))
+           (remaining (throw 'mismatch 'mismatch))
+           (t
+            (let* ((pos (max (nth 1 seg) origin))
+                   (prompt-start nil)
+                   (preview nil))
+              ;; Resume at the depth frontier when it is nearer than the
+              ;; last prompt's state: the body between is unchanged.
+              (when (and frontier
+                         (<= (+ origin (car frontier)) pos)
+                         (or (null state)
+                             (> (+ origin (car frontier)) (nth 0 state))))
+                (setq state (list (+ origin (car frontier))
+                                  (nth 1 frontier) (nth 2 frontier))))
+              (setq state (or state (mevedel-transcript-prompt-scan-state))
+                    prompt-start (mevedel-transcript--user-prompt-start
+                                  pos (nth 2 seg) nil state))
+              (when prompt-start
+                (setq preview
+                      (save-excursion
+                        (goto-char prompt-start)
+                        (when (re-search-forward "[^[:space:]]" (nth 2 seg) t)
+                          (buffer-substring-no-properties
+                           (match-beginning 0)
+                           (min (nth 2 seg) (line-end-position)))))))
+              (push (vector start end
+                            (- (nth 0 state) origin) (nth 1 state) (nth 2 state)
+                            (and preview (- prompt-start origin))
+                            (and preview
+                                 (mevedel--truncate-display preview 80 "...")))
+                    units))))))
+      (if remaining 'mismatch (nreverse units))))
+    (if (eq result 'mismatch)
+        'mismatch
+      (cons result
+            (let* ((target (save-excursion
+                             (goto-char (point-max))
+                             (line-beginning-position)))
+                   (candidates
+                    (delq nil
+                          (list state
+                                (and frontier
+                                     (list (+ origin (car frontier))
+                                           (nth 1 frontier)
+                                           (nth 2 frontier))))))
+                   (base (car (sort (copy-sequence
+                                     (or (cl-remove-if
+                                          (lambda (candidate)
+                                            (> (nth 0 candidate) target))
+                                          candidates)
+                                         candidates
+                                         (list (mevedel-transcript-prompt-scan-state))))
+                                    (lambda (a b) (> (nth 0 a) (nth 0 b))))))
+                   (position (max target (nth 0 base)))
+                   (depths (if (> position (nth 0 base))
+                               (mevedel-transcript--org-block-depths-before
+                                position (nth 0 base) (nth 1 base) (nth 2 base))
+                             (cons (nth 1 base) (nth 2 base)))))
+              ;; Trust the depths only when no marker counted on the way
+              ;; reads text that can still change: fail closed otherwise.
+              (and (mevedel-session-artifacts--depth-lookahead-closed-p
+                    (min position
+                         (if frontier (+ origin (car frontier)) (point-min)))
+                    position)
+                   (list (- position origin) (car depths) (cdr depths))))))))
+
+(defun mevedel-session-artifacts--prompts-from-units (units origin directives)
+  "Return the prompt index plists for UNITS at ORIGIN, as a whole scan builds.
+DIRECTIVES are the buffer's directive ranges, ascending and disjoint."
+  (let ((turn 0) results)
+    (dolist (unit units)
+      (when-let* ((relative (aref unit 5)))
+        (let ((prompt-start (+ origin relative)))
+          (while (and directives
+                      (<= (plist-get (car directives) :body-end) prompt-start))
+            (pop directives))
+          (cl-incf turn)
+          (push (mevedel-session-artifacts--prompt-record
+                 turn prompt-start (aref unit 6)
+                 (and directives
+                      (>= prompt-start (plist-get (car directives) :body-start))
+                      (car directives)))
+                results))))
+    (nreverse results)))
+
+(defun mevedel-session-artifacts--prompt-derive (buffer)
+  "Return (PROMPTS . FORK-POINTS) of BUFFER, as the uncached scans find them.
+An accessible-whole buffer derives only what changed since the last call, by
+the proof its change source holds; any doubt derives everything.  A narrowed
+buffer is scanned in full, since its fork points are restriction-relative."
+  (with-current-buffer buffer
+    (if (not (mevedel-session-artifacts--prompt-cache-eligible-p))
+        (cons (mevedel-session-artifacts-collect-prompts buffer)
+              (mevedel-session-artifacts-fork-point-spans buffer))
+      (let* ((origin (mevedel-session-artifacts-content-start buffer))
+             (cache (mevedel-session-artifacts--prompt-cache-ensure origin))
+             (source (mevedel-session-artifacts--prompt-cache-source cache))
+             (marker (mevedel-transcript-source-origin source))
+             (derived (mevedel-session-artifacts--prompt-cache-origin cache))
+             (d (if derived (mevedel-transcript-source-change source) 0))
+             (full (or (null derived) (eql d 0)
+                       (not (eql (marker-position marker) origin)))))
+        (when full
+          (set-marker marker origin)
+          (setq d 0))
+        (let* ((audit (mevedel-session-artifacts--audit-spans-cached
+                       cache origin d full))
+               (directives
+                (mevedel-transcript-directive-ranges-from-spans
+                 (cl-loop for span in (car audit)
+                          when (eq (plist-get (nth 2 span) :type)
+                                   'directive-turn-boundary)
+                          collect (list :record (nth 2 span)
+                                        :start (+ origin (nth 0 span))
+                                        :end (+ origin (nth 1 span))))
+                 (current-buffer)))
+               ;; The parser's neighbor repair reads the same fork-point
+               ;; spans: hand it the cached ones instead of a whole scan.
+               (prepared
+                (cons t (cl-loop for span in (car audit)
+                                 when (eq (plist-get (nth 2 span) :type)
+                                          'fork-point)
+                                 collect (list :record (nth 2 span)
+                                               :start (+ origin (nth 0 span))
+                                               :end (+ origin (nth 1 span))))))
+               (derived-units
+                (let ((mevedel-transcript--prepared-audit-spans prepared))
+                  (mevedel-session-artifacts--prompt-units
+                   cache origin d full)))
+               (derived-units
+                (if (eq derived-units 'mismatch)
+                    (let ((mevedel-transcript--prepared-audit-spans prepared))
+                      (mevedel-session-artifacts--prompt-units
+                       cache origin 0 t))
+                  derived-units))
+               (units (car derived-units)))
+          (setf (mevedel-session-artifacts--prompt-cache-origin cache) origin
+                (mevedel-session-artifacts--prompt-cache-units cache) units
+                (mevedel-session-artifacts--prompt-cache-spans cache) (car audit)
+                (mevedel-session-artifacts--prompt-cache-unresolved cache) (cdr audit)
+                (mevedel-session-artifacts--prompt-cache-frontier cache)
+                (cdr derived-units))
+          (mevedel-transcript-source-accept source)
+          (cons (mevedel-session-artifacts--prompts-from-units
+                 units origin directives)
+                (cl-loop for span in (car audit)
+                         when (eq (plist-get (nth 2 span) :type) 'fork-point)
+                         collect (append
+                                  (copy-sequence (nth 2 span))
+                                  (list :record-start (+ origin (nth 0 span))
+                                        :transcript-cutoff
+                                        (+ origin (nth 1 span)))))))))))
 
 (defun mevedel-session-artifacts--prompt-count-in-text (text)
   "Return the number of user prompt markers detected in TEXT."
@@ -1074,13 +1430,22 @@ SOURCE-START and SOURCE-END must bound one rendered assistant turn."
 
 (defun mevedel-session-artifacts--prompt-fork-point
     (prompt next-position fork-points)
-  "Return PROMPT's fork point before NEXT-POSITION from FORK-POINTS."
-  (cl-find-if
-   (lambda (fork-point)
-     (let ((start (plist-get fork-point :record-start)))
-       (and (> start (plist-get prompt :pos))
-            (or (null next-position) (< start next-position)))))
-   fork-points))
+  "Return PROMPT's fork point before NEXT-POSITION from vector FORK-POINTS.
+FORK-POINTS ascend by `:record-start', so the first one after the prompt is
+the only candidate: later ones start later still."
+  (let ((low 0)
+        (high (length fork-points))
+        (position (plist-get prompt :pos)))
+    (while (< low high)
+      (let ((middle (/ (+ low high) 2)))
+        (if (> (plist-get (aref fork-points middle) :record-start) position)
+            (setq high middle)
+          (setq low (1+ middle)))))
+    (when (< low (length fork-points))
+      (let ((fork-point (aref fork-points low)))
+        (and (or (null next-position)
+                 (< (plist-get fork-point :record-start) next-position))
+             fork-point)))))
 
 (defun mevedel-session-artifacts--continued-prompt (session)
   "Return SESSION's latest prompt entry when its turn continues in this segment.
@@ -1158,13 +1523,14 @@ that prompt's model turn."
           (cl-loop for (seg . prompts) in index
                    when (< seg current-seg)
                    sum (length prompts)))
-         (raw-all     (mevedel-session-artifacts-collect-prompts buffer))
+         (derived     (mevedel-session-artifacts--prompt-derive buffer))
+         (raw-all     (car derived))
          (tail-count  (with-current-buffer buffer
                         (mevedel-session-artifacts--segment-tail-prompt-count)))
          (skip-count  (min tail-count (length raw-all)))
          (raw         (nthcdr skip-count raw-all))
-         (fork-points
-          (mevedel-session-artifacts-fork-point-spans buffer))
+         (fork-points (cdr derived))
+         (fork-vector (vconcat fork-points))
          (with-cum    (cl-loop for remaining on raw
                                for p = (car remaining)
                                for next-position =
@@ -1187,7 +1553,7 @@ that prompt's model turn."
                                     (plist-get copy :cum-turn)))
                                  (when-let* ((fork-point
                                               (mevedel-session-artifacts--prompt-fork-point
-                                               p next-position fork-points)))
+                                               p next-position fork-vector)))
                                    (dolist (key '(:fork-point-id
                                                   :transcript-cutoff))
                                      (plist-put copy key
@@ -1641,8 +2007,11 @@ END is the position just after the `:END:' line."
             (insert ":PROPERTIES:\n:END:\n"))
           (mevedel-session-artifacts--property-drawer-region)))))
 
-(defun mevedel-session-artifacts-property-delete-direct (property)
-  "Delete PROPERTY from the initial Org property drawer without Org parsing."
+(defun mevedel-session-artifacts-property-delete-direct (property &optional keep-drawer)
+  "Delete PROPERTY from the initial Org property drawer without Org parsing.
+Removing the last property also removes the then empty drawer, unless
+KEEP-DRAWER is non-nil: a replacement keeps it, so the transcript's body
+start, which follows the drawer, is not collapsed and rewritten."
   (when-let* ((region (mevedel-session-artifacts--property-drawer-region)))
     (save-excursion
       (save-restriction
@@ -1677,6 +2046,7 @@ END is the position just after the `:END:' line."
                        (forward-line 1))
                      (point))))
                 (when (and removed
+                           (not keep-drawer)
                            (= (save-excursion
                                 (goto-char (car region))
                                 (forward-line 1)
@@ -1690,7 +2060,7 @@ END is the position just after the `:END:' line."
 
 (defun mevedel-session-artifacts--property-put-direct (property value)
   "Set PROPERTY to VALUE in the initial Org property drawer without Org parsing."
-  (mevedel-session-artifacts-property-delete-direct property)
+  (mevedel-session-artifacts-property-delete-direct property t)
   (when-let* ((region (mevedel-session-artifacts--ensure-property-drawer)))
     (save-excursion
       (save-restriction
@@ -1759,33 +2129,41 @@ drawer size.  Recompute after each write and stop once the serialized
 bounds no longer change."
   (when (and (derived-mode-p 'org-mode)
              (fboundp 'gptel--get-buffer-bounds))
-    (save-excursion
-      (save-restriction
-        (widen)
-        (let ((print-length nil)
-              (print-level nil)
-              (last nil)
-              (done nil)
-              (attempts 0))
-          ;; Drawer edits shift existing properties along with the text.
-          ;; Structural classification is needed once, not once per offset.
-          (mevedel-transcript-normalize-properties)
-          (while (and (not done) (< attempts 8))
-            (setq attempts (1+ attempts))
-            (let ((serialized
-                   (when-let* ((bounds (gptel--get-buffer-bounds)))
-                     (prin1-to-string bounds))))
-              (cond
-               ((null serialized)
-                (mevedel-session-artifacts-property-delete-direct
-                 "GPTEL_BOUNDS")
-                (setq done t))
-               ((equal serialized last)
-                (setq done t))
-               (t
-                (setq last serialized)
-                (mevedel-session-artifacts--property-put-direct
-                 "GPTEL_BOUNDS" serialized))))))))))
+    ;; The bounds come from the retained run list: each round below only moves
+    ;; the drawer, which shifts the body's positions without changing a run.
+    (mevedel-session-bounds-call-with-cache
+     (lambda ()
+       (save-excursion
+         (save-restriction
+           (widen)
+           (let ((print-length nil)
+                 (print-level nil)
+                 (last nil)
+                 (done nil)
+                 (attempts 0))
+             ;; Drawer edits shift existing properties along with the text.
+             ;; Structural classification is needed once, not once per offset.
+             (mevedel-transcript-normalize-properties)
+             (while (and (not done) (< attempts 8))
+               (setq attempts (1+ attempts))
+               (let ((serialized
+                      (when-let* ((bounds (gptel--get-buffer-bounds)))
+                        (prin1-to-string bounds))))
+                 (cond
+                  ((null serialized)
+                   (mevedel-transcript-source-call-with-metadata-change
+                    (lambda ()
+                      (mevedel-session-artifacts-property-delete-direct
+                       "GPTEL_BOUNDS")))
+                   (setq done t))
+                  ((equal serialized last)
+                   (setq done t))
+                  (t
+                   (setq last serialized)
+                   (mevedel-transcript-source-call-with-metadata-change
+                    (lambda ()
+                      (mevedel-session-artifacts--property-put-direct
+                       "GPTEL_BOUNDS" serialized))))))))))))))
 
 (defun mevedel-session-artifacts--save-gptel-state-around (orig-fun &rest args)
   "Call ORIG-FUN with ARGS, persisting bounds but no request config.
@@ -1811,10 +2189,16 @@ cannot leave stale request configuration behind."
             (mevedel-session-artifacts--with-fast-property-writes
              (lambda ()
                (let ((gptel-system-prompt nil))
-                 (apply orig-fun args))))
+                 ;; gptel writes the leading drawer only, which the change
+                 ;; proof exempts, and asks for the bounds more than once.
+                 (mevedel-session-bounds-call-with-cache
+                  (lambda ()
+                    (mevedel-transcript-source-call-with-metadata-change
+                     (lambda () (apply orig-fun args))))))))
           (apply orig-fun args))
       (when mevedel-org-buffer-p
-        (mevedel-session-artifacts-strip-gptel-config-properties)
+        (mevedel-transcript-source-call-with-metadata-change
+         #'mevedel-session-artifacts-strip-gptel-config-properties)
         (mevedel-session-artifacts-stabilize-gptel-bounds)
         (let ((delta (- (buffer-size) size-before)))
           (when (/= delta 0)
@@ -2271,12 +2655,82 @@ Only apply those tombstones after the replacement sidecar is durable."
               artifacts)))
     (nreverse artifacts)))
 
+(defvar-local mevedel-session-artifacts--committed-transcript-proof nil
+  "Exact character/coding identity last acknowledged in this data buffer.
+This small proof owns no transcript text and is never durable authority.")
+
+(defun mevedel-session-artifacts--transcript-proof (session)
+  "Return the current buffer's exact saved-byte identity for SESSION.
+Check only after save hooks have serialized property-derived metadata into
+characters.  The buffer, owner, encoding, restriction and manifest digest all
+belong to the proof; a cloned buffer or replaced owner cannot inherit it."
+  (when (and buffer-file-name (mevedel-session-save-path session))
+    (list (current-buffer) (mevedel-session-checkpoint-state session)
+          (expand-file-name buffer-file-name) (buffer-chars-modified-tick)
+          (or buffer-file-coding-system 'utf-8-unix) enable-multibyte-characters
+          (point-min) (point-max)
+          (plist-get
+           (cdr (assoc (file-relative-name buffer-file-name
+                                          (mevedel-session-save-path session))
+                       (plist-get (mevedel-session-publication session) :artifacts)))
+           :sha256))))
+
+(defun mevedel-session-artifacts--select-staged-save (session batch frozen)
+  "Select SESSION's digested BATCH using only FROZEN save state.
+FROZEN contains manifest entries, comparability proof, forced-save flag and
+timestamp captured with the transcript.  Return nil for
+an exact no-op, or BATCH with only changed payloads and a stamped marker.
+Only SESSION's diagnostic updated-at slot is changed; no live root field is
+read.  The caller owns every staged source until acknowledgement."
+  (let* ((entries (plist-get frozen :entries))
+         (comparable (plist-get frozen :comparable))
+         (marker (seq-find (lambda (artifact) (plist-get artifact :commit-marker))
+                           (plist-get batch :artifacts)))
+         (changed
+          (seq-filter
+           (lambda (artifact)
+             (and (not (plist-get artifact :commit-marker))
+                  (or (not comparable)
+                      (plist-get artifact :replace)
+                      (let ((entry (cdr (assoc (plist-get artifact :logical) entries))))
+                        (if (plist-get artifact :delete)
+                            entry
+                          (not (and entry
+                                    (equal (plist-get artifact :source-sha256)
+                                           (plist-get entry :sha256)))))))))
+           (plist-get batch :artifacts))))
+    (unless marker (error "Staged save requires a sidecar marker"))
+    (unless (and comparable (not (plist-get frozen :force)) (null changed)
+                 (equal (plist-get marker :source-sha256)
+                        (plist-get (cdr (assoc "session.meta.el" entries)) :sha256)))
+      ;; The staged marker already holds the frozen sidecar as the checkpoint
+      ;; owner projected it at stage time, merged recovery rows included.  It
+      ;; is a detached local file: reading it never touches live fields.
+      (let* ((sidecar (copy-sequence
+                       (mevedel-session-publication--read-staged-sidecar
+                        (plist-get marker :source))))
+             (stamp (plist-get frozen :stamp))
+             (content
+              (encode-coding-string
+               (mevedel-session-artifacts-printed-value
+                (plist-put sidecar :updated-at stamp))
+               'utf-8-unix t)))
+        (setf (mevedel-session-updated-at session) stamp)
+        (mevedel-session-publication--write-staged-content
+         (plist-get marker :source) content 'no-conversion)
+        (setf (plist-get marker :source-sha256) (secure-hash 'sha256 content)
+              (plist-get batch :artifacts) (append changed (list marker)))
+        batch))))
+
 (defun mevedel-session-artifacts-prepare-save
-    (session buffer &optional settled force)
+    (session buffer &optional settled force defer-comparison)
   "Freeze portable SESSION's save from BUFFER while holding its mutation gate.
 When SETTLED is non-nil, update the prompt index and latest fork point.
 When FORCE is non-nil, publish even when the state is already committed.
 The caller owns checkpoint preparation exclusion and mutation admission.
+With DEFER-COMPARISON capture native characters and return a :select-staged
+continuation, called with a digested local batch before publication reservation.
+Its comparison and stamping use only the captured snapshot, never live fields.
 Return (:artifacts ARTIFACTS :finish FUNCTION).  Call FUNCTION without arguments
 only after authoritative adoption, or immediately when ARTIFACTS is nil.
 Edits made after capture remain modified.  Nothing is published here."
@@ -2285,7 +2739,8 @@ Edits made after capture remain modified.  Nothing is published here."
     (mevedel-session-artifacts-update-prompt-index session buffer)
     (mevedel-session-artifacts--ensure-latest-fork-point session buffer))
   (let ((segment-artifact nil)
-        frozen-tick
+        saved-transcript-p frozen-proof unchanged
+        frozen-tick frozen-modification-tick
         checkpoint
         instructions
         (mevedel-session-artifacts--critical-artifacts nil)
@@ -2304,22 +2759,60 @@ Edits made after capture remain modified.  Nothing is published here."
       (when (buffer-modified-p)
         (run-hooks 'before-save-hook)
         (mevedel-session-artifacts-update-prompt-index session buffer)
-        (setq frozen-tick (buffer-chars-modified-tick))
-        (setq segment-artifact
-              (list
-               :path buffer-file-name
-               ;; Freeze the bytes once for comparison, staging and writing.
-               :content (encode-coding-string
-                         (buffer-substring-no-properties (point-min) (point-max))
-                         (or buffer-file-coding-system 'utf-8-unix) t)
-               :coding 'no-conversion))))
+        (setq frozen-tick (buffer-chars-modified-tick)
+              frozen-modification-tick (buffer-modified-tick)
+              frozen-proof (mevedel-session-artifacts--transcript-proof session)
+              saved-transcript-p t)
+        ;; A parser frontier can advance before a failed save.  Only an ACKed
+        ;; character/coding identity whose manifest entry still agrees proves
+        ;; that no transcript capture, staging or hashing is necessary.
+        (unless (and (mevedel-session-publication--comparable-p session)
+                     (stringp (nth 8 frozen-proof))
+                     (eq (car frozen-proof)
+                         (car mevedel-session-artifacts--committed-transcript-proof))
+                     (eq (cadr frozen-proof)
+                         (cadr mevedel-session-artifacts--committed-transcript-proof))
+                     (equal (cddr frozen-proof)
+                            (cddr mevedel-session-artifacts--committed-transcript-proof)))
+          (let* ((content (buffer-substring-no-properties (point-min) (point-max)))
+                 (coding (or buffer-file-coding-system 'utf-8-unix))
+                 ;; Publication strings that are unibyte already mean literal
+                 ;; bytes.  Preserve the root writer's explicit encoding even
+                 ;; for an unusual unibyte conversation buffer.
+                 (native (and defer-comparison (multibyte-string-p content))))
+            (setq segment-artifact
+                  (list :path buffer-file-name
+                        :content (if native content
+                                   (encode-coding-string content coding t))
+                        :coding (if native coding 'no-conversion)))))))
     (setq checkpoint
           (mevedel-session-checkpoint-capture
            session "/root" (mevedel-session-artifacts--live-sidecar session buffer)))
+    ;; The first capture creates the owner epoch.  No I/O or character write
+    ;; separates it from the transcript freeze above.
+    (when frozen-proof
+      (setcar (cdr frozen-proof) (mevedel-session-checkpoint-state session)))
     ;; `updated-at' is stamped only once this save is known to carry a
     ;; change, because stamping it first would make the sidecar differ from
     ;; the committed one on every call and defeat the comparison below.
-    (let* ((leading
+    (let* ((sidecar
+            (mevedel-session-checkpoint-project
+             session
+             (mevedel-session-checkpoint--copy
+              (mevedel-session-artifacts--live-sidecar session buffer))
+             checkpoint))
+           (marker (list :path (mevedel-session-artifacts-sidecar-path
+                                (mevedel-session-save-path session))
+                         :content (mevedel-session-artifacts-printed-value sidecar)
+                         :checkpoint checkpoint :commit-marker t))
+           (stamp (format-time-string "%FT%H-%M-%S"))
+           (frozen (and defer-comparison
+                        (list :stamp stamp :force force
+                              :comparable (mevedel-session-publication--comparable-p session)
+                              :entries (mevedel-session-checkpoint--copy
+                                        (plist-get (mevedel-session-publication session)
+                                                   :artifacts)))))
+           (leading
             (append
              (and segment-artifact (list segment-artifact))
              (nreverse mevedel-session-artifacts--critical-artifacts)
@@ -2328,32 +2821,44 @@ Edits made after capture remain modified.  Nothing is published here."
            ;; Compare payloads once.  The same selection decides whether a
            ;; save is needed and supplies its publication; hashing a changed
            ;; transcript again here only duplicates encoding and allocation.
-           (changed (mevedel-session-publication-prune-committed session leading))
-           (unchanged
-            (and (not force) (null changed)
-                 (mevedel-session-publication-committed-p
-                  session (list (mevedel-session-artifacts--sidecar-artifact
-                                 session buffer checkpoint))))))
-      (unless unchanged
-        (setf (mevedel-session-updated-at session)
-              (format-time-string "%FT%H-%M-%S")))
+           (changed (if defer-comparison leading
+                      (mevedel-session-publication-prune-committed session leading))))
+      (unless defer-comparison
+        (setq unchanged
+              (and (not force) (null changed)
+                   (mevedel-session-publication-committed-p session (list marker))))
+        (unless unchanged
+          (setf (mevedel-session-updated-at session) stamp
+                (plist-get marker :content)
+                (mevedel-session-artifacts-printed-value
+                 (plist-put sidecar :updated-at stamp)))))
       (list
        :artifacts
        (unless unchanged
-         (append changed
-                 (list (mevedel-session-artifacts--sidecar-artifact
-                        session buffer checkpoint))))
+         (append changed (list marker)))
+       :select-staged
+       (and defer-comparison
+            (lambda (batch)
+              (let ((selected (mevedel-session-artifacts--select-staged-save
+                               session batch frozen)))
+                (setq unchanged (null selected))
+                selected)))
        :finish
        (lambda ()
          ;; Unchanged bytes already belong to the authoritative snapshot.
          ;; Otherwise this cleanup is permitted only after head adoption.
-         (when (and segment-artifact (buffer-live-p buffer))
+         (when (and saved-transcript-p (buffer-live-p buffer))
            (with-current-buffer buffer
              (condition-case err
                  (progn
                    (set-visited-file-modtime 0)
-                   (when (= frozen-tick (buffer-chars-modified-tick))
-                     (set-buffer-modified-p nil))
+                   (let ((current (mevedel-session-artifacts--transcript-proof session)))
+                     (when (and (= frozen-tick (buffer-chars-modified-tick))
+                                (= frozen-modification-tick (buffer-modified-tick))
+                                (eq (cadr current) (cadr frozen-proof))
+                                (equal (butlast current) (butlast frozen-proof)))
+                       (setq mevedel-session-artifacts--committed-transcript-proof current)
+                       (set-buffer-modified-p nil)))
                    (unless unchanged
                      (mevedel-session-artifacts--run-save-hooks-silently
                       'after-save-hook)))

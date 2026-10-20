@@ -243,7 +243,7 @@
                   "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-submit
                   "mevedel-session-publication"
-                  (session prepare acknowledge &optional mail-ids retain-failure))
+                  (session prepare acknowledge &optional mail-ids retain-failure select-staged))
 (declare-function mevedel-session-publication-diagnostic-backlog-p
                   "mevedel-session-publication" (session))
 (autoload 'mevedel-session-publication-async-eligible-p "mevedel-session-publication")
@@ -1452,10 +1452,18 @@ Explicit saves and teardown keep using the synchronous writer and its barrier."
                                   (if mevedel--agent-invocation
                                       (mevedel-agent-conversation-prepare-save
                                        mevedel--agent-invocation)
-                                    (mevedel-session-artifacts-prepare-save session buffer)))))
+                                    (mevedel-session-artifacts-prepare-save
+                                     session buffer nil nil t)))))
                          (setq fallback (null prepared))
-                         (plist-get prepared :artifacts)))))
-                 acknowledge nil t)
+                         (prog1 (plist-get prepared :artifacts)
+                           ;; The job owns captured payload strings until staging.
+                           ;; ACK retains only the finish/selection continuations.
+                           (setf (plist-get prepared :artifacts) nil))))))
+                 acknowledge nil t
+                 (lambda (batch)
+                   (if-let* ((select (plist-get prepared :select-staged)))
+                       (funcall select batch)
+                     batch)))
               ((error quit)
                (funcall acknowledge nil err)
                nil))))))))

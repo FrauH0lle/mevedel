@@ -309,7 +309,40 @@
         (mevedel-test--with-captured-diagnostics nil
           (mevedel-transcript-restore-gptel-state)))
       (should (bound-and-true-p gptel-mode))
-      (should-not restore-reached))))
+      (should-not restore-reached)))
+
+  :doc "keeps a transcript unfontified, without JIT or the gptel annotator"
+  (let ((font-hook-ran nil))
+    (with-temp-buffer
+      (mevedel--transcript-org-mode)
+      (insert "Body\n")
+      (let ((font-lock-mode-hook (list (lambda () (setq font-hook-ran t)))))
+        (mevedel-transcript-enable-gptel-mode)
+        (should (bound-and-true-p gptel-mode))
+        (should-not font-lock-mode)
+        (should-not (bound-and-true-p jit-lock-mode))
+        (should-not (memq 'gptel-org--annotate-links jit-lock-functions))
+        (should-not font-hook-ran)
+        ;; Idempotent: a second call does not re-enable anything.
+        (mevedel-transcript-enable-gptel-mode)
+        (should-not font-lock-mode)
+        (should-not (bound-and-true-p jit-lock-mode))
+        ;; A change's tick delta is unspecified; prove the suffix, not +1.
+        (let ((tick (buffer-modified-tick))
+              (proof (mevedel-transcript-source-create (point-min)))
+              (start (point-max)))
+          (mevedel-transcript-source-accept proof)
+          (goto-char start)
+          (insert "more")
+          (should (> (buffer-modified-tick) tick))
+          (should (= (1- start) (mevedel-transcript-source-change proof)))
+          (should (= (buffer-modified-tick) (mevedel-transcript-source-tick proof)))
+          (let ((after-insert (buffer-modified-tick)))
+            (redisplay)
+            (accept-process-output nil 0.01)
+            (should (= after-insert (buffer-modified-tick)))))
+        (should-not (text-property-any (point-min) (point-max)
+                                       'fontified t))))))
 
 (provide 'test-mevedel-transcript-restore)
 ;;; test-mevedel-transcript-restore.el ends here

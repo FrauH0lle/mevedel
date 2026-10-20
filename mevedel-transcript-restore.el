@@ -198,7 +198,16 @@ gptel's restore run on a file-visiting transcript would only duplicate
 bounds restoration and complain about the missing backend."
   (unless (bound-and-true-p gptel-mode)
     (cl-letf (((symbol-function 'gptel--restore-state) #'ignore))
-      (gptel-mode +1))))
+      (gptel-mode +1))
+    ;; gptel's Org branch registers a JIT annotator, which switches
+    ;; `jit-lock-mode' back on.  Its after-change hook silently writes
+    ;; `fontified' and would invalidate transcript change proofs.  Undo that
+    ;; registration and keep storage unfontified; the user's global font-lock
+    ;; hooks must not run for a transcript.
+    (jit-lock-unregister 'gptel-org--annotate-links)
+    (let ((font-lock-mode-hook nil))
+      (font-lock-mode -1)
+      (jit-lock-mode nil))))
 
 (defun mevedel-transcript-restore-gptel-state ()
   "Restore gptel state without dirtying the current transcript buffer."

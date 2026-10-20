@@ -68,29 +68,168 @@
 ;;
 ;;; Segment extraction
 
-(mevedel-deftest mevedel-transcript--first-source-change ()
-  (progn
-    (should (= 2 (mevedel-transcript--first-source-change "ab" "abc")))
-    (should (= 2 (mevedel-transcript--first-source-change "abc" "ab")))
-    (should (= 1 (mevedel-transcript--first-source-change "abc" "axc")))
-    (should (= 3 (mevedel-transcript--first-source-change "abc" "abc")))
-    (should (= 1 (mevedel-transcript--first-source-change
-                  "abc" (concat "a" (propertize "b" 'gptel 'response) "c"))))))
+(mevedel-deftest mevedel-transcript--cache-rebase ()
+  (let ((cache (mevedel-transcript-cache-create
+                :origin 10 :high 100 :restart 50 :blocked 70
+                :raw '((tool 20 30 "id")) :ranges '((tool 20 30 "id"))
+                :segments '((user 10 20) (tool 20 30 "id")))))
+    (mevedel-transcript--cache-rebase cache 5)
+    (should (= 15 (mevedel-transcript-cache-origin cache)))
+    (should (= 105 (mevedel-transcript-cache-high cache)))
+    (should (= 55 (mevedel-transcript-cache-restart cache)))
+    (should (= 75 (mevedel-transcript-cache-blocked cache)))
+    (should (equal '((tool 25 35 "id"))
+                   (mevedel-transcript-cache-raw cache)))
+    (should (equal '((tool 25 35 "id"))
+                   (mevedel-transcript-cache-ranges cache)))
+    (should (equal '((user 15 25) (tool 25 35 "id"))
+                   (mevedel-transcript-cache-segments cache)))))
+
+(mevedel-deftest mevedel-transcript--cached-parse ()
+  ,test
+  (test)
+  :doc "changing the consumer purpose derives the right result"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Prompt\n#+begin_reasoning\nThinking\n#+end_reasoning\n")
+    (let ((cache (mevedel-transcript-cache-create)))
+      (should (equal (mevedel-transcript-segments (point-min) (point-max))
+                     (mevedel-transcript--cached-parse cache nil nil)))
+      ;; Changing the consumer's purpose must not reuse conversation segments
+      ;; as normalization ranges.
+      (should (equal (mevedel-transcript--structural-ranges
+                      (point-min) (point-max)
+                      (mevedel-transcript--property-segments
+                       (point-min) (point-max)))
+                     (mevedel-transcript--cached-parse cache nil t)))))
+  :doc "an interrupted derivation retains one owned proof rather than leaking consumers"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Prompt\n")
+    (let ((cache (mevedel-transcript-cache-create)))
+      (dotimes (_ 3)
+        (cl-letf (((symbol-function 'mevedel-transcript--property-segments)
+                   (lambda (&rest _) (error "Interrupted derivation"))))
+          (should-error (mevedel-transcript--cached-parse cache nil nil)))
+        (should (= 1 (length mevedel-transcript-source--consumers)))))))
+
+(mevedel-deftest mevedel-transcript-cached-ranges ()
+  ,test
+  (test)
+  :doc "known metadata rebases origins and leaves an identical full derivation"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n"
+            "#+begin_summary\nInherited\n#+end_summary\n"
+            "Prompt\n#+begin_reasoning\nThinking\n#+end_reasoning\n")
+    (let ((cache (mevedel-transcript-cache-create)))
+      (dotimes (_ 4)
+        (let ((origin (mevedel-transcript--skip-leading-properties-drawer 1)))
+          (should (equal (mevedel-transcript--structural-ranges
+                          (point-min) (point-max)
+                          (mevedel-transcript--property-segments
+                           (point-min) (point-max)))
+                         (mevedel-transcript-cached-ranges cache origin))))
+        (mevedel-transcript-source-call-with-metadata-change
+         (lambda () (goto-char 14) (insert ":META: value\n")))
+        (goto-char (point-max))
+        (insert (propertize "Tail\n" 'gptel 'response))))))
 
 (mevedel-deftest mevedel-transcript--cache-restart ()
+  ,test
+  (test)
+  :doc "tool closes keep recovery lookahead and unresolved containers live"
   (with-temp-buffer
-    (insert (make-string 100 ?x))
+    (insert (make-string 100 ?x) "\n#+end_tool\n")
     (let ((cache (mevedel-transcript-cache-create
                   :ranges '((tool 10 20) (reasoning 30 40) (tool 60 70))
                   :raw '((reasoning 25 80)))))
       (should (= 25 (mevedel-transcript--cache-restart cache 90)))
       (setf (mevedel-transcript-cache-blocked cache) 24)
       (should (= 10 (mevedel-transcript--cache-restart cache 90)))
-      (should (= 1 (mevedel-transcript--cache-restart cache 20))))))
+      (should (= 1 (mevedel-transcript--cache-restart cache 20)))))
+  :doc "plain appends do not scan from an old tool or the beginning of history"
+  (with-temp-buffer
+    (insert (make-string 1000 ?x) "\nTail\n")
+    (let ((cache (mevedel-transcript-cache-create
+                  :ranges '((tool 10 20)))))
+      (should (= (point-max)
+                 (mevedel-transcript--cache-restart cache (point-max)))))))
 
 (mevedel-deftest mevedel-transcript-cached-segments ()
   ,test
   (test)
+  :doc "a long unbroken response line remains equivalent after an append"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Prompt\n#+begin_tool\n"
+            (propertize "(:name \"Read\" :args nil)\noutput\n" 'gptel '(tool . "one"))
+            "#+end_tool\n"
+            (propertize (make-string 100000 ?x) 'gptel 'response))
+    (let ((cache (mevedel-transcript-cache-create)))
+      (mevedel-transcript-cached-segments cache)
+      (insert (propertize "tail" 'gptel 'response))
+      (should (equal (mevedel-transcript-segments (point-min) (point-max))
+                     (mevedel-transcript-cached-segments cache)))))
+  :doc "an edit far along an opener line can validate a formerly rejected control"
+  (dolist (pair '(("<hook-context>" . "</hook-context>")
+                  ("<task-background>" . "</task-background>")
+                  ("<system-reminder>" . "</system-reminder>")
+                  (":PROMPT:" . ":END:")))
+    (with-temp-buffer
+      (org-mode)
+      (insert (car pair) (make-string 100 ?\s))
+      (let ((invalid (point))
+            (cache (mevedel-transcript-cache-create)))
+        (insert "x\npayload\n" (cdr pair) "\n")
+        (mevedel-transcript-cached-segments cache)
+        (delete-region invalid (1+ invalid))
+        (should (equal (mevedel-transcript-segments (point-min) (point-max))
+                       (mevedel-transcript-cached-segments cache))))))
+  :doc "seeded edit scripts preserve full parser semantics across recovery and tail reuse"
+  (dolist (seed '(17 42 2026))
+    (with-temp-buffer
+      (org-mode)
+      (insert "Prompt\n#+begin_tool\n"
+              (propertize "(:name \"Read\" :args nil)\noutput\n" 'gptel '(tool . "one"))
+              "#+end_tool\n"
+              (propertize "Answer\n" 'gptel 'response))
+      (let ((cache (mevedel-transcript-cache-create))
+            (state (cl-make-random-state seed)))
+        (dotimes (iteration 100)
+          (should (equal (mevedel-transcript-segments (point-min) (point-max))
+                         (mevedel-transcript-cached-segments cache)))
+          (pcase (% iteration 7)
+            (0 (goto-char (point-max))
+               (insert (propertize "Tail\n" 'gptel 'response)))
+            (1 (goto-char (point-max))
+               (insert "#+begin_reasoning\nThinking\n#+end_reasoning\n"))
+            (2 (goto-char (1+ (cl-random (buffer-size) state)))
+               (insert "edited"))
+            (3 (let ((start (1+ (cl-random (buffer-size) state))))
+                 (delete-region start (min (+ start 4) (point-max)))))
+            (4 (goto-char (point-max))
+               (insert (propertize "recovered\n" 'gptel '(tool . "one"))
+                       "#+end_tool\n"))
+            (5 (goto-char (point-max))
+               (insert "<agent-result sender=\"/root/a\">\nResult\n</agent-result>\n"))
+            (6 (with-silent-modifications
+                 (put-text-property 1 (min 15 (point-max)) 'gptel 'ignore))))))))
+  :doc "a dirty frontier outside a new restriction cannot retain inaccessible controls"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Prompt\n#+begin_reasoning\nOne\n#+end_reasoning\n"
+            "#+begin_reasoning\nTwo\n#+end_reasoning\n")
+    (let ((cache (mevedel-transcript-cache-create)))
+      (mevedel-transcript-cached-segments cache)
+      (goto-char (point-max))
+      (insert (propertize "More\n" 'gptel 'response))
+      (save-restriction
+        (narrow-to-region (point-min) 15)
+        (should (equal (mevedel-transcript-segments (point-min) (point-max))
+                       (mevedel-transcript-cached-segments cache))))
+      (should (equal (mevedel-transcript-segments (point-min) (point-max))
+                     (mevedel-transcript-cached-segments cache)))))
   :doc "incomplete controls before a closed tool remain resumable on a later close"
   (dolist (pair '(("#+begin_reasoning\n" . "#+end_reasoning\n")
                   ("<system-reminder>\n" . "</system-reminder>\n")
@@ -161,6 +300,20 @@
           (old-end (point-max)))
       (mevedel-transcript-cached-segments cache)
       (insert (propertize "recovered output\n" 'gptel '(tool . "one")) "#+end_tool\n")
+      (let* ((full (mevedel-transcript-segments (point-min) (point-max)))
+             (tool (assq 'tool full)))
+        (should (> (caddr tool) old-end))
+        (should (equal full (mevedel-transcript-cached-segments cache))))))
+  :doc "tool recovery accepts a close prefix with trailing non-word-boundary text"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Prompt\n#+begin_tool\n"
+            (propertize "(:name \"Read\" :args nil)\nresult\n" 'gptel '(tool . "one"))
+            "#+end_tool\n" (make-string 500 ?x) "\n")
+    (let ((cache (mevedel-transcript-cache-create))
+          (old-end (point-max)))
+      (mevedel-transcript-cached-segments cache)
+      (insert "#+end_toolXYZ\n")
       (let* ((full (mevedel-transcript-segments (point-min) (point-max)))
              (tool (assq 'tool full)))
         (should (> (caddr tool) old-end))
@@ -1422,6 +1575,48 @@ TOOL-PROP."
 (mevedel-deftest mevedel-transcript-normalize-properties ()
   ,test
   (test)
+  :doc "incremental normalization equals full normalization through adversarial edits"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n#+begin_summary\nInherited\n#+end_summary\n"
+            "Prompt\n#+begin_tool\n"
+            (propertize "(:name \"Read\" :args nil)\noutput\n" 'gptel '(tool . "one"))
+            "#+end_tool\n#+begin_reasoning\nThinking\n#+end_reasoning\n"
+            (propertize "Answer\n" 'gptel 'response))
+    (mevedel-transcript-normalize-properties)
+    (let ((state (cl-make-random-state 57231)))
+      (dotimes (iteration 80)
+        (pcase (% iteration 8)
+          (0 (goto-char (point-max))
+             (insert (propertize "More answer\n" 'gptel 'response)))
+          (1 (goto-char (point-max))
+             (insert "<system-reminder>\nReminder\n</system-reminder>\n"))
+          (2 (goto-char (+ 20 (cl-random (- (point-max) 21) state)))
+             (insert "middle"))
+          (3 (let ((start (+ 20 (cl-random (- (point-max) 22) state))))
+               (delete-region start (min (+ start 3) (point-max)))))
+          (4 (goto-char (point-max))
+             (insert "<agent-result sender=\"/root/a\">\nResult\n</agent-result>\n"))
+          (5 (with-silent-modifications
+               (put-text-property 20 (min 40 (point-max)) 'gptel 'response)))
+          (6 (mevedel-transcript-source-call-with-metadata-change
+              (lambda () (goto-char 14) (insert ":META: value\n"))))
+          (7 (delete-region (max 20 (- (point-max) 25)) (point-max))))
+        (let ((input (buffer-substring (point-min) (point-max))) expected)
+          ;; This oracle deliberately bypasses every derived cache.
+          (with-temp-buffer
+            (org-mode)
+            (insert input)
+            (let* ((drawer (mevedel-transcript--skip-leading-properties-drawer 1))
+                   (base (mevedel-transcript--property-segments 1 (point-max)))
+                   (ranges (mevedel-transcript--structural-ranges 1 (point-max) base)))
+              (mevedel-transcript--clear-gptel-properties 1 drawer)
+              (mevedel-transcript--apply-structural-properties ranges)
+              (mevedel-transcript--repair-response-continuation-properties ranges))
+            (setq expected (buffer-substring (point-min) (point-max))))
+          (mevedel-transcript-normalize-properties)
+          (should (equal-including-properties
+                   expected (buffer-substring (point-min) (point-max))))))))
   :doc "unchanged normalization is reused and text or property edits invalidate it"
   (with-temp-buffer
     (org-mode)

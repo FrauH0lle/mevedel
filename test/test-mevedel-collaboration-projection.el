@@ -15,6 +15,7 @@
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-tool-ptc)
 (require 'mevedel-tool-render-data)
+(require 'mevedel-gptel-stream-bridge)
 
 (mevedel-deftest mevedel-collaboration--agent-mailbox ()
   ,test
@@ -512,8 +513,10 @@ Small value ranges repeat texts, so occurrence-numbered ids are exercised."
                     (plist-put record :revision 99)
                     (plist-put record :guest "rewritten")))))))))))
 
-(mevedel-deftest mevedel-collaboration--canonical-records/streaming
-  (:doc "a streamed sentence reprojects only the growing response")
+(mevedel-deftest mevedel-collaboration--canonical-records/streaming ()
+  ,test
+  (test)
+  :doc "a streamed sentence reprojects only the growing response"
   (with-temp-buffer
     (mevedel--transcript-org-mode)
     (dotimes (index 8)
@@ -543,7 +546,10 @@ Small value ranges repeat texts, so occurrence-numbered ids are exercised."
                 ((symbol-function 'mevedel-transcript--tool-block-end-from-start)
                  (lambda (&rest args) (cl-incf ends) (apply tool-end args))))
         (let ((inhibit-modification-hooks t))
-          (insert (propertize " more text." 'gptel 'response)))
+          (mevedel-gptel-stream-bridge--insert-tracked
+           (lambda (response _info _raw) (insert response))
+           (propertize " more text." 'gptel 'response)
+           (list :position (point-marker) :tracking-marker (point-marker)) nil))
         (let ((records (mevedel-collaboration--canonical-records
                         (current-buffer) nil nil cache)))
           (should (equal "Streaming more text."
@@ -554,7 +560,42 @@ Small value ranges repeat texts, so occurrence-numbered ids are exercised."
           (should (= 1 cleans)))
         ;; An unmodified buffer reprojects nothing at all.
         (mevedel-collaboration--canonical-records (current-buffer) nil nil cache)
-        (should (= 1 cleans))))))
+        (should (= 1 cleans)))))
+  :doc "a transformer relocating insertion produces the full equivalent projection"
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (insert "Prompt\n" (propertize "Answer\n" 'gptel 'response))
+    (let ((cache (mevedel-collaboration--projection-cache-create)))
+      (mevedel-collaboration--canonical-records (current-buffer) nil nil cache)
+      (let ((inhibit-modification-hooks t))
+        (mevedel-gptel-stream-bridge--insert-tracked
+         (lambda (text info _raw)
+           (insert (funcall (plist-get info :transformer) text)))
+         (propertize "Relocated " 'gptel 'response)
+         (list :position (point-marker) :tracking-marker (point-marker)
+               :transformer (lambda (text) (goto-char (point-min)) text)) nil))
+      (should (string-prefix-p "Relocated Prompt" (buffer-string)))
+      (should (equal (mevedel-collaboration--canonical-records (current-buffer))
+                     (mevedel-collaboration--canonical-records
+                      (current-buffer) nil nil cache)))
+      (should (= (point-min)
+                 (mevedel-transcript-cache-restart
+                  (mevedel-collaboration--projection-cache-transcript cache))))))
+  :doc "an unobserved silent prefix edit falls back to a full equivalent projection"
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (insert "Prompt\n" (propertize "Answer\n" 'gptel 'response))
+    (let ((cache (mevedel-collaboration--projection-cache-create)))
+      (mevedel-collaboration--canonical-records (current-buffer) nil nil cache)
+      (let ((inhibit-modification-hooks t))
+        (goto-char (point-min))
+        (insert "Changed "))
+      (should (equal (mevedel-collaboration--canonical-records (current-buffer))
+                     (mevedel-collaboration--canonical-records
+                      (current-buffer) nil nil cache)))
+      (should (= (point-min)
+                 (mevedel-transcript-cache-restart
+                  (mevedel-collaboration--projection-cache-transcript cache)))))))
 
 (mevedel-deftest mevedel-collaboration--canonical-records/live-inputs
   (:doc "a retained Bash record follows its execution without a text change")

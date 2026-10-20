@@ -111,9 +111,11 @@ Otherwise a nested acknowledged arrival during a second recovery read could
 be overwritten by an already-frozen sidecar. Segment transitions identify
 their own adoption through the committed root projection, not unrelated head
 movement from a nested mailbox publication.
-Writers clear a buffer's modified flag only if its character-change tick still
-matches the frozen bytes; delivery during target I/O remains dirty for the next
-checkpoint rather than losing its unsaved receipt.
+Writers clear a buffer's modified flag only if its full modification tick still
+matches the freeze; property-only gptel changes can alter the next serialized
+bounds even without changing characters. Root writers also check the frozen
+byte identity. Delivery or property changes during publication remain dirty for
+the next checkpoint rather than losing unsaved receipts or bounds.
 
 New retained transcript text and its transcript metadata share a strict
 publication when the portable sidecar already exists. The session root supplies
@@ -172,6 +174,33 @@ not after freezing an overlapping job's tentative state.
 Cold, remote and file-backed checkpoints remain synchronous.
 [Sessions](../sessions.md) owns the persistence and recovery contract.
 
+Preparation shares disposable derived caches between the ordinary synchronous
+writer and the asynchronous job. Each consumer's paired-hook proof records the
+earliest changed body offset; known leading drawer writes rebase positions
+without invalidating unchanged transcript text. Structure, normalization ranges,
+gptel response bounds, audit spans and per-user-segment prompt results reuse
+their proven prefix. Prompt depth state has its own lookahead proof: an
+unresolved tool discriminator or render-data block prevents reuse of dependent
+unit states, including indented controls recognized by the depth grammar.
+Unobserved changes, unsafe hook ordering and potentially mutating overlay hooks
+invalidate the proof. Buffer clones acquire their own proofs and cannot update
+the original's. These caches affect computation only: frozen bytes, checkpoint
+candidates, mutation admission and authoritative-head adoption are unchanged.
+Full transcript capture and encoding remain main-thread work; this is not a
+hard latency bound for arbitrary transcript structure or garbage collection.
+Generated storage disables font-lock and JIT fontification. A compiled-copy
+trace showed JIT writing `fontified=nil` after the change proof adopted its
+tick, forcing full derivation on every save; controls disabling only that hook
+or both modes eliminated the invalidation without changing saved bytes.
+Disabling stays inside the bare-mode hook boundary, and transcript gptel
+activation unregisters gptel's Org annotator so its registration cannot turn
+JIT back on after restore. Raw inspection remains intentionally unfontified.
+The stream bridge explicitly announces its silent insertion, adopting its tick
+before post-stream observers derive caches. Foreign transformer and observer
+edits remain unproven and fail closed rather than receiving blanket authority.
+Point or buffer redirection also fails closed: gptel inserts at the location
+returned by its transformer, not necessarily at the original tracking marker.
+
 ## Rationale and consequences
 
 Acknowledgement promises durable delivery; an activity flavor does not. Recovery
@@ -222,6 +251,29 @@ All revisions belong to ADR 0112:
   the gain is event-loop time between target phases, not earlier durability.
   These samples precede the cancellation, abandonment and buffer-kill guard
   corrections, validated separately without another performance run.
+- **Phase B: staged, hashed and selected off the freeze (2026-10-20).** The
+  warm-local checkpoint's freeze used to encode the transcript, hash it for
+  comparison and build its publication in one main-thread turn. Freeze now
+  captures native characters, the detached sidecar and a copy of the committed
+  entries only; staging, a control-program `file-hash` and selection follow in
+  later turns, so selection compares digests of the staged bytes, never live
+  state. After save hooks serialize property-derived metadata into characters,
+  an acknowledged proof of the exact character/coding identity may skip the
+  transcript's capture, staging and hash. A nil selection is refused while
+  retained recovery exists, so it cannot consume that recovery. The projected
+  staged marker, not an earlier raw sidecar, supplies metadata for stamping;
+  this preserves deferred ToolCall recovery merged during staging. Root and
+  agent finish guards compare full modification ticks, so property-only
+  changes after freeze stay dirty and serialize on the next save.
+  Compiled-copy natural/synthetic prepare medians are now 9.07-11.89 ms,
+  versus 34.77-78.14 ms before this preparation work. All 20 non-GC latency
+  samples stay below 20 ms (largest heartbeat gap 17.94 ms), but four samples
+  with observed GC reach 51.90-61.05 ms; an instrumented run places a
+  40.35 ms GC inside preparation. The unconditional target remains unmet.
+  ACK medians rise 32.33-37.16 ms versus prefix reuse alone, and overall
+  allocation is not reduced. [Sessions](../sessions.md#warm-local-asynchronous-mailbox-publication)
+  records exact sizes, allocation, ACK comparisons and limitations. Historical
+  measurements below describe their earlier frozen code.
 - **2026-10-20 warm-local asynchronous mailbox acknowledgement:** a live trace
   of one background-command delivery on a local session spent about 98 of its
   135 ms in synchronous control-program waits, and the user observed the
@@ -241,27 +293,29 @@ All revisions belong to ADR 0112:
   deliberately warm local sessions: remote targets, cold materialization,
   file-backed and PID-lock sessions stay synchronous until separately
   converted, so no remote safety is inferred from local results. No persisted
-  format changes. Measured after the final source freeze on one fixture:
-  compiled modules, an isolated test
-  home, a local portable session holding 6000 saved turns, one 4000-character
-  execution result delivered per sample, six samples per mode, a 5 ms timer
-  recording the largest gap between runs as the heartbeat, and a composer
-  draft whose text and point were checked afterwards and preserved in all 19
-  samples. The synchronous path held the editor 59.9-73.8 ms, with a heartbeat
-  gap of 60.0-73.9 ms. Asynchronous submission returned in 0.22-0.45 ms and
-  the acknowledgement arrived 75.4-120.1 ms after submission, with a largest
-  heartbeat gap of 8.2-10.2 ms. An explicit drain issued immediately after
-  submission waited a further 89.8-115.0 ms (submission 0.19-0.46 ms,
-  acknowledgement 85.0-110.2 ms, heartbeat gap 7.9-10.8 ms). A 0.25-second
-  drain limit on a deliberately stalled admission signalled at 255.6 ms in the
-  single sample taken, with acknowledgement still pending until the held
-  callback was released. Acknowledgement latency did not improve: it is about
-  the same as, or a little longer than, the synchronous commit; the gain is
-  that the editor runs meanwhile. These are compiled in-process measurements
-  on one fixture with small samples, not graphical input latency or
-  live-session measurements, and not a hard bound on arbitrary filesystem
-  latency, sidecar size or GC. The 98 ms figure is an upper bound on
-  the waiting removed, not a measured saving.
+  format changes. Rerun after checkpoint preparation changes on one fixture:
+  compiled modules, an isolated test home, a synthetic local portable session
+  holding 6000 saved turns, one 4000-character execution result per sample,
+  six samples per mode and a 5 ms heartbeat. The synchronous path held the
+  editor 63.907-70.177 ms (heartbeat 63.977-70.228 ms). Asynchronous submission
+  returned in 0.196-0.460 ms and acknowledged after 105.028-115.540 ms, with
+  a maximum heartbeat gap of 6.533-7.159 ms. Earlier async ranges were
+  8.2-10.2 ms gap and 75.4-120.1 ms ACK; no blocking regression was observed,
+  not a general ACK improvement. An explicit drain immediately after submission
+  waited 111.696-119.674 ms (ACK 104.729-114.990 ms, heartbeat 6.237-6.999 ms).
+  A deliberately stalled admission with a 0.25-second limit signalled at
+  250.244 ms and retained the unacknowledged job; releasing its callback led to
+  ACK at 355.000 ms from submission. A separate phase-instrumented pass measured
+  at most 1.674 ms per async advance and 1.704 ms per containing timer. Composer
+  text and point survived all 38 latency/phase samples. The original recipe
+  explicitly collects garbage before each sample; none contained GC. This does
+  not contradict the streaming-checkpoint GC spikes above. Possible independent
+  verifier load was not excluded. The gain is that the editor runs meanwhile,
+  not earlier acknowledgement. These are compiled in-process measurements on
+  one fixture with small samples, not graphical input latency or live-session
+  measurements, nor a hard bound on arbitrary filesystem latency, sidecar size
+  or GC. The 98 ms figure is an upper bound on waiting removed, not a measured
+  saving.
 - **2026-10-19 unified committed checkpoint:** the full-save fallback added
   120–132 ms to each root delivery batch in compiled private-copy replays.
   A single owner now projects committed root fields and retains consumed mail

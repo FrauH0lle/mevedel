@@ -12,6 +12,7 @@
 (require 'subr-x)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-transcript-audit)
+(require 'mevedel-transcript-source)
 (require 'mevedel-utilities)
 
 ;; `mevedel-ptc-interpreter'
@@ -1147,36 +1148,61 @@ stale `gptel' runs; incomplete controls remain ordinary transcript text."
           (mevedel-transcript-scan-result job))
       (mevedel-transcript-scan-cancel job))))
 
+(defconst mevedel-transcript--response-continuation-max-gap 160
+  "Maximum structural-to-response prefix size repaired after restore.")
+
 (cl-defstruct (mevedel-transcript-cache
                (:constructor mevedel-transcript-cache-create)
                (:copier nil))
   "Derived segmentation of one accessible transcript, never persisted.
-SOURCE snapshots property values too, protecting comparisons on later edits
-from shared mutable objects.  Like the full projection, the unchanged fast
-path relies on the buffer modification tick.  BLOCKED is the earliest
-unresolved opener or orphan tool property run."
-  buffer low mode tick source raw ranges blocked segments)
+SOURCE proves the unchanged prefix through paired modification hooks; an
+unobserved edit requires full derivation.  ORIGIN is the last body start, whose
+marker follows known metadata writes.  BLOCKED is the earliest unresolved
+opener or orphan tool property run."
+  buffer low high limit origin mode tick source raw ranges blocked segments restart ranges-only-p)
 
-(defun mevedel-transcript--first-source-change (old new)
-  "Return the first differing character or property offset in OLD and NEW."
-  (let* ((comparison (compare-strings old nil nil new nil nil))
-         (limit (if (eq comparison t) (length old)
-                  (1- (abs comparison))))
-         (pos 0))
-    (while (and (< pos limit)
-                (equal (text-properties-at pos old)
-                       (text-properties-at pos new)))
-      (setq pos (min limit (next-property-change pos old (length old))
-                     (next-property-change pos new (length new)))))
-    pos))
+(defun mevedel-transcript--cache-rebase (cache delta)
+  "Shift CACHE's body coordinates by a known leading metadata DELTA."
+  (dolist (slot '(raw ranges segments))
+    (let ((shifted
+           (mapcar (lambda (range)
+                     (append (list (car range) (+ delta (cadr range))
+                                   (+ delta (caddr range)))
+                             (cdddr range)))
+                   (pcase slot
+                     ('raw (mevedel-transcript-cache-raw cache))
+                     ('ranges (mevedel-transcript-cache-ranges cache))
+                     ('segments (mevedel-transcript-cache-segments cache))))))
+      (pcase slot
+        ('raw (setf (mevedel-transcript-cache-raw cache) shifted))
+        ('ranges (setf (mevedel-transcript-cache-ranges cache) shifted))
+        ('segments (setf (mevedel-transcript-cache-segments cache) shifted)))))
+  (when (mevedel-transcript-cache-blocked cache)
+    (cl-incf (mevedel-transcript-cache-blocked cache) delta))
+  (when (mevedel-transcript-cache-restart cache)
+    (cl-incf (mevedel-transcript-cache-restart cache) delta))
+  (cl-incf (mevedel-transcript-cache-high cache) delta)
+  (cl-incf (mevedel-transcript-cache-origin cache) delta))
 
 (defun mevedel-transcript--cache-restart (cache change)
   "Return CACHE's last closed control before CHANGE, or the buffer start.
 An unresolved opener or a raw container crossing that point moves the
-restart back: a later close can change even a previously rejected range."
+restart back: a later close can change even a previously rejected range.
+Without a tool close in the changed suffix, an old tool cannot extend.  Resume
+at the changed line instead, retaining any preceding control whose bounded
+response-prefix repair can still reach the change."
   (let ((start (point-min))
         (limit (min change (or (mevedel-transcript-cache-blocked cache) change)))
-        last-tool moved)
+        last-tool moved independent-tail line-start)
+    (save-excursion
+      (goto-char (min limit (point-max)))
+      ;; Opener validity can depend on trailing whitespace anywhere on the
+      ;; line.  An edit far from the prefix can turn a rejected opener into a
+      ;; valid one, so a fixed-size lookbehind cannot prove this boundary.
+      (setq line-start (line-beginning-position))
+      (goto-char line-start)
+      (setq independent-tail
+            (not (re-search-forward "^#\\+end_tool" nil t))))
     (dolist (range (mevedel-transcript-cache-ranges cache))
       (when (and (< (cadr range) limit) (< (caddr range) limit))
         (setq start (max start (cadr range)))
@@ -1184,7 +1210,15 @@ restart back: a later close can change even a previously rejected range."
           (setq last-tool (max (or last-tool (point-min)) (cadr range))))))
     ;; Tool recovery chooses the last close before the next genuine opener,
     ;; even across other controls.  Keep that final tool's lookahead live.
-    (when last-tool (setq start (min start last-tool)))
+    (if independent-tail
+        (progn
+          (setq start line-start)
+          (dolist (range (mevedel-transcript-cache-ranges cache))
+            (when (and (<= (caddr range) limit)
+                       (>= (caddr range)
+                           (- limit mevedel-transcript--response-continuation-max-gap)))
+              (setq start (min start (cadr range))))))
+      (when last-tool (setq start (min start last-tool))))
     (setq moved t)
     (while moved
       (setq moved nil)
@@ -1194,25 +1228,52 @@ restart back: a later close can change even a previously rejected range."
           (setq start (cadr range) moved t))))
     start))
 
-(defun mevedel-transcript-cached-segments (cache)
+(defun mevedel-transcript--cached-parse (cache origin ranges-only)
   "Return full canonical segmentation, retaining unchanged structure in CACHE.
 Resume control searches at the last closed control before the first source
 change.  Validate against the complete raw property runs and apply neighbor
 repairs to the joined result, preserving the full parser's context.  The
-cache is valid only for its source buffer, restriction and major mode."
-  (let* ((tick (buffer-modified-tick))
+cache is valid only for its source buffer, restriction and major mode.
+ORIGIN, when supplied, is the body start after known leading metadata.
+RANGES-ONLY derives normalization ranges including leading summary controls,
+instead of the conversation segments that exclude the inherited summary."
+  (let* ((origin (or origin (point-min)))
+         (tick (buffer-modified-tick))
+         (proof (mevedel-transcript-cache-source cache))
          (same (and (eq (current-buffer) (mevedel-transcript-cache-buffer cache))
                     (eql (point-min) (mevedel-transcript-cache-low cache))
-                    (eq major-mode (mevedel-transcript-cache-mode cache))))
-         (old (and same (mevedel-transcript-cache-source cache))))
-    (if (and old (eql tick (mevedel-transcript-cache-tick cache))
-             (= (length old) (- (point-max) (point-min))))
+                    (eql (point-max)
+                         (and (markerp (mevedel-transcript-cache-limit cache))
+                              (marker-position
+                               (mevedel-transcript-cache-limit cache))))
+                    (eq major-mode (mevedel-transcript-cache-mode cache))
+                    (eq ranges-only (mevedel-transcript-cache-ranges-only-p cache))
+                    proof
+                    (eql origin (marker-position
+                                 (mevedel-transcript-source-origin proof)))))
+         (dirty (and same (mevedel-transcript-source-change proof)))
+         (delta (if same (- origin (mevedel-transcript-cache-origin cache)) 0))
+         (old (and same (or dirty
+                            (= (point-max) (+ delta
+                                             (mevedel-transcript-cache-high cache)))))))
+    (unless old
+      (when proof (mevedel-transcript-source-release proof))
+      (when (markerp (mevedel-transcript-cache-limit cache))
+        (set-marker (mevedel-transcript-cache-limit cache) nil))
+      (setf (mevedel-transcript-cache-limit cache) (copy-marker (point-max) t))
+      (setq proof (mevedel-transcript-source-create origin))
+      ;; Establish ownership before derivation, which may quit or signal.  A
+      ;; failed attempt remains invalid and its next attempt releases this proof.
+      (setf (mevedel-transcript-cache-source cache) proof
+            (mevedel-transcript-cache-buffer cache) nil))
+    (when (and old (/= delta 0))
+      (mevedel-transcript--cache-rebase cache delta))
+    (if (and old (null dirty))
         (mevedel-transcript-cache-segments cache)
-      (let* ((source (buffer-substring (point-min) (point-max)))
-             (change (and old (+ (point-min)
-                                (mevedel-transcript--first-source-change old source))))
+      (let* ((change (and old (+ origin dirty)))
              (base (mevedel-transcript--property-segments (point-min) (point-max)))
-             (low (if base (cadr (car base)) (point-min)))
+             (low (if (and base (not ranges-only))
+                      (cadr (car base)) (point-min)))
              (old (and old (>= change low) old))
              (start (if old (max low (mevedel-transcript--cache-restart cache change))
                       low))
@@ -1241,8 +1302,9 @@ cache is valid only for its source buffer, restriction and major mode."
                                         (cl-remove-if
                                          (lambda (range) (<= (caddr range) start)) raw)))
                         (cl-remove-if-not (lambda (range) (eq (car range) 'tool)) prefix)))
-               (segments (mevedel-transcript--finish-segments
-                          base ranges (point-min) (point-max)))
+               (segments (if ranges-only ranges
+                           (mevedel-transcript--finish-segments
+                            base ranges (point-min) (point-max))))
                (tools (sort (cl-remove-if-not (lambda (range) (eq (car range) 'tool))
                                               (copy-sequence ranges))
                             (lambda (a b) (< (cadr a) (cadr b))))))
@@ -1269,29 +1331,48 @@ cache is valid only for its source buffer, restriction and major mode."
                 (unless (and tools (<= (cadr (car tools)) (cadr segment))
                              (>= (caddr (car tools)) (caddr segment)))
                   (setq blocked (min (or blocked (cadr segment)) (cadr segment)))))))
-          ;; Freeze shared property objects only after comparisons and parsing.
-          (let ((pos 0))
-            (while (< pos (length source))
-              (let ((next (next-property-change pos source (length source))))
-                (set-text-properties pos next (copy-tree (text-properties-at pos source)) source)
-                (setq pos next))))
+          (mevedel-transcript-source-accept proof)
           (setf (mevedel-transcript-cache-buffer cache) (current-buffer)
                 (mevedel-transcript-cache-low cache) (point-min)
+                (mevedel-transcript-cache-high cache) (point-max)
+                (mevedel-transcript-cache-origin cache) origin
                 (mevedel-transcript-cache-mode cache) major-mode
                 (mevedel-transcript-cache-tick cache) tick
-                (mevedel-transcript-cache-source cache) source
+                (mevedel-transcript-cache-source cache) proof
+                (mevedel-transcript-cache-ranges-only-p cache) ranges-only
                 (mevedel-transcript-cache-raw cache) raw
                 (mevedel-transcript-cache-ranges cache) ranges
                 (mevedel-transcript-cache-blocked cache) blocked
-                (mevedel-transcript-cache-segments cache) segments)
+                (mevedel-transcript-cache-segments cache) segments
+                (mevedel-transcript-cache-restart cache) start)
           segments)))))
+
+(defun mevedel-transcript-cached-segments (cache &optional origin)
+  "Return canonical segments, reusing CACHE's hook-proven unchanged prefix.
+ORIGIN is the body start after known leading metadata, or `point-min'."
+  (mevedel-transcript--cached-parse cache origin nil))
+
+(defun mevedel-transcript-cached-ranges (cache &optional origin)
+  "Return normalization ranges, reusing CACHE's hook-proven unchanged prefix.
+ORIGIN is the body start after known leading metadata, or `point-min'."
+  (mevedel-transcript--cached-parse cache origin t))
+
+(defvar mevedel-transcript--prepared-audit-spans nil
+  "Nil, or (t . SPANS) from the current source's proven audit derivation.
+The prompt-index consumer supplies canonical absolute spans while finishing
+the same source, avoiding a second whole-buffer audit scan.")
 
 (defun mevedel-transcript--finish-segments (segments ranges scan-start scan-end)
   "Apply RANGES and canonical neighbor repairs to SEGMENTS in source bounds."
   (let ((segments (mevedel-transcript--overlay-ranges segments ranges))
         repaired)
     (dolist (span
-             (mevedel-transcript-audit-buffer-spans 'fork-point scan-start scan-end))
+             (if mevedel-transcript--prepared-audit-spans
+                 (cl-remove-if-not
+                  (lambda (span)
+                    (eq (plist-get (plist-get span :record) :type) 'fork-point))
+                  (cdr mevedel-transcript--prepared-audit-spans))
+               (mevedel-transcript-audit-buffer-spans 'fork-point scan-start scan-end)))
       (let ((prompt-start (plist-get span :end))
             prompt-end)
         (dolist (segment segments)
@@ -1322,9 +1403,10 @@ cache is valid only for its source buffer, restriction and major mode."
 
 (defun mevedel-transcript--whitespace-segment-p (seg)
   "Return non-nil if SEG is entirely whitespace."
-  (not (string-match-p
-        "[^ \t\r\n]"
-        (buffer-substring-no-properties (cadr seg) (caddr seg)))))
+  (save-excursion
+    (goto-char (cadr seg))
+    (skip-chars-forward " \t\r\n" (caddr seg))
+    (= (point) (caddr seg))))
 
 (defun mevedel-transcript--absorb-structural-whitespace (segments)
   "Attach whitespace-only property fragments to adjacent control SEGMENTS."
@@ -1335,10 +1417,10 @@ cache is valid only for its source buffer, restriction and major mode."
             (next (cadr rest)))
         (if (and next
                  (memq (car seg) '(user ignored))
-                 (mevedel-transcript--whitespace-segment-p seg)
                  (memq (car next)
                        '(tool reasoning mailbox reminder hook-context
-                         render-data prompt ignored)))
+                         render-data prompt ignored))
+                 (mevedel-transcript--whitespace-segment-p seg))
             (progn
               (setcar (cdr rest)
                       (list (car next) (cadr seg) (caddr next)))
@@ -1373,6 +1455,8 @@ cache is valid only for its source buffer, restriction and major mode."
     (while rest
       (let* ((seg (car rest))
              (text (and (eq (car seg) 'user)
+                        (eq (car-safe (car out)) 'tool)
+                        (eq (car-safe (cadr rest)) 'reasoning)
                         (buffer-substring-no-properties
                          (cadr seg) (caddr seg)))))
         (push (if (and text
@@ -1429,9 +1513,6 @@ cache is valid only for its source buffer, restriction and major mode."
            (put-text-property start end 'gptel 'ignore)))
         ((or 'reasoning 'prompt)
          (put-text-property start end 'gptel 'ignore))))))
-
-(defconst mevedel-transcript--response-continuation-max-gap 160
-  "Maximum structural-to-response prefix size repaired after restore.")
 
 (defun mevedel-transcript--structural-gap-prop-p (prop type)
   "Return non-nil when PROP is stale structural state after TYPE."
@@ -1504,9 +1585,13 @@ cache is valid only for its source buffer, restriction and major mode."
   "Modification tick after the last successful whole-buffer normalization.
 Text and property edits both invalidate this derived state.")
 
+(defvar-local mevedel-transcript--normalization-cache nil
+  "Hook-proven structural ranges for the current buffer's normalization.")
+
 (defun mevedel-transcript-normalize-properties ()
   "Normalize structural transcript properties in the current Org buffer.
-Reuse normalization until buffer text or properties change."
+Reapply only the suffix after the last proven closed control.  Unobserved edits
+require a full pass; known leading metadata writes only rebase coordinates."
   (when (and (derived-mode-p 'org-mode)
              (not (eql mevedel-transcript--normalized-tick
                        (buffer-modified-tick))))
@@ -1514,20 +1599,47 @@ Reuse normalization until buffer text or properties change."
       (save-excursion
         (save-restriction
           (widen)
-          (with-silent-modifications
-            (let* ((drawer-end
-                    (mevedel-transcript--skip-leading-properties-drawer
-                     (point-min)))
-                   (base (mevedel-transcript--property-segments
-                          (point-min) (point-max)))
-                   (ranges (mevedel-transcript--structural-ranges
-                            (point-min) (point-max) base)))
+          (let* ((drawer-end
+                  (mevedel-transcript--skip-leading-properties-drawer
+                   (point-min)))
+                 (cache (or mevedel-transcript--normalization-cache
+                            (setq mevedel-transcript--normalization-cache
+                                  (mevedel-transcript-cache-create))))
+                 (proof (mevedel-transcript-cache-source cache))
+                 (changed (or (null proof)
+                              (not (eq (marker-buffer
+                                        (mevedel-transcript-source-origin proof))
+                                       (current-buffer)))
+                              (not (eql drawer-end
+                                        (marker-position
+                                         (mevedel-transcript-source-origin proof))))
+                              (mevedel-transcript-source-change proof)))
+                 (ranges (mevedel-transcript-cached-ranges cache drawer-end))
+                 (restart (mevedel-transcript-cache-restart cache))
+                 (suffix (and changed
+                              (cl-remove-if
+                               (lambda (range) (<= (caddr range) restart))
+                               ranges))))
+            (with-silent-modifications
               (when (> drawer-end (point-min))
-                (mevedel-transcript--clear-gptel-properties
-                 (point-min) drawer-end))
-              (mevedel-transcript--apply-structural-properties ranges)
-              (mevedel-transcript--repair-response-continuation-properties
-               ranges))))))
+                (mevedel-transcript-source-call-with-metadata-change
+                 (lambda ()
+                   (mevedel-transcript-source-call-with-change
+                    (point-min) drawer-end
+                    (lambda ()
+                      (mevedel-transcript--clear-gptel-properties
+                       (point-min) drawer-end))))))
+              (when suffix
+                (mevedel-transcript-source-call-with-change
+                 (max restart drawer-end) (point-max)
+                 (lambda ()
+                   (mevedel-transcript--apply-structural-properties suffix)
+                   (mevedel-transcript--repair-response-continuation-properties
+                    suffix)))))
+            ;; Normalization is an idempotent property repair.  Its own ranges
+            ;; stay valid; every other derived consumer observes the suffix.
+            (mevedel-transcript-source-accept
+             (mevedel-transcript-cache-source cache))))))
     (setq mevedel-transcript--normalized-tick (buffer-modified-tick))))
 
 (defun mevedel-transcript-restore-ignored-properties (start end)
@@ -2069,9 +2181,11 @@ next persisted tool."
 A prompt starts on its own line after the response separator; a stale
 tail left by drifted `GPTEL_BOUNDS' continues the response's last line."
   (and (eq (car seg) 'user)
-       (let ((text (buffer-substring-no-properties (cadr seg) (caddr seg))))
-         (and (string-match-p "\\`[ \t]*\n" text)
-              (string-match-p "[^ \t\r\n]" text)))))
+       (save-excursion
+         (goto-char (cadr seg))
+         (skip-chars-forward " \t" (caddr seg))
+         (and (< (point) (caddr seg)) (eq (char-after) ?\n)
+              (not (mevedel-transcript--whitespace-segment-p seg))))))
 
 (defun mevedel-transcript--repair-response-fragment-segments (segments)
   "Return SEGMENTS with stale response fragments reclassified.
@@ -2138,12 +2252,14 @@ This is deliberately conservative so a real user prompt in a
 `tool -> user -> response' sequence does not get swallowed into the
 assistant turn."
   (and next-seg
+       (<= (- (caddr seg) (cadr seg)) 120)
        (let* ((text (buffer-substring-no-properties (cadr seg) (caddr seg)))
               (trimmed (string-trim text))
-              (next-text
-               (buffer-substring-no-properties (cadr next-seg)
-                                               (caddr next-seg)))
-              (next-trimmed (string-trim-left next-text)))
+              (next-first
+               (save-excursion
+                 (goto-char (cadr next-seg))
+                 (skip-chars-forward " \t\n\r" (caddr next-seg))
+                 (and (< (point) (caddr next-seg)) (char-after)))))
          (and (not (string-empty-p trimmed))
               (<= (length text) 120)
               (not (string-match-p "\n" text))
@@ -2151,8 +2267,8 @@ assistant turn."
                                    trimmed))
               (not (mevedel-transcript--scaffolding-only-p
                     (current-buffer) (cadr seg) (caddr seg)))
-              (not (string-empty-p next-trimmed))
-              (let ((ch (aref next-trimmed 0)))
+              next-first
+              (let ((ch next-first))
                 (or (and (>= ch ?a) (<= ch ?z))
                     (memq ch '(?, ?. ?\; ?: ?\) ?\] ?\}))))))))
 
