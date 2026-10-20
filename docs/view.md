@@ -1312,6 +1312,9 @@ tight windows, it truncates to its own row's width, without taking
 space from the operational controls. Its stored text is capped at 512 characters,
 including an ellipsis, after filtering and whitespace normalization. This bounds
 the width measurement performed on every header-line evaluation. Clicking it reveals the original prompt,
+Finding the prompt above the top edge is a binary search over the view's prompt
+header runs, collected once per content change: a scroll step can evaluate the
+header line several times, and a backward property walk cost 0.1-0.3 ms each.
 expanding a folded turn or input when necessary. It is view-only:
 synthetic/model-only context is excluded, and archived segments use only their
 own visible turns.
@@ -2272,6 +2275,10 @@ background queue sorted by cursor distance. Interactive visibility uses Emacs's
 current window end, reusing completed redisplay and accounting for variable-height
 rows. Changed window contents or scroll positions request an updated boundary;
 batch rendering, which has no glyph matrices, uses its line-motion approximation.
+That boundary costs about a millisecond of display simulation, and scrolling
+asks on every step. The check therefore first compares the window start with the
+end of the last unformatted table, cached per content change and width: when no
+such table reaches the window, it answers without the window end.
 Tables in an unfinished streamed response stay raw even if that timer runs;
 terminal reconciliation replaces the live projection with a pending table,
 which the same idle timer then formats once. This avoids relaying out a table

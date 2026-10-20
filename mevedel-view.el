@@ -1237,6 +1237,28 @@ Resolve archives only on source projection, never during header redisplay."
   (unless (mevedel-view-historical-segment-p)
     (nth 4 mevedel-view--continuation-prompt-cache)))
 
+(defvar-local mevedel-view--prompt-headers nil
+  "(CONTENT-TICK . RUNS) for `mevedel-view--prompt-header-runs'.")
+
+(defun mevedel-view--prompt-header-runs ()
+  "Return a vector of (START END PREVIEW) prompt header runs in buffer order.
+The header line asks for the pinned prompt on every redisplay; the few
+header runs change only with the content, so collect them once per change."
+  (let ((tick (mevedel-view--content-tick)))
+    (if (eql tick (car mevedel-view--prompt-headers))
+        (cdr mevedel-view--prompt-headers)
+      (let ((pos (point-min)) runs)
+        (while (< pos (point-max))
+          (let ((next (next-single-property-change
+                       pos 'mevedel-view-prompt-preview nil (point-max)))
+                (preview (get-text-property pos 'mevedel-view-prompt-preview)))
+            (when preview
+              (push (list pos next preview) runs))
+            (setq pos next)))
+        (setq runs (vconcat (nreverse runs))
+              mevedel-view--prompt-headers (cons tick runs))
+        runs))))
+
 (defun mevedel-view--pinned-prompt (window)
   "Return (POSITION . PREVIEW) for the prompt above WINDOW's top edge.
 Metadata lives on rendered prompt headers, not in the model transcript."
@@ -1244,29 +1266,21 @@ Metadata lives on rendered prompt headers, not in the model transcript."
              (eq (window-buffer window) (current-buffer))
              (not (get-text-property
                    (window-start window) 'mevedel-view-prompt-preview)))
-    (let ((top (min (window-start window)
-                    (or (and (markerp mevedel-view--input-marker)
-                             (marker-position mevedel-view--input-marker))
-                        (point-max))))
-          (pos (min (1+ (window-start window)) (point-max)))
-          found)
-      (while (and (not found) (> pos (point-min)))
-        (let ((edge (previous-single-property-change
-                     pos 'mevedel-view-prompt-preview nil (point-min))))
-          (if (not edge)
-              (setq pos (point-min))
-            (let ((preview (get-text-property
-                            (max (point-min) (1- edge))
-                            'mevedel-view-prompt-preview)))
-              (if (and preview (<= edge top))
-                  (setq found
-                        (cons (or (previous-single-property-change
-                                   edge 'mevedel-view-prompt-preview nil
-                                   (point-min))
-                                  (point-min))
-                              preview))
-                (setq pos edge))))))
-      found)))
+    (let* ((top (min (window-start window)
+                     (or (and (markerp mevedel-view--input-marker)
+                              (marker-position mevedel-view--input-marker))
+                         (point-max))))
+           (runs (mevedel-view--prompt-header-runs))
+           (lo 0) (hi (length runs)))
+      ;; The last header run ending at or before TOP.
+      (while (< lo hi)
+        (let ((mid (/ (+ lo hi) 2)))
+          (if (<= (nth 1 (aref runs mid)) top)
+              (setq lo (1+ mid))
+            (setq hi mid))))
+      (when (> lo 0)
+        (let ((run (aref runs (1- lo))))
+          (cons (nth 0 run) (nth 2 run)))))))
 
 (defun mevedel-view--jump-to-pinned-prompt (position &optional event)
   "Reveal the pinned prompt at POSITION in the clicked window from EVENT."

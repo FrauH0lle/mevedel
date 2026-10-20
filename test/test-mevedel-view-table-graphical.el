@@ -74,6 +74,28 @@
         (set-frame-font original-font t nil t)))))
 
 (mevedel-deftest mevedel-view-table--visible-stale ()
+  ,test
+  (test)
+  :doc "skips window-end's display simulation when no stale table reaches the window"
+  (mevedel-test--with-displayed-buffer
+    (insert "| a | b |\n|---|---|\n| 1 | 2 |\n")
+    (let ((table-end (point)))
+      (insert (make-string 400 ?\n) "| c | d |\n")
+      (put-text-property (point-min) (point-max) 'mevedel-view-table-source "src")
+      (put-text-property table-end (- (point-max) 10) 'mevedel-view-table-source nil)
+      (put-text-property (point-min) (point-max) 'mevedel-view-table-width
+                         (window-body-width (selected-window) t))
+      ;; The first table is unformatted but entirely above the window start.
+      (put-text-property (point-min) table-end 'mevedel-view-table-width nil)
+      (set-window-start (selected-window) (+ table-end 5) t)
+      (let ((noninteractive nil))
+        (cl-letf (((symbol-function 'window-end)
+                   (lambda (&rest _) (error "Simulated display"))))
+          (should-not (mevedel-view-table--visible-stale (selected-window)))))
+      (set-window-start (selected-window) (point-min) t)
+      (should (= (point-min)
+                 (car (mevedel-view-table--visible-stale (selected-window)))))))
+  :doc "finds a table only once it is actually on screen"
   (progn
     (skip-unless (display-graphic-p))
     (mevedel-test--with-displayed-buffer

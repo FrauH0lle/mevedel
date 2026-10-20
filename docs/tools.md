@@ -1326,7 +1326,10 @@ Foreground completions produce none. The durable
 presentation identity is the session, owning agent, and execution ID, not
 command text, so repeated polls, event retries, and later mailbox delivery do
 not create a second breadcrumb, while concurrent identical commands remain
-distinct. The mailbox payload and model-facing delivery remain unchanged; the
+distinct. Recording checks older segments through their breadcrumb identities,
+cached by each archive's content identity (published hash or file stat), so a
+completion does not reread and parse every archive. The mailbox payload and model-facing
+delivery remain unchanged; the
 owner's own delivery renders nothing in its transcript, and other receiving
 transcripts show a one-line background notice built from
 the `EXECUTION`, `MONITOR`, and `MONITOR_TERMINAL` opening-tag attributes (see

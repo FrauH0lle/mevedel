@@ -156,37 +156,64 @@ Each value is (DESCRIPTOR IDENTITY UPDATES); identity guards external changes.")
         (plist-put render-data :sandbox-summary summary)
       render-data)))
 
+(defvar mevedel-execution-transcript--segment-breadcrumbs
+  (make-hash-table :test #'equal)
+  "Archived segment content identity -> its breadcrumb keys.")
+
+(defconst mevedel-execution-transcript--segment-breadcrumbs-limit 256
+  "Maximum number of archived segments whose breadcrumb keys are retained.")
+
+(defun mevedel-execution-transcript--breadcrumb-keys (buffer)
+  "Return (OWNER . EXECUTION-ID) for each completion breadcrumb in BUFFER."
+  (with-current-buffer buffer
+    (save-restriction
+      (widen)
+      (mapcar (lambda (record)
+                (cons (plist-get record :owner) (plist-get record :execution-id)))
+              (mevedel-transcript-audit-records
+               (buffer-substring (point-min) (point-max))
+               'execution-breadcrumb)))))
+
+(defun mevedel-execution-transcript--segment-breadcrumb-keys (session descriptor)
+  "Return breadcrumb keys of SESSION's archived segment DESCRIPTOR, or nil.
+Keys are cached by the segment's content identity, a published hash or file
+stat, rather than reread and parsed for every completion."
+  (let* ((identity (mevedel-session-artifacts-transcript-segment-identity
+                    session descriptor))
+         (cached (if identity
+                     (gethash identity mevedel-execution-transcript--segment-breadcrumbs
+                              :missing)
+                   :missing)))
+    (if (not (eq cached :missing))
+        cached
+      (when-let* ((older (condition-case nil
+                             (mevedel-session-artifacts-read-transcript-segment
+                              session descriptor)
+                           (error nil))))
+        (let ((keys (unwind-protect
+                        (mevedel-execution-transcript--breadcrumb-keys older)
+                      (kill-buffer older))))
+          (when identity
+            (when (>= (hash-table-count mevedel-execution-transcript--segment-breadcrumbs)
+                      mevedel-execution-transcript--segment-breadcrumbs-limit)
+              (clrhash mevedel-execution-transcript--segment-breadcrumbs))
+            (puthash identity keys mevedel-execution-transcript--segment-breadcrumbs))
+          keys)))))
+
 (defun mevedel-execution-transcript--breadcrumb-present-p (record)
   "Return non-nil when this receiving transcript already contains RECORD.
 Completion retries after compaction must not create a second breadcrumb in
 the new segment of the same transcript."
-  (cl-labels ((present (buffer)
-                (with-current-buffer buffer
-                  (save-restriction
-                    (widen)
-                    (cl-some
-                     (lambda (existing)
-                       (and (equal (plist-get existing :execution-id)
-                                   (plist-get record :execution-id))
-                            (equal (plist-get existing :owner)
-                                   (plist-get record :owner))))
-                     (mevedel-transcript-audit-records
-                      (buffer-substring (point-min) (point-max))
-                      'execution-breadcrumb))))))
-    (or (present (current-buffer))
+  (let ((key (cons (plist-get record :owner) (plist-get record :execution-id))))
+    (or (member key (mevedel-execution-transcript--breadcrumb-keys (current-buffer)))
         (when mevedel--session
-          (catch 'found
-            (dolist (descriptor (mevedel-session-artifacts-transcript-segments
-                                 mevedel--session (current-buffer)))
-              (when (and (eq (plist-get descriptor :status) 'readable)
-                         (not (plist-get descriptor :current-p)))
-                (when-let* ((older (condition-case nil
-                                      (mevedel-session-artifacts-read-transcript-segment
-                                       mevedel--session descriptor)
-                                    (error nil))))
-                  (unwind-protect
-                      (when (present older) (throw 'found t))
-                    (kill-buffer older))))))))))
+          (cl-some (lambda (descriptor)
+                     (and (eq (plist-get descriptor :status) 'readable)
+                          (not (plist-get descriptor :current-p))
+                          (member key (mevedel-execution-transcript--segment-breadcrumb-keys
+                                       mevedel--session descriptor))))
+                   (mevedel-session-artifacts-transcript-segments
+                    mevedel--session (current-buffer)))))))
 
 (defun mevedel-execution-transcript--persist-terminal-record
     (record &optional terminal-data)

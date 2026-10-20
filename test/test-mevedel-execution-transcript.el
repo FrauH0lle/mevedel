@@ -688,6 +688,67 @@
                          (buffer-string) 'execution-breadcrumb))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-execution-transcript--segment-breadcrumb-keys ()
+  ,test
+  (test)
+  :doc "is nil without a readable file"
+  (let* ((root (make-temp-file "mevedel-breadcrumb-missing-" t))
+         (session (mevedel-session--create :save-path root :authority-mode 'pid-lock))
+         (mevedel-execution-transcript--segment-breadcrumbs
+          (make-hash-table :test #'equal)))
+    (unwind-protect
+        (should-not (mevedel-execution-transcript--segment-breadcrumb-keys
+                     session (list :number 1 :status 'readable)))
+      (delete-directory root t)))
+  :doc "reads an archived segment once and rereads it only after a rewrite"
+  (let* ((root (make-temp-file "mevedel-breadcrumb-keys-" t))
+         (archive (mevedel-session-artifacts-segment-path root 1))
+         (session (mevedel-session--create :save-path root :authority-mode 'pid-lock
+                                           :current-segment 2))
+         (descriptor (list :number 1 :path archive :status 'readable))
+         (mevedel-execution-transcript--segment-breadcrumbs (make-hash-table :test #'equal))
+         (write (lambda (id)
+                  (let ((text (with-temp-buffer
+                                (mevedel-execution-transcript--record-breadcrumb
+                                 (list :type 'terminal :data-buffer (current-buffer)
+                                       :owner "/root" :tool-use-id "call"
+                                       :facts (list :execution-id id :command "true"
+                                                    :state 'completed :outcome 'success)))
+                                (mevedel-execution-transcript-test--persisted-audit-transcript
+                                 (buffer-string)))))
+                    (with-temp-file archive (insert text))))))
+    (unwind-protect
+        (progn
+          (funcall write "exec-1")
+          (should (equal '(("/root" . "exec-1"))
+                         (mevedel-execution-transcript--segment-breadcrumb-keys
+                          session descriptor)))
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-read-transcript-segment)
+                     (lambda (&rest _) (ert-fail "Archived segment reread"))))
+            (should (equal '(("/root" . "exec-1"))
+                           (mevedel-execution-transcript--segment-breadcrumb-keys
+                            session descriptor))))
+          ;; A rewind can rewrite a segment; a different file identity rereads it.
+          (funcall write "exec-two")
+          (should (equal '(("/root" . "exec-two"))
+                         (mevedel-execution-transcript--segment-breadcrumb-keys
+                          session descriptor))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-execution-transcript--breadcrumb-keys ()
+  ,test
+  (test)
+  :doc "lists owner and execution identity of each completion breadcrumb"
+  (with-temp-buffer
+    (dolist (id '("exec-a" "exec-b"))
+      (mevedel-execution-transcript--record-breadcrumb
+       (list :type 'terminal :data-buffer (current-buffer) :owner "/root"
+             :tool-use-id id
+             :facts (list :execution-id id :command "true"
+                          :state 'completed :outcome 'success))))
+    (should (equal '(("/root" . "exec-a") ("/root" . "exec-b"))
+                   (mevedel-execution-transcript--breadcrumb-keys (current-buffer))))))
+
 (mevedel-deftest mevedel-execution-transcript--record-nested-terminal ()
   ,test
   (test)

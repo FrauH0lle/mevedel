@@ -412,6 +412,36 @@
                                "\n" t)))
       (should (apply #'= (mapcar #'string-width lines))))))
 
+(mevedel-deftest mevedel-view-table--last-stale-end ()
+  ,test
+  (test)
+  :doc "returns the end of the last settled table lacking the width"
+  (with-temp-buffer
+    (insert "text\n| a |\nmid\n| b |\ntail")
+    (should-not (mevedel-view-table--last-stale-end 400))
+    (put-text-property 6 12 'mevedel-view-table-source "a")
+    (put-text-property 16 22 'mevedel-view-table-source "b")
+    (should (= 22 (mevedel-view-table--last-stale-end 400)))
+    (put-text-property 16 22 'mevedel-view-table-streaming t)
+    (should (= 12 (mevedel-view-table--last-stale-end 400)))
+    (put-text-property 6 12 'mevedel-view-table-width 400)
+    (should-not (mevedel-view-table--last-stale-end 400))
+    (should (= 12 (mevedel-view-table--last-stale-end 500))))
+  :doc "answers from its cache until the content changes"
+  (with-temp-buffer
+    (insert "| a | b |\n")
+    (put-text-property 1 (point-max) 'mevedel-view-table-source "src")
+    (should (mevedel-view-table--last-stale-end 400))
+    (let ((calls 0)
+          (real (symbol-function 'next-single-property-change)))
+      (cl-letf (((symbol-function 'next-single-property-change)
+                 (lambda (&rest args) (cl-incf calls) (apply real args))))
+        (should (mevedel-view-table--last-stale-end 400))
+        (should (= 0 calls))
+        (put-text-property 1 (point-max) 'mevedel-view-table-width 400)
+        (should-not (mevedel-view-table--last-stale-end 400))
+        (should (< 0 calls))))))
+
 (mevedel-deftest mevedel-view-table-rerender ()
   ,test
   (test)

@@ -561,6 +561,35 @@
 (mevedel-deftest mevedel-view--pinned-prompt ()
   ,test
   (test)
+  :doc "matches a backward property walk at every window start"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (dolist (prompt '("One" "Two" "Three"))
+        (mevedel-view-test--insert-data data-buf (format "%s\n" prompt) nil)
+        (mevedel-view-test--insert-data
+         data-buf (apply #'concat (make-list 5 "answer\n")) 'response))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (set-window-buffer (selected-window) view-buf)
+        (let ((oracle
+               (lambda (start top)
+                 ;; The last prompt header run that ends at or before TOP.
+                 (let ((pos (point-min)) found)
+                   (while (< pos start)
+                     (let ((next (next-single-property-change
+                                  pos 'mevedel-view-prompt-preview nil (point-max)))
+                           (preview (get-text-property pos 'mevedel-view-prompt-preview)))
+                       (when (and preview (<= next top))
+                         (setq found (cons pos preview)))
+                       (setq pos next)))
+                   found))))
+          (dolist (start (number-sequence (point-min) (1- (mevedel-view--input-start))))
+            (set-window-start nil start t)
+            (unless (get-text-property start 'mevedel-view-prompt-preview)
+              (should (equal (funcall oracle start
+                                      (min start (mevedel-view--input-marker-position)))
+                             (mevedel-view--pinned-prompt (selected-window))))))))))
+
   :doc "header follows the prompt above the top edge, not point or the newest prompt"
   (save-window-excursion
     (mevedel-view-test--with-buffers
@@ -928,6 +957,26 @@
                 (mevedel-view--full-rerender)
                 (should-not (mevedel-view--sticky-prompt-line))))))
       (delete-directory directory t))))
+
+(mevedel-deftest mevedel-view--prompt-header-runs ()
+  ,test
+  (test)
+  :doc "collects prompt header runs once per content change"
+  (with-temp-buffer
+    (insert "a" (propertize "Prompt one" 'mevedel-view-prompt-preview "one")
+            "body" (propertize "Prompt two" 'mevedel-view-prompt-preview "two"))
+    (should (equal [(2 12 "one") (16 26 "two")] (mevedel-view--prompt-header-runs)))
+    (let ((calls 0)
+          (real (symbol-function 'next-single-property-change)))
+      (cl-letf (((symbol-function 'next-single-property-change)
+                 (lambda (&rest args) (cl-incf calls) (apply real args))))
+        (mevedel-view--prompt-header-runs)
+        (should (= 0 calls))
+        (goto-char (point-max))
+        (insert (propertize "Three" 'mevedel-view-prompt-preview "three"))
+        (should (equal [(2 12 "one") (16 26 "two") (26 31 "three")]
+                       (mevedel-view--prompt-header-runs)))
+        (should (< 0 calls))))))
 
 (mevedel-deftest mevedel-view--pinned-prompt-button ()
   ,test

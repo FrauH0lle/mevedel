@@ -20,6 +20,7 @@
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-theme-faces)
 (require 'mevedel-utilities)
+(require 'mevedel-view-animation)
 (require 'text-property-search)
 
 ;; `mevedel-view-markdown'
@@ -1014,21 +1015,50 @@ Tables in an unfinished streamed response remain raw until terminal projection."
                (mevedel-view-table--rear-nonsticky
                 (list 'rear-nonsticky (get-text-property beg 'rear-nonsticky)))))))))
 
+(defvar-local mevedel-view-table--stale-cache nil
+  "(CONTENT-TICK WIDTH . END) for `mevedel-view-table--last-stale-end'.")
+
+(defun mevedel-view-table--last-stale-end (width)
+  "Return the end of the last settled table run lacking layout WIDTH, or nil.
+Scrolling asks on every step whether visible tables need layout.  A table
+ending at or before a window's start cannot be visible in it, so this one
+position, computed once per content change, usually settles the question."
+  (let ((key (cons (mevedel-view--content-tick) width)))
+    (if (equal key (cons (car mevedel-view-table--stale-cache)
+                         (cadr mevedel-view-table--stale-cache)))
+        (cddr mevedel-view-table--stale-cache)
+      (let ((pos (point-min)) last)
+        (while pos
+          (let ((next (next-single-property-change pos 'mevedel-view-table-source)))
+            (when (and (get-text-property pos 'mevedel-view-table-source)
+                       (not (get-text-property pos 'mevedel-view-table-streaming))
+                       (not (eql width (get-text-property pos 'mevedel-view-table-width))))
+              (setq last (or next (point-max))))
+            (setq pos next)))
+        (setq mevedel-view-table--stale-cache (cons (car key) (cons width last)))
+        last))))
+
 (defun mevedel-view-table--visible-stale (window)
   "Return (START END SOURCE) for one visible table needing WINDOW's layout.
 Include the complete table even when only its middle is visible.  Retained
 source with a nil width is a table awaiting its first prettification."
   (let* ((width (window-body-width window t))
-         (pos (window-start window))
+         (start (window-start window))
+         ;; `window-end' with UPDATE simulates display, about a millisecond on
+         ;; each scroll step; skip it when no stale table reaches the window.
+         (pos (when-let* ((last (mevedel-view-table--last-stale-end width))
+                          ((> last start)))
+                start))
          ;; Reuse completed redisplay; `window-end' also handles variable-height
          ;; rows. Batch Emacs has no glyph matrices, so retain its approximation.
-         (end (or (and (not noninteractive) (window-end window t))
-                  (save-excursion
-                    (goto-char pos)
-                    (vertical-motion (window-body-height window) window)
-                    (point))))
+         (end (and pos
+                   (or (and (not noninteractive) (window-end window t))
+                       (save-excursion
+                         (goto-char pos)
+                         (vertical-motion (window-body-height window) window)
+                         (point)))))
          found)
-    (while (and (< pos end) (not found))
+    (while (and pos (< pos end) (not found))
       (let ((source (get-text-property pos 'mevedel-view-table-source))
             (next (next-single-property-change pos 'mevedel-view-table-source nil end)))
         (cond
