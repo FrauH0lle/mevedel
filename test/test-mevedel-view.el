@@ -961,7 +961,7 @@
 (mevedel-deftest mevedel-view--prompt-header-runs ()
   ,test
   (test)
-  :doc "collects prompt header runs once per content change"
+  :doc "collects prompt header runs once per text change, not per fontification"
   (with-temp-buffer
     (insert "a" (propertize "Prompt one" 'mevedel-view-prompt-preview "one")
             "body" (propertize "Prompt two" 'mevedel-view-prompt-preview "two"))
@@ -970,6 +970,7 @@
           (real (symbol-function 'next-single-property-change)))
       (cl-letf (((symbol-function 'next-single-property-change)
                  (lambda (&rest args) (cl-incf calls) (apply real args))))
+        (put-text-property 1 (point-max) 'face 'bold)
         (mevedel-view--prompt-header-runs)
         (should (= 0 calls))
         (goto-char (point-max))

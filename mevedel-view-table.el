@@ -952,6 +952,10 @@ surrounding transcript properties."
               (set-window-point win (if success (relocate wp) wp))
               (set-window-start win (if success (relocate ws) ws) t))))))))
 
+(defvar-local mevedel-view-table--stale-cache nil
+  "(CHARS-TICK WIDTH . END) for `mevedel-view-table--last-stale-end'.
+Table rendering resets it: it can update a table's width without changing text.")
+
 (defun mevedel-view-table--render-region (start end source &optional window)
   "Replace START..END with SOURCE rendered as an aligned table.
 The rendered text retains SOURCE and the displaying window's pixel
@@ -969,6 +973,9 @@ layout targets; otherwise a window showing the buffer is used."
          (inhibit-read-only t)
          (inhibit-modification-hooks t)
          (inhibit-quit t))
+    ;; Identical text below changes only properties, which the stale-table
+    ;; cache does not observe.
+    (setq mevedel-view-table--stale-cache nil)
     ;; Cell/offset relocation avoids an expensive whole-table text diff.
     ;; Identical text only needs its display properties refreshed.
     (unless (equal (buffer-substring-no-properties start end) rendered)
@@ -1015,15 +1022,14 @@ Tables in an unfinished streamed response remain raw until terminal projection."
                (mevedel-view-table--rear-nonsticky
                 (list 'rear-nonsticky (get-text-property beg 'rear-nonsticky)))))))))
 
-(defvar-local mevedel-view-table--stale-cache nil
-  "(CONTENT-TICK WIDTH . END) for `mevedel-view-table--last-stale-end'.")
-
 (defun mevedel-view-table--last-stale-end (width)
   "Return the end of the last settled table run lacking layout WIDTH, or nil.
 Scrolling asks on every step whether visible tables need layout.  A table
 ending at or before a window's start cannot be visible in it, so this one
-position, computed once per content change, usually settles the question."
-  (let ((key (cons (mevedel-view--content-tick) width)))
+position, computed once per text change, usually settles the question.
+Fontification while scrolling changes properties only, so it must not
+invalidate the answer."
+  (let ((key (cons (buffer-chars-modified-tick) width)))
     (if (equal key (cons (car mevedel-view-table--stale-cache)
                          (cadr mevedel-view-table--stale-cache)))
         (cddr mevedel-view-table--stale-cache)

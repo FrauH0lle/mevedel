@@ -1238,13 +1238,15 @@ Resolve archives only on source projection, never during header redisplay."
     (nth 4 mevedel-view--continuation-prompt-cache)))
 
 (defvar-local mevedel-view--prompt-headers nil
-  "(CONTENT-TICK . RUNS) for `mevedel-view--prompt-header-runs'.")
+  "(CHARS-TICK . RUNS) for `mevedel-view--prompt-header-runs'.")
 
 (defun mevedel-view--prompt-header-runs ()
   "Return a vector of (START END PREVIEW) prompt header runs in buffer order.
 The header line asks for the pinned prompt on every redisplay; the few
-header runs change only with the content, so collect them once per change."
-  (let ((tick (mevedel-view--content-tick)))
+header runs change only with the text, so collect them once per text change.
+Every header is written together with its inserted text.  Fontification
+while scrolling changes properties only, so it must not invalidate them."
+  (let ((tick (buffer-chars-modified-tick)))
     (if (eql tick (car mevedel-view--prompt-headers))
         (cdr mevedel-view--prompt-headers)
       (let ((pos (point-min)) runs)

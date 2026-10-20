@@ -417,17 +417,21 @@
   (test)
   :doc "returns the end of the last settled table lacking the width"
   (with-temp-buffer
-    (insert "text\n| a |\nmid\n| b |\ntail")
-    (should-not (mevedel-view-table--last-stale-end 400))
-    (put-text-property 6 12 'mevedel-view-table-source "a")
-    (put-text-property 16 22 'mevedel-view-table-source "b")
-    (should (= 22 (mevedel-view-table--last-stale-end 400)))
-    (put-text-property 16 22 'mevedel-view-table-streaming t)
-    (should (= 12 (mevedel-view-table--last-stale-end 400)))
-    (put-text-property 6 12 'mevedel-view-table-width 400)
-    (should-not (mevedel-view-table--last-stale-end 400))
-    (should (= 12 (mevedel-view-table--last-stale-end 500))))
-  :doc "answers from its cache until the content changes"
+    (let ((answer (lambda (width)
+                    ;; Each case is a separate text state.
+                    (setq mevedel-view-table--stale-cache nil)
+                    (mevedel-view-table--last-stale-end width))))
+      (insert "text\n| a |\nmid\n| b |\ntail")
+      (should-not (funcall answer 400))
+      (put-text-property 6 12 'mevedel-view-table-source "a")
+      (put-text-property 16 22 'mevedel-view-table-source "b")
+      (should (= 22 (funcall answer 400)))
+      (put-text-property 16 22 'mevedel-view-table-streaming t)
+      (should (= 12 (funcall answer 400)))
+      (put-text-property 6 12 'mevedel-view-table-width 400)
+      (should-not (funcall answer 400))
+      (should (= 12 (funcall answer 500)))))
+  :doc "survives fontification and recomputes after a text change"
   (with-temp-buffer
     (insert "| a | b |\n")
     (put-text-property 1 (point-max) 'mevedel-view-table-source "src")
@@ -436,11 +440,28 @@
           (real (symbol-function 'next-single-property-change)))
       (cl-letf (((symbol-function 'next-single-property-change)
                  (lambda (&rest args) (cl-incf calls) (apply real args))))
+        ;; Scrolling fontifies newly visible text: a property-only change.
+        (put-text-property 1 (point-max) 'face 'bold)
         (should (mevedel-view-table--last-stale-end 400))
         (should (= 0 calls))
-        (put-text-property 1 (point-max) 'mevedel-view-table-width 400)
-        (should-not (mevedel-view-table--last-stale-end 400))
-        (should (< 0 calls))))))
+        (goto-char (point-max))
+        (insert "more text\n")
+        (should (mevedel-view-table--last-stale-end 400))
+        (should (< 0 calls)))))
+  :doc "table rendering resets it even when only the width property changes"
+  (mevedel-test--with-displayed-buffer
+    (insert "| a | b |\n|---|---|\n| 1 | 2 |\n")
+    (mevedel-view-table-decorate (point-min) (point-max) nil)
+    (let ((inhibit-read-only t))
+      (put-text-property (point-min)
+                         (next-single-property-change
+                          (point-min) 'mevedel-view-table-source nil (point-max))
+                         'mevedel-view-table-width nil))
+    (let ((width (window-body-width (selected-window) t)))
+      (should (mevedel-view-table--last-stale-end width))
+      (mevedel-view-table-rerender)
+      (should (eql width (get-text-property (point-min) 'mevedel-view-table-width)))
+      (should-not (mevedel-view-table--last-stale-end width)))))
 
 (mevedel-deftest mevedel-view-table-rerender ()
   ,test
