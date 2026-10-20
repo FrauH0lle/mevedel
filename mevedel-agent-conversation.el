@@ -160,6 +160,10 @@
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 
+;; `mevedel-view-render'
+(declare-function mevedel-view--refresh-tool-row "mevedel-view-render"
+                  (data-buffer tool-use-id))
+
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-agent-live-transcript-post-tool
                   "mevedel-view-agent" (args))
@@ -671,10 +675,19 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
                         ((buffer-live-p view)))
               ;; A retained handle has marker-backed source coordinates, so
               ;; replacing its metadata need not rebuild unrelated history.
-              ;; A summary without retained metadata can still be a generic
-              ;; tool row and needs the full-render fallback.
+              ;; A summary without retained metadata changed only its own
+              ;; tool row, which may be a compound call's child: redraw that
+              ;; row.  Its counters change with every sandboxed command the
+              ;; agent runs, and the full re-render this used to request took
+              ;; 1.6 s of a long session's view each time.  A row the view
+              ;; cannot find still falls back to the full render.
               (if (and patched-summary-p (not patched-render-data-p))
-                  (mevedel-view-rerender view)
+                  (unless (with-current-buffer view
+                            (mevedel-view--refresh-tool-row
+                             parent
+                             (mevedel-agent-invocation-parent-tool-use-id
+                              invocation)))
+                    (mevedel-view-rerender view))
                 (mevedel-view-refresh-agent-rendering
                  view (mevedel-agent-invocation-path invocation)))))
         (error
