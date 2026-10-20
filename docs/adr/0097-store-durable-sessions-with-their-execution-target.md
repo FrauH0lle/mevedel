@@ -84,7 +84,8 @@ co-located session history, and requires serialized publication rather than
 asynchronous callbacks writing directly through TRAMP.
 
 Serialized does not mean the editor must wait. For warm local portable sessions
-an acknowledged mailbox delivery runs as one session-owned publication job
+an acknowledged mailbox delivery or automatic root/agent transcript checkpoint
+runs as one session-owned publication job
 (admission, freeze, reservation, generation, head commit, adoption), each phase
 a pinned control program launched without waiting, and each continuation
 scheduled from a timer after the process sentinel returns, never from the
@@ -98,13 +99,49 @@ restore finds, and durable mail identities with hidden transcript receipts
 keep delivery at-least-once. An uncertain head outcome is decided by reading
 the authoritative head, not by guessing: the candidate head means adopt, the
 prior head means roll back, anything else, or an unreadable head, retains the
-job as pending publication for explicit retry or abandonment.
+job as pending publication for explicit retry or abandonment. Checkpoints
+retain definitive pre-head failures as frozen recovery too; later automatic
+opportunities do not retry them blindly. Their opaque checkpoint candidate
+installs only after head adoption, and their success-only finish clears a
+buffer's modified flag only if its tick still matches the captured bytes.
+Explicit saves, settlement and teardown remain synchronous and drain accepted
+work first, before transcript capture or checkpoint exclusion. Pending recovery
+blocks teardown even without an in-flight job. Capture itself remains
+main-thread Lisp under the mutation gate. Cancellation is reported through the
+asynchronous failure acknowledgement without escaping a timer; explicit
+abandonment discards staging without retaining the discarded checkpoint again.
+Retained-agent buffer queries save or refuse unpublished bytes; a bypassed
+query's failed kill-hook save leaves a warned temporary recovery file. The
+session exit query remains the single exit gate.
 Remote publication, cold materialization and file-backed sessions are not
 converted. [Sessions](../sessions.md#warm-local-asynchronous-mailbox-publication)
 owns the contract; [ADR 0112](0112-debounce-observational-agent-persists.md)
 owns the gate and acknowledgement semantics.
 
 ## Decision history
+
+The 2026-10-20 follow-up found that the 30-second automatic checkpoint still
+blocked the editor for 280-314 ms on a live 1.6 MB session. Scheduling a
+synchronous save from idle transport does not make that save non-blocking.
+Warm-local automatic checkpoints now use the same continuation carrier as
+mailbox publication, with shared capture/finish logic and retained frozen
+recovery on failure. No persisted format or remote publication contract changes.
+On a compiled full-copy replay of that session, six samples per mode, draining
+pending batch/coalesced-render timers before each edit, reduced root heartbeat
+gaps from 94.42-104.04 ms to 40.35-46.18 ms;
+asynchronous submission took 0.08-0.11 ms and acknowledgement 105.45-118.50 ms.
+Agent gaps were 81.11-122.33 ms synchronously and 21.67-57.44 ms asynchronously,
+with acknowledgement 89.42-210.48 ms. Main-thread capture remains material
+(37.61 ms root, 14.06 ms agent in a separate profile), so this is not a 20 ms
+bound. Repeated instrumentation separately found a 116.90 ms no-GC gap in a
+113.55 ms restored-view batch callback during the acknowledgement wait. That
+callback resolved an archived continuation prompt on a cold cache: it is a
+restore/first-render cost, not checkpoint publication; warm live probes took
+0.5-0.9 ms.
+[ADR 0112](0112-debounce-observational-agent-persists.md) records the fixture,
+GC caveat and phase attribution; these are not graphical latency measurements.
+The checkpoint samples precede the cancellation, abandonment and buffer-kill
+guard corrections, which were validated separately without remeasurement.
 
 On 2026-10-20 the synchronous waiting for target programs in a background
 completion's publication was measured at about 98 of 135 ms on a local session

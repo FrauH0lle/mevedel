@@ -1398,8 +1398,8 @@ artifacts.
 ### Warm-local asynchronous mailbox publication
 
 Delivering a background command's completion or monitor batch to its owner's
-mailbox is the one acknowledged mutation that does not block the editor on
-target programs. Only a materialized local portable session qualifies: its
+mailbox and automatic root or agent transcript checkpoints do not block the
+editor on target programs. Only a materialized local portable session qualifies: its
 save path is local, its authority is portable, a committed publication with a
 sidecar exists, its root buffer is live, and it is not stopping. Cold
 materialization, remote targets, file-backed and PID-lock sessions use the
@@ -1436,7 +1436,7 @@ the job, acknowledges the failure, and leaves the producer holding its output;
 a later synchronous attempt reports the reason. Freeze runs only after
 admission, under the gate: it identifies the records (a record already present
 is dropped), marks the new ones `:uncommitted`, prepends them to the live
-queue and captures the fresh sidecar, which is the job's only artifact. The
+queue and captures the fresh sidecar. The
 reservation program carries the first fixed write, the head-commit program
 carries the immutable generation ahead of the lease update, and that update
 returns the lease to `active`. The commit point is the lease head, as for
@@ -1482,6 +1482,50 @@ a registry save that requires a commit -- drain the gate first, so none
 reports queued work as committed; an unresolved job makes them fail with the
 recovery instruction. Transcript streaming and composer edits are not gated.
 
+Automatic checkpoints use that same job, not a separate writer. Their queued
+preparation rechecks modified state, the save-failed cue and retained batches
+under the gate, then runs the existing root or agent transcript capture. A
+synchronous save ahead of the preparation can absorb it without freezing or
+publishing anything. One accepted checkpoint per buffer coalesces repeated
+requests until acknowledgement. The frozen batch contains its changed
+transcript, instruction and file-history artifacts, and a sidecar marker last.
+If an agent has no canonical transcript to prepare, acknowledgement releases
+the gate and hands the save to its synchronous writer; it does not clear the
+save-failed cue as though a transcript had been published.
+The marker's checkpoint candidate is validated before publication and installed
+only after authoritative head adoption, including reconciliation. This retires
+only the consumption and ToolCall receipts covered by those frozen transcript
+bytes. Ancillary fixed files share the asynchronous reservation program; the
+transcript, instruction and file-history payloads remain immutable-only.
+
+Checkpoint acknowledgement runs the same success-only finish as a synchronous
+save. It clears the buffer's modified flag only if its character-change tick
+still matches the frozen bytes; model output or user edits during publication
+remain modified for the next checkpoint. A definitive pre-head checkpoint
+failure retains the frozen batch as pending publication before reporting the
+save-failed cue. Further checkpoints do not blindly retry it: explicit retry
+or abandonment resolves recovery first. Retry installs the frozen candidate
+without repeating the failed acknowledgement. Unlike failed mailbox delivery,
+checkpoint recovery does not discard its frozen bytes. Explicit manual saves,
+settlement and close/exit remain synchronous and drain accepted checkpoints
+before saving or releasing authority. A synchronous agent writer drains before
+entering checkpoint exclusion or capturing its transcript. Pending recovery
+blocks close/exit even when no job remains in flight, until explicit retry or
+abandonment resolves it. Explicit abandonment deletes the discarded staging
+files without retaining the failed job's checkpoint again. A canceled save hook
+or continuation is handled as an asynchronous failure, not re-signalled from
+its timer; acknowledgement and cleanup cannot strand the next preparation.
+Before capture exists, cancellation leaves modified text and the save-failed
+cue for a later checkpoint rather than inventing recovery bytes.
+
+Retained-agent buffer kills run a local query that saves unpublished transcript
+bytes first and refuses the kill if publication is failed or unresolved. The
+existing session exit query likewise drains accepted jobs and refuses pending
+recovery; there is no second agent exit query. If teardown bypasses the buffer
+query and its final save still fails, the kill hook writes the unpublished
+transcript to a temporary recovery file and warns with its path. Cold, remote
+and file-backed checkpoints keep their previous synchronous path.
+
 Gate ownership is explicit. A queued preparation runs with a fresh token that
 is held in a session slot only while it runs and is passed to the preparation
 as an argument; only a call carrying that token may reenter the gate. No
@@ -1523,6 +1567,37 @@ signalled after 255.6 ms without acknowledging or discarding the job; releasing
 the stalled callback then completed it. Composer text and point survived all 19
 samples. One fixture, small samples, no live or graphical measurement; this is
 not a hard bound on arbitrary filesystem latency, sidecar size or GC.
+
+The automatic-checkpoint follow-up was measured separately with compiled code
+on a `cp -a` copy of a real session (95 files, 27,795,709 bytes), never the live
+session itself. The restored root held 1,069,346 bytes and the selected agent
+about 1.34 MB. After draining pending view-batch and coalesced-render timers
+before each edit (not every observer queue), six samples per mode compared the
+same frozen code's synchronous writer with its async
+checkpoint entry. A 5 ms heartbeat covered submission, the acknowledgement wait
+and 12 ms afterwards; no observer was suppressed. Ranges in milliseconds:
+
+| Checkpoint | Synchronous heartbeat gap | Async submission | Async acknowledgement | Async heartbeat gap |
+| --- | ---: | ---: | ---: | ---: |
+| Root | 94.42-104.04 | 0.08-0.11 | 105.45-118.50 | 40.35-46.18 |
+| Agent | 81.11-122.33 | 0.07-0.30 | 89.42-210.48 | 21.67-57.44 |
+
+The largest synchronous agent sample included 41.35 ms of GC; the paired
+asynchronous samples had none. Async publication removes target-program waits,
+not main-thread transcript capture: a separate profile measured root preparation
+at 37.61 ms (prompt indexing 15.57 ms, gptel state saving 13.20 ms including
+10.43 ms of property normalization), and agent preparation at 14.06 ms. These
+inclusive components must not be summed. The root therefore does not meet a
+20 ms responsiveness target. A repeated agent run also reproduced a 116.90 ms
+gap without GC: a restored-view batch callback took 113.55 ms, including a
+74.79 ms full-rerender reset resolving an archived continuation prompt on a cold
+cache. This is a restore/first-render cost, not checkpoint publication; a warm
+live-editor probe took 0.5-0.9 ms. The delayed cold render can overlap the
+acknowledgement wait or follow it, so the smaller paired gaps do not bound all
+visible stalls.
+These are copied-session timer measurements, not graphical input latency.
+They precede the cancellation, abandonment and buffer-kill guard corrections;
+those lifecycle corrections were validated separately, not remeasured here.
 
 Closing the root buffer stops new admissions and drains accepted jobs before
 its final save and lease release; Emacs exit does the same for every live

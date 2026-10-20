@@ -305,7 +305,137 @@ run while it is pending."
          session '(active) 'active 90
          (lambda (success error) (setq settled (list success error)))))
       (should-not (car settled))
-      (should (eq 'user-error (car (cadr settled)))))))
+      (should (eq 'user-error (car (cadr settled))))))
+  :doc "a quit in a continuation finishes the job once and never escapes the timer"
+  (test-mevedel-durability-async--with-lease (root session)
+    (let ((settle (symbol-function 'mevedel-session-durability--observe-lease-settle))
+          (quits 0)
+          (calls nil)
+          (escaped 0)
+          bound)
+      (setf (mevedel-session-lease session)
+            (mevedel-session-durability--strip-assumption
+             (mevedel-session-lease session)))
+      (setq bound (copy-sequence (mevedel-session-lease session)))
+      (cl-letf (((symbol-function 'mevedel-session-durability--observe-lease-settle)
+                 (lambda (&rest arguments)
+                   (cl-incf quits)
+                   (signal 'quit nil)
+                   (apply settle arguments))))
+        (mevedel-session-durability--update-owned-lease-async
+         session '(active) 'active 90
+         (lambda (success error) (push (list success error) calls)))
+        (let ((steps 0))
+          (while (and (< (cl-incf steps) 300) (null calls))
+            (condition-case nil
+                (accept-process-output nil 0.01)
+              (quit (cl-incf escaped)))))
+        (condition-case nil
+            (accept-process-output nil 0.05)
+          (quit (cl-incf escaped))))
+      (should (= 0 escaped))
+      (should (equal '((nil (quit))) calls))
+      (should (= 1 quits))
+      (should (equal bound (mevedel-session-lease session)))))
+  :doc "a quit while reporting the launched process finishes once, escapes nowhere, and the late result is inert"
+  (test-mevedel-durability-async--with-lease (root session)
+    (let ((run (symbol-function 'mevedel-session-control-fs-run-program-async))
+          (launches 0)
+          (escaped 0)
+          (calls nil)
+          bound)
+      (setf (mevedel-session-lease session)
+            (mevedel-session-durability--strip-assumption
+             (mevedel-session-lease session)))
+      (setq bound (copy-sequence (mevedel-session-lease session)))
+      (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program-async)
+                 (lambda (operations callback)
+                   (cl-incf launches)
+                   (funcall run operations callback))))
+        (let ((mevedel-session-durability-async-process-function
+               (lambda (_process) (signal 'quit nil))))
+          (condition-case nil
+              (mevedel-session-durability--update-owned-lease-async
+               session '(active) 'active 90
+               (lambda (success error) (push (list success error) calls)))
+            (quit (cl-incf escaped))))
+        (should (equal '((nil (quit))) calls))
+        ;; The program still answers; nothing may continue from it.
+        (let ((steps 0))
+          (while (and (< (cl-incf steps) 60))
+            (condition-case nil
+                (accept-process-output nil 0.01)
+              (quit (cl-incf escaped))))))
+      (should (= 0 escaped))
+      (should (= 1 launches))
+      (should (equal '((nil (quit))) calls))
+      (should (equal bound (mevedel-session-lease session))))))
+
+(mevedel-deftest mevedel-session-durability--async-job ()
+  ,test
+  (test)
+  :doc "finish calls back once"
+  (let* (calls
+         (job (mevedel-session-durability--async-job
+               (lambda (success error) (push (list success error) calls)))))
+    (funcall (car job) t nil)
+    (funcall (car job) nil '(error "late"))
+    (should (equal '((t nil)) calls)))
+  :doc "an error in a guarded thunk finishes the job"
+  (let* (calls
+         (job (mevedel-session-durability--async-job
+               (lambda (success error) (push (list success error) calls)))))
+    (funcall (cdr job) (lambda () (error "Boom")))
+    (should (equal '((nil (error "Boom"))) calls)))
+  :doc "a quit finishes the job and returns without re-signalling"
+  (let* (calls
+         (job (mevedel-session-durability--async-job
+               (lambda (success error) (push (list success error) calls)))))
+    (should (eq 'returned (condition-case nil
+                              (progn (funcall (cdr job) (lambda () (signal 'quit nil)))
+                                     'returned)
+                            (quit 'escaped))))
+    (should (equal '((nil (quit))) calls)))
+  :doc "a quit inside the callback is a warning, not an escape or a second call"
+  (let* ((calls 0)
+         diagnostics
+         (job (mevedel-session-durability--async-job
+               (lambda (_success _error) (cl-incf calls) (signal 'quit nil)))))
+    (mevedel-test--with-captured-diagnostics diagnostics
+      (should (eq 'returned (condition-case nil
+                                (progn (funcall (cdr job) (lambda () (error "Boom")))
+                                       (funcall (car job) t nil)
+                                       'returned)
+                              (quit 'escaped)))))
+    (should (= 1 calls))
+    (should (string-match-p "interrupted" diagnostics)))
+  :doc "a quit after the job finished is a warning, not an escape"
+  (let* (diagnostics
+         (job (mevedel-session-durability--async-job #'ignore)))
+    (mevedel-test--with-captured-diagnostics diagnostics
+      (should (eq 'returned (condition-case nil
+                                (progn
+                                  (funcall (cdr job)
+                                           (lambda ()
+                                             (funcall (car job) t nil)
+                                             (signal 'quit nil)))
+                                  'returned)
+                              (quit 'escaped)))))
+    (should (string-match-p "interrupted" diagnostics)))
+  :doc "a thunk after the job finished does not run"
+  (let* (calls ran
+         (job (mevedel-session-durability--async-job
+               (lambda (success error) (push (list success error) calls)))))
+    (funcall (car job) nil '(error "aborted"))
+    (funcall (cdr job) (lambda () (setq ran t)))
+    (should-not ran)
+    (should (= 1 (length calls))))
+  :doc "an error from the callback itself propagates without a second call"
+  (let* ((calls 0)
+         (job (mevedel-session-durability--async-job
+               (lambda (_success _error) (cl-incf calls) (error "Callback failed")))))
+    (should-error (funcall (cdr job) (lambda () (funcall (car job) t nil))))
+    (should (= 1 calls))))
 
 (mevedel-deftest mevedel-session-durability-commit-publication-head-async ()
   ,test

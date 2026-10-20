@@ -204,7 +204,7 @@
               (insert "Changed")))
           (cl-letf (((symbol-function 'buffer-list)
                      (lambda (&optional _) (list first second)))
-                    ((symbol-function 'mevedel-session-persistence-autosave-buffer)
+                    ((symbol-function 'mevedel-session-persistence-checkpoint-buffer)
                      (lambda (buffer)
                        (if saved (setq saw-input input)
                          (setq input-timer

@@ -42,6 +42,8 @@
 (autoload 'mevedel-engine-record-history-edit "mevedel-engine")
 
 ;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts--sidecar-artifact
+                  "mevedel-session-artifacts" (session buffer &optional checkpoint))
 (declare-function mevedel-session-artifacts-artifact-present-p
                   "mevedel-session-artifacts" (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-assert-not-superseded
@@ -61,6 +63,8 @@
                   "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-strip-gptel-config-properties
                   "mevedel-session-artifacts" nil)
+(autoload 'mevedel-session-artifacts--sidecar-artifact
+  "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-artifact-present-p
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-call-with-checkpoint
@@ -92,6 +96,11 @@
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-write-sidecar-now
   "mevedel-session-persistence")
+
+;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-barrier
+                  "mevedel-session-publication" (session &optional token))
+(autoload 'mevedel-session-publication-barrier "mevedel-session-publication")
 
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-install-activation-hook
@@ -349,8 +358,7 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
              (when (mevedel-agent-invocation-p inv)
                (mevedel-agent-conversation-refresh inv)))))
        nil t)
-      (add-hook 'kill-buffer-hook
-                #'mevedel-agent-conversation--on-buffer-kill nil t))
+      (mevedel-agent-conversation--install-kill-guards))
     buffer))
 
 (defun mevedel-agent-conversation-hydrate
@@ -777,10 +785,131 @@ Return nil when INVOCATION has no live conversation buffer."
         (cancel-timer timer))
       (setf (mevedel-agent-invocation-transcript-save-timer invocation) nil))))
 
+(defun mevedel-agent-conversation--owns-transcript-p (invocation)
+  "Return non-nil when INVOCATION's live buffer is its canonical transcript."
+  (let ((buffer (mevedel-agent-invocation-buffer invocation))
+        (relative (mevedel-agent-invocation-transcript-relative-path invocation))
+        (session (mevedel-agent-invocation-parent-session invocation)))
+    (and (buffer-live-p buffer) relative session
+         (mevedel-session-save-path session)
+         (with-current-buffer buffer
+           (and buffer-file-name
+                (mevedel--same-file-p
+                 buffer-file-name
+                 (expand-file-name relative (mevedel-session-save-path session))))))))
+
+(defun mevedel-agent-conversation--freeze-preamble (invocation session)
+  "Settle INVOCATION's tentative state and return its first checkpoint.
+Call with the transcript buffer current and SESSION's mutation gate held."
+  (mevedel-ptc-checkpoint-clear-settled
+   session (mevedel-agent-invocation-path invocation))
+  (prog1 (mevedel-session-checkpoint-capture
+          session (mevedel-agent-invocation-path invocation))
+    (mevedel-session-persistence-update-transcript-entry
+     session (mevedel-agent-invocation-agent-id invocation)
+     (list :updated-at (format-time-string "%FT%H-%M-%S")))))
+
+(defun mevedel-agent-conversation--freeze-content (invocation session)
+  "Run save hooks and freeze the current modified transcript buffer.
+Return (:content STRING :frozen-tick TICK :checkpoint CHECKPOINT)."
+  (when (bound-and-true-p gptel-mode)
+    (gptel--save-state))
+  (let ((inhibit-message t)
+        (message-log-max nil)
+        (before-save-hook (remq 'gptel--save-state before-save-hook)))
+    (run-hooks 'before-save-hook)
+    (list :frozen-tick (buffer-chars-modified-tick)
+          :content (buffer-substring-no-properties (point-min) (point-max))
+          :checkpoint (mevedel-session-checkpoint-capture
+                       session (mevedel-agent-invocation-path invocation)))))
+
+(defun mevedel-agent-conversation--finish-save (frozen-tick)
+  "Mark the current transcript buffer saved if unchanged since FROZEN-TICK."
+  (set-visited-file-modtime 0)
+  (when (= frozen-tick (buffer-chars-modified-tick))
+    (set-buffer-modified-p nil))
+  (let ((inhibit-message t) (message-log-max nil))
+    (run-hooks 'after-save-hook)))
+
+(defun mevedel-agent-conversation-prepare-save (invocation)
+  "Freeze INVOCATION's retained transcript for an asynchronous portable commit.
+Return nil when the warm portable path does not apply (cold, file-backed, no
+committed sidecar or no live root), so the caller saves synchronously.
+Otherwise return (:artifacts ARTIFACTS :finish FUNCTION).  ARTIFACTS is the
+transcript, when modified, followed by the sidecar commit marker carrying the
+frozen checkpoint.  FUNCTION takes no arguments and runs only after the commit
+is adopted: it marks the buffer saved when unchanged since the freeze, runs
+`after-save-hook' and clears the sidecar-dirty flag.  A failed commit never
+calls it, so the buffer stays modified.  Call with the session's mutation gate
+held and its checkpoint exclusion established by the caller; any pending
+debounced save is cancelled because this freeze supersedes it."
+  (when (mevedel-agent-invocation-p invocation)
+    (let* ((session (mevedel-agent-invocation-parent-session invocation))
+           (buffer (mevedel-agent-invocation-buffer invocation))
+           (parent (mevedel-agent-invocation-parent-data-buffer invocation))
+           (root (and session (or (mevedel-session-root-buffer session) parent))))
+      (when (and session
+                 (mevedel-agent-conversation--owns-transcript-p invocation)
+                 (mevedel-session-codec-portable-authority-p session)
+                 (buffer-live-p root)
+                 (mevedel-session-artifacts-artifact-present-p
+                  session "session.meta.el" t))
+        (mevedel-agent-conversation--cancel-save invocation)
+        (with-current-buffer buffer
+          (let* ((checkpoint
+                  (mevedel-agent-conversation--freeze-preamble
+                   invocation session))
+                 (frozen (and (buffer-modified-p)
+                              (mevedel-agent-conversation--freeze-content
+                               invocation session)))
+                 (frozen-tick (plist-get frozen :frozen-tick))
+                 (checkpoint (if frozen (plist-get frozen :checkpoint) checkpoint)))
+            (list
+             :artifacts
+             (append
+              (and frozen
+                   (list (list :path (expand-file-name buffer-file-name)
+                               :content (plist-get frozen :content)
+                               :coding 'utf-8-unix)))
+              (list (mevedel-session-artifacts--sidecar-artifact
+                     session root checkpoint)))
+             :finish
+             (lambda ()
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (when frozen
+                     (condition-case err
+                         (mevedel-agent-conversation--finish-save frozen-tick)
+                       (error
+                        (mevedel--warn-once
+                         'agent-conversation-post-save
+                         "Agent transcript post-save cleanup failed: %s"
+                         (error-message-string err)))))))
+               (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil)))))))))
+
+(defun mevedel-agent-conversation--drain-gate (invocation token)
+  "Drain INVOCATION's session publication work before it is frozen.
+Return non-nil when the caller may capture.  An unresolved job reports and
+returns nil.  TOKEN is the caller's gate ownership, which is exempt."
+  (let ((session (mevedel-agent-invocation-parent-session invocation)))
+    (or (not (and session
+                  (mevedel-session-save-path session)
+                  (mevedel-session-codec-portable-authority-p session)))
+        (condition-case err
+            (progn (mevedel-session-publication-barrier session token) t)
+          (error
+           (message "mevedel: conversation save deferred for %s: %s"
+                    (mevedel-agent-invocation-agent-id invocation)
+                    (error-message-string err))
+           nil)))))
+
 (defun mevedel-agent-conversation--write (invocation &optional token)
   "Write INVOCATION's retained conversation, returning non-nil on success.
-TOKEN is the caller's publication gate ownership, handed to gated writers."
-  (when (mevedel-agent-invocation-p invocation)
+The session's publication gate drains first, so a concurrent job cannot have
+captured a stale agent candidate.  TOKEN is the caller's publication gate
+ownership, handed to gated writers."
+  (when (and (mevedel-agent-invocation-p invocation)
+             (mevedel-agent-conversation--drain-gate invocation token))
     (mevedel-session-artifacts-call-with-checkpoint
      (mevedel-agent-invocation-parent-session invocation)
      (lambda ()
@@ -800,18 +929,10 @@ TOKEN is the caller's publication gate ownership, handed to gated writers."
 			  relative (mevedel-session-save-path session))))
                (condition-case err
                            (progn
-                             (mevedel-ptc-checkpoint-clear-settled
-                              session (mevedel-agent-invocation-path invocation))
-	                   (let ((checkpoint
-                                    (mevedel-session-checkpoint-capture
-                                     session (mevedel-agent-invocation-path invocation))))
-                     (mevedel-session-persistence-update-transcript-entry
-                      session
-                      (mevedel-agent-invocation-agent-id invocation)
-                      (list :updated-at (format-time-string "%FT%H-%M-%S")))
+                             (let ((checkpoint
+                                    (mevedel-agent-conversation--freeze-preamble
+                                     invocation session)))
                      (when (buffer-modified-p)
-                       (when (bound-and-true-p gptel-mode)
-			 (gptel--save-state))
                        (let* ((coding-system-for-write 'utf-8-unix)
                               (save-silently t)
                               (inhibit-message t)
@@ -827,14 +948,12 @@ TOKEN is the caller's publication gate ownership, handed to gated writers."
 			 ;; leave resume unable to see it.
 			 (if (mevedel-session-codec-portable-authority-p session)
                              (progn
-                               (run-hooks 'before-save-hook)
-                               (let ((frozen-tick (buffer-chars-modified-tick))
-                                     (content (buffer-substring-no-properties
-                                               (point-min) (point-max)))
-                                     (root (or (mevedel-session-root-buffer session) parent)))
-                                         (setq checkpoint
-                                               (mevedel-session-checkpoint-capture
-                                                session (mevedel-agent-invocation-path invocation)))
+                               (let* ((frozen (mevedel-agent-conversation--freeze-content
+                                               invocation session))
+                                      (frozen-tick (plist-get frozen :frozen-tick))
+                                      (content (plist-get frozen :content))
+                                      (root (or (mevedel-session-root-buffer session) parent)))
+                                         (setq checkpoint (plist-get frozen :checkpoint))
 					 (if (and (buffer-live-p root)
 					  (mevedel-session-artifacts-artifact-present-p
                                            session "session.meta.el" t))
@@ -845,10 +964,9 @@ TOKEN is the caller's publication gate ownership, handed to gated writers."
                                        (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil))
                                    (mevedel-session-artifacts-publish-text
                                     session buffer-file-name content 'utf-8-unix t token))
-                               (set-visited-file-modtime 0)
-                               (when (= frozen-tick (buffer-chars-modified-tick))
-                                 (set-buffer-modified-p nil)))
-                               (run-hooks 'after-save-hook))
+                               (mevedel-agent-conversation--finish-save frozen-tick)))
+                           (when (bound-and-true-p gptel-mode)
+                             (gptel--save-state))
                            (mevedel-session-artifacts-assert-not-superseded)
                                    (let ((before-save-hook
                                           (append before-save-hook
@@ -903,10 +1021,76 @@ later and never carries it."
     (mevedel-agent-conversation--cancel-save invocation)
     (mevedel-agent-conversation--write invocation token)))
 
+(defun mevedel-agent-conversation--owes-p (invocation)
+  "Return non-nil when INVOCATION's canonical transcript has unpublished bytes."
+  (and (mevedel-agent-conversation--owns-transcript-p invocation)
+       (with-current-buffer (mevedel-agent-invocation-buffer invocation)
+         (or (buffer-modified-p)
+             (mevedel-agent-invocation-sidecar-dirty invocation)))))
+
+(defun mevedel-agent-conversation--unsaved-reason (invocation)
+  "Save INVOCATION if it owes bytes and return why it still does, or nil.
+Return nil when nothing is owed or the save fully published it.  Otherwise
+return a user-facing message naming the recovery commands.  The save drains
+the session's publication gate first, so an unresolved job refuses here."
+  (when (mevedel-agent-conversation--owes-p invocation)
+    (let ((canceled nil))
+      (condition-case nil
+          (mevedel-agent-conversation-save invocation)
+        (error nil)
+        (quit (setq canceled t)))
+      (when (or canceled (mevedel-agent-conversation--owes-p invocation))
+        (format (concat "agent transcript %s has unpublished changes (%s); run "
+                        "mevedel-session-publication-retry or "
+                        "mevedel-session-publication-abandon, then try again")
+                (mevedel-agent-invocation-agent-id invocation)
+                (if canceled
+                    "the save was canceled"
+                  "publication failed or is unresolved"))))))
+
+(defun mevedel-agent-conversation-allow-buffer-kill-p ()
+  "Return non-nil when the current retained agent transcript may be killed.
+A `kill-buffer-query-functions' member.  Unpublished bytes are saved first; a
+failed or unresolved publication refuses the kill with a message, keeping the
+buffer so explicit recovery stays possible."
+  (or (not (mevedel-agent-invocation-p mevedel--agent-invocation))
+      (if-let* ((reason (mevedel-agent-conversation--unsaved-reason
+                         mevedel--agent-invocation)))
+          (progn (message "mevedel: %s" reason) nil)
+        t)))
+
+(defun mevedel-agent-conversation--preserve-unsaved (invocation)
+  "Write INVOCATION's unpublished transcript bytes to a recovery file.
+Return the file name.  The kill hook calls it when a save failed, so closing
+the buffer cannot silently discard the bytes."
+  (with-current-buffer (mevedel-agent-invocation-buffer invocation)
+    (let ((file (make-temp-file "mevedel-unsaved-agent-" nil ".chat.org")))
+      (write-region (point-min) (point-max) file nil 'silent)
+      file)))
+
+(defun mevedel-agent-conversation--install-kill-guards ()
+  "Install the current agent buffer's kill query and kill hook."
+  (add-hook 'kill-buffer-query-functions
+            #'mevedel-agent-conversation-allow-buffer-kill-p nil t)
+  (add-hook 'kill-buffer-hook
+            #'mevedel-agent-conversation--on-buffer-kill nil t))
+
 (defun mevedel-agent-conversation--on-buffer-kill ()
-  "Persist and abort any live request owned by the current conversation."
+  "Persist and abort any live request owned by the current conversation.
+A save that leaves bytes unpublished is reported with a recovery file, never
+discarded silently."
   (when (mevedel-agent-invocation-p mevedel--agent-invocation)
-    (mevedel-agent-conversation-save mevedel--agent-invocation))
+    (condition-case nil
+        (mevedel-agent-conversation-save mevedel--agent-invocation)
+      ((error quit) nil))
+    (when (mevedel-agent-conversation--owes-p mevedel--agent-invocation)
+      (display-warning
+       'mevedel
+       (format "Closing %s left unpublished changes; recovered to %s"
+               (mevedel-agent-invocation-agent-id mevedel--agent-invocation)
+               (mevedel-agent-conversation--preserve-unsaved
+                mevedel--agent-invocation))
+       :warning)))
   (when (and (mevedel-agent-invocation-p mevedel--agent-invocation)
              (boundp 'gptel--request-alist)
              (cl-some

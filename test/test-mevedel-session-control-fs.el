@@ -556,6 +556,43 @@ streams over stdin."
           (let ((kill-buffer-query-functions nil)) (kill-buffer buffer))))
       (delete-directory root t)))
 
+  :doc "a kill hook that quits still delivers once, kills the private buffers and clears the job"
+  (let* ((root (make-temp-file "mevedel-control-async-local-" t))
+         (spawn (symbol-function 'make-process))
+         (calls 0) buffers diagnostics settled hook)
+    (setq hook (lambda ()
+                 (when (string-prefix-p " *mevedel-control-fs-async*" (buffer-name))
+                   (signal 'quit nil))))
+    (unwind-protect
+        (progn
+          (mevedel-test--with-captured-diagnostics diagnostics
+            (add-hook 'kill-buffer-hook hook)
+            (cl-letf (((symbol-function 'make-process)
+                       (lambda (&rest args)
+                         (setq buffers (list (plist-get args :buffer)
+                                             (plist-get args :stderr)))
+                         (apply spawn args))))
+              (mevedel-session-control-fs-run-program-async
+               (list (list :op 'path-exists-p :path root))
+               (lambda (results error)
+                 (cl-incf calls)
+                 (setq settled (list results error))))
+              (with-timeout (10 (ert-fail "Callback never delivered"))
+                (while (not settled) (accept-process-output nil 0.02)))
+              (accept-process-output nil 0.1)))
+          (should (= 1 calls))
+          (should (string-match-p "cleanup failed" diagnostics))
+          (should-not (nth 1 settled))
+          (should (eq 'ok (plist-get (car (car settled)) :status)))
+          (should (= 2 (length buffers)))
+          (should-not (cl-some #'buffer-live-p buffers))
+          (should-not mevedel-session-control-fs--async-jobs))
+      (remove-hook 'kill-buffer-hook hook)
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer)
+          (let ((kill-buffer-hook nil)) (kill-buffer buffer))))
+      (delete-directory root t)))
+
   :doc "a program that stopped early leaves no later payload staged"
   (let* ((root (make-temp-file "mevedel-control-async-local-" t))
          (second (file-name-concat root "second"))

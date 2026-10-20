@@ -1995,21 +1995,38 @@ do the same for its own continuations."
 (defun mevedel-session-durability--async-job (callback)
   "Return (FINISH . GUARD) delivering one asynchronous result to CALLBACK.
 FINISH calls CALLBACK with (SUCCESS ERROR) the first time only.  GUARD runs
-a thunk and reports its error through FINISH, unless FINISH already ran: then
-the error came from CALLBACK itself and propagates."
-  (let (done)
-    (cons (lambda (success error)
+a thunk and reports its error or quit through FINISH, unless FINISH already
+ran: then an error came from CALLBACK itself and propagates.  A quit never
+escapes: it finishes the job with the error `(quit)' and GUARD returns, so no
+step leaves its job waiting and nothing is re-signalled from the timer or
+sentinel that ran it.  A quit inside CALLBACK itself, or after FINISH ran, is
+reported as a warning.  A thunk handed to GUARD after FINISH ran, such as the
+continuation of a program whose launch was interrupted, does not run."
+  (let* (done
+         (finish
+          (lambda (success error)
             (unless done
               (setq done t)
-              (funcall callback success error)))
+              (condition-case nil
+                  (funcall callback success error)
+                (quit
+                 (display-warning
+                  'mevedel "Asynchronous lease callback was interrupted"
+                  :warning)))))))
+    (cons finish
           (lambda (thunk)
-            (condition-case err
-                (funcall thunk)
-              (error
-               (if done
-                   (signal (car err) (cdr err))
-                 (setq done t)
-                 (funcall callback nil err))))))))
+            (unless done
+              (condition-case err
+                  (funcall thunk)
+                ((error quit)
+                 (cond
+                  ((not done)
+                   (funcall finish nil err))
+                  ((eq 'quit (car err))
+                   (display-warning
+                    'mevedel "Asynchronous lease step was interrupted"
+                    :warning))
+                  (t (signal (car err) (cdr err)))))))))))
 
 (defun mevedel-session-durability--async-program
     (directory operations job context continue)

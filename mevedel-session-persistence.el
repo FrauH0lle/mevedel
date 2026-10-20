@@ -37,6 +37,9 @@
 (autoload 'mevedel-agent-control-reoffer-mail "mevedel-agent-control")
 
 ;; `mevedel-agent-conversation'
+(declare-function mevedel-agent-conversation-prepare-save
+                  "mevedel-agent-conversation" (invocation))
+(autoload 'mevedel-agent-conversation-prepare-save "mevedel-agent-conversation")
 (autoload 'mevedel-agent-conversation-save "mevedel-agent-conversation")
 
 ;; `mevedel-agent-persistence'
@@ -221,6 +224,8 @@
 (autoload 'mevedel-session-naming-normalize "mevedel-session-naming")
 
 ;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-async-eligible-p
+                  "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-call-with-diagnostic-batch
                   "mevedel-session-publication" (session function))
 (declare-function mevedel-session-publication-barrier
@@ -236,12 +241,17 @@
                   "mevedel-session-publication" (directories listings))
 (declare-function mevedel-session-publication-stopping
                   "mevedel-session-publication" (session))
+(declare-function mevedel-session-publication-submit
+                  "mevedel-session-publication"
+                  (session prepare acknowledge &optional mail-ids retain-failure))
 (declare-function mevedel-session-publication-diagnostic-backlog-p
                   "mevedel-session-publication" (session))
+(autoload 'mevedel-session-publication-async-eligible-p "mevedel-session-publication")
 (autoload 'mevedel-session-publication-barrier "mevedel-session-publication")
 (autoload 'mevedel-session-publication-busy-p "mevedel-session-publication")
 (autoload 'mevedel-session-publication-defer "mevedel-session-publication")
 (autoload 'mevedel-session-publication-stopping "mevedel-session-publication")
+(autoload 'mevedel-session-publication-submit "mevedel-session-publication")
 (autoload 'mevedel-session-publication-diagnostic-backlog-p
   "mevedel-session-publication")
 (autoload 'mevedel-session-publication-call-with-diagnostic-batch
@@ -1237,6 +1247,8 @@ warns and returns nil, leaving explicit recovery or abandonment possible."
               (if (eq buffer (mevedel-session-root-buffer session))
                   (mevedel-session-publication-stopping session)
                 (mevedel-session-publication-barrier session))
+              (when (mevedel-session-pending-publication session)
+                (user-error "Session has pending publication; retry or abandon it first"))
               t)
           (error
            ;; Recovery may admit work again, so admissions reopen.
@@ -1368,6 +1380,86 @@ deferred save runs with its own."
 (defvar mevedel-session-persistence--autosaves (make-hash-table :test #'eq)
   "Conversation buffers with a queued auto-save opportunity.")
 
+(defvar-local mevedel-session--checkpoint-pending nil
+  "Identity of this buffer's accepted background checkpoint, or nil.")
+
+(defun mevedel-session-persistence-checkpoint-buffer (buffer)
+  "Checkpoint BUFFER in the background when its authority permits it.
+Only warm local portable root and agent conversations use an asynchronous
+publication job.  Other authorities use the synchronous autosave writer.
+Return `pending' for accepted work, nil for an ineligible or absorbed save.
+Capture and the modified/failed/uncommitted recheck run only under the gate.
+Failures retain frozen publication recovery and the existing save-failed cue.
+Explicit saves and teardown keep using the synchronous writer and its barrier."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (and mevedel--session
+                 (mevedel-session-workspace mevedel--session)
+                 (not (bound-and-true-p mevedel-session--read-only-mode))
+                 (not (bound-and-true-p mevedel-session--inspection-buffer-p))
+                 (or mevedel--agent-invocation
+                     (eq buffer (mevedel-session-root-buffer mevedel--session)))
+                 (not (mevedel-session-publication-stopping-p mevedel--session))
+                 (not mevedel-session--checkpoint-pending)
+                 (or (buffer-modified-p) mevedel-session--save-failed
+                     (mevedel-session-publication-uncommitted-batches mevedel--session)))
+        (if (not (mevedel-session-publication-async-eligible-p mevedel--session))
+            (mevedel-session-persistence-autosave-buffer buffer)
+          (let* ((session mevedel--session)
+                 (identity (list buffer))
+                 prepared fallback
+                 (acknowledge
+                  (lambda (success err)
+                    (when (and (buffer-live-p buffer)
+                               (eq identity (buffer-local-value
+                                             'mevedel-session--checkpoint-pending buffer)))
+                      (with-current-buffer buffer
+                        (setq mevedel-session--checkpoint-pending nil)
+                        (condition-case cleanup
+                            (if success
+                                (if fallback
+                                    ;; The gate is released before ACK.  A
+                                    ;; missing canonical agent transcript must
+                                    ;; use its ordinary writer, not a successful
+                                    ;; no-op that clears the failure cue.
+                                    (mevedel-session-persistence-autosave-buffer buffer)
+                                  (when prepared (funcall (plist-get prepared :finish)))
+                                  (setq mevedel-session--save-failed nil)
+                                  (force-mode-line-update))
+                              (mevedel-session-persistence--note-autosave-failure
+                               buffer (if (stringp err) (list 'error err) err)))
+                          ((error quit)
+                           (mevedel-session-persistence--note-autosave-failure
+                            buffer cleanup))))))))
+            (setq mevedel-session--checkpoint-pending identity)
+            (condition-case err
+                (mevedel-session-publication-submit
+                 session
+                 (lambda ()
+                   (when (and (buffer-live-p buffer)
+                              (eq session (buffer-local-value 'mevedel--session buffer)))
+                     (with-current-buffer buffer
+                       ;; A synchronous save ahead of this preparation can absorb
+                       ;; it.  No transcript, sidecar or hooks were frozen yet.
+                       (when (or (buffer-modified-p) mevedel-session--save-failed
+                                 (mevedel-session-publication-uncommitted-batches session))
+                         (mevedel-session-artifacts-recover-working-directory session)
+                         (mevedel-session-artifacts-check-target-incarnation session buffer)
+                         (setq prepared
+                               (mevedel-session-artifacts-call-with-checkpoint
+                                session
+                                (lambda ()
+                                  (if mevedel--agent-invocation
+                                      (mevedel-agent-conversation-prepare-save
+                                       mevedel--agent-invocation)
+                                    (mevedel-session-artifacts-prepare-save session buffer)))))
+                         (setq fallback (null prepared))
+                         (plist-get prepared :artifacts)))))
+                 acknowledge nil t)
+              ((error quit)
+               (funcall acknowledge nil err)
+               nil))))))))
+
 (defun mevedel-session-persistence-autosave-soon (buffer)
   "Queue one transport-safe checkpoint of conversation BUFFER.
 Repeated calls before it runs coalesce.  The checkpoint runs only if
@@ -1386,7 +1478,7 @@ can absorb it."
                       (and (bound-and-true-p mevedel--session)
                            (mevedel-session-publication-uncommitted-batches
                             mevedel--session)))))
-       (mevedel-session-persistence-autosave-buffer buffer)))))
+       (mevedel-session-persistence-checkpoint-buffer buffer)))))
 
 (defun mevedel-session-persistence-autosave ()
   "Checkpoint modified data buffers during Emacs auto-save.

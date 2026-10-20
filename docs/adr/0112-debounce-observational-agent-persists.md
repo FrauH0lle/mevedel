@@ -22,7 +22,9 @@ Until then the records are tentative and hidden, and the producer keeps the
 output it would otherwise have consumed. Every other acknowledged mutation, and
 every cold, remote, file-backed or PID-lock session, keeps the synchronous
 path above. [Sessions](../sessions.md#warm-local-asynchronous-mailbox-publication)
-owns the job's phases, gate and recovery.
+owns the job's phases, gate and recovery. Automatic warm-local root and agent
+transcript checkpoints also use that job. Explicit saves and settlement still
+wait synchronously for their commits.
 
 While a job is accepted, its session's mutation gate is held. Mutations that
 would change acknowledged state or freeze a sidecar -- background mailbox
@@ -134,7 +136,40 @@ through their agent writer before pending registry saves and lease release.
 
 Mid-turn checkpoints use the native auto-save path. Because Emacs auto-saves
 only after input, a repeating timer drives that same path while any root or
-agent request is in flight, and stops once none is.
+agent request is in flight, and stops once none is. Warm local portable
+checkpoints submit a preparation to the session-owned publication job. It
+rechecks modified state, save failure and retained batches under the gate;
+only then does the shared root or agent writer freeze the transcript and its
+checkpoint candidate. One accepted checkpoint per buffer coalesces repeated
+opportunities. Nil preparation is a successful no-op when an earlier save
+absorbed the edit. An agent without a canonical transcript instead falls back
+to its synchronous writer after gate release, without clearing the save-failed
+cue for an unsaved transcript. The sidecar marker is last, carries the opaque checkpoint
+candidate and is projected through the current owner. The candidate is
+validated before the head commit and installed only after authoritative head
+adoption, including reconciliation. Success runs the shared post-save finish,
+clearing modified state only if no edit followed capture. Pre-head failure
+retains the frozen batch as pending publication before reporting save-failed;
+automatic checkpoints never blindly retry that recovery. Explicit retry
+installs its candidate without repeating the failed acknowledgement.
+Save-hook cancellation is caught at the asynchronous boundary, not allowed to
+escape its timer and strand the gate. Before a batch exists it leaves modified
+text and the save-failed cue without recovery bytes, permitting a later checkpoint.
+Explicit abandonment deletes staged recovery and fails any unresolved job's
+acknowledgement once; unlike an ordinary checkpoint failure, it never retains
+that job's discarded batch again.
+Close and exit drain accepted work before their synchronous save and lease release.
+Already-pending recovery blocks teardown even when no job remains in flight.
+Retained-agent buffers also query unpublished transcript state before a kill,
+saving first and refusing failed or unresolved publication. Emacs exit uses the
+existing session query, not a parallel agent query. If a caller bypasses the
+buffer query and the kill hook cannot save, it preserves unpublished transcript
+bytes in a temporary recovery file and reports the path. Lease continuations,
+producer acknowledgements and private carrier cleanup catch cancellation at
+their asynchronous boundary so a quit cannot strand a job or its successor.
+The synchronous agent writer drains before checkpoint exclusion and capture,
+not after freezing an overlapping job's tentative state.
+Cold, remote and file-backed checkpoints remain synchronous.
 [Sessions](../sessions.md) owns the persistence and recovery contract.
 
 ## Rationale and consequences
@@ -156,6 +191,37 @@ transactional journal.
 
 All revisions belong to ADR 0112:
 
+- **2026-10-20 asynchronous automatic transcript checkpoints:** a live trace
+  of the 30-second checkpoint on a 1.6 MB session still blocked the editor
+  for 280-314 ms after mailbox delivery became asynchronous. The auto-save
+  preparation now shares the session publication job rather than calling its
+  synchronous writer from the idle callback. Capture remains under the gate,
+  not at scheduling time, and synchronous and asynchronous writers share the
+  same capture and success-only finish. The persisted format, checkpoint
+  projection, receipt retirement and explicit-save contract are unchanged.
+  A compiled replay on a full `cp -a` copy of the real session (95 files,
+  27,795,709 bytes; restored root 1,069,346 bytes, selected agent about 1.34 MB)
+  measured six samples per mode, draining pending batch and coalesced-render
+  timers before each edit, not every observer queue. Root synchronous heartbeat gaps
+  (5 ms timer, through the acknowledgement wait and 12 ms afterwards)
+  were 94.42-104.04 ms, versus 40.35-46.18 ms asynchronously; async submission
+  took 0.08-0.11 ms and acknowledgement 105.45-118.50 ms. Agent gaps were
+  81.11-122.33 ms synchronously (41.35 ms GC in the largest sample), versus
+  21.67-57.44 ms asynchronously, with submission 0.07-0.30 ms and
+  acknowledgement 89.42-210.48 ms. No paired async sample collected garbage.
+  The carrier does not remove capture: a separate profile measured root
+  preparation at 37.61 ms, including prompt indexing 15.57 ms and gptel state
+  saving 13.20 ms, and agent preparation at 14.06 ms. The root still exceeds
+  the 20 ms target. Repeated agent instrumentation also attributed a 116.90 ms
+  no-GC gap to a restored-view batch callback (113.55 ms, including a 74.79 ms
+  full-rerender reset). Its archived continuation prompt hit a cold cache: this
+  is restore/first-render work, not checkpoint publication (a warm live probe
+  took 0.5-0.9 ms). It can run during or after the acknowledgement wait.
+  These copied-session timer measurements neither bound all visible stalls
+  nor establish graphical input latency. Capture semantics are unchanged;
+  the gain is event-loop time between target phases, not earlier durability.
+  These samples precede the cancellation, abandonment and buffer-kill guard
+  corrections, validated separately without another performance run.
 - **2026-10-20 warm-local asynchronous mailbox acknowledgement:** a live trace
   of one background-command delivery on a local session spent about 98 of its
   135 ms in synchronous control-program waits, and the user observed the

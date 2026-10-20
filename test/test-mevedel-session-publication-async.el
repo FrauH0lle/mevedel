@@ -58,6 +58,17 @@
                       (test-mevedel-publication-async--ids
                        (test-mevedel-publication-async--restored-mail session))))))))
 
+(defun test-mevedel-publication-async--transcript-artifacts
+    (session buffer logical content &optional checkpoint)
+  "Return the artifacts of one transcript checkpoint of SESSION from BUFFER.
+A non-fixed transcript LOGICAL holding CONTENT, an ancillary fixed file below
+a missing directory chain, and the sidecar commit marker carrying CHECKPOINT."
+  (let ((save-path (mevedel-session-save-path session)))
+    (list (list :path (file-name-concat save-path logical) :content content)
+          (list :path (file-name-concat save-path "notes/deep/extra.txt")
+                :content "extra")
+          (mevedel-session-artifacts--sidecar-artifact session buffer checkpoint))))
+
 (mevedel-deftest mevedel-agent-control-enqueue-execution-result/async (:quiet t)
   ,test
   (test)
@@ -143,6 +154,51 @@
 (mevedel-deftest mevedel-session-publication-submit/async (:quiet t)
   ,test
   (test)
+  :doc "quit while staging removes partial files and fails the checkpoint once"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let ((write (symbol-function 'write-region))
+           (writes 0) directories acknowledgements)
+       (cl-letf (((symbol-function 'write-region)
+                  (lambda (start end filename &rest arguments)
+                    (when (and (stringp filename)
+                               (string-match-p "mevedel-publication-" filename))
+                      (push (file-name-directory filename) directories)
+                      (when (= (cl-incf writes) 2) (signal 'quit nil)))
+                    (apply write start end filename arguments))))
+         (mevedel-session-publication-submit
+          session
+          (lambda ()
+            (test-mevedel-publication-async--transcript-artifacts
+             session buffer "segment-9.chat.org" "Partial staging"))
+          (lambda (ok err) (push (list ok err) acknowledgements)) nil t)
+         (test-mevedel-publication-async--wait (lambda () acknowledgements)))
+       (should (= writes 2))
+       (should (equal '((nil (quit))) acknowledgements))
+       (should-not (mevedel-session-publication-busy-p session))
+       (should-not (mevedel-session-pending-publication session))
+       (dolist (directory directories) (should-not (file-exists-p directory))))))
+
+  :doc "quit in an acknowledged producer callback cannot strand its successor"
+  (test-mevedel-publication-async--fixture
+   (lambda (session _buffer)
+     (let (acknowledgements diagnostics)
+       (mevedel-test--with-captured-diagnostics diagnostics
+         (test-mevedel-publication-async--send
+          session "callback-quit"
+          (lambda (ok err)
+            (push (list ok err) acknowledgements)
+            (signal 'quit nil)))
+         (test-mevedel-publication-async--send
+          session "after-callback-quit"
+          (lambda (ok err) (push (list ok err) acknowledgements)))
+         (test-mevedel-publication-async--wait
+          (lambda () (= 2 (length acknowledgements)))))
+       (should (equal '((t nil) (t nil)) acknowledgements))
+       (should (string-match-p "Publication acknowledgement failed: Quit" diagnostics))
+       (should-not (mevedel-session-publication-busy-p session))
+       (should (= 2 (length (test-mevedel-publication-async--restored-mail session)))))))
+
   :doc "disabled transport still drains accepted overlapping publications exactly once"
   (test-mevedel-publication-async--fixture
    (lambda (session _buffer)
@@ -265,7 +321,336 @@
        (should-not (plist-get (car (test-mevedel-publication-async--mail session)) :uncommitted))
        (should (equal (list (secure-hash 'sha256 "/root:restore"))
                       (test-mevedel-publication-async--ids
-                       (test-mevedel-publication-async--restored-mail session))))))))
+                       (test-mevedel-publication-async--restored-mail session)))))))
+
+  :doc "a multi-artifact checkpoint publishes transcripts and ancillary fixed files asynchronously"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let ((head (plist-get (mevedel-session-publication session) :head))
+           (save-path (mevedel-session-save-path session))
+           acknowledgements)
+       (mevedel-session-publication-submit
+        session
+        (lambda ()
+          (test-mevedel-publication-async--transcript-artifacts
+           session buffer "segment-9.chat.org" "async transcript"))
+        (lambda (ok err) (push (list ok err) acknowledgements)))
+       (should-not acknowledgements)
+       (test-mevedel-publication-async--wait (lambda () acknowledgements))
+       (should (equal '((t nil)) acknowledgements))
+       (should-not (equal head (plist-get (mevedel-session-publication session) :head)))
+       (should (equal "extra"
+                      (with-temp-buffer
+                        (insert-file-contents
+                         (file-name-concat save-path "notes/deep/extra.txt"))
+                        (buffer-string))))
+       (should (equal "async transcript"
+                      (mevedel-session-artifacts-read-artifact
+                       session "segment-9.chat.org" t)))
+       (test-mevedel-publication-async--wait
+        (lambda () (not (mevedel-session-publication-busy-p session))))
+       (should-not (mevedel-session-pending-publication session)))))
+
+  :doc "a nil preparation is a clean no-op success"
+  (test-mevedel-publication-async--fixture
+   (lambda (session _buffer)
+     (let ((head (plist-get (mevedel-session-publication session) :head))
+           acknowledgements)
+       (mevedel-session-publication-submit
+        session #'ignore (lambda (ok err) (push (list ok err) acknowledgements)))
+       (test-mevedel-publication-async--wait (lambda () acknowledgements))
+       (should (equal '((t nil)) acknowledgements))
+       (should (equal head (plist-get (mevedel-session-publication session) :head)))
+       (test-mevedel-publication-async--wait
+        (lambda () (not (mevedel-session-publication-busy-p session))))
+       (should-not (mevedel-session-publication-active-p session)))))
+
+  :doc "a replacing marker is refused before any target write"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let ((head (plist-get (mevedel-session-publication session) :head))
+           acknowledgements)
+       (mevedel-session-publication-submit
+        session
+        (lambda ()
+          (mapcar (lambda (artifact)
+                    (if (plist-get artifact :commit-marker)
+                        (plist-put (copy-sequence artifact) :replace t)
+                      artifact))
+                  (test-mevedel-publication-async--transcript-artifacts
+                   session buffer "segment-9.chat.org" "refused")))
+        (lambda (ok err) (push (list ok err) acknowledgements)))
+       (test-mevedel-publication-async--wait (lambda () acknowledgements))
+       (should-not (caar acknowledgements))
+       (should (cadar acknowledgements))
+       (should (equal head (plist-get (mevedel-session-publication session) :head)))
+       (should-not (mevedel-session-pending-publication session))
+       (should-not (file-exists-p
+                    (file-name-concat (mevedel-session-save-path session)
+                                      "notes/deep/extra.txt"))))))
+
+  :doc "a checkpoint candidate is installed only after its head commits"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let ((install (symbol-function 'mevedel-session-checkpoint-install))
+           (head (plist-get (mevedel-session-publication session) :head))
+           installed acknowledgements)
+       (cl-letf (((symbol-function 'mevedel-session-checkpoint-install)
+                  (lambda (owner candidate)
+                    (push (plist-get (mevedel-session-publication owner) :head) installed)
+                    (funcall install owner candidate))))
+         (mevedel-session-publication-submit
+          session
+          (lambda ()
+            (test-mevedel-publication-async--transcript-artifacts
+             session buffer "segment-9.chat.org" "checkpointed"
+             (mevedel-session-checkpoint-capture session "/root")))
+          (lambda (ok err) (push (list ok err) acknowledgements)))
+         (test-mevedel-publication-async--wait (lambda () acknowledgements)))
+       (should (equal '((t nil)) acknowledgements))
+       (should (= 1 (length installed)))
+       (should-not (equal head (car installed)))
+       (should (equal (plist-get (mevedel-session-publication session) :head)
+                      (car installed))))))
+
+  :doc "a candidate invalidated before the head fails without installing or writing"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let ((head (plist-get (mevedel-session-publication session) :head))
+           (installs 0)
+           acknowledgements)
+       (cl-letf (((symbol-function 'mevedel-session-checkpoint-install)
+                  (lambda (&rest _) (cl-incf installs))))
+         (mevedel-session-publication-submit
+          session
+          (lambda ()
+            (let ((candidate (mevedel-session-checkpoint-capture session "/root")))
+              ;; Adopting another history invalidates every earlier candidate.
+              (mevedel-session-checkpoint-seed
+               session (mevedel-session-artifacts--live-sidecar session buffer))
+              (test-mevedel-publication-async--transcript-artifacts
+               session buffer "segment-9.chat.org" "stale" candidate)))
+          (lambda (ok err) (push (list ok err) acknowledgements)))
+         (test-mevedel-publication-async--wait (lambda () acknowledgements)))
+       (should-not (caar acknowledgements))
+       (should (= 0 installs))
+       (should (equal head (plist-get (mevedel-session-publication session) :head)))
+       (should-not (mevedel-session-pending-publication session)))))
+
+  :doc "retain-failure keeps the frozen batch as recovery and a retry commits it"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let ((prepare (symbol-function 'mevedel-session-publication--prepare-generation))
+           (head (plist-get (mevedel-session-publication session) :head))
+           (failures 0)
+           acknowledgements)
+       (cl-letf (((symbol-function 'mevedel-session-publication--prepare-generation)
+                  (lambda (&rest arguments)
+                    (if (= 0 failures)
+                        (progn (cl-incf failures)
+                               (error "Injected immutable generation failure"))
+                      (apply prepare arguments)))))
+         (mevedel-test--with-captured-diagnostics nil
+           (mevedel-session-publication-submit
+            session
+            (lambda ()
+              (test-mevedel-publication-async--transcript-artifacts
+               session buffer "segment-9.chat.org" "retained"))
+            (lambda (ok err) (push (list ok err) acknowledgements))
+            nil t)
+           (test-mevedel-publication-async--wait (lambda () acknowledgements))
+           (should-not (caar acknowledgements))
+           (should (equal head (plist-get (mevedel-session-publication session) :head)))
+           (should (mevedel-session-pending-publication session))
+           (should (plist-get (mevedel-session-pending-publication session) :batches))
+           (mevedel-session-publication-retry session)))
+       (should-not (mevedel-session-pending-publication session))
+       (should-not (equal head (plist-get (mevedel-session-publication session) :head)))
+       (should (equal "retained"
+                      (mevedel-session-artifacts-read-artifact
+                       session "segment-9.chat.org" t)))
+       (should (= 1 (length acknowledgements))))))
+
+  :doc "without retain-failure the frozen batch is discarded and later mutation proceeds"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let ((head (plist-get (mevedel-session-publication session) :head))
+           acknowledgements)
+       (cl-letf (((symbol-function 'mevedel-session-publication--prepare-generation)
+                  (lambda (&rest _) (error "Injected immutable generation failure"))))
+         (mevedel-session-publication-submit
+          session
+          (lambda ()
+            (test-mevedel-publication-async--transcript-artifacts
+             session buffer "segment-9.chat.org" "discarded"))
+          (lambda (ok err) (push (list ok err) acknowledgements)))
+         (test-mevedel-publication-async--wait (lambda () acknowledgements)))
+       (should-not (caar acknowledgements))
+       (should-not (mevedel-session-pending-publication session))
+       (should (equal head (plist-get (mevedel-session-publication session) :head)))
+       (should-not (mevedel-session-publication-uncommitted-artifact
+                    session "segment-9.chat.org")))))
+
+  :doc "a committed head whose result was lost reconciles, adopts, and installs once"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let* ((original (symbol-function 'mevedel-session-durability-commit-publication-head-async))
+            (install (symbol-function 'mevedel-session-checkpoint-install))
+            (head (plist-get (mevedel-session-publication session) :head))
+            (installs 0)
+            acknowledgements)
+       (cl-letf (((symbol-function 'mevedel-session-durability-commit-publication-head-async)
+                  (lambda (owner candidate callback)
+                    ;; The head really commits; only its result is lost.
+                    (funcall original owner candidate
+                             (lambda (_success _error)
+                               (funcall callback nil '(error "Injected lost result"))))))
+                 ((symbol-function 'mevedel-session-checkpoint-install)
+                  (lambda (owner candidate)
+                    (cl-incf installs)
+                    (funcall install owner candidate))))
+         (mevedel-session-publication-submit
+          session
+          (lambda ()
+            (test-mevedel-publication-async--transcript-artifacts
+             session buffer "segment-9.chat.org" "late"
+             (mevedel-session-checkpoint-capture session "/root")))
+          (lambda (ok err) (push (list ok err) acknowledgements)))
+         (test-mevedel-publication-async--wait (lambda () acknowledgements)))
+       (should (equal '((t nil)) acknowledgements))
+       (should (= 1 installs))
+       (should-not (equal head (plist-get (mevedel-session-publication session) :head)))
+       (should-not (mevedel-session-pending-publication session))
+       (should (equal "late"
+                      (mevedel-session-artifacts-read-artifact
+                       session "segment-9.chat.org" t)))))))
+
+(mevedel-deftest mevedel-session-publication--async-fixed-operations (:quiet t)
+  ,test
+  (test)
+  :doc "one program proves the lease then ensures each parent level and writes each fixed artifact"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let* ((batch (mevedel-session-publication--stage-artifacts
+                    session
+                    (test-mevedel-publication-async--transcript-artifacts
+                     session buffer "segment-9.chat.org" "transcript")))
+            (plan (mevedel-session-publication--async-fixed-operations session batch))
+            (operations (car plan)))
+       (unwind-protect
+           (progn
+             ;; The immutable-only transcript contributes nothing; the deep
+             ;; ancillary file brings its two parents, the sidecar none.
+             (should (equal '(verify-latest make-directory make-directory write write)
+                            (mapcar (lambda (operation) (plist-get operation :op))
+                                    operations)))
+             (should (equal '(3 4) (cdr plan)))
+             (should (cl-every (lambda (index)
+                                 (eq 'write (plist-get (nth index operations) :op)))
+                               (cdr plan)))
+             (should (equal ".el" (plist-get (car operations) :content)))
+             (should (cl-every (lambda (operation) (plist-get operation :optional))
+                               (seq-filter (lambda (operation)
+                                             (eq 'make-directory (plist-get operation :op)))
+                                           operations)))
+             (should (equal (file-name-concat (mevedel-session-save-path session)
+                                              "notes/deep/extra.txt")
+                            (file-truename (plist-get (nth 3 operations) :path)))))
+         (mevedel-session-publication--delete-batch batch)))))
+  :doc "a session without a bound lease generation plans nothing"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let ((batch (mevedel-session-publication--stage-artifacts
+                   session
+                   (test-mevedel-publication-async--transcript-artifacts
+                    session buffer "segment-9.chat.org" "transcript")))
+           (lease (mevedel-session-lease session)))
+       (unwind-protect
+           (progn
+             (setf (mevedel-session-lease session) nil)
+             (should (equal '(nil) (mevedel-session-publication--async-fixed-operations
+                                    session batch))))
+         (setf (mevedel-session-lease session) lease)
+         (mevedel-session-publication--delete-batch batch)))))
+  :doc "a fixed artifact outside the session directory is refused"
+  (test-mevedel-publication-async--fixture
+   (lambda (session _buffer)
+     (should-error
+      (mevedel-session-publication--async-fixed-operations
+       session (list :artifacts (list (list :path (make-temp-name "/tmp/mevedel-outside-")
+                                            :source "/tmp/mevedel-source"))))))))
+
+(mevedel-deftest mevedel-session-publication--project-staged-sidecar (:quiet t)
+  ,test
+  (test)
+  :doc "an identity the checkpoint candidate consumed since freezing leaves the staged sidecar"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let (acknowledgements)
+       (test-mevedel-publication-async--send
+        session "stale-id" (lambda (ok err) (push (list ok err) acknowledgements)))
+       (test-mevedel-publication-async--wait (lambda () acknowledgements))
+       (let* ((mail (test-mevedel-publication-async--mail session))
+              (id (plist-get (car mail) :id))
+              (batch (mevedel-session-publication--stage-artifacts
+                      session
+                      (test-mevedel-publication-async--transcript-artifacts
+                       session buffer "segment-9.chat.org" "transcript")))
+              (marker (mevedel-session-publication--batch-marker batch))
+              (source (plist-get marker :source)))
+         (unwind-protect
+             (progn
+               (should (member id (test-mevedel-publication-async--ids
+                                   (plist-get (mevedel-session-publication--read-staged-sidecar
+                                               source)
+                                              :messages))))
+               ;; The mail is consumed after the sidecar was frozen, and the
+               ;; candidate captured with that consumption retires it.
+               (mevedel-session-checkpoint-consume session "/root" mail)
+               (mevedel-agent-control--set-mailbox-queue session "/root" nil)
+               (mevedel-session-publication--project-staged-sidecar
+                session marker (mevedel-session-checkpoint-capture session "/root"))
+               (should-not (member id (test-mevedel-publication-async--ids
+                                       (plist-get
+                                        (mevedel-session-publication--read-staged-sidecar
+                                         source)
+                                        :messages))))
+               (should-not (plist-get marker :source-sha256)))
+           (mevedel-session-publication--delete-batch batch))))))
+  :doc "an already projected sidecar keeps its staged bytes"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let* ((batch (mevedel-session-publication--stage-artifacts
+                    session
+                    (test-mevedel-publication-async--transcript-artifacts
+                     session buffer "segment-9.chat.org" "transcript")))
+            (marker (mevedel-session-publication--batch-marker batch))
+            (source (plist-get marker :source))
+            (before (mevedel-session-publication--file-sha256 source)))
+       (unwind-protect
+           (progn
+             (mevedel-session-publication--project-staged-sidecar session marker nil)
+             (should (equal before (mevedel-session-publication--file-sha256 source))))
+         (mevedel-session-publication--delete-batch batch)))))
+  :doc "a session without a checkpoint owner is left untouched"
+  (test-mevedel-publication-async--fixture
+   (lambda (session buffer)
+     (let* ((batch (mevedel-session-publication--stage-artifacts
+                    session
+                    (test-mevedel-publication-async--transcript-artifacts
+                     session buffer "segment-9.chat.org" "transcript")))
+            (marker (mevedel-session-publication--batch-marker batch))
+            (source (plist-get marker :source))
+            (before (mevedel-session-publication--file-sha256 source)))
+       (let ((owner (mevedel-session-checkpoint-state session)))
+         (unwind-protect
+             (cl-letf (((symbol-function 'mevedel-session-checkpoint-project)
+                        (lambda (&rest _) (ert-fail "Projected without an owner"))))
+               (setf (mevedel-session-checkpoint-state session) nil)
+               (mevedel-session-publication--project-staged-sidecar session marker nil)
+               (should (equal before (mevedel-session-publication--file-sha256 source))))
+           (setf (mevedel-session-checkpoint-state session) owner)
+           (mevedel-session-publication--delete-batch batch)))))))
 
 (defun test-mevedel-publication-async--interleaving (fail &optional latch-first)
   "Interleave checkpoint, observational registry save and latch with delivery.
@@ -316,6 +701,25 @@ LATCH-FIRST starts the latch writer, rather than the root checkpoint, mid-job."
 (mevedel-deftest mevedel-session-publication-defer/async (:quiet t)
   ,test
   (test)
+  :doc "quit in a queued preparation and its failure handler releases the next entry"
+  (test-mevedel-publication-async--fixture
+   (lambda (session _buffer)
+     (let (acknowledged failures successor diagnostics)
+       (mevedel-test--with-captured-diagnostics diagnostics
+         (test-mevedel-publication-async--send
+          session "preparation-quit" (lambda (&rest _) (setq acknowledged t)))
+         (should (mevedel-session-publication-defer
+                  session (lambda (_token) (signal 'quit nil))
+                  (lambda (err) (push err failures) (signal 'quit nil))))
+         (should (mevedel-session-publication-defer
+                  session (lambda (_token) (setq successor t))))
+         (test-mevedel-publication-async--wait (lambda () successor)))
+       (should acknowledged)
+       (should (equal '((quit)) failures))
+       (should (string-match-p "Quit" diagnostics))
+       (should-not (mevedel-session-publication-busy-p session))
+       (should-not (mevedel-session-publication-preparation-token session)))))
+
   :doc "a timer cannot borrow a queued synchronous publication's held lease window"
   (test-mevedel-publication-async--fixture
    (lambda (session buffer)
@@ -631,7 +1035,71 @@ QUEUED adds a second completion while the first job is unresolved."
   ,test
   (test)
   :doc "explicit abandonment releases an unresolved uncommitted job and fails its original ACK"
-  (test-mevedel-publication-async--unresolved nil 'abandon))
+  (test-mevedel-publication-async--unresolved nil 'abandon)
+
+  :doc "abandoning retained checkpoint recovery deletes staging and permits close and exit"
+  (dolist (kind '(buffer exit))
+    (test-mevedel-publication-async--fixture
+     (lambda (session buffer)
+       (let ((head (plist-get (mevedel-session-publication session) :head))
+             (commits 0) (observations 0) acknowledgements directories)
+         (cl-letf (((symbol-function 'mevedel-session-durability-commit-publication-head-async)
+                    (lambda (_owner _head callback)
+                      (cl-incf commits)
+                      (funcall callback nil '(file-error "Head write did not run"))))
+                   ((symbol-function 'mevedel-session-durability-observe-publication-head-async)
+                    (lambda (_owner callback)
+                      (cl-incf observations)
+                      (funcall callback nil '(file-error "Head temporarily unreadable")))))
+           (mevedel-session-publication-submit
+            session
+            (lambda ()
+              (test-mevedel-publication-async--transcript-artifacts
+               session buffer "segment-9.chat.org" "Uncommitted checkpoint"))
+            (lambda (ok err) (push (list ok err) acknowledgements)) nil t)
+           (test-mevedel-publication-async--wait
+            (lambda ()
+              (when-let* ((job (mevedel-session-publication-job session)))
+                (eq 'unresolved (mevedel-session-publication--job-phase job))))))
+         (should (= commits 1))
+         (should (= observations 1))
+         (should-not acknowledgements)
+         (should (mevedel-session-pending-publication session))
+         (setq directories
+               (mapcar (lambda (batch) (plist-get batch :directory))
+                       (mevedel-session-publication--job-batches
+                        (mevedel-session-publication-job session))))
+         (should directories)
+         (dolist (directory directories) (should (file-directory-p directory)))
+         (with-current-buffer buffer
+           (should-not (mevedel-session-persistence-allow-buffer-close-p)))
+         (should-not (mevedel-session-persistence--allow-emacs-exit-p))
+         (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+           (should (mevedel-session-publication-abandon session)))
+         (should (equal '((nil (error "Session publication was explicitly abandoned")))
+                        acknowledgements))
+         (should-not (mevedel-session-pending-publication session))
+         (should-not (mevedel-session-publication-job session))
+         (should-not (mevedel-session-publication-busy-p session))
+         (should-not (mevedel-session-publication-active-p session))
+         (should-not (mevedel-session-publication-uncommitted-batches session))
+         (should-not (mevedel-session-publication-queue session))
+         (dolist (directory directories) (should-not (file-exists-p directory)))
+         (should (equal head (plist-get (mevedel-session-publication session) :head)))
+         (should (mevedel-session-persistence--allow-emacs-exit-p))
+         (with-current-buffer buffer
+           (should (mevedel-session-persistence-allow-buffer-close-p)))
+         (pcase kind
+           ('buffer
+            (with-current-buffer buffer
+              (add-hook 'kill-buffer-query-functions
+                        #'mevedel-session-persistence-allow-buffer-close-p nil t)
+              (add-hook 'kill-buffer-hook #'mevedel-session-persistence-release-on-kill nil t)
+              (should (kill-buffer buffer))))
+           ('exit (should-not (mevedel-session-persistence--stop-publications))))
+         (accept-process-output nil 0.05)
+         (should (= 1 (length acknowledgements)))
+         (should-not (mevedel-session-pending-publication session)))))))
 
 (mevedel-deftest mevedel-agent-control-reoffer-mail/async (:quiet t)
   ,test

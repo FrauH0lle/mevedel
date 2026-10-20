@@ -1365,7 +1365,7 @@ Each failure is reported and does not stop the rest."
     (dolist (file files)
       (condition-case err
           (when (file-exists-p file) (delete-file file))
-        (error
+        ((error quit)
          (display-warning
           'mevedel
           (format "Staged control payload cleanup failed: %s"
@@ -1435,15 +1435,16 @@ target: callers serialize the ones that touch the same files."
                           (dolist (file (car staged))
                             (condition-case err
                                 (when (file-exists-p file) (delete-file file))
-                              (error
+                              ((error quit)
                                (push file mevedel-session-control-fs--orphaned-staged)
                                (setq failure (or failure err)))))
                           ;; Every private resource is released on its own:
-                          ;; one failing kill hook must not leave the others.
+                          ;; one failing or quitting kill hook must not leave
+                          ;; the others.
                           (condition-case err
                               (when-let* ((pipe (get-buffer-process stderr)))
                                 (delete-process pipe))
-                            (error (setq failure (or failure err))))
+                            ((error quit) (setq failure (or failure err))))
                           ;; The buffers are private: another module's kill
                           ;; query must not veto them, and a veto (a nil
                           ;; return) counts as failure like a signal does.
@@ -1452,7 +1453,7 @@ target: callers serialize the ones that touch the same files."
                               (condition-case err
                                   (let ((kill-buffer-query-functions nil))
                                     (kill-buffer buffer))
-                                (error (setq failure (or failure err))))
+                                ((error quit) (setq failure (or failure err))))
                               (when (buffer-live-p buffer)
                                 (setq failure
                                       (or failure
@@ -1464,7 +1465,7 @@ target: callers serialize the ones that touch the same files."
                                       (let ((kill-buffer-hook nil)
                                             (kill-buffer-query-functions nil))
                                         (kill-buffer buffer)))
-                                  (error nil)))))
+                                  ((error quit) nil)))))
                           (when failure (signal (car failure) (cdr failure))))))
              (deliver (lambda (results failure)
                         (setq mevedel-session-control-fs--async-jobs
@@ -1483,7 +1484,7 @@ target: callers serialize the ones that touch the same files."
                                           ;; stored outcome.
                                           (condition-case cleanup
                                               (funcall release)
-                                            (error
+                                            ((error quit)
                                              (display-warning
                                               'mevedel
                                               (format "Control program cleanup failed: %s"
@@ -1588,7 +1589,7 @@ target: callers serialize the ones that touch the same files."
              (when (process-live-p process) (delete-process process))
              (condition-case cleanup
                  (funcall release)
-               (error
+               ((error quit)
                 (display-warning
                  'mevedel
                  (format "Control program cleanup failed: %s"

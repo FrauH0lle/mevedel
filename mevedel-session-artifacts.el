@@ -2271,13 +2271,15 @@ Only apply those tombstones after the replacement sidecar is durable."
               artifacts)))
     (nreverse artifacts)))
 
-(defun mevedel-session-artifacts--remote-save
-    (session buffer settled &optional force token)
-  "Publish portable project SESSION's durability-critical state from BUFFER.
+(defun mevedel-session-artifacts-prepare-save
+    (session buffer &optional settled force)
+  "Freeze portable SESSION's save from BUFFER while holding its mutation gate.
 When SETTLED is non-nil, update the prompt index and latest fork point.
 When FORCE is non-nil, publish even when the state is already committed.
-The public save entry point has already completed the mutation gate before
-calling this serializer."
+The caller owns checkpoint preparation exclusion and mutation admission.
+Return (:artifacts ARTIFACTS :finish FUNCTION).  Call FUNCTION without arguments
+only after authoritative adoption, or immediately when ARTIFACTS is nil.
+Edits made after capture remain modified.  Nothing is published here."
   (mevedel-session-artifacts-ensure-files session buffer)
   (when settled
     (mevedel-session-artifacts-update-prompt-index session buffer)
@@ -2332,51 +2334,49 @@ calling this serializer."
                  (mevedel-session-publication-committed-p
                   session (list (mevedel-session-artifacts--sidecar-artifact
                                  session buffer checkpoint))))))
-      (if unchanged
-          ;; Nothing durable differs from the committed snapshot, so this
-          ;; save owes the target no transaction.  A segment artifact that
-          ;; compared equal proves the committed snapshot already holds these
-          ;; bytes, so the buffer is no longer dirty against the target.
-          (when segment-artifact
-            (with-current-buffer buffer
-              (condition-case err
-                  (progn
-                    (set-visited-file-modtime 0)
-                    (when (= frozen-tick (buffer-chars-modified-tick))
-                      (set-buffer-modified-p nil)))
-                (error
-                 (mevedel--warn-once
-                  'artifacts-session-post-save
-                  "Session post-save cleanup failed: %s"
-                  (error-message-string err))))))
+      (unless unchanged
         (setf (mevedel-session-updated-at session)
-              (format-time-string "%FT%H-%M-%S"))
-        (let ((publication
-               (append changed
-                       (list (mevedel-session-artifacts--sidecar-artifact
-                              session buffer checkpoint)))))
-          (mevedel-session-publication-publish
-           session publication mevedel-session-artifacts-require-agent-commit-p t
-           token))
-        (when segment-artifact
-          (with-current-buffer buffer
-            (condition-case err
-                (progn
-                  (set-visited-file-modtime 0)
-                  (when (= frozen-tick (buffer-chars-modified-tick))
-                    (set-buffer-modified-p nil))
-                  (mevedel-session-artifacts--run-save-hooks-silently
-                   'after-save-hook))
-              (error
-               (mevedel--warn-once
-                'artifacts-session-post-save
-                "Session post-save cleanup failed: %s"
-                (error-message-string err))))))))
-    ;; Input history is diagnostic UI state: warn/retry independently and
-    ;; never turn it into critical publication.
-    (mevedel-session-persistence-notify-session-event
-     session 'save-history)
-    (mevedel-session-save-path session)))
+              (format-time-string "%FT%H-%M-%S")))
+      (list
+       :artifacts
+       (unless unchanged
+         (append changed
+                 (list (mevedel-session-artifacts--sidecar-artifact
+                        session buffer checkpoint))))
+       :finish
+       (lambda ()
+         ;; Unchanged bytes already belong to the authoritative snapshot.
+         ;; Otherwise this cleanup is permitted only after head adoption.
+         (when (and segment-artifact (buffer-live-p buffer))
+           (with-current-buffer buffer
+             (condition-case err
+                 (progn
+                   (set-visited-file-modtime 0)
+                   (when (= frozen-tick (buffer-chars-modified-tick))
+                     (set-buffer-modified-p nil))
+                   (unless unchanged
+                     (mevedel-session-artifacts--run-save-hooks-silently
+                      'after-save-hook)))
+               (error
+                (mevedel--warn-once
+                 'artifacts-session-post-save
+                 "Session post-save cleanup failed: %s"
+                 (error-message-string err))))))
+         ;; Input history is diagnostic UI state, not critical publication.
+         (mevedel-session-persistence-notify-session-event session 'save-history)
+         (mevedel-session-save-path session))))))
+
+(defun mevedel-session-artifacts--remote-save
+    (session buffer settled &optional force token)
+  "Publish portable SESSION's save from BUFFER synchronously.
+SETTLED, FORCE and TOKEN have the public save entry's meanings."
+  (let* ((prepared (mevedel-session-artifacts-prepare-save
+                    session buffer settled force))
+         (artifacts (plist-get prepared :artifacts)))
+    (when artifacts
+      (mevedel-session-publication-publish
+       session artifacts mevedel-session-artifacts-require-agent-commit-p t token))
+    (funcall (plist-get prepared :finish))))
 
 (defun mevedel-session-artifacts-save
     (session buffer &optional settled force token)

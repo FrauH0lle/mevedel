@@ -627,12 +627,19 @@
                    :session session :phase 'unresolved))
             (mevedel-test--with-captured-diagnostics message
               (should-not (mevedel-session-persistence-allow-buffer-close-p)))
-            (should (string-search "publication-abandon" message)))
+            (should (string-search "publication-abandon" message))
+            ;; A definitive failure leaves recovery without a running job.
+            (setf (mevedel-session-publication-job session) nil
+                  (mevedel-session-pending-publication session) '(:error "Failed checkpoint"))
+            (mevedel-test--with-captured-diagnostics message
+              (should-not (mevedel-session-persistence-allow-buffer-close-p)))
+            (should (string-search "retry or abandon" message)))
           (should-not (mevedel-session-publication-stopping-p session))
           ;; A non-root buffer never decides the session's fate.
           (with-current-buffer other
             (should (mevedel-session-persistence-allow-buffer-close-p))))
-      (setf (mevedel-session-publication-job session) nil
+      (setf (mevedel-session-pending-publication session) nil
+            (mevedel-session-publication-job session) nil
             (mevedel-session-root-buffer session) nil)
       (mapc #'kill-buffer (list buffer other))
       (mevedel-workspace-clear-registry)
@@ -697,10 +704,17 @@
               (mevedel-session-persistence-release-on-kill))
             (should-not (or saved released))
             (should (string-search "unresolved" message))
-            (setf (mevedel-session-publication-job session) nil)
+            (setf (mevedel-session-publication-job session) nil
+                  (mevedel-session-pending-publication session) '(:error "Failed checkpoint"))
+            (mevedel-test--with-captured-diagnostics message
+              (mevedel-session-persistence-release-on-kill))
+            (should-not (or saved released))
+            (should (string-search "retry or abandon" message))
+            (setf (mevedel-session-pending-publication session) nil)
             (mevedel-session-persistence-release-on-kill)
             (should (and saved released))))
-      (setf (mevedel-session-publication-job session) nil
+      (setf (mevedel-session-pending-publication session) nil
+            (mevedel-session-publication-job session) nil
             (mevedel-session-root-buffer session) nil)
       (kill-buffer buffer)
       (mevedel-workspace-clear-registry)
@@ -767,7 +781,8 @@
                        (lambda (&optional _frame) (list parent buffer))))
               (run-hooks 'auto-save-hook)
               (with-timeout (2 (ert-fail "Auto-save remained queued"))
-                (while (> (hash-table-count mevedel-session-persistence--autosaves) 0)
+                (while (or (> (hash-table-count mevedel-session-persistence--autosaves) 0)
+                           (mevedel-session-publication-busy-p session))
                   (sleep-for .002))))
             (should (string-search
                      "Agent prompt"
@@ -780,7 +795,8 @@
                        (lambda (&optional _frame) (list buffer))))
               (run-hooks 'auto-save-hook)
               (with-timeout (2 (ert-fail "Auto-save remained queued"))
-                (while (> (hash-table-count mevedel-session-persistence--autosaves) 0)
+                (while (or (> (hash-table-count mevedel-session-persistence--autosaves) 0)
+                           (mevedel-session-publication-busy-p session))
                   (sleep-for .002))))
             (should (string-search
                      "Auto-saved agent answer"
