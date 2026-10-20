@@ -21,6 +21,15 @@
       (should (equal status 0))
       (buffer-string))))
 
+(defun mevedel-bash-git-test--init (directory)
+  "Create a repository in DIRECTORY whose metadata changes only on request.
+Git starts a detached `git maintenance run --auto' after a commit; under
+load it could still hold or remove its lock file while a test compared
+metadata snapshots around an inspection."
+  (mevedel-bash-git-test--run (list "git" "init" "-q" "-b" "main" directory))
+  (mevedel-bash-git-test--run (list "git" "-C" directory "config" "maintenance.auto" "false"))
+  (mevedel-bash-git-test--run (list "git" "-C" directory "config" "gc.auto" "0")))
+
 (defun mevedel-bash-git-test--snapshot (root)
   "Return contents, modes and modification/change times of ROOT's tree."
   (mapcar
@@ -253,7 +262,7 @@
          (process-environment (copy-sequence process-environment)))
     (unwind-protect
         (progn
-          (mevedel-bash-git-test--run (list "git" "init" "-q" "-b" "main" repo))
+          (mevedel-bash-git-test--init repo)
           (make-directory temporary-root)
           (make-directory bin)
           (with-temp-file (file-name-concat bin "mktemp")
@@ -296,7 +305,7 @@
         (progn
           (setenv "HOME" root)
           (setenv "XDG_CONFIG_HOME" (file-name-concat root ".config"))
-          (mevedel-bash-git-test--run (list "git" "init" "-q" "-b" "main" repo))
+          (mevedel-bash-git-test--init repo)
           (setq default-directory (file-name-as-directory repo))
           (mevedel-bash-git-test--run '("git" "config" "user.name" "Test"))
           (mevedel-bash-git-test--run '("git" "config" "user.email" "test@example.test"))
@@ -426,7 +435,7 @@
          (marker (file-name-concat root "remote-ran")))
     (unwind-protect
         (progn
-          (mevedel-bash-git-test--run '("git" "init" "-q" "-b" "main" "."))
+          (mevedel-bash-git-test--init ".")
           (with-temp-file helper
             (insert "#!/bin/sh\n: > " (shell-quote-argument marker) "\nexit 1\n"))
           (set-file-modes helper #o700)
@@ -569,7 +578,7 @@
          (default-directory root))
     (unwind-protect
         (progn
-          (mevedel-bash-git-test--run (list "git" "init" "-q" "-b" "main" base))
+          (mevedel-bash-git-test--init base)
           (setq default-directory (file-name-as-directory base))
           (mevedel-bash-git-test--run '("git" "config" "user.name" "Test"))
           (mevedel-bash-git-test--run '("git" "config" "user.email" "test@example.test"))
@@ -609,7 +618,7 @@
            (stamp (encode-time 0 0 0 1 1 2000 t)))
       (unwind-protect
           (progn
-            (mevedel-bash-git-test--run '("git" "init" "-q" "-b" "main" "."))
+            (mevedel-bash-git-test--init ".")
             (mevedel-bash-git-test--run '("git" "config" "user.name" "Test"))
             (mevedel-bash-git-test--run '("git" "config" "user.email" "test@example.test"))
             ;; Ignore ctime/subsecond differences to reproduce a same-tick
