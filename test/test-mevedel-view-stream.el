@@ -901,6 +901,29 @@ turn's later text, live and after reconstruction."
           (ert-info ((format "View after its render:\n%s" visible))
             (should (= 1 (mevedel-view-stream-test--count-substring
                           expected visible)))))
+        ;; The completion follows the still-running call in source.  Local
+        ;; progress refreshes must replace only that call, not append another
+        ;; copy of the separately projected completion.  Interleave tail
+        ;; rebuilds to cover the reported grow/reset/grow sequence too.
+        (dotimes (n 15)
+          (mevedel-view-stream-handle-tool-progress
+           (list :type 'progress :session session :data-buffer data-buf
+                 :owner "main" :tool-use-id "call-fast"
+                 :tool-args '(:command "make fast")
+                 :facts '(:execution-id "exec-fast" :command "make fast"
+                          :state running)))
+          (when (zerop (% (1+ n) 5))
+            (mevedel-view-render-live-update data-buf))
+          (ert-info ((format "Completion after progress update %d" n))
+            (should (= 1 (mevedel-view-stream-test--count-substring
+                          expected
+                          (buffer-substring-no-properties
+                           (point-min) (mevedel-view--input-start))))))
+          (should (equal draft (mevedel-view--input-text)))
+          (should (= 4 (- (point) (mevedel-view--input-start)))))
+        (with-current-buffer data-buf
+          (should (= 1 (length (mevedel-transcript-audit-records
+                               (buffer-string) 'execution-breadcrumb)))))
         (with-current-buffer data-buf
           (save-excursion
             (goto-char tracking)

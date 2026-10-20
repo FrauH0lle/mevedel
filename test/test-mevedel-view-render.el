@@ -5048,6 +5048,57 @@
           (should (markerp (cdr source)))))
       (should (equal "> quoted\nsecond line" (mevedel-view--input-text))))))
 
+(mevedel-deftest mevedel-view--refresh-tool-row/audit-neighbors
+  (:doc "progress leaves an expanded neighboring hook audit unchanged")
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "#+begin_tool Custom\n"
+              (propertize "(:name \"Custom\" :args (:value \"x\"))\n\nresult"
+                          'gptel '(tool . "audited"))
+              "\n#+end_tool\n"
+              (mevedel--format-hook-audit-record
+               '(:type tool-context :event "PreToolUse"
+                 :handlers ((:source project-file
+                             :contexts ("Keep this audit expanded")))))))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4)
+      (let (audit-text audit-key)
+        (save-excursion
+          (goto-char (text-property-any (point-min) (mevedel-view--input-start)
+                                        'mevedel-view-type 'hook-audit))
+          (mevedel-view-toggle-section)
+          (let ((bounds (mevedel-view-disclosure-section-bounds)))
+            (setq audit-text (buffer-substring-no-properties
+                              (car bounds) (cdr bounds))
+                  audit-key (get-text-property (point) 'mevedel-view-source-key))))
+        (dotimes (_ 5)
+          (should (mevedel-view--refresh-tool-row data-buf "audited"))
+          (should (= 1 (mevedel-view-test--count-substring
+                        "PreToolUse hook added context" (buffer-string))))
+          (save-excursion
+            (goto-char (text-property-any (point-min) (mevedel-view--input-start)
+                                          'mevedel-view-type 'hook-audit))
+            (let ((bounds (mevedel-view-disclosure-section-bounds)))
+              (should (equal audit-text (buffer-substring-no-properties
+                                        (car bounds) (cdr bounds))))
+              (should-not (get-text-property (point) 'mevedel-view-collapsed))
+              (should (eq audit-key (get-text-property
+                                    (point) 'mevedel-view-source-key)))))
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+          (should (= 4 (- (point) (mevedel-view--input-start)))))
+        ;; The insertion copy must not strip audits from cached renderings.
+        (mevedel-view--full-rerender)
+        (should (= 1 (mevedel-view-test--count-substring
+                      "PreToolUse hook added context" (buffer-string))))
+        (save-excursion
+          (goto-char (text-property-any (point-min) (mevedel-view--input-start)
+                                        'mevedel-view-type 'hook-audit))
+          (let ((bounds (mevedel-view-disclosure-section-bounds)))
+            (should (equal audit-text (buffer-substring-no-properties
+                                      (car bounds) (cdr bounds))))
+            (should-not (get-text-property (point) 'mevedel-view-collapsed))))))))
+
 (mevedel-deftest mevedel-view--prepare-tool-segment/audited-span
   (:doc "a complete tool followed by its merged hook audit is parsed once")
   (mevedel-view-test--with-buffers

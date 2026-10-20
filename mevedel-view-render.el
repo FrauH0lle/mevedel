@@ -3295,6 +3295,11 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
       (when-let* ((rendering
                   (mevedel-view--segment-rendering
                    data-buffer (car source) (cdr source))))
+        ;; The source span can include following audits, but this replacement
+        ;; owns only the tool and its nested calls.  Their separate audit and
+        ;; completion rows remain outside START..END; reinserting them here
+        ;; would add another copy on every progress event.
+        (setq rendering (plist-put (copy-sequence rendering) :hook-audits nil))
         (unless (or (plist-get rendering :force-expanded-p)
                     previously-forced-p)
           (setq rendering

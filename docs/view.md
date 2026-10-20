@@ -198,6 +198,8 @@ completion renders nothing. A transcript receiving another owner's completion,
 such as a parent receiving a child's, shows an expandable notice from the
 mailbox record instead. A command that finished before yielding has no
 breadcrumb. Model-facing mailbox payloads and agent settlement are unchanged.
+Targeted tool-progress refreshes replace only the tool row and its nested
+calls, leaving separate completion and hook-audit rows untouched.
 
 Directive requests render in the ordinary session view as first-class turns.
 The directive header carries id, action, turn, and an exclusion badge; the
