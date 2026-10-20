@@ -1088,7 +1088,11 @@ connection charges for, so the program path is proved here too."
                (plist-get (plist-get result :facts) :execution-id)
                (lambda (value) (setq stopped value)))
               (test-mevedel-execution--wait (lambda () stopped))
-              (should (< (- (float-time) start) 1.0))))
+              ;; Riding the grace takes at least the kill delay.  A fixed
+              ;; 1 s bound also measured mock TRAMP round trips, which took
+              ;; 1.06 s under a full parallel suite.
+              (should (< (- (float-time) start)
+                         mevedel-execution-process--child-kill-delay))))
           ;; The zombie still answers the raw group probe: only
           ;; zombie-awareness settled this stop early.
           (should (integerp group-id))

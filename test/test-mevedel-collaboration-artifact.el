@@ -871,19 +871,27 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
                      (before (with-temp-buffer (insert-file-contents path) (buffer-string)))
                      (n (mevedel-shared-editing-save-version workspace id)))
                 (should (eq (intern kind) (plist-get (mevedel-artifact-store-meta workspace id) :kind)))
-                (setq sent nil)
+                ;; Artifact notifications reach the lobby too; under load
+                ;; one can arrive before the export answers.
+                (setq sent (list (list 'lobby 1 '(:t "store-list"))))
                 (mevedel-collaboration--handle-artifact-get
                  lobby 1 (list :reqId 91 :id (concat "artifact:" id) :version n))
-                (let ((deadline (+ (float-time) 15)))
-                  (while (and (not sent) (< (float-time) deadline))
-                    (accept-process-output nil 0.05)))
-                (let ((preview (mevedel-collaboration-artifact-test--reply sent 'lobby)))
+                (cl-flet ((answer ()
+                            (nth 2 (cl-find-if
+                                    (lambda (entry)
+                                      (and (eq 'lobby (car entry))
+                                           (eql 91 (plist-get (nth 2 entry) :reqId))))
+                                    sent))))
+                  (let ((deadline (+ (float-time) 15)))
+                    (while (and (not (answer)) (< (float-time) deadline))
+                      (accept-process-output nil 0.05)))
+                (let ((preview (answer)))
                   (should preview)
                   (should-not (plist-get preview :error))
                   (should (equal (if (equal kind "document") "text/html" "image/svg+xml")
                                  (plist-get preview :mime)))
                   (should (plist-get preview :data)))
-                (should (equal before (with-temp-buffer (insert-file-contents path) (buffer-string)))))))
+                (should (equal before (with-temp-buffer (insert-file-contents path) (buffer-string))))))))
            ;; Losing the bearer before the queue runs cannot create an item.
            (let ((before (mevedel-artifact-store-ids workspace)) reply)
              (funcall
