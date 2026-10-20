@@ -245,7 +245,11 @@ delivery, execution ownership, or process lifecycle.
 
 Live Eval runs in the host Emacs. Restoring the window configuration does not
 undo variable assignments, buffer edits, files written, timers, or other side
-effects. Use it only for effects within the authorized task.
+effects. Use it only for effects within the authorized task. With UI preservation
+enabled, chat views restore their semantic cursor and reading positions after
+the frame layout is restored. A redraw during evaluation therefore does not let
+the saved window configuration move a background-work reader into an earlier
+Assistant block or the composer.
 
 Batch Eval starts a separate `emacs --batch -Q`. Its load path and working
 directory are supplied, but it does not copy loaded packages or live values.

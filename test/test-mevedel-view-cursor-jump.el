@@ -15,6 +15,7 @@
 (require 'mevedel-view-stream)
 (require 'mevedel-tool-ui)
 (require 'mevedel-agent-control)
+(require 'mevedel-tool-exec)
 
 (mevedel-deftest mevedel-view-pending-ask-redraw ()
   (dolist (location '(ask background composer))
@@ -106,6 +107,15 @@
   (mevedel-view--interaction-render)
   :doc "incremental live update keeps the Ask focus"
   (mevedel-view-render-live-update data-buf)
+  :doc "new response text keeps the visited live zone"
+  (progn
+    (mevedel-view-test--insert-data data-buf "More response text.\n" 'response)
+    (mevedel-view-render-live-update data-buf))
+  :doc "response settlement keeps the visited live zone"
+  (with-current-buffer data-buf
+    (mevedel-view-stream-render-response (point-min) (point-max)))
+  :doc "stream stop keeps the visited live zone"
+  (mevedel-view-stream-stop)
   :doc "pipeline accepted permission redraw keeps the Ask focus"
   (mevedel-view-stream-handle-pipeline-event
    (list :type 'permission-approved :data-buffer data-buf
@@ -113,6 +123,16 @@
          :permission-approvals '("test")))
   :doc "full rerender keeps the Ask focus"
   (mevedel-view--full-rerender)
+  :doc "live Eval window restoration keeps the visited live zone"
+  (let ((expression (format "(with-current-buffer %S (mevedel-view--full-rerender))"
+                            (buffer-name view-buf)))
+        result)
+    (with-current-buffer data-buf
+      (mevedel-tool-exec--eval-live
+       (lambda (response) (setq result (plist-get response :result)))
+       expression "injection" t))
+    (should (stringp result))
+    (should-not (string-prefix-p "Error:" result)))
   :doc "stale agent handle fallback keeps the Ask focus"
   (progn
     (let ((inhibit-read-only t))

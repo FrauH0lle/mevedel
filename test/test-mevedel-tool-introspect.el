@@ -325,6 +325,42 @@ Return the delivered text; omitted optional arguments are nil."
         (unless (memq buffer before) (kill-buffer buffer))))))
 
 
+(ert-deftest mevedel-tool-introspect--manual-preserves-existing-info ()
+  "Reading a node leaves an existing Info reader and the caller unchanged."
+  (let ((before (buffer-list))
+        (Info-history nil)
+        (Info-history-list nil))
+    (unwind-protect
+        (save-window-excursion
+          (info "(elisp)Lists")
+          (let ((reader (current-buffer))
+                (contents (buffer-string))
+                (position (point))
+                (node Info-current-node)
+                (file Info-current-file)
+                (window (selected-window))
+                (windows (window-list)))
+            (with-temp-buffer
+              (let ((caller (current-buffer)))
+                (insert "Caller contents")
+                (goto-char 4)
+                (should (string-match-p
+                         "Node: Top"
+                         (mevedel-tool-introspect--manual-node-contents "elisp" "Top")))
+                (should (eq (current-buffer) caller))
+                (should (= (point) 4))
+                (should (equal (buffer-string) "Caller contents"))))
+            (should (eq (selected-window) window))
+            (should (equal (window-list) windows))
+            (should (eq (window-buffer window) reader))
+            (with-current-buffer reader
+              (should (equal contents (buffer-string)))
+              (should (= position (point)))
+              (should (equal node Info-current-node))
+              (should (equal file Info-current-file)))))
+      (dolist (buffer (buffer-list))
+        (unless (memq buffer before) (kill-buffer buffer))))))
+
 (mevedel-deftest mevedel-tool-introspect--source
   (:before-each (mevedel-tool-introspect--register))
   ,test

@@ -184,8 +184,12 @@ local directories and reads no file, so ordinary policy covers it."
 ;;; Handlers
 
 (defun mevedel-tool-introspect--manual-node-contents (manual node)
-  "Return contents of NODE in Info MANUAL."
-  (save-window-excursion
+  "Return contents of NODE in Info MANUAL without displaying it."
+  (with-temp-buffer
+    ;; Enter Info mode first so navigation does not select an Info window.
+    ;; A saved window configuration would overwrite semantic reader positions
+    ;; if a live view redraws while Info loads the node.
+    (Info-mode)
     (Info-goto-node (format "(%s)%s" manual node))
     (buffer-substring-no-properties (point-min) (point-max))))
 

@@ -550,7 +550,9 @@ message without interning it. A library's location is its first file in local
 load-path directories, preferring source, plus whether its feature is loaded.
 `EmacsFind` only searches names: functions, commands, variables, or libraries in
 local load-path directories, matching an Orderless pattern. `EmacsManual` lists
-Info manuals, a manual's nodes, or one node's contents. A `value` read always
+Info manuals, a manual's nodes, or one node's contents. Node reads use a
+temporary, undisplayed Info buffer, leaving the user's Info buffer and window
+layout alone even when a live chat redraws during navigation. A `value` read always
 asks for permission; library source must resolve inside a local load-path
 directory (see
 [Permissions](permissions.md#introspection-source-reads)).

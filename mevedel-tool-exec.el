@@ -148,6 +148,12 @@
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 
+;; `mevedel-view-composer'
+(declare-function mevedel-view-call-preserving-window-configuration
+                  "mevedel-view-composer" (thunk))
+(autoload 'mevedel-view-call-preserving-window-configuration
+  "mevedel-view-composer")
+
 ;; `mevedel-workspace'
 (declare-function mevedel--all-allowed-roots
                   "mevedel-workspace" (&optional buffer))
@@ -792,14 +798,16 @@ CALLBACK receives the result envelope.  RESULT-FORMAT controls
 the model-facing shape.  PRESERVE-UI restores the selected frame's
 window configuration after evaluation."
   (let ((standard-output (generate-new-buffer " *mevedel-eval-elisp*"))
-        (window-configuration (and preserve-ui
-                                   (current-window-configuration)))
         (result nil) (output nil) response)
     (unwind-protect
         (condition-case err
             (let ((default-directory
                    (mevedel-tool-exec-permission-default-directory)))
-              (setq result (eval (read expression) t))
+              (setq result
+                    (if preserve-ui
+                        (mevedel-view-call-preserving-window-configuration
+                         (lambda () (eval (read expression) t)))
+                      (eval (read expression) t)))
               (when (> (buffer-size standard-output) 0)
                 (setq output (with-current-buffer standard-output
                                (buffer-string))))
@@ -812,9 +820,6 @@ window configuration after evaluation."
                             (buffer-string))))
            (setq response
                  (mevedel-tool-exec--eval-format-error err output))))
-      (when (window-configuration-p window-configuration)
-        (ignore-errors
-          (set-window-configuration window-configuration)))
       (kill-buffer standard-output))
     (unless (equal result-format "injection")
       (setq response

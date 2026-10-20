@@ -1614,73 +1614,99 @@ do not override that relocation or classify its old offsets as lost."
                           (or (mevedel-view--render-anchor-position anchor)
                               position)))))))
              (unwind-protect (funcall thunk)
-               (unless positions-preserved
-                 (let ((restored-current-point
-	                (resolve-position mevedel-view--pww-current-point
-                                          mevedel-view--pww-current-input-offset
-                                          mevedel-view--pww-current-anchor)))
-                   (goto-char (min (point-max) restored-current-point))))
-	       (dolist (entry mevedel-view--pww-saved)
-                 (pcase-let ((`(,w ,wp ,ws ,input-offset ,at-bottom
-                                   ,wp-anchor ,ws-anchor ,ws-input-offset ,visit)
-		              entry))
-                   (when (and (window-live-p w)
-		              (eq (window-buffer w) mevedel-view--pww-current-buffer))
-                     (unless positions-preserved
-	               (let ((restored-point
-		              (resolve-position wp input-offset wp-anchor)))
-		         (when restored-point
-                           (set-window-point w (min (point-max) restored-point)))
-		         (when (eq w mevedel-view--pww-selected-window)
-                           (goto-char (window-point w))))
-	               (let* ((anchored-start
-                               (mevedel-view--render-anchor-position ws-anchor t))
-                              (restored-start
-		               (or (and ws-input-offset
-			                (+ (mevedel-view--input-start) ws-input-offset))
-	                           anchored-start
-                                   ws)))
-		         (when (and ws-anchor (not anchored-start))
-                           (push w lost-starts))
-		         (when (and restored-start (<= restored-start (point-max)))
-                           (set-window-start w restored-start t)))
-	               (when (and at-bottom (not input-offset))
-		         (save-selected-window
-                           (select-window w)
-                           (goto-char (point-max))
-                           (recenter -1))))
-                     (when-let* ((position (and visit
-                                                (mevedel-view-zone-anchor-position (car visit)))))
-                       (set-window-point w position)
-                       (mevedel-view--set-viewport
-                        w (mevedel-view--viewport-at-y w position (nth 1 visit)))
-                       (mevedel-view--restore-window-blank-pixels w (nth 2 visit))
-                       (push w visited-windows)))))
-               (when (and (not positions-preserved) mevedel-view--pww-current-mark)
-	         (set-marker
-	          (mark-marker)
-                  (min
-                   (point-max)
-                   (resolve-position mevedel-view--pww-current-mark
-			             mevedel-view--pww-mark-input-offset
-			             mevedel-view--pww-mark-anchor)))
-                 (setq mark-active mevedel-view--pww-mark-active
-                       deactivate-mark mevedel-view--pww-deactivate-mark))
-               (mevedel-view--restore-composer-anchors
-                (seq-remove (lambda (anchor) (memq (car anchor) visited-windows)) anchors))
-               (mevedel-view--clamp-window-starts
-                (seq-remove (lambda (tail)
-                              (or (memq (car tail) visited-windows)
-                                  (and (assq (car tail) anchors)
-                                       (not (memq (car tail) lost-starts)))))
-                            tails)
-                lost-starts)))))
+		   (when (buffer-live-p mevedel-view--pww-current-buffer)
+		     (with-current-buffer mevedel-view--pww-current-buffer
+		       (unless positions-preserved
+			 (let ((restored-current-point
+				(resolve-position mevedel-view--pww-current-point
+						  mevedel-view--pww-current-input-offset
+						  mevedel-view--pww-current-anchor)))
+			   (goto-char (min (point-max) restored-current-point))))
+		       (dolist (entry mevedel-view--pww-saved)
+			 (pcase-let ((`(,w ,wp ,ws ,input-offset ,at-bottom
+					   ,wp-anchor ,ws-anchor ,ws-input-offset ,visit)
+				      entry))
+			   (when (and (window-live-p w)
+				      (eq (window-buffer w) mevedel-view--pww-current-buffer))
+			     (unless positions-preserved
+			       (let ((restored-point
+				      (resolve-position wp input-offset wp-anchor)))
+				 (when restored-point
+				   (set-window-point w (min (point-max) restored-point)))
+				 (when (eq w mevedel-view--pww-selected-window)
+				   (goto-char (window-point w))))
+			       (let* ((anchored-start
+				       (mevedel-view--render-anchor-position ws-anchor t))
+				      (restored-start
+				       (or (and ws-input-offset
+						(+ (mevedel-view--input-start) ws-input-offset))
+					   anchored-start
+					   ws)))
+				 (when (and ws-anchor (not anchored-start))
+				   (push w lost-starts))
+				 (when (and restored-start (<= restored-start (point-max)))
+				   (set-window-start w restored-start t)))
+			       (when (and at-bottom (not input-offset))
+				 (save-selected-window
+				   (select-window w)
+				   (goto-char (point-max))
+				   (recenter -1))))
+			     (when-let* ((position (and visit
+							(mevedel-view-zone-anchor-position (car visit)))))
+			       (set-window-point w position)
+			       (mevedel-view--set-viewport
+				w (mevedel-view--viewport-at-y w position (nth 1 visit)))
+			       (mevedel-view--restore-window-blank-pixels w (nth 2 visit))
+			       (push w visited-windows)))))
+		       (when (and (not positions-preserved) mevedel-view--pww-current-mark)
+			 (set-marker
+			  (mark-marker)
+			  (min
+			   (point-max)
+			   (resolve-position mevedel-view--pww-current-mark
+					     mevedel-view--pww-mark-input-offset
+					     mevedel-view--pww-mark-anchor)))
+			 (setq mark-active mevedel-view--pww-mark-active
+			       deactivate-mark mevedel-view--pww-deactivate-mark))
+		       (mevedel-view--restore-composer-anchors
+			(seq-remove (lambda (anchor) (memq (car anchor) visited-windows)) anchors))
+		       (mevedel-view--clamp-window-starts
+			(seq-remove (lambda (tail)
+				      (or (memq (car tail) visited-windows)
+					  (and (assq (car tail) anchors)
+					       (not (memq (car tail) lost-starts)))))
+				    tails)
+			lost-starts)))))))
 
 (defmacro mevedel-view--preserving-window-state (&rest body)
   "Execute BODY while preserving point and window positions."
   (declare (indent 0) (debug t))
   `(mevedel-view--call-preserving-window-state
     (lambda () ,@body)))
+
+(defun mevedel-view-call-preserving-window-configuration (thunk)
+  "Call THUNK, restoring the frame layout and semantic view positions.
+Unlike a raw window configuration, view anchors survive text replaced by
+redraws during THUNK.  Buffer edits are not reverted.  THUNK runs in the
+caller's buffer, not in a displayed view."
+  (let ((configuration (current-window-configuration))
+        (caller (current-buffer))
+        (buffers (delete-dups
+                  (mapcar #'window-buffer (window-list nil 'no-minibuffer)))))
+    (cl-labels
+        ((preserve (remaining)
+           (if (null remaining)
+               (unwind-protect
+                   (with-current-buffer caller (funcall thunk))
+                 (set-window-configuration configuration))
+             (let ((buffer (car remaining)))
+               (if (with-current-buffer buffer
+                     (derived-mode-p 'mevedel-view-mode))
+                   (with-current-buffer buffer
+                     (mevedel-view--call-preserving-window-state
+                      (lambda () (preserve (cdr remaining)))))
+                 (preserve (cdr remaining)))))))
+      (preserve buffers))))
 
 (defun mevedel-view--call-with-render-boundaries-advancing (thunk)
   "Call THUNK while zone boundary markers advance across insertions."
