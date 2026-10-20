@@ -195,7 +195,7 @@ naming input, closed chats (`:chapters`),
 the ids of attached [store artifacts](view.md#artifact-store) (`:attached-artifacts`),
 and, for an artifact's own conversation, that artifact's id (`:dedicated-artifact`).
 Other schemas are rejected by the runtime loader; older sessions are converted
-only by the [explicit migration](#explicit-migration-to-v0513). Recovery records
+only by the [explicit migration](#explicit-session-migration). Recovery records
 contain issue messages, never credentials.
 Queued follow-ups retain text, attribution, scope and attachment grants. Live
 submission objects are excluded. Undelivered steering reloads as requiring review,
@@ -802,7 +802,7 @@ confirmation; declining aborts resume, while accepting binds the conversation
 to the opened workspace and discards copied session permission rules, resource
 grants, and additional roots.  The next save records the opened workspace's
 identity. Superseded sidecar shapes are not migrated during resume; the
-[explicit migration](#explicit-migration-to-v0513) runs separately.
+[explicit migration](#explicit-session-migration) runs separately.
 
 The package release is `0.5.0`; its persisted session format is independently
 `v0.5.13`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
@@ -1026,7 +1026,7 @@ Snapshot contents remain raw and owner-only. Readers resolve the names in the
 checkpoint index; saving does not rewrite existing archived history.
 
 Sessions no longer publish `artifacts/...` logical entries. The
-[artifact migration](#moving-artifacts-into-the-store) moves the content of a
+[artifact migration](#legacy-artifacts) moves the content of a
 session published before the store into it and drops those entries from the
 converted copy.
 
@@ -1822,107 +1822,123 @@ An active persisted Goal is restored `paused`, with an explicit session-resumed
 reason; opening a session never dispatches Goal work. `/goal resume` is required
 to continue. Rewind preserves session preset settings but clears Goal state.
 
-### Explicit migration to v0.5.13
+### Explicit session migration
 
-The standalone [migration script](https://github.com/FrauH0lle/mevedel/blob/master/scripts/migrate-session-v0.5.6.el) converts
-v0.5.6, v0.5.9, v0.5.10, v0.5.11 and v0.5.12 sessions to v0.5.13. A v0.5.13
-session receives the Worktree retry normalization described below and is
-otherwise only validated. Other versions, including v0.5.7 and
-v0.5.8, are not read.
-Close the source session first, then run
-from the repository root with a new destination outside the source directory:
+The standalone [migration script](https://github.com/FrauH0lle/mevedel/blob/master/scripts/migrate-sessions.el)
+accepts a session directory or project root and upgrades sessions **in place**
+to the latest format. Close the selected session, or every session in the
+project, and keep them closed throughout migration. From the repository root:
 
 ```bash
-npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-session-v0.5.6.el \
-  -f mevedel-migrate-session-main -- /path/to/old-session /path/to/converted-session
+# Migrate every session in a project:
+npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-sessions.el \
+  -f mevedel-migrate-session-main -- /path/to/project
+
+# Or migrate one session:
+npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-sessions.el \
+  -f mevedel-migrate-session-main -- /path/to/project/.mevedel/sessions/SESSION-ID
 ```
 
-The source remains unchanged. The converter preserves session identity,
-transcripts, artifacts, native-history references and all retained publication
-heads, updating sidecar checksums. A Goal saved before incomplete-usage
-tracking gains an explicit complete-usage flag; an invalid Goal refuses
-conversion instead of being dropped silently by the runtime loader. New recovery fields start empty because older
-formats did not persist queued input; previously unsaved queues cannot be recovered.
-Existing v0.5.10 sidecars retain their recovery state. A converted session
-starts with no attached artifacts unless the artifact migration below attaches
-the ones it moved; v0.5.11 sessions keep their attachments, and one that still
-holds legacy `artifacts/` is refused rather than having them moved without
-being attached. Titles and naming states are kept. No older format recorded
-naming input, so a converted session has none: an `attempted` title can still
-be retried, and `mevedel-retry-session-naming` asks for a description instead
-of guessing it from history. No older format recorded chat boundaries either,
-so a converted session reads as one chat: its earlier segments stay browsable
-without chat titles. Conversion makes no model requests. Restoring an interrupted
-native conversation still requires explicit continuation through the current
-reader's recovery rules.
+There are no version selectors, prompts, separate artifact-migration commands,
+or manual directory swaps. `--help` prints usage. The command reports each
+session's outcome and the backup path when it changes a session. It exits zero
+when every selected session is migrated, already current, or closed before
+ever being saved; any failed session makes the exit status nonzero. A project
+run continues past individual conversion failures. Unsupported versions are
+failures, not successful skips. A live session or pending recovery aborts the
+whole run before any session is changed.
 
-The fork-first Worktree plan handoff changed within v0.5.13, so conversion
-also checks its saved implementation retry. A summary retry that has not
-recorded a summary or target changes to fork-first preparation, preserving
-the accepted plan and implementation selection. Here retries and current
-fork-first Worktree retries stay unchanged. A legacy retry with a cached
-summary or prepared target is refused: its summary may already have been
-applied, or its clean target session may already own prepared work. Recover
-that handoff manually before converting; the converter neither deletes the
-target nor resets or replays implementation. Conversion itself never creates
-a worktree, forks a session, or requests a summary.
+Supported source versions are v0.5.6, v0.5.9, v0.5.10, v0.5.11, v0.5.12 and
+v0.5.13; the current target is v0.5.13. Versions v0.5.7 and v0.5.8 are not
+supported. Each source follows an ordered chain of version-to-next-version
+steps. The script checks that the chain ends at the runtime codec's current
+format. To retire old support, remove the oldest prefix of steps and their
+unused conversion functions; the first remaining source becomes the minimum
+supported version. Retained steps do not need rewriting. Runtime readers and
+writers still accept only the current schema.
 
-Conversion refuses PID locks, live leases, pending recovery, invalid metadata,
-checksum mismatches and symlinks. A lease that is active but past its expiry,
+#### Safety and backups
+
+Conversion validates a private staging copy, preserves session identity and
+transcript bytes, and updates retained publication sidecars and their
+checksums. Before installing the result, it rechecks that the source has not
+changed. It moves the original to a unique backup outside session discovery,
+then installs the converted copy at the original path. An ordinary installation
+failure restores the original path; backups are never overwritten. Already
+current sessions are not rewritten or backed up. A migration lock prevents two
+script invocations from operating on the same sessions directory concurrently.
+Backups are hidden siblings named `.migration-backup-SESSION-ID-*/session`;
+temporary staging parents are `.migration-stage-*`, and the lock is
+`.migration-lock`. If a process is killed during the rename window, inspect
+those locations and restore the original session path before retrying; do not
+open both copies as writable sessions. A lock left by a killed migration must
+be removed only after checking that the migration process has stopped.
+
+Migration refuses PID locks, live leases, pending recovery, invalid metadata,
+checksum mismatches, symlinks and special files. An active lease past its expiry,
 as a crashed Emacs leaves it, counts as closed. Publication collection can
 leave an older retained manifest naming data files it removed, and older
-generations may hold sidecars older than v0.5.6; the copy drops such a
-manifest, and a portable session's stale fixed sidecar, while keeping their
-data files. The published head itself must be complete and convertible. A
-released lease naming no head is a session closed before it ever saved; it has
-no metadata to convert. A failed conversion removes only its new copy. The runtime loader continues to
-accept only the current schema.
+generations may hold unsupported sidecars. The copy drops such unreadable
+retained manifests, and a portable session's stale fixed sidecar, while keeping
+their data files. The published head itself must be complete and convertible.
+A released lease naming no head is a session closed before it ever saved and
+has nothing to migrate. A failed conversion leaves the original session in
+place and removes its staging copy. Backups are retained for manual inspection
+and removal, not opened or migrated automatically.
 
-The converter keeps the session ID, so never leave both copies in the sessions
-directory or open both as writable sessions. After checking the copy, move the
-original out of `.mevedel/sessions` as a backup and put the converted directory
-at the original path under the same directory name.
+#### Preserved state and format defaults
 
-### Moving artifacts into the store
+Conversion preserves native-history references, titles, naming states,
+attachments and already-durable recovery state. A Goal predating
+incomplete-usage tracking gains an explicit complete-usage flag; an invalid
+Goal refuses conversion instead of being dropped silently by the runtime
+loader. Fields an older format never persisted start empty: queued input
+before v0.5.10, attachments before v0.5.11 unless imported below, naming input
+before v0.5.12, and chat boundaries before v0.5.13. Unsaved queues and earlier
+chat titles cannot be reconstructed. Retrying an old attempted title asks for
+a description rather than guessing from history. Migration makes no model
+requests, creates no worktrees, and does not resume interrupted native turns.
 
-The [artifact migration script](https://github.com/FrauH0lle/mevedel/blob/master/scripts/migrate-artifacts-to-store.el)
-moves a workspace's per-session artifacts into its
-[artifact store](view.md#artifact-store) once, and converts every session of
-the workspace in the same run. Close every session of the workspace, then run
-from the repository root with a new destination outside the sessions
-directory:
+The fork-first Worktree handoff changed within v0.5.13, so migration also
+checks its saved retry shape even when the top-level version is current. A
+summary retry without a recorded summary or target changes to fork-first
+preparation, preserving the accepted plan and selection. Here retries and
+current fork-first retries remain unchanged. A legacy retry with a cached
+summary or prepared target is refused because its effects cannot be inferred
+safely. Recover that handoff manually; migration neither deletes the target nor
+resets or replays implementation.
 
-```bash
-npx @emacs-eask/cli emacs --batch -L . -l scripts/migrate-artifacts-to-store.el \
-  -f mevedel-migrate-artifacts-main -- /path/to/workspace /path/to/converted-sessions
-```
+#### Legacy artifacts
 
-For each session it reads the session's `artifacts/` entries -- a portable
-session's from its verified publication, never its fixed cache; a PID-lock
-session's folder without links, hidden files and backups -- and creates one
-store artifact per file, whiteboard and document. A file artifact gets an id
-from its file name; a whiteboard or document keeps its own id. A fork's copy
-that did not change is the same artifact as its parent's. Legacy artifact
-comments are not carried over: discussions replaced them without a migration.
-Every new artifact starts with
-one version. Legacy payload names and bytes are preserved; store bookkeeping
-lives in the separate `.state/ID/` directory. The session is then converted
-as above into the destination, attached to the artifacts it held and without
-its old `artifacts/` folder and manifest entries; it is not made their
-dedicated session. A session the converter has nothing to read in, one older
-than v0.5.6 or one closed before it ever saved, is copied unchanged. One that
-fails, for example on an unreadable artifact payload, is copied unchanged too
-and reported as FAILED with its reason, while the remaining sessions are
-processed; the script then exits with an error naming how many failed. The
-script prints each session's artifacts.
+The same command imports pre-v0.5.11 per-session artifacts into the project's
+[artifact store](view.md#artifact-store), attaches their ids to the converted
+session, and removes its old `artifacts/` folder and manifest entries. The
+session is not made their dedicated session. Project ownership is inferred
+from the session's location under `PROJECT/.mevedel/sessions/`; a detached
+session holding legacy artifacts is refused rather than writing to a guessed
+project. A store-aware session still holding legacy artifacts is also refused
+rather than losing existing attachments. Artifact imports require every
+session in that project to be closed, even when the command selects only one
+session, because they write the shared store. Metadata-only single-session
+migration does not require closing unrelated sessions.
 
-Nothing in the original sessions changes, so a failed run loses nothing. A
-rerun into a new destination reuses the store artifacts an earlier run
-completed, including shared items reused across forked sessions. Interrupted
-imports are removed on failure and retried with their first version intact.
-After checking the destination, move the
-original sessions directory aside as a backup and put the destination in its
-place.
+Portable artifacts come from verified publications, never fixed caches. PID
+session artifact enumeration excludes hidden files and backups; links anywhere
+in a session are refused before importing. Files retain their payload names
+and bytes; whiteboards and documents retain their ids unless a fork's copy
+diverged. Identical fork copies reuse the same imported artifact. Each new
+artifact starts with one version, with bookkeeping in `.state/ID/`. Legacy
+artifact comments are not carried over: discussions replaced them without a
+migration. Unrecognized files in the reserved `artifacts/shared-editing/`
+namespace refuse migration rather than being silently discarded.
+
+Metadata validation precedes store imports. A failed import leaves the source
+session unchanged; completed imports may remain in the store and are reused
+on retry only while their payload or shared-item state still matches the
+legacy source. A changed source or imported artifact, or a missing imported
+payload, refuses the retry rather than overwriting either copy or attaching
+stale content. Resolve that difference before retrying. Interrupted individual
+imports remove their incomplete new item.
 
 ### Incompatible session inspection
 

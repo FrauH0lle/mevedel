@@ -51,8 +51,9 @@ design even when it breaks existing APIs, commands, configuration, persisted
 state, or workflows.
 
 - Do not add compatibility wrappers, aliases, shims, deprecation layers,
-  dual-format readers/writers, version gates, or migrations unless the user
-  explicitly requests compatibility for that specific change.
+  dual-format readers/writers, or runtime version gates unless the user
+  explicitly requests compatibility for that specific change. Standalone
+  session migration is the exception below, not a runtime compatibility path.
 - Remove superseded code and update all in-repo callers, tests, fixtures, and
   documentation in the same change. Do not leave the old path alongside the
   new one.
@@ -62,6 +63,24 @@ state, or workflows.
   older mevedel versions or previously persisted local state.
 - Call out destructive effects in the handoff, but do not preserve the old
   behavior merely to avoid a break.
+
+Maintain one standalone session migration script outside the runtime loader:
+
+- Accept a session directory or project directory through one command-line
+  entry point. Discover the relevant sessions and their stored versions and
+  migrate them to the latest format without interactive prompts or requiring
+  callers to select versions or invoke individual steps. Already-current
+  sessions are a no-op; failures produce clear diagnostics and a nonzero exit
+  status for automation.
+- Support multiple source versions through an ordered chain of explicit
+  version-to-next-version steps, applied oldest to newest from each session's
+  stored version. Keep each step self-contained so support for the oldest
+  versions can be dropped by deleting a prefix of the chain and raising the
+  minimum supported version, without rewriting retained steps. Reject versions
+  outside the supported range rather than guessing.
+- When changing the persisted session format, update the script, its tests,
+  and migration documentation in the same change. Keep legacy-format knowledge
+  in the migration script, not in runtime readers or writers.
 
 ## ADRS ARE REVISABLE
 

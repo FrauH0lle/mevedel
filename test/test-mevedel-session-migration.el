@@ -13,7 +13,13 @@
 ;; converter under test.
 (require 'mevedel-migrate-session
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
-                           ".." "scripts" "migrate-session-v0.5.6.el"))
+                           ".." "scripts" "migrate-sessions.el"))
+
+(defun mevedel-migration-test--stable-attributes (file)
+  "Return FILE's attributes except access time, which reads may change."
+  (let ((attributes (file-attributes file)))
+    (setf (nth 4 attributes) nil)
+    attributes))
 
 (defmacro mevedel-migration-test--with-source (version &rest body)
   "Run BODY with a two-head VERSION session and a separate destination."
@@ -25,8 +31,9 @@
           (workspace (mevedel-session-workspace session))
           (old (cl-loop for (key value) on (mevedel-session-codec-serialize session) by #'cddr
                         ;; Strip exactly the fields VERSION predates.
-                        unless (or (eq key :chapters)
-                                   (and (not (equal ,version "v0.5.12"))
+                        unless (or (and (not (equal ,version "v0.5.13"))
+                                        (eq key :chapters))
+                                   (and (not (member ,version '("v0.5.12" "v0.5.13")))
                                         (eq key :naming-input))
                                    (and (member ,version '("v0.5.6" "v0.5.9"))
                                         (memq key '(:recovery-issues :pending-follow-ups :pending-steering
@@ -427,12 +434,259 @@
             (should-error (mevedel-migrate-session--read file)))
         (delete-file file)))))
 
+(mevedel-deftest mevedel-migrate-session--steps ()
+  ,test
+  (test)
+  :doc "each step receives its declared source and the next step receives its output"
+  (mevedel-migration-test--with-source "v0.5.6"
+    (let* ((original mevedel-migrate-session--steps)
+           seen
+           (mevedel-migrate-session--steps
+            (mapcar
+             (lambda (step)
+               (pcase-let ((`(,from ,to ,convert) step))
+                 (list from to
+                       (lambda (&rest args)
+                         (should (equal from (plist-get (car args) :version)))
+                         (push from seen)
+                         (apply convert args)))))
+             original)))
+      (should (equal mevedel-session-codec-format-version
+                     (plist-get (mevedel-migrate-session--sidecar old) :version)))
+      (should (equal (mapcar #'car original) (nreverse seen)))))
+
+  :doc "dropping the oldest chain prefix rejects retired sources and preserves later migrations"
+  (let ((mevedel-migrate-session--steps (cdr mevedel-migrate-session--steps)))
+    (mevedel-migration-test--with-source "v0.5.6"
+      (should-error (mevedel-migrate-session--sidecar old)))
+    (mevedel-migration-test--with-source "v0.5.9"
+      (should (equal mevedel-session-codec-format-version
+                     (plist-get (mevedel-migrate-session--sidecar old) :version)))))
+
+  :doc "an implementation with a stale target fails instead of pretending to reach latest"
+  (let ((mevedel-session-codec-format-version "v99.0.0"))
+    (mevedel-migration-test--with-source "v0.5.9"
+      (should-error (mevedel-migrate-session--sidecar old))))
+
+  :doc "removing every old step leaves current-only validation"
+  (let ((mevedel-migrate-session--steps nil))
+    (mevedel-migration-test--with-source "v0.5.13"
+      (should (equal old (mevedel-migrate-session--sidecar old))))
+    (mevedel-migration-test--with-source "v0.5.12"
+      (should-error (mevedel-migrate-session--sidecar old)))))
+
 (mevedel-deftest mevedel-migrate-session-main (:quiet t)
+  ,test
+  (test)
+  :doc "one directory argument migrates in place and reports the retained backup"
   (mevedel-migration-test--with-source "v0.5.9"
-    (let ((command-line-args-left (list "--" source destination)))
-      (should (string-search "source unchanged" (with-output-to-string (mevedel-migrate-session-main))))
+    (let ((command-line-args-left (list "--" source)))
+      (let ((output (with-output-to-string (mevedel-migrate-session-main))))
+        (should (string-search "old" output))
+        (should (string-search "backup" (downcase output))))
       (should-not command-line-args-left)
-      (should (file-exists-p (file-name-concat destination "session.meta.el"))))))
+      (should (equal mevedel-session-codec-format-version
+                     (plist-get (mevedel-migrate-session--read
+                                 (file-name-concat source "session.meta.el")) :version)))))
+
+  :doc "help needs no directory and invalid argument lists fail"
+  (let ((command-line-args-left '("--" "--help")))
+    (should (string-search "DIRECTORY" (with-output-to-string (mevedel-migrate-session-main))))
+    (should-not command-line-args-left))
+  (dolist (args '(nil ("--") ("--" "one" "two") ("--unknown")))
+    (let ((command-line-args-left args))
+      (should-error (mevedel-migrate-session-main)))))
+
+(mevedel-deftest mevedel-migrate-sessions (:quiet t)
+  ,test
+  (test)
+  :doc "in-place migration preserves original bytes in a backup and reruns are a no-op"
+  (mevedel-migration-test--with-source "v0.5.9"
+    (let* ((before (mapcar (lambda (file)
+                            (cons (file-relative-name file source)
+                                  (mevedel-migrate-session--hash file)))
+                          (directory-files-recursively source ".")))
+           (row (cdar (mevedel-migrate-sessions source)))
+           (backup (plist-get row :backup)))
+      (should (eq 'migrated (plist-get row :status)))
+      (should (file-directory-p backup))
+      (should-not (file-in-directory-p backup source))
+      (dolist (entry before)
+        (should (equal (cdr entry)
+                       (mevedel-migrate-session--hash (file-name-concat backup (car entry))))))
+      (let ((files (directory-files root t))
+            (attributes (mevedel-migration-test--stable-attributes (file-name-concat source head))))
+        (should (eq 'current (plist-get (cdar (mevedel-migrate-sessions source)) :status)))
+        (should (equal files (directory-files root t)))
+        (should (equal attributes (mevedel-migration-test--stable-attributes
+                                   (file-name-concat source head)))))
+      (should (equal "v0.5.9"
+                     (plist-get (mevedel-migrate-session--read
+                                 (file-name-concat backup "session.meta.el")) :version)))))
+
+  :doc "already-current metadata is not rewritten or backed up"
+  (mevedel-migration-test--with-source "v0.5.13"
+    (let ((before (directory-files root t))
+          (attributes (mevedel-migration-test--stable-attributes
+                       (file-name-concat source "session.meta.el"))))
+      (should (eq 'current (plist-get (cdar (mevedel-migrate-sessions source)) :status)))
+      (should (equal before (directory-files root t)))
+      (should (equal attributes (mevedel-migration-test--stable-attributes
+                                 (file-name-concat source "session.meta.el"))))))
+
+  :doc "project migration continues after unsupported sessions and leaves them unchanged"
+  (mevedel-migration-test--with-source "v0.5.9"
+    (let* ((sessions (file-name-concat root ".mevedel" "sessions"))
+           (good (file-name-concat sessions "good"))
+           (bad (file-name-concat sessions "unsupported")))
+      (make-directory sessions t)
+      (rename-file source good)
+      (make-directory bad)
+      (mevedel-migrate-session--write (file-name-concat bad "session.meta.el")
+                                      '(:version "v0.5.8"))
+      (let* ((before (mevedel-migrate-session--hash (file-name-concat bad "session.meta.el")))
+             (report (mevedel-migrate-sessions root)))
+        (should (eq 'migrated (plist-get (cdr (assoc "good" report)) :status)))
+        (should (eq 'failed (plist-get (cdr (assoc "unsupported" report)) :status)))
+        (should (stringp (plist-get (cdr (assoc "unsupported" report)) :reason)))
+        (should (equal before (mevedel-migrate-session--hash
+                               (file-name-concat bad "session.meta.el")))))
+      ;; Backups/staging must not become newly discoverable sessions.
+      (should (equal '("good" "unsupported")
+                     (mapcar #'car (mevedel-migrate-sessions root))))))
+
+  :doc "a project with a live session is refused before any other session is changed"
+  (mevedel-migration-test--with-source "v0.5.9"
+    (let* ((sessions (file-name-concat root ".mevedel" "sessions"))
+           (good (file-name-concat sessions "a-closed"))
+           (live (file-name-concat sessions "z-live")))
+      (make-directory sessions t)
+      (rename-file source good)
+      (make-directory live)
+      (mevedel-migrate-session--write (file-name-concat live "session.meta.el") old)
+      (with-temp-file (file-name-concat live ".lock") (insert "held"))
+      (let ((before (mevedel-migrate-session--hash (file-name-concat good "session.meta.el"))))
+        (should-error (mevedel-migrate-sessions root))
+        (should (equal before (mevedel-migrate-session--hash
+                               (file-name-concat good "session.meta.el")))))))
+
+  :doc "installation failure restores the original instead of leaving its path missing"
+  (mevedel-migration-test--with-source "v0.5.9"
+    (let ((rename (symbol-function 'rename-file))
+          (before (mevedel-migrate-session--hash (file-name-concat source "session.meta.el")))
+          injected)
+      (cl-letf (((symbol-function 'rename-file)
+                 (lambda (from to &optional overwrite)
+                   (if (and (not injected)
+                            (equal (directory-file-name to) (directory-file-name source)))
+                       (progn (setq injected t) (error "Injected install failure"))
+                     (funcall rename from to overwrite)))))
+        (let ((row (cdar (mevedel-migrate-sessions source))))
+          (should injected)
+          (should (eq 'failed (plist-get row :status)))
+          (should (string-search "Injected install failure" (plist-get row :reason)))))
+      (should (equal before (mevedel-migrate-session--hash
+                             (file-name-concat source "session.meta.el"))))))
+
+  :doc "source changes during staging abort replacement"
+  (mevedel-migration-test--with-source "v0.5.9"
+    (let ((copy (symbol-function 'mevedel-migrate-session-copy))
+          (chat (file-name-concat source ".publications/generation-bbbbbbbbbbbbbbbbbbbb/000002.data"))
+          injected)
+      (cl-letf (((symbol-function 'mevedel-migrate-session-copy)
+                 (lambda (&rest args)
+                   (prog1 (apply copy args)
+                     (unless injected
+                       (setq injected t)
+                       (write-region "\nConcurrent edit" nil chat t 'silent))))))
+        (let ((row (cdar (mevedel-migrate-sessions source))))
+          (should injected)
+          (should (eq 'failed (plist-get row :status)))))
+      (should (equal "v0.5.9" (plist-get (mevedel-migrate-session--read
+                                        (file-name-concat source "session.meta.el")) :version)))
+      (should (string-suffix-p "Concurrent edit"
+                               (with-temp-buffer (insert-file-contents chat) (buffer-string))))))
+
+  :doc "project state links are refused rather than migrating their target"
+  (mevedel-migration-test--with-source "v0.5.9"
+    (let* ((state (file-name-concat root "elsewhere"))
+           (sessions (file-name-concat state "sessions"))
+           (actual (file-name-concat sessions "session")))
+      (rename-file (file-name-concat root ".mevedel") state)
+      (make-directory sessions t)
+      (rename-file source actual)
+      (make-symbolic-link state (file-name-concat root ".mevedel"))
+      (let ((before (mevedel-migrate-session--hash (file-name-concat actual "session.meta.el"))))
+        (should-error (mevedel-migrate-sessions root))
+        (should (equal before (mevedel-migrate-session--hash
+                               (file-name-concat actual "session.meta.el")))))))
+
+  :doc "an existing migration lock blocks replacement and is not removed by the contender"
+  (mevedel-migration-test--with-source "v0.5.9"
+    (let ((lock (file-name-concat root ".migration-lock"))
+          (before (mevedel-migrate-session--hash (file-name-concat source "session.meta.el"))))
+      (make-directory lock)
+      (should-error (mevedel-migrate-sessions source))
+      (should (file-directory-p lock))
+      (should (equal before (mevedel-migrate-session--hash
+                             (file-name-concat source "session.meta.el"))))))
+
+  :doc "nil authoritative metadata is invalid, not an unpublished empty session"
+  (dolist (authority '(pid-lock portable))
+    (mevedel-migration-test--with-source "v0.5.9"
+      (if (eq authority 'pid-lock)
+          (progn
+            (delete-directory (file-name-concat source ".lease") t)
+            (delete-directory (file-name-concat source ".publications") t)
+            (mevedel-migrate-session--write (file-name-concat source "session.meta.el") nil))
+        (let* ((file (file-name-concat source (file-name-directory head) "000001.data"))
+               (manifest-file (file-name-concat source head))
+               (manifest (mevedel-migrate-session--read manifest-file)))
+          (mevedel-migrate-session--write file nil)
+          (setf (plist-get (cdar (plist-get manifest :artifacts)) :sha256)
+                (mevedel-migrate-session--hash file))
+          (mevedel-migrate-session--write manifest-file manifest)))
+      (let ((before (directory-files root t))
+            (row (cdar (mevedel-migrate-sessions source))))
+        (should (eq 'failed (plist-get row :status)))
+        (should (stringp (plist-get row :reason)))
+        (should (equal before (directory-files root t))))))
+
+  :doc "unsupported, future and missing versions fail without a source rewrite"
+  (dolist (version '("v0.5.5" "v0.5.7" "v0.5.8" "v99.0.0" nil))
+    (mevedel-migration-test--with-source "v0.5.9"
+      (delete-directory (file-name-concat source ".lease") t)
+      (delete-directory (file-name-concat source ".publications") t)
+      (mevedel-migrate-session--write (file-name-concat source "session.meta.el")
+                                      (list :version version))
+      (let ((before (directory-files root t))
+            (digest (mevedel-migrate-session--hash (file-name-concat source "session.meta.el"))))
+        (should (eq 'failed (plist-get (cdar (mevedel-migrate-sessions source)) :status)))
+        (should (equal before (directory-files root t)))
+        (should (equal digest (mevedel-migrate-session--hash
+                               (file-name-concat source "session.meta.el"))))))))
+
+(mevedel-deftest mevedel-migrate-session-cli (:quiet t)
+  ,test
+  (test)
+  :doc "real batch invocation migrates, no-ops and returns nonzero for unsupported versions"
+  (mevedel-migration-test--with-source "v0.5.9"
+    (let ((script (file-name-concat (file-name-directory (locate-library "mevedel"))
+                                   "scripts" "migrate-sessions.el")))
+      (dolist (expected '(0 0 1))
+        (when (= expected 1)
+          (delete-directory (file-name-concat source ".lease") t)
+          (delete-directory (file-name-concat source ".publications") t)
+          (mevedel-migrate-session--write (file-name-concat source "session.meta.el")
+                                          '(:version "v99.0.0")))
+        (with-temp-buffer
+          (let ((status (call-process
+                         (expand-file-name invocation-name invocation-directory) nil t nil
+                         "--batch" "-Q" "--eval"
+                         (prin1-to-string `(setq load-path ',load-path debug-on-error nil))
+                         "-l" script "-f" "mevedel-migrate-session-main" "--" source)))
+            (if (zerop expected) (should (zerop status)) (should-not (zerop status)))
+            (should (string-search "old" (buffer-string)))))))))
 
 (provide 'test-mevedel-session-migration)
 ;;; test-mevedel-session-migration.el ends here

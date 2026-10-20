@@ -155,10 +155,13 @@ push out every earlier version, including the state before the turn.
   deliberately widens ADR 0099's "published record is the authority".
 - Deleting an artifact deletes its versions, discussions, lease and dedicated
   session; deleting a session deletes none of them.
-- Existing per-session artifacts move once with an explicit migration script, a
-  user-requested exception to the no-migration rule, which also converts every
-  session to the v0.5.11 sidecar format that records attached ids. Transcript
-  cards in old segments that name pre-migration paths show as missing.
+- Existing per-session artifacts move once as part of the unified standalone
+  [session migration](../sessions.md#explicit-session-migration), the policy's
+  explicit exception to runtime backwards compatibility. The v0.5.10-to-v0.5.11
+  step introduces attached ids; later steps bring the sidecar to the current
+  format. The command accepts a session or project directory and retains original
+  sessions as backups. Transcript cards in old segments that name pre-migration
+  paths show as missing.
 - Discussions on an HTML artifact are not serialized across Emacs instances; the
   later write wins.
 
@@ -171,6 +174,12 @@ push out every earlier version, including the state before the turn.
 
 ## Decision history
 
+- **One migration entry point.** The original artifact command converted into
+  a separate sessions directory and required a manual swap. The user's request
+  for automated, stepwise migration folded artifact imports into the same
+  standalone command as metadata migration, with staging and original-session
+  backups. There is no separate artifact migration command or runtime legacy
+  reader.
 - **Taking over an expired item lease.** At first an edit that met an
   expired foreign lease asked for confirmation when its caller could have
   asked. The question ran from the editing queue's timer, so it blocked
