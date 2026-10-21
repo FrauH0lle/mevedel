@@ -75,6 +75,7 @@ test('plan cards render Markdown and expose full implementation instructions', a
   const browser = await chromium.launch();
   try {
     const page = await room(browser);
+    await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/markdown.js'), 'utf8')});
     await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
     await requestRenderer(page);
     await page.evaluate(() => requestView.render({reqId: 1, bodyKind: 'markdown',
@@ -162,6 +163,7 @@ test('pending patch notices precede the diff and update safely in place', async 
     for (const width of [375, 1200]) {
       const page = await room(browser);
       await page.setViewportSize({width, height: 812});
+      await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/markdown.js'), 'utf8')});
       await page.addScriptTag({content: await readFile(
         resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
       await requestRenderer(page);
@@ -413,6 +415,7 @@ test('a pending interaction rises above every open panel', async () => {
 async function wideRoom(browser, width) {
   const page = await room(browser);
   await page.setViewportSize({width, height: 1300});
+  await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/markdown.js'), 'utf8')});
   await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
   await page.evaluate(() => {
     const box = document.getElementById('session-box');

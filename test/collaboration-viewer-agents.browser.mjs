@@ -23,7 +23,7 @@ test('long agent attribution and task owners fit phone and desktop', async () =>
           contentType: path.endsWith('.css') ? 'text/css' : 'text/html'});
       });
       await page.goto('http://viewer.test/index.html');
-      for (const asset of ['viewer-nav.js', 'renderer.js', 'viewer-agent.js', 'viewer-background.js', 'viewer-task.js']) {
+      for (const asset of ['viewer-nav.js', 'markdown.js', 'renderer.js', 'viewer-agent.js', 'viewer-background.js', 'viewer-task.js']) {
         await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer', asset), 'utf8')});
       }
       await page.evaluate(() => {

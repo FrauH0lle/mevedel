@@ -1,4 +1,4 @@
-/* renderer.js -- Dependency-free transcript record rendering */
+/* renderer.js -- Transcript record rendering */
 'use strict';
 
 (() => {
@@ -9,203 +9,17 @@
     return node;
   }
 
-  /* -- Markdown (DOM-built, textContent only, XSS-safe) --------------- */
-
-  function renderInline(target, text) {
-    // `code`, **bold**, *italic* -- one pass, longest marker first.
-    const pattern = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)/g;
-    let last = 0;
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      if (match.index > last) {
-        target.append(text.slice(last, match.index));
-      }
-      const token = match[0];
-      if (token.startsWith('`')) {
-        target.append(el('code', '', token.slice(1, -1)));
-      } else if (token.startsWith('**')) {
-        const strong = el('strong');
-        renderInline(strong, token.slice(2, -2));
-        target.append(strong);
-      } else {
-        const em = el('em');
-        renderInline(em, token.slice(1, -1));
-        target.append(em);
-      }
-      last = match.index + token.length;
-    }
-    if (last < text.length) target.append(text.slice(last));
-  }
-
-  // GitHub-style pipe tables: a header row, a delimiter row of dashes,
-  // then body rows. The delimiter row is what distinguishes a table
-  // from prose that happens to contain a pipe.
-  function splitRow(line) {
-    const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
-    return trimmed.split('|').map(cell => cell.trim());
-  }
-
-  function isTableStart(lines, index) {
-    const header = lines[index];
-    const delimiter = lines[index + 1];
-    if (!header || !delimiter) return false;
-    if (!header.includes('|') || !delimiter.includes('|')) return false;
-    if (!/^[\s|:-]+$/.test(delimiter)) return false;
-    const cells = splitRow(delimiter);
-    return cells.length > 1
-      && cells.every(cell => /^:?-{1,}:?$/.test(cell));
-  }
-
-  function columnAlignments(line) {
-    return splitRow(line).map(cell => {
-      const left = cell.startsWith(':');
-      const right = cell.endsWith(':');
-      if (left && right) return 'center';
-      if (right) return 'right';
-      return 'left';
-    });
-  }
-
-  function renderTable(rows) {
-    const wrap = el('div', 'tablewrap');
-    const table = el('table', 'mdtable');
-    const align = columnAlignments(rows[1]);
-    const head = el('thead');
-    const headRow = el('tr');
-    splitRow(rows[0]).forEach((cell, column) => {
-      const th = el('th');
-      if (align[column]) th.style.textAlign = align[column];
-      renderInline(th, cell);
-      headRow.append(th);
-    });
-    head.append(headRow);
-    table.append(head);
-    const body = el('tbody');
-    rows.slice(2).forEach(row => {
-      const tr = el('tr');
-      splitRow(row).forEach((cell, column) => {
-        const td = el('td');
-        if (align[column]) td.style.textAlign = align[column];
-        renderInline(td, cell);
-        tr.append(td);
-      });
-      body.append(tr);
-    });
-    table.append(body);
-    wrap.append(table);
-    return wrap;
-  }
+  /* -- Markdown (Marked parsing, DOMPurify sanitization) ------------- */
 
   function renderMarkdown(text) {
     const root = el('div', 'prose');
-    const lines = String(text || '').split('\n');
-    let index = 0;
-    let paragraph = [];
-    const flush = () => {
-      if (paragraph.length) {
-        const p = el('p');
-        // A single newline is a real line break here, not a space.
-        // Strict CommonMark would fold these into one line, but the
-        // model means them -- "one number per line" arrives as forty
-        // newlines -- and Emacs renders them, so the two surfaces
-        // would otherwise disagree about the same answer.
-        paragraph.forEach((line, index) => {
-          if (index) p.append(el('br'));
-          renderInline(p, line);
-        });
-        root.append(p);
-        paragraph = [];
-      }
-    };
-    while (index < lines.length) {
-      const line = lines[index];
-      // A fence closes only on a run of the same character that is at
-      // least as long as the opener, so a ```elisp block nested inside
-      // a ````markdown one no longer ends the outer block early.
-      const fence = line.match(/^(\s{0,3})(`{3,}|~{3,})\s*(\S*)\s*$/);
-      if (fence) {
-        flush();
-        const marker = fence[2];
-        const closer = new RegExp(
-          `^\\s{0,3}${marker[0] === '`' ? '`' : '~'}{${marker.length},}\\s*$`);
-        const code = [];
-        index++;
-        while (index < lines.length && !closer.test(lines[index])) {
-          code.push(lines[index]);
-          index++;
-        }
-        index++; // closing fence
-        root.append(renderCodeBlock(code.join('\n'), fence[3]));
-        continue;
-      }
-      // A pipe table needs its delimiter row to be a table at all.
-      if (isTableStart(lines, index)) {
-        flush();
-        const rows = [];
-        while (index < lines.length && /\|/.test(lines[index])
-               && lines[index].trim()) {
-          rows.push(lines[index]);
-          index++;
-        }
-        root.append(renderTable(rows));
-        continue;
-      }
-      const heading = line.match(/^(#{1,4})\s+(.*)$/);
-      if (heading) {
-        flush();
-        const h = el(`h${heading[1].length}`);
-        renderInline(h, heading[2]);
-        root.append(h);
-        index++;
-        continue;
-      }
-      const quote = line.match(/^>\s?(.*)$/);
-      if (quote) {
-        flush();
-        const bq = el('blockquote');
-        const inner = [quote[1]];
-        index++;
-        while (index < lines.length && /^>\s?/.test(lines[index])) {
-          inner.push(lines[index].replace(/^>\s?/, ''));
-          index++;
-        }
-        const p = el('p');
-        renderInline(p, inner.join('\n'));
-        bq.append(p);
-        root.append(bq);
-        continue;
-      }
-      const bullet = line.match(/^\s*([-*]|\d+\.)\s+/);
-      if (bullet) {
-        flush();
-        const ordered = /^\s*\d+\./.test(line);
-        const list = el(ordered ? 'ol' : 'ul');
-        while (index < lines.length) {
-          const item = lines[index].match(/^\s*(?:[-*]|\d+\.)\s+(.*)$/);
-          if (!item) break;
-          const li = el('li');
-          renderInline(li, item[1]);
-          list.append(li);
-          index++;
-          // Continuation lines indented under the item.
-          while (index < lines.length && /^\s{2,}\S/.test(lines[index])
-                 && !/^\s*(?:[-*]|\d+\.)\s+/.test(lines[index])) {
-            li.append(' ' + lines[index].trim());
-            index++;
-          }
-        }
-        root.append(list);
-        continue;
-      }
-      if (/^\s*$/.test(line)) {
-        flush();
-        index++;
-        continue;
-      }
-      paragraph.push(line);
-      index++;
-    }
-    flush();
+    root.innerHTML = window.mevedelMarkdown.render(text);
+    // Only add our DOM-built, textContent-based highlighter after sanitizing;
+    // never reinterpret code text as HTML.
+    root.querySelectorAll('pre > code').forEach(code => {
+      const lang = /(?:^|\s)language-(\S+)/.exec(code.className);
+      code.parentElement.replaceWith(renderCodeBlock(code.textContent, lang ? lang[1] : ''));
+    });
     return root;
   }
 

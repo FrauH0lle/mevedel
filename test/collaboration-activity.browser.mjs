@@ -15,6 +15,7 @@ test('activity summaries preserve failures, children and disclosure at phone and
       const page = await browser.newPage({viewport: {width, height: 812}});
       await page.setContent('<main id="transcript"></main><textarea id="draft">&gt; exact\nmultiline draft</textarea>');
       await page.addStyleTag({content: await readFile(resolve(root, 'relay/viewer/viewer.css'), 'utf8')});
+      await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/markdown.js'), 'utf8')});
       await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
       await page.evaluate(() => {
         window.activity = {id: 'tool-1', summary: 'Read 2 files, searched 1 pattern, evaluated 1 form',
@@ -70,7 +71,7 @@ test('source navigation loads exactly the host-located archive', async () => {
   try {
     const page = await browser.newPage();
     await page.setContent('<section id="history"></section>');
-    for (const asset of ['renderer.js', 'viewer-history.js']) {
+    for (const asset of ['markdown.js', 'renderer.js', 'viewer-history.js']) {
       await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer', asset), 'utf8')});
     }
     await page.evaluate(() => {
@@ -111,6 +112,7 @@ test('revealed sources use the unobscured transcript viewport', async () => {
       <main id="transcript"></main><div class="spacer"></div><section id="history-body"></section>
       <div class="spacer"></div><aside class="dock"><textarea id="draft">exact draft</textarea></aside>
       <section class="viewer-panel" hidden><header class="topbar">Agent header</header><div id="agent-transcript" class="agent-ledger"></div></section>`);
+      await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/markdown.js'), 'utf8')});
       await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer/renderer.js'), 'utf8')});
       await page.evaluate(() => {
         for (const id of ['transcript', 'history-body', 'agent-transcript']) {

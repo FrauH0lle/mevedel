@@ -151,6 +151,12 @@ npm ci --prefix shared-editing
 npm run build --prefix shared-editing
 ```
 
+The same build produces the viewer's local Marked/DOMPurify bundle
+(`relay/viewer/markdown.js`) and its license notice. Ordinary Markdown viewing
+does not start the shared-editing helper or require Node on the host. Use
+Node 26 for development and tests (as in CI); the host helper's minimum
+runtime remains Node 22.4.
+
 The board fonts are generated from Excalidraw's font subsets with
 `python3 shared-editing/fonts.py EXCALIDRAW_CHECKOUT` (fontTools and brotli).
 It writes the TTFs the host renders with, the WOFF2 files embedded in the
@@ -160,6 +166,8 @@ to measure and wrap text. Rebuild the bundles afterwards.
 Commit the lockfile and generated helper/viewer bundles together. The build
 also assembles license notices; font and renderer licenses accompany their
 packaged resources. Rebuild the relay to embed changed viewer assets.
+See [dependency maintenance](development.md#dependency-maintenance) for
+automated update PRs and the generated-asset checks.
 
 ## Editing and pointing
 

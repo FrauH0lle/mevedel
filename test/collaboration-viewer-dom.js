@@ -73,6 +73,9 @@ function textOf(node) {
 }
 
 function load(path, context) {
+  if (path.endsWith('/renderer.js')) {
+    require('./collaboration-markdown-support').installMarkdown(context, Element);
+  }
   vm.runInNewContext(fs.readFileSync(path, 'utf8'), context);
 }
 

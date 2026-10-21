@@ -19,6 +19,7 @@ const {chromium} = require('playwright');
 const viewer = name => readFile(resolve(root, 'relay/viewer', name), 'utf8');
 const kit = await viewer('viewer-artifact-discussions.js');
 const sidebar = await viewer('viewer-discussions.js');
+const markdown = await viewer('markdown.js');
 const renderer = await viewer('renderer.js');
 
 const ARTIFACT = `<!doctype html><html><head><style>
@@ -63,7 +64,7 @@ const HOST = `<!doctype html><html><head><style>
 
 async function setup(page) {
   await page.setContent(HOST);
-  for (const script of [renderer, sidebar, kit]) await page.addScriptTag({content: script});
+  for (const script of [markdown, renderer, sidebar, kit]) await page.addScriptTag({content: script});
   await page.evaluate(() => {
     window.sent = [];
     window.openedConversations = [];

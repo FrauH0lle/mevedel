@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const runNotificationTests = require('./collaboration-notifications-test');
+const {installMarkdown} = require('./collaboration-markdown-support');
 
 class Element {
   constructor(tag) {
@@ -125,6 +126,8 @@ function textOf(node) {
   if (typeof node === 'string') return node;
   return (node.textContent || '') + node.children.map(textOf).join('');
 }
+
+const elements = node => node.children.filter(child => typeof child !== 'string');
 
 function findByClass(root, className) {
   if (typeof root === 'string') return null;
@@ -734,6 +737,7 @@ function testCompletionRendering() {
   const document = {createElement: tag => new Element(tag)};
   const context = {window, document};
   const href = navigationFixture(context);
+  installMarkdown(context, Element);
   vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), context);
   const render = (record, onExecutionOpen) => window.mevedelTranscriptRenderer.renderRecord(
     record, null, null, null, onExecutionOpen);
@@ -1084,6 +1088,7 @@ async function main() {
   };
   vm.runInNewContext(fs.readFileSync('relay/viewer/transport.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/notifications.js', 'utf8'), context);
+  installMarkdown(context, Element);
   vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/attachments.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-artifact.js', 'utf8'), context);
@@ -1442,6 +1447,47 @@ async function main() {
   // so the table is not swallowed and the elisp is not loose prose.
   assert.match(mdFlat, /```elisp/);
   await deliver({t: 'remove', ids: ['md']});
+
+  // Preserve the source hierarchy, including dedents after nested lists,
+  // and format inline markup on wrapped item lines just like the first.
+  await deliver({t: 'record', record: {
+    id: 'lists', kind: 'assistant', revision: 0,
+    text: fs.readFileSync('test/fixtures/collaboration-nested-lists.md', 'utf8'),
+  }});
+  const listProse = findByClass(findByRecordId(nodes.transcript, 'lists'), 'prose');
+  const topList = listProse.children.find(child => child.tagName === 'ul');
+  assert.equal(elements(topList).length, 4);
+  const identityItem = elements(topList)[2];
+  const authors = identityItem.children.find(child => child.tagName === 'ul');
+  assert.equal(elements(authors).length, 2);
+  assert.equal(textOf(elements(authors)[0]), 'Roland Goers roland.goers@swisstph.ch');
+  assert.equal(textOf(elements(authors)[1]), 'Myroslava Volosko myroslava.volosko@swisstph.ch');
+  assert.deepEqual(elements(authors).map(author => elements(author)[0].href),
+                   ['mailto:roland.goers@swisstph.ch', 'mailto:myroslava.volosko@swisstph.ch']);
+  assert.ok(identityItem.children.some(child => child.tagName === 'code'
+    && textOf(child) === '--author'));
+  assert.match(textOf(elements(topList)[3]), /^git fetch and git pull/);
+  await deliver({t: 'remove', ids: ['lists']});
+
+  const mixedLists = window.mevedelTranscriptRenderer.renderMarkdown(
+    '- Parent\n  wrapped **bold** and `code` <img src=x onerror=alert(1)>\n'
+    + '  1. Child\n     - Grandchild\n  2. Sibling\n'
+    + '  - Unordered child\n- Next\n\n1. Ordered root\n\nAfter');
+  assert.deepEqual(elements(mixedLists).map(child => child.tagName), ['ul', 'ol', 'p']);
+  const parents = elements(elements(mixedLists)[0]);
+  assert.equal(parents.length, 2);
+  const childLists = parents[0].children.filter(child => ['ul', 'ol'].includes(child.tagName));
+  assert.deepEqual(childLists.map(child => child.tagName), ['ol', 'ul']);
+  assert.equal(elements(childLists[0]).length, 2);
+  assert.equal(elements(elements(childLists[0])[0]).at(-1).tagName, 'ul');
+  assert.equal(elements(elements(elements(childLists[0])[0]).at(-1)).length, 1);
+  assert.ok(parents[0].children.some(child => child.tagName === 'strong' && textOf(child) === 'bold'));
+  assert.ok(parents[0].children.some(child => child.tagName === 'code' && textOf(child) === 'code'));
+  assert.match(textOf(parents[0]), /<img src=x onerror=alert\(1\)>/,
+               'raw HTML remains readable literal text');
+  const descendants = node => elements(node).flatMap(child => [child, ...descendants(child)]);
+  assert.equal(descendants(mixedLists).some(node => node.tagName === 'img'), false,
+               'literal HTML does not create an image or event handler');
 
   // Single newlines are real breaks: the model means them, and Emacs
   // renders them, so the two surfaces must not disagree.

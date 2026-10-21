@@ -33,6 +33,46 @@ limits while mevedel retains its client-side guards. Preflight must exercise the
 configured backend type through the native request path; matching an expected
 payload from a substituted type does not establish configuration equivalence.
 
+## Dependency maintenance
+
+`.github/dependabot.yml` schedules weekly update PRs for the exact npm pins
+and lockfile in `shared-editing/`, the Go module in `relay/`, and GitHub
+Actions references. Tiptap updates are grouped, including major releases;
+the dependency test checks that its schema packages remain synchronized.
+`@tiptap/y-tiptap` has its own version series. Updates are reviewed, not
+automatically merged. Dependabot security updates also depend on the
+repository's dependency graph, alerts, and security-update settings.
+
+The read-only `dependencies` workflow installs the lockfile, rebuilds the
+helper and viewer assets, and rejects tracked differences or unexpected
+generated files. It also runs helper/viewer tests, focused Chromium
+regressions, and Go checks on PRs. It does not replace the full shared-editor
+browser suite, which additionally needs the isolated Emacs/Eask environment.
+The workflow uses no secrets, disables checkout credentials, and never writes
+back to a PR or runs PR code through `pull_request_target`.
+
+Dependabot does not regenerate committed bundles, WASM, or license notices.
+For an npm update PR, check out that branch and use Node 26 to run:
+
+```sh
+npm ci --prefix shared-editing
+npm run build --prefix shared-editing
+```
+
+Review and commit all generated changes along with the manifest and lockfile,
+then run the checks in [shared editing](shared-editing.md#checks). A PR with
+stale generated assets intentionally fails CI; testing a rebuilt bundle is
+not proof that the packaged bundle was updated. New viewer assets enter the
+relay release when its binary is rebuilt.
+
+The bot does not maintain Eask/MELPA dependencies, the embedded tree-sitter
+grammar pin, manually ported Excalidraw code and fonts, system packages, or
+the unpinned documentation-site Python install. Actions using `@master` also
+remain floating; update PRs do not turn branch references into immutable pins.
+These still need explicit upstream/provenance review. Repository settings and
+required branch checks must be configured on GitHub; the workflow files do
+not establish them.
+
 ## gptel source rule
 
 mevedel is tightly coupled to gptel. Before

@@ -1,0 +1,72 @@
+name: dependencies
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-assets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: shared-editing/package-lock.json
+      - name: Install dependencies
+        run: npm ci --prefix shared-editing
+      - name: Rebuild and check committed assets
+        run: |
+          npm run build --prefix shared-editing
+          git diff --exit-code -- shared-editing relay/viewer
+          test -z "$(git ls-files --others --exclude-standard -- shared-editing relay/viewer)"
+      - name: Test helper and viewer
+        run: |
+          npm test --prefix shared-editing
+          node test/collaboration-viewer-test.js
+          node test/collaboration-tool-presentation-test.js
+          node test/collaboration-viewer-agent-test.js
+          node test/collaboration-viewer-content-links-test.js
+      - name: Install Chromium
+        run: shared-editing/node_modules/.bin/playwright install --with-deps chromium
+      - name: Test Markdown and viewer integration in Chromium
+        run: >-
+          node --test
+          test/collaboration-markdown.browser.mjs
+          test/collaboration-activity.browser.mjs
+          test/collaboration-viewer-requests.browser.mjs
+          test/collaboration-viewer-agents.browser.mjs
+          test/collaboration-discussions.browser.mjs
+
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: relay/go.mod
+          cache-dependency-path: relay/go.sum
+      - name: Check and build relay
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+          go test ./...
+          go build .

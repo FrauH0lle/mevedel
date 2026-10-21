@@ -1,0 +1,24 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /shared-editing
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    groups:
+      tiptap:
+        patterns: ['@tiptap/*']
+      tiptap-security:
+        applies-to: security-updates
+        patterns: ['@tiptap/*']
+
+  - package-ecosystem: gomod
+    directory: /relay
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

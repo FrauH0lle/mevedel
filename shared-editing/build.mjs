@@ -39,10 +39,22 @@ const qr = await build({
   legalComments: 'external',
   metafile: true,
 });
+const markdown = await build({
+  entryPoints: [root + 'markdown.mjs'],
+  outfile: root + '../relay/viewer/markdown.js',
+  bundle: true,
+  platform: 'browser',
+  format: 'iife',
+  target: 'es2022',
+  minify: true,
+  legalComments: 'external',
+  metafile: true,
+});
 for (const [bundle, file, title] of [
   [host, root + 'THIRD-PARTY-NOTICES.txt', 'the bundled shared editor'],
   [browser, root + '../relay/viewer/shared-editor.LICENSE.txt', 'the bundled shared editor'],
   [qr, root + '../relay/viewer/qrcode.LICENSE.txt', 'the invite QR code'],
+  [markdown, root + '../relay/viewer/markdown.LICENSE.txt', 'the Markdown renderer'],
 ]) {
   const packages = new Set();
   for (const input of Object.keys(bundle.metafile.inputs)) {
@@ -73,7 +85,7 @@ for (const [bundle, file, title] of [
     for (const name of files) notices += (await readFile(directory + '/' + name, 'utf8')) + '\n';
   }
   // Ported Excalidraw code, and in the editor bundle its embedded fonts.
-  if (bundle !== qr) notices += '\n--- Excalidraw ---\n' + (await readFile(root + 'EXCALIDRAW-LICENSE', 'utf8'));
+  if (bundle === host || bundle === browser) notices += '\n--- Excalidraw ---\n' + (await readFile(root + 'EXCALIDRAW-LICENSE', 'utf8'));
   if (bundle === browser) notices += '\n--- Fonts ---\n' + (await readFile(root + 'FONT-LICENSE', 'utf8'));
-  await writeFile(file, notices.trimEnd() + '\n');
+  await writeFile(file, notices.replace(/[ \t]+$/gm, '').trimEnd() + '\n');
 }

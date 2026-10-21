@@ -479,7 +479,8 @@ func TestHealthzAndViewer(t *testing.T) {
 	// The installable-viewer assets ship in the embedded bundle.
 	for _, path := range []string{
 		"/manifest.json", "/icon.svg", "/icon.png", "/notifications.js",
-		"/renderer.js", "/transport.js", "/viewer-agent.js",
+		"/renderer.js", "/markdown.js", "/markdown.LICENSE.txt", "/markdown.js.LEGAL.txt",
+		"/transport.js", "/viewer-agent.js",
 		"/viewer-artifact.js", "/viewer-artifact-discussions.js",
 		"/viewer-task.js", "/viewer-session.js",
 		"/viewer-panel.css", "/viewer-theme.css", "/viewer-room.css",

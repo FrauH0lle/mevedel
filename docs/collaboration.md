@@ -1352,8 +1352,14 @@ follows later toggles over `postMessage`, so an artifact themes off
 local `#section` links inside the artifact, including encoded section IDs,
 so they scroll within its sandbox rather than navigating to the room URL.
 This applies in both the panel and the separate artifact tab.
-Markdown goes through the
-DOM-built XSS-safe renderer, images display inline, plain text shows as
+Markdown is parsed by locally bundled Marked and sanitized by DOMPurify
+before DOM insertion. It supports nested lists, links (including email
+autolinks), tables, and inline formatting on wrapped list lines. Single
+newlines remain visible line breaks. Authored HTML is displayed literally,
+not interpreted; code blocks retain the viewer's text-based highlighting.
+If browser sanitization is unavailable, rendering refuses the content rather
+than inserting unsanitized HTML.
+Images display inline, plain text shows as
 text, and anything else is offered as a download. "Open in tab" puts an
 HTML artifact beside the conversation: a same-origin shell opened
 synchronously from the click -- the bytes are already in hand, so no
