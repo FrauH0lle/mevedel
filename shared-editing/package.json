@@ -27,7 +27,7 @@
     "qrcode-generator": "2.0.4",
     "roughjs": "4.6.4",
     "y-protocols": "1.0.7",
-    "yjs": "13.6.32"
+    "yjs": "13.6.33"
   },
   "devDependencies": {
     "esbuild": "0.28.2",
