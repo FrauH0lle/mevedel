@@ -46,7 +46,7 @@
     records: new Map(),
     elements: new Map(),
     staging: null,
-    filter: 'all',
+    filter: 'main',
     connected: false,
     unseen: new Set(),
     busy: null,
@@ -973,18 +973,21 @@
       // A shared item's tab waits for the host's item list, so a deleted
       // item's tab does not flash up while a reload replays its turns.
       const listed = ids.filter(id => presence.get(id) === true);
+      // All earns its tab only when it shows more than Main chat.
+      const all = counts.all > counts.main;
       // The strip is part of the surface once connected, even with no
       // directive yet: an always-present control needs no discovering.
       filterNav.hidden = !state.connected;
-      if (state.filter !== 'all' && state.filter !== 'main'
-          && !listed.includes(state.filter)) {
-        state.filter = 'all';
+      // Main chat is the room's home: a lost tab falls back to it.
+      if (state.filter === 'all' ? !all
+          : state.filter !== 'main' && !listed.includes(state.filter)) {
+        state.filter = 'main';
       }
       filterNav.replaceChildren();
       const add = (value, label, dir) => {
         const unseen = state.unseen.has(value);
         const button = el('button',
-                          `${dir ? 'dir' : ''}${unseen ? ' unseen' : ''}`,
+                          `${dir ? 'dir' : ''}${value === 'all' ? 'all' : ''}${unseen ? ' unseen' : ''}`,
                           label);
         button.type = 'button';
         button.setAttribute('aria-pressed',
@@ -1000,9 +1003,9 @@
         button.addEventListener('click', () => selectFilter(value));
         filterNav.append(button);
       };
-      add('all', 'All');
-      if (listed.length) add('main', 'Main chat');
+      add('main', 'Main chat');
       listed.forEach(id => add(id, directiveLabel(id), true));
+      if (all) add('all', 'All');
     }
     state.records.forEach(record => {
       const turn = state.elements.get(record.id);
@@ -1455,7 +1458,7 @@
     } else if (frame.t === 'files-changed') {
       files.changed(frame);
     } else if (frame.t === 'session-models') {
-      sessions.showModels(frame.models);
+      sessions.showModels(frame.models, frame.efforts);
     } else if (frame.t === 'new-session') {
       sessions.showResult({
         reqId: frame.reqId, ok: frame.ok === true, message: frame.message,

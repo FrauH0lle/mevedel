@@ -122,7 +122,7 @@ body:has(#transcript:empty):has(#terminal-state:not([hidden])) .dock { margin-to
 .assistant-working::before { width:16px; height:16px; margin-right:10px; color:var(--accent); vertical-align:-3px; }
 .composer { padding:14px 18px 12px; border-color:var(--rule-strong); border-radius:4px; box-shadow:none; gap:8px; }
 .composer-label { font-weight:500; color:var(--ink); font-size:12px; }
-.composer textarea { min-height:55px; font-size:15px; line-height:1.6; }
+.composer textarea { font-size:15px; line-height:1.6; }
 .composer-row { gap:6px; }
 .composer-row > .btn { min-height:34px; padding:7px 11px; font-size:12px; font-weight:500; }
 .composer-row .quiet { background:transparent; border:1px solid transparent; }
@@ -286,7 +286,7 @@ body:has(#editing-panel.docked) .room-button { display:grid; }
   #session-box[open] .dock-disclosure-body { max-height:none; overflow:visible; }
   /* The composer starts at one line and grows with its message. */
   .composer-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
-  .composer textarea { min-height:44px; field-sizing:content; max-height:30dvh; }
+  .composer textarea { min-height:44px; max-height:30dvh; }
   .composer-row > .btn { font-size:11px; padding:6px 9px; }
   .sheet-form { padding:20px; }
   .modeline { font-size:12px; gap:8px; }

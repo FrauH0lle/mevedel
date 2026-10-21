@@ -33,7 +33,9 @@ persisted selection in a fresh recovery snapshot.
 
 Session creation sheets refresh offered `BACKEND:MODEL` labels with
 `{"t":"session-models"}`; the host replies with `models` to writable session
-guests or lobby owners only. Session owners rename through
+guests or lobby owners only, plus an `efforts` object mapping each label whose
+model declares reasoning efforts to their names. A `new-session` request may
+carry `effort` alongside `model`. Session owners rename through
 `{"t":"recovery","action":"rename","value":"New name"}`. Lobby owners use
 `{"t":"rename-session","reqId":N,"id":"session-id","name":"New name"}`;
 the reply repeats `reqId` with `ok` and, on refusal, `message`. Successful names

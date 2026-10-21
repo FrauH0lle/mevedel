@@ -29,22 +29,34 @@
          (room (list :session t :guests guests :transport 'relay))
          (gptel--known-backends nil)
          sent)
-    (gptel-make-openai "Fresh" :models '(first second))
+    (gptel-make-openai "Fresh" :models '(first mevedel-test-effort-model))
+    (put 'mevedel-test-effort-model :reasoning-effort '(member low high))
     (puthash 1 (list :writable nil :owner nil) guests)
     (puthash 2 (list :writable t :owner nil) guests)
     (puthash 3 (list :writable t :owner t) guests)
-    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
-               (lambda (_transport peer frame) (push (cons peer frame) sent))))
-      (dolist (peer '(1 2 3 4))
-        (mevedel-collaboration--handle-session-models room peer))
-      (should (equal '(2 3) (sort (mapcar #'car sent) #'<)))
-      (should (equal "session-models" (plist-get (cdar sent) :t)))
-      (should (member "Fresh:second" (append (plist-get (cdar sent) :models) nil)))
-      (setq sent nil)
-      (plist-put room :session nil)
-      (dolist (peer '(1 2 3 4))
-        (mevedel-collaboration--handle-session-models room peer))
-      (should (equal '(3) (mapcar #'car sent))))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport peer frame) (push (cons peer frame) sent))))
+          (dolist (peer '(1 2 3 4))
+            (mevedel-collaboration--handle-session-models room peer))
+          (should (equal '(2 3) (sort (mapcar #'car sent) #'<)))
+          (should (equal "session-models" (plist-get (cdar sent) :t)))
+          (should (member "Fresh:mevedel-test-effort-model"
+                          (append (plist-get (cdar sent) :models) nil)))
+          ;; Each model with declared efforts lists their names; one without
+          ;; has no entry.
+          (let ((efforts (plist-get (cdar sent) :efforts)))
+            (should (equal ["low" "high"]
+                           (gethash "Fresh:mevedel-test-effort-model" efforts)))
+            (should-not (gethash "Fresh:first" efforts))
+            (should (equal "{\"Fresh:mevedel-test-effort-model\":[\"low\",\"high\"]}"
+                           (json-encode efforts))))
+          (setq sent nil)
+          (plist-put room :session nil)
+          (dolist (peer '(1 2 3 4))
+            (mevedel-collaboration--handle-session-models room peer))
+          (should (equal '(3) (mapcar #'car sent))))
+      (put 'mevedel-test-effort-model :reasoning-effort nil))))
 
 (mevedel-deftest mevedel-collaboration--new-session-reply
   (:doc "targets one peer with the supplied new-session outcome")
@@ -175,23 +187,27 @@
   (:doc "grants owners, asks for writers, and deduplicates exact requests")
   (let* ((guests (make-hash-table :test #'eql))
          (room (list :transport 'transport :guests guests))
-         created asked created-images models)
+         created asked created-images models efforts)
     (puthash 1 (list :name "Owner" :writable t :owner t :ready t) guests)
     (puthash 2 (list :name "Writer" :writable t :ready t) guests)
     (puthash 3 (list :name "Reader" :ready t) guests)
     (cl-letf (((symbol-function 'mevedel-collaboration--create-guest-session)
                (lambda (_room _peer _guest _request-id name prompt
-                                &optional images model)
+                               &optional images model effort)
                  (push (cons name prompt) created)
                  (push model models)
+                 (push effort efforts)
                  (setq created-images images)))
               ((symbol-function 'mevedel-collaboration--ask-host-new-session)
                (lambda (_room _peer _guest _request-id name prompt
-                                &optional _images model)
+                               &optional _images model effort)
                  (push (cons name prompt) asked)
-                 (push model models)))
+                 (push model models)
+                 (push effort efforts)))
               ((symbol-function 'mevedel-model-candidates)
-               (lambda () '(("Codex:gpt-6-luna" :backend b :model m)))))
+              (lambda () '(("Codex:gpt-6-luna" :backend b :model m))))
+              ((symbol-function 'mevedel-model-supported-efforts)
+               (lambda (model) (and (eq model 'm) '(low high)))))
       (mevedel-collaboration--handle-new-session
        room 1 '(:reqId 1 :name "onboarding" :prompt "Design the flow"))
       (should (equal '(("onboarding" . "Design the flow")) created))
@@ -280,7 +296,34 @@
             (should (= before (length models)))
             (should (eq :json-false (plist-get (car sent) :ok)))
             (should (equal "Unknown model Codex:missing"
-                           (plist-get (car sent) :message)))))))))
+                           (plist-get (car sent) :message))))
+          ;; A declared effort rides with its model to either path, as the
+          ;; model's own symbol.
+          (plist-put (gethash 2 guests) :pending-new-session nil)
+          (mevedel-collaboration--handle-new-session
+           room 2 '(:reqId 14 :name "deep" :model "Codex:gpt-6-luna"
+                    :effort "high"))
+          (should (eq 'high (car efforts)))
+          (mevedel-collaboration--handle-new-session
+           room 1 '(:reqId 15 :name "deep-owned" :model "Codex:gpt-6-luna"
+                    :effort "low"))
+          (should (eq 'low (car efforts)))
+          ;; An undeclared effort, or one without a model to check it
+          ;; against, refuses the request instead of dropping the choice.
+          (setq sent nil)
+          (let ((before (length efforts)))
+            (plist-put (gethash 2 guests) :pending-new-session nil)
+            (mevedel-collaboration--handle-new-session
+             room 2 '(:reqId 16 :name "x" :model "Codex:gpt-6-luna"
+                      :effort "ultra"))
+            (should (equal "Model Codex:gpt-6-luna has no reasoning effort ultra"
+                           (plist-get (car sent) :message)))
+            (mevedel-collaboration--handle-new-session
+             room 1 '(:reqId 17 :name "y" :effort "high"))
+            (should (equal "Choose a model to set its reasoning effort"
+                           (plist-get (car sent) :message)))
+            (should (eq :json-false (plist-get (car sent) :ok)))
+            (should (= before (length efforts)))))))))
 
 (mevedel-deftest mevedel-collaboration--ask-host-new-session
   (:doc "asks the host and owners, never the guest the request is about")
@@ -309,10 +352,11 @@
                                       :audience audience))
                  'overlay)))
       (mevedel-collaboration--ask-host-new-session
-       room 7 guest 42 "flow" "go" nil "Codex:gpt-6-luna")
+       room 7 guest 42 "flow" "go" nil "Codex:gpt-6-luna" 'high)
       ;; The host approves the model along with the session.
       (should (string-match-p "^Model:  Codex:gpt-6-luna$"
                               (plist-get captured :content)))
+      (should (string-match-p "^Effort: high$" (plist-get captured :content)))
       ;; An owner may create a session outright, so approving someone
       ;; else's request is no new authority.  Only a non-owner ever gets
       ;; here, so restricting to owners already excludes the requester --
@@ -341,16 +385,17 @@
       (puthash 7 guest guests)
       (funcall (plist-get captured :callback) 'approve)
       (should (eq 'created (car (car sent))))
-      (should (equal '("flow" "go" nil "Codex:gpt-6-luna")
-                     (last (cdr (car sent)) 4)))
+      (should (equal '("flow" "go" nil "Codex:gpt-6-luna" high)
+                     (last (cdr (car sent)) 5)))
       ;; An unnamed request says the session will be titled later.
       (mevedel-collaboration--ask-host-new-session room 7 guest 43 nil nil)
       (should (string-match-p "^Name:   (none -- titled from the first prompt)$"
                               (plist-get captured :content)))
+      (should-not (string-match-p "^Effort:" (plist-get captured :content)))
       (should (equal "Create a new session for Writer?"
                      (plist-get captured :question)))
       (funcall (plist-get captured :callback) 'approve)
-      (should (equal '(nil nil nil nil) (last (cdr (car sent)) 4))))))
+      (should (equal '(nil nil nil nil nil) (last (cdr (car sent)) 5))))))
 
 (mevedel-deftest mevedel-collaboration--offer-room-to-owners
   (:doc "offers a created room to the other owners, never to the requester")
@@ -401,6 +446,9 @@
 			       ((symbol-function 'mevedel-model-set-session-provider)
 				(lambda (_session provider &optional _buffer)
 				  (push (plist-get provider :label) steps)))
+			       ((symbol-function 'mevedel-model-set-session-effort)
+				(lambda (_session effort &optional _buffer)
+				  (push effort steps)))
 			       ((symbol-function 'mevedel-collaboration--start)
 				(lambda (&rest _) (push 'start steps) new-room))
 			       ((symbol-function 'mevedel-collaboration--stop-internal)
@@ -467,6 +515,13 @@
 								room 1 '(:name "Owner" :writable t :owner t) 8 "luna" "go" nil
 								"Codex:gpt-6-luna"))
 							     (should (equal '(preset "Codex:gpt-6-luna" start enqueue)
+									    (reverse steps)))
+							     ;; A chosen effort follows the model, before the room starts.
+							     (setq steps nil)
+							     (mevedel-collaboration--create-guest-session
+							      room 1 '(:name "Owner" :writable t :owner t) 11 "deep" nil nil
+							      "Codex:gpt-6-luna" 'high)
+							     (should (equal '(preset "Codex:gpt-6-luna" high start)
 									    (reverse steps)))
 							     ;; No choice keeps the preset's own model.
 							     (setq steps nil)

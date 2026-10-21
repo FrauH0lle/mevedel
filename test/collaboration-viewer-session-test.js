@@ -9,6 +9,7 @@ const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
 const ids = ['new-session-button', 'new-session', 'new-session-form',
              'new-session-name', 'new-session-prompt', 'new-session-create',
              'new-session-model', 'new-session-model-label',
+             'new-session-effort', 'new-session-effort-label',
              'new-session-lede', 'invites', 'invite-button', 'invite',
              'invite-tiers', 'rooms', 'rooms-list'];
 
@@ -427,4 +428,40 @@ console.log('viewer session controller passed');
   nodes['new-session-prompt'].value = '';
   nodes['new-session'].close('create');
   assert.equal('model' in sent[0], false);
+}
+
+// Reasoning effort follows the picked model: each model offers its own
+// declared efforts, and Default offers none because its model is only
+// known once the host applies its preset.
+{
+  const {controller, nodes, sent} = build(64, null, ['Codex:gpt-6-astra', 'Plain:old']);
+  nodes['new-session-button'].dispatch('click');
+  controller.showModels(['Codex:gpt-6-astra', 'Plain:old'],
+                        {'Codex:gpt-6-astra': ['low', 'high']});
+  assert.equal(nodes['new-session-effort'].hidden, true, 'Default model offers no efforts');
+  assert.equal(nodes['new-session-effort-label'].hidden, true);
+  nodes['new-session-model'].value = 'Codex:gpt-6-astra';
+  nodes['new-session-model'].dispatch('change');
+  assert.equal(nodes['new-session-effort'].hidden, false);
+  assert.deepEqual(nodes['new-session-effort'].children.map(textOf), ['Default', 'low', 'high']);
+  nodes['new-session-effort'].value = 'high';
+  // A model without declared efforts drops the picker and the stale pick.
+  nodes['new-session-model'].value = 'Plain:old';
+  nodes['new-session-model'].dispatch('change');
+  assert.equal(nodes['new-session-effort'].hidden, true);
+  assert.equal(nodes['new-session-effort'].value, '');
+  nodes['new-session-model'].value = 'Codex:gpt-6-astra';
+  nodes['new-session-model'].dispatch('change');
+  nodes['new-session-effort'].value = 'high';
+  nodes['new-session-name'].value = 'deep';
+  nodes['new-session-prompt'].value = '';
+  nodes['new-session'].close('create');
+  assert.equal(sent[0].model, 'Codex:gpt-6-astra');
+  assert.equal(sent[0].effort, 'high');
+  // Default effort sends none.
+  nodes['new-session-button'].dispatch('click');
+  nodes['new-session-effort'].value = '';
+  nodes['new-session-name'].value = 'plain';
+  nodes['new-session'].close('create');
+  assert.equal('effort' in sent[1], false);
 }

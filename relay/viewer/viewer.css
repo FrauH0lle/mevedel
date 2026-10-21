@@ -97,6 +97,8 @@ code, pre { font-family: var(--font-mono); }
   font-weight: 600;
 }
 .filter button.dir { color: var(--accent); }
+/* All is the overview, kept apart at the strip's far end. */
+.filter button.all { margin-left: auto; }
 .filter button .cnt {
   font-size: .68rem;
   line-height: 1;
@@ -117,7 +119,7 @@ code, pre { font-family: var(--font-mono); }
   box-shadow: 0 0 0 2px var(--surface);
 }
 /* The strip earns its own row on a phone; on a wide screen a lone
-   "All" control under the wordmark looks orphaned, so it joins the line. */
+   "Main chat" control under the wordmark looks orphaned, so it joins the line. */
 @media (min-width: 60rem) {
   .topbar { flex-wrap: nowrap; }
   .filter {
@@ -648,14 +650,19 @@ code, pre { font-family: var(--font-mono); }
   gap: .4rem;
 }
 .composer[hidden] { display: none; }
+/* The message starts at one line and grows with its text up to a cap,
+   then scrolls. */
 .composer textarea {
+  box-sizing: border-box;
   border: 0;
   background: transparent;
-  resize: vertical;
+  resize: none;
   color: inherit;
   font: inherit;
   font-size: 1rem;
-  min-height: 2.2rem;
+  field-sizing: content;
+  max-height: min(40dvh, 18rem);
+  overflow-y: auto;
   outline: none;
 }
 .composer-row {

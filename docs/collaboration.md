@@ -404,7 +404,19 @@ session gets the default chat preset first and the picked model second, because
 a preset may name a model of its own that would otherwise replace the guest's
 choice. Only the lead model changes: the preset's model tiers and workloads,
 and so its agents, stay as configured. The choice is stored like `/model`'s and
-survives resume. An owner's session settings also permit registered preset replacement; it preserves
+survives resume.
+
+`session-models` also carries `efforts`, mapping each offered label whose model
+declares reasoning efforts to their names. Once a model with efforts is picked,
+the sheet offers its efforts after a Default entry and sends the pick as the
+frame's optional `effort`; changing the model refreshes the list and drops a
+pick the new model lacks. The Default model offers none, because its model is
+only known once the host applies the default preset. The host refuses an effort
+without a model, or one the picked model does not declare, and otherwise applies
+it after the model, so it replaces the effort the preset brought. Default keeps
+that effort. The approval prompt shows a requested effort.
+
+An owner's session settings also permit registered preset replacement; it preserves
 permission and sandbox modes because a preset carries
 tools, agents and arbitrary settings, not just a model. An approval prompt
 shows the requested model, or `default`.
@@ -704,11 +716,13 @@ trash is their safety net.
 
 Directives and shared items are the room's discussions. Records inside a
 directive turn carry its id and records inside a shared-item turn carry the
-item's id, so the filter strip lists **All**, **Main chat**, each directive
-(◆) and each whiteboard, document or artifact with turns (◇). **Main chat** hides every
-discussion. A turn's discussion chip selects that discussion too. A deleted item
-has no tab: its turns stay under **All** with a disabled chip marked **deleted**
-(see [deleting](shared-editing.md#deleting)).
+item's id, so the filter strip lists **Main chat**, each directive (◆) and
+each whiteboard, document or artifact with turns (◇), with **All** at its far
+end. **Main chat** is the default and hides every discussion; a tab whose
+discussion disappears falls back to it. **All** appears only when it shows
+more than **Main chat**. A turn's discussion chip selects that discussion too.
+A deleted item has no tab: its turns stay under **All** with a disabled chip
+marked **deleted** (see [deleting](shared-editing.md#deleting)).
 
 Selecting a directive scopes ordinary guest text to discussion of that directive;
 the host rechecks its workspace identity on receipt. A missing or invalid

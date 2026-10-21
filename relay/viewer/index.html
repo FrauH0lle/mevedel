@@ -238,7 +238,7 @@
         <p id="queue-state" class="queue-state" role="status" hidden></p>
         <p id="composer-scope" class="composer-scope" hidden></p>
         <label class="composer-label" for="composer-input">Message the room</label>
-        <textarea id="composer-input" class="composer-input" rows="2"
+        <textarea id="composer-input" class="composer-input" rows="1"
                   placeholder="Queue a follow-up for the session…"
                   aria-label="Prompt"></textarea>
         <div id="attachments" class="attachments"></div>
@@ -282,6 +282,11 @@
           <label id="new-session-model-label" class="sheet-label"
                  for="new-session-model" hidden>Model</label>
           <select id="new-session-model" class="sheet-input" hidden></select>
+          <label id="new-session-effort-label" class="sheet-label"
+                 for="new-session-effort" hidden>Reasoning effort
+            <span class="sheet-hint">Default leaves it to the provider</span>
+          </label>
+          <select id="new-session-effort" class="sheet-input" hidden></select>
           <label class="sheet-label" for="new-session-prompt">First prompt
             <span class="sheet-hint">optional — it runs on creation</span>
           </label>

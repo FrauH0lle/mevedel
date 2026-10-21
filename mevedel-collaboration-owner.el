@@ -73,9 +73,14 @@
                   "mevedel-models" (spec &optional noerror))
 (declare-function mevedel-model-set-session-provider
                   "mevedel-models" (session provider &optional buffer))
+(declare-function mevedel-model-set-session-effort
+                  "mevedel-models" (session effort &optional buffer))
+(declare-function mevedel-model-supported-efforts "mevedel-models" (model))
 (autoload 'mevedel-model-candidates "mevedel-models")
 (autoload 'mevedel-model-resolve-provider "mevedel-models")
 (autoload 'mevedel-model-set-session-provider "mevedel-models")
+(autoload 'mevedel-model-set-session-effort "mevedel-models")
+(autoload 'mevedel-model-supported-efforts "mevedel-models")
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view-enqueue-external-follow-up
@@ -128,14 +133,24 @@ refusal protects the command allowlist from becoming an escalation path."
     (mevedel-collaboration--publish-status room)))
 
 (defun mevedel-collaboration--handle-session-models (room peer)
-  "Send PEER the current model choices when it can request a session in ROOM."
+  "Send PEER the current model choices when it can request a session in ROOM.
+Each model that declares reasoning efforts lists their names under its
+label in the frame\='s efforts object."
   (when-let* ((guest (mevedel-collaboration--guest room peer))
               ((if (plist-get room :session)
                    (plist-get guest :writable)
                  (plist-get guest :owner))))
-    (mevedel-collaboration--transport-send
-     (plist-get room :transport) peer
-     (list :t "session-models" :models (vconcat (mapcar #'car (mevedel-model-candidates)))))))
+    (let ((candidates (mevedel-model-candidates))
+          (efforts (make-hash-table :test #'equal)))
+      (dolist (candidate candidates)
+        (when-let* ((names (mevedel-model-supported-efforts
+                            (plist-get (cdr candidate) :model))))
+          (puthash (car candidate) (vconcat (mapcar #'symbol-name names))
+                   efforts)))
+      (mevedel-collaboration--transport-send
+       (plist-get room :transport) peer
+       (list :t "session-models" :models (vconcat (mapcar #'car candidates))
+             :efforts efforts)))))
 
 (defun mevedel-collaboration--new-session-reply
     (room peer request-id name &rest keys)
@@ -174,7 +189,7 @@ requester is skipped because its own reply already carried a link."
       (mevedel-collaboration--offer-room room owner-peer name link))))
 
 (defun mevedel-collaboration--create-guest-session
-    (room peer guest request-id name prompt &optional images model)
+    (room peer guest request-id name prompt &optional images model effort)
   "Create session NAME for GUEST and reply to PEER's REQUEST-ID.
 A nil NAME creates an unnamed session; replies and offers then carry the
 name it starts with, its id, until it is titled from its first prompt.
@@ -184,7 +199,8 @@ lobby's workspace and root.  GUEST receives the same authority tier it
 already holds, and ROOM's other owner guests are offered an owner link
 to it.  The session gets the default chat preset and then MODEL, a
 \"BACKEND:MODEL\" label, when given: the preset may name a model of its
-own, which would otherwise replace the guest's choice.  PROMPT, when
+own, which would otherwise replace the guest's choice.  EFFORT, a
+reasoning effort symbol MODEL supports, follows the model.  PROMPT, when
 given, is queued with attachment IMAGES only after the new room starts;
 a failed start, save or enqueue discards the partial session and
 reports failure without stopping ROOM."
@@ -216,6 +232,9 @@ reports failure without stopping ROOM."
                 (mevedel-model-set-session-provider
                  new-session (mevedel-model-resolve-provider model)
                  created-buffer))
+              (when effort
+                (mevedel-model-set-session-effort
+                 new-session effort created-buffer))
               (setq new-room
                     (mevedel-collaboration--start new-session created-buffer))
               (when prompt
@@ -255,10 +274,11 @@ reports failure without stopping ROOM."
              new-room buffer))))))))
 
 (defun mevedel-collaboration--ask-host-new-session
-    (room peer guest request-id name prompt &optional images model)
+    (room peer guest request-id name prompt &optional images model effort)
   "Ask the host to approve GUEST's REQUEST-ID for a session named NAME.
 PROMPT and its attachment IMAGES start the session once approved, on
-MODEL when given.  A nil NAME asks for an unnamed session.
+MODEL and its reasoning EFFORT when given.  A nil NAME asks for an
+unnamed session.
 
 The prompt reaches Emacs and ROOM's owner-link guests.  An owner may
 create a session outright, so approving someone else's request is no new
@@ -282,6 +302,8 @@ fails on the name that the first one took."
           (format "Name:   %s\n"
                   (or name "(none -- titled from the first prompt)"))
           (format "Model:  %s\n" (or model "default"))
+          (when effort
+            (format "Effort: %s\n" effort))
           (format "Prompt: %s\n"
                   (or prompt "(none -- the session starts empty)"))
           (when (> (length images) 0)
@@ -299,7 +321,7 @@ fails on the name that the first one took."
              (pcase outcome
                ('approve
                 (mevedel-collaboration--create-guest-session
-                 room peer guest request-id name prompt images model))
+                 room peer guest request-id name prompt images model effort))
                (`(feedback . ,text)
                 (mevedel-collaboration--new-session-reply
                  room peer request-id name :ok :json-false :message text))
@@ -316,7 +338,9 @@ fails on the name that the first one took."
 (defun mevedel-collaboration--handle-new-session (room peer frame)
   "Act on writable guest PEER's request in FRAME for a new session.
 FRAME may name the session's model; one this host has not registered
-refuses the request rather than falling back to the default.  A request
+refuses the request rather than falling back to the default.  FRAME may
+also name a reasoning effort, which needs a model that supports it; the
+default model is only known once its preset applies.  A request
 without a usable name creates an unnamed session, which is titled from
 its first prompt like one started in Emacs without a name."
   (when-let* ((guest (mevedel-collaboration--guest room peer))
@@ -336,6 +360,15 @@ its first prompt like one started in Emacs without a name."
                        ;; Files alone still say what the session is for.
                        (and images "See the attached file.")))
            (model (mevedel-collaboration--guest-text (plist-get frame :model)))
+           (provider (and model (cdr (assoc model (mevedel-model-candidates)))))
+           (effort-name (mevedel-collaboration--guest-text
+                         (plist-get frame :effort)))
+           (effort (and effort-name provider
+                        ;; Never intern browser text: a declared effort
+                        ;; is already an interned symbol.
+                        (car (memq (intern-soft effort-name)
+                                   (mevedel-model-supported-efforts
+                                    (plist-get provider :model))))))
            (waiting (plist-get guest :pending-new-session))
            (last (plist-get guest :last-new-session))
            (now (float-time)))
@@ -359,17 +392,24 @@ its first prompt like one started in Emacs without a name."
                 mevedel-collaboration--duplicate-prompt-window))
         nil)
        ;; Only offered labels: probing an arbitrary name could register it.
-       ((and model (not (assoc model (mevedel-model-candidates))))
+       ((and model (not provider))
         (mevedel-collaboration--new-session-reply
          room peer request-id name :ok :json-false
          :message (format "Unknown model %s" model)))
+       ((and effort-name (not effort))
+        (mevedel-collaboration--new-session-reply
+         room peer request-id name :ok :json-false
+         :message (if model
+                      (format "Model %s has no reasoning effort %s"
+                              model effort-name)
+                    "Choose a model to set its reasoning effort")))
        (t
         (plist-put guest :last-new-session (cons request-id now))
         (if (plist-get guest :owner)
             (mevedel-collaboration--create-guest-session
-             room peer guest request-id name prompt images model)
+             room peer guest request-id name prompt images model effort)
           (mevedel-collaboration--ask-host-new-session
-           room peer guest request-id name prompt images model)))))))
+           room peer guest request-id name prompt images model effort)))))))
 
 (provide 'mevedel-collaboration-owner)
 ;;; mevedel-collaboration-owner.el ends here

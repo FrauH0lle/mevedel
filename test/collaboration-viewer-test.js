@@ -888,6 +888,7 @@ async function main() {
                'new-session-result', 'new-session-name',
                'new-session-prompt', 'new-session-model',
                'new-session-model-label',
+               'new-session-effort', 'new-session-effort-label',
                'new-session-create', 'new-session-lede',
                'invites', 'invite-button', 'invite', 'invite-tiers',
                'lobby', 'lobby-list', 'lobby-empty', 'lobby-omitted',
@@ -1306,9 +1307,11 @@ async function main() {
   assert.equal(nodes.transcript.children.length, 4);
 
   // The filter strip is visible from connection on, even before any
-  // directive record exists.
+  // directive record exists; Main chat is its default tab.
   assert.equal(nodes.filter.hidden, false);
-  assert.match(textOf(nodes.filter.children[0]), /^All/);
+  assert.equal(nodes.filter.children.length, 1);
+  assert.match(textOf(nodes.filter.children[0]), /^Main chat/);
+  assert.equal(nodes.filter.children[0].attributes['aria-pressed'], 'true');
 
   // ApplyPatch tool row: the authored patch renders as a diff pane and the
   // result summary stays a plain line.
@@ -1502,22 +1505,23 @@ async function main() {
     text: 'Refactor the parser\nwith details', directive: 'dir-1',
   }});
   assert.equal(nodes.filter.hidden, false);
-  assert.match(nodes.filter.children[0].attributes.title, /every turn/i);
   const labels = nodes.filter.children.map(textOf);
   assert.equal(labels.length, 3);
-  assert.match(labels[0], /^All/);
-  assert.match(labels[1], /^Main chat/);
-  assert.match(labels[2], /Refactor the parser/);
-  nodes.filter.children[2].dispatch('click');
+  assert.match(labels[0], /^Main chat/);
+  assert.match(labels[1], /Refactor the parser/);
+  assert.match(labels[2], /^All/);
+  assert.match(nodes.filter.children[2].attributes.title, /every turn/i);
+  assert.match(nodes.filter.children[2].className, /\ball\b/);
+  nodes.filter.children[1].dispatch('click');
   assert.equal(findByRecordId(nodes.transcript, 'assistant').hidden, true);
   assert.equal(findByRecordId(nodes.transcript, 'directive-user').hidden, false);
-  nodes.filter.children[1].dispatch('click'); // Main chat
+  nodes.filter.children[0].dispatch('click'); // Main chat
   assert.equal(findByRecordId(nodes.transcript, 'assistant').hidden, false);
   assert.equal(findByRecordId(nodes.transcript, 'directive-user').hidden, true);
   // A prompt sent under a directive filter carries that directive, so
   // the reply lands in the thread the guest is reading; main chat and
   // All carry none. The composer says where the prompt will go.
-  nodes.filter.children[2].dispatch('click');
+  nodes.filter.children[1].dispatch('click');
   assert.match(nodes['composer-input'].placeholder, /Refactor the parser/);
   // The composer scope pill names the directive the prompt will land in
   // and disappears for unscoped filters.
@@ -1527,7 +1531,7 @@ async function main() {
   nodes.composer.dispatch('submit');
   await waitFor(() => first.sent.length === 7, 'directive-scoped prompt');
   assert.equal((await unseal(key, first.sent[6])).directive, 'dir-1');
-  nodes.filter.children[1].dispatch('click'); // Main chat
+  nodes.filter.children[0].dispatch('click'); // Main chat
   assert.equal(nodes['composer-scope'].hidden, true);
   nodes['composer-input'].value = 'main chat';
   nodes.composer.dispatch('submit');
@@ -1545,7 +1549,7 @@ async function main() {
   assert.match(dirTab().className, /unseen/);
   dirTab().dispatch('click');
   assert.doesNotMatch(dirTab().className, /unseen/);
-  nodes.filter.children[0].dispatch('click'); // All
+  nodes.filter.children[2].dispatch('click'); // All
 
   // Attachments are not only photos: an allowlisted text type rides the
   // frame verbatim, a disallowed one never leaves the browser, and the
@@ -1662,10 +1666,10 @@ async function main() {
   chooseName('before-wait');
   await waitFor(() => first.sent.length === beforeName + 1, 'sealed name');
   const queuedSendBefore = first.sent.length;
-  nodes.filter.children[2].dispatch('click');
+  nodes.filter.children[1].dispatch('click');
   nodes['composer-input'].value = 'send the queued photo';
   nodes.composer.dispatch('submit');
-  nodes.filter.children[1].dispatch('click');
+  nodes.filter.children[0].dispatch('click');
   // A name chosen while the prompt waits is the host's next, not the prompt's.
   chooseName('after-wait');
   await waitFor(() => first.sent.length === queuedSendBefore + 1, 'sealed name');
@@ -2680,16 +2684,19 @@ async function main() {
   assert.equal(findByRecordId(nodes.transcript, 'artifact-discussion').hidden, true);
   assert.equal(nodes['composer-input'].placeholder, 'Message ◇ Pipeline…');
   assert.match(textOf(nodes['composer-scope']), /its own conversation/);
-  nodes.filter.children[0].dispatch('click'); // All
+  nodes.filter.children.at(-1).dispatch('click'); // All
   assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
 
   // Deleting the item keeps its turns under All but ends its discussion:
-  // the open tab falls back to All, the tab goes, and the chip says why.
+  // the open tab falls back to Main chat, the tab goes, and the chip says why.
   boardTab().dispatch('click');
   const deletion = btoa(JSON.stringify({event: 'deleted', id: 'board-1', actor: 'Ross'}));
   await deliverTo(sockets[1], {t: 'editing', reqId: 'event', offset: 0,
                                total: deletion.length, data: deletion});
   assert.equal(boardTab(), undefined, 'a deleted item has no tab');
+  assert.match(textOf(nodes.filter.children.find(b => b.attributes['aria-pressed'] === 'true')), /^Main chat/);
+  assert.equal(findByRecordId(nodes.transcript, 'board-answer').hidden, true);
+  nodes.filter.children.at(-1).dispatch('click'); // All
   assert.equal(findByRecordId(nodes.transcript, 'board-answer').hidden, false);
   assert.equal(findByRecordId(nodes.transcript, 'artifact-discussion').hidden, false);
   assert.equal(nodes['composer-scope'].hidden, true);

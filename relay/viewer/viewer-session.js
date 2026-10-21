@@ -24,6 +24,10 @@
     const promptInput = document.getElementById('new-session-prompt');
     const modelInput = document.getElementById('new-session-model');
     const modelLabel = document.getElementById('new-session-model-label');
+    const effortInput = document.getElementById('new-session-effort');
+    const effortLabel = document.getElementById('new-session-effort-label');
+    // Effort names per model label; a model without any has no entry.
+    let modelEfforts = {};
     const submit = document.getElementById('new-session-create');
     const lede = document.getElementById('new-session-lede');
     // The first prompt carries files like any other prompt.
@@ -185,8 +189,9 @@
 
     // Refreshed on open: provider startup can discover more models after welcome.
     // The empty value leaves the choice to the host's default preset.
-    function showModels(offered) {
+    function showModels(offered, efforts) {
       if (Array.isArray(offered)) state.models = offered;
+      if (efforts && typeof efforts === 'object') modelEfforts = efforts;
       const models = state.models.filter(model => typeof model === 'string');
       const wanted = modelInput.value;
       const fallback = el('option', null, 'Default');
@@ -198,7 +203,29 @@
       }));
       modelInput.value = models.includes(wanted) ? wanted : '';
       modelInput.hidden = modelLabel.hidden = models.length === 0;
+      showEfforts();
     }
+
+    // Efforts follow the picked model. The default model is only known
+    // once the host applies its preset, so Default offers none.
+    function showEfforts() {
+      const model = !modelInput.hidden && modelInput.value;
+      const offered = model && Object.hasOwn(modelEfforts, model)
+        ? modelEfforts[model] : null;
+      const efforts = Array.isArray(offered)
+        ? offered.filter(effort => typeof effort === 'string') : [];
+      const wanted = effortInput.value;
+      const fallback = el('option', null, 'Default');
+      fallback.value = '';
+      effortInput.replaceChildren(fallback, ...efforts.map(effort => {
+        const option = el('option', null, effort);
+        option.value = effort;
+        return option;
+      }));
+      effortInput.value = efforts.includes(wanted) ? wanted : '';
+      effortInput.hidden = effortLabel.hidden = efforts.length === 0;
+    }
+    modelInput.addEventListener('change', showEfforts);
 
     // An empty name leaves naming to the host, which titles the session
     // from its first prompt; a typed name without a letter or digit is also unnamed.
@@ -210,6 +237,9 @@
       const frame = {t: 'new-session', reqId, prompt: promptInput.value.trim()};
       if (name) frame.name = name;
       if (!modelInput.hidden && modelInput.value) frame.model = modelInput.value;
+      if (frame.model && !effortInput.hidden && effortInput.value) {
+        frame.effort = effortInput.value;
+      }
       const request = () => {
         const attached = files.items();
         if (attached.length) {
