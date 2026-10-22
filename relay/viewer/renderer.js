@@ -201,17 +201,35 @@
   }
 
   function renderCodeBlock(code, lang) {
-    if ((lang || '').toLowerCase() === 'diff') {
-      const block = el('div', 'codeblock');
-      block.append(el('span', 'lang', 'diff'));
-      block.append(renderDiff(code));
-      return block;
-    }
     const block = el('div', 'codeblock');
-    if (lang) block.append(el('span', 'lang', lang));
-    const pre = el('pre');
-    highlightInto(pre, code, lang);
-    block.append(pre);
+    const header = el('div', 'codeblock-header');
+    if (lang) header.append(el('span', 'lang', lang));
+    const copy = el('button', 'btn quiet codeblock-copy', 'Copy');
+    copy.type = 'button';
+    copy.setAttribute('title', 'Copy code');
+    copy.setAttribute('aria-live', 'polite');
+    copy.addEventListener('click', async () => {
+      copy.disabled = true;
+      try {
+        await navigator.clipboard.writeText(code);
+        copy.textContent = 'Copied';
+        copy.setAttribute('title', 'Copy code again');
+      } catch (_) {
+        copy.textContent = 'Copy failed';
+        copy.setAttribute('title', 'Clipboard unavailable. Try again or select the code to copy manually.');
+      } finally {
+        copy.disabled = false;
+      }
+    });
+    header.append(copy);
+    block.append(header);
+    if ((lang || '').toLowerCase() === 'diff') {
+      block.append(renderDiff(code));
+    } else {
+      const pre = el('pre');
+      highlightInto(pre, code, lang);
+      block.append(pre);
+    }
     return block;
   }
 

@@ -182,6 +182,102 @@ test('project Markdown supports standard blocks, links, and literal highlighted 
   assert.equal(await page.evaluate(() => window.__markdownAttack), undefined);
 });
 
+for (const width of [375, 1280]) {
+  test(`code-block buttons copy exact text and fit at ${width}px`, async t => {
+    const browser = await chromium.launch({headless: true});
+    t.after(() => browser.close());
+    const page = await browser.newPage({viewport: {width, height: 800},
+      permissions: ['clipboard-read', 'clipboard-write']});
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    const cases = [
+      {lang: 'elisp', code: '(defun demo ()\n\n\t"<tag> & λ"  )\n\n',
+       // Marked normalizes trailing blank lines before our renderer receives code.
+       displayed: '(defun demo ()\n\n\t"<tag> & λ"  )\n'},
+      {lang: '', code: '  unlabelled\n\ttext with spaces  \n'},
+      {lang: 'diff', code: '@@ -1 +1 @@\n-old\n+new\n'},
+      {lang: 'sql', code: 'SELECT ' + 'column, '.repeat(100) + 'last FROM data;\n'},
+      {lang: '', code: ''},
+    ];
+    await openFile(page, cases.map(({lang, code}) => '```' + lang + '\n' + code + '```').join('\n\n'));
+    const blocks = page.locator('#artifact-body .codeblock');
+    assert.equal(await blocks.count(), cases.length);
+    for (let i = 0; i < cases.length; i++) {
+      const block = blocks.nth(i);
+      const copy = block.getByRole('button');
+      const expected = cases[i].displayed ?? cases[i].code;
+      if (cases[i].lang !== 'diff') {
+        assert.equal(await block.locator('pre').textContent(), expected,
+                     'the expected clipboard text is the rendered code, including whitespace');
+      }
+      assert.equal(await copy.textContent(), 'Copy');
+      await copy.scrollIntoViewIfNeeded();
+      const geometry = await copy.evaluate(button => {
+        const rect = button.getBoundingClientRect();
+        const header = button.parentElement.getBoundingClientRect();
+        return {left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom,
+                headerLeft: header.left, headerRight: header.right,
+                headerTop: header.top, headerBottom: header.bottom};
+      });
+      assert.ok(geometry.left >= geometry.headerLeft && geometry.right <= geometry.headerRight,
+                'the Copy button stays inside the header even when code scrolls horizontally');
+      assert.ok(geometry.left >= 0 && geometry.right <= width,
+                `the Copy button fits the viewport: ${JSON.stringify(geometry)}`);
+      assert.ok(geometry.top >= geometry.headerTop && geometry.bottom <= geometry.headerBottom);
+      // Native keyboard activation exercises the actual browser clipboard.
+      await copy.focus();
+      await copy.press('Enter');
+      await page.waitForFunction(index => document.querySelectorAll('#artifact-body .codeblock-copy')[index]
+        .textContent === 'Copied', i);
+      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expected);
+      assert.equal(await copy.isEnabled(), true);
+      await page.evaluate(() => navigator.clipboard.writeText('replace clipboard'));
+      await copy.click();
+      // The success label is already present; wait for the pending write to finish.
+      await page.waitForFunction(index => !document.querySelectorAll('#artifact-body .codeblock-copy')[index]
+        .disabled, i);
+      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expected,
+                   'copy remains usable after success');
+    }
+    assert.deepEqual(errors, []);
+  });
+}
+
+test('code-block copy reports unavailable or rejected clipboard writes and permits retry', async t => {
+  const browser = await chromium.launch({headless: true});
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await openFile(page, '```js\nconst value = 1;\n```');
+  const copy = page.locator('#artifact-body .codeblock-copy');
+  for (const failure of ['missing', 'rejected']) {
+    await page.evaluate(failure => {
+      Object.defineProperty(navigator, 'clipboard', {configurable: true, value:
+        failure === 'missing' ? undefined : {writeText: () => Promise.reject(new Error('Denied'))}});
+    }, failure);
+    await copy.click();
+    assert.equal(await copy.textContent(), 'Copy failed');
+    assert.equal(await copy.isEnabled(), true);
+    assert.match(await copy.getAttribute('title'), /select the code to copy manually/);
+  }
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {
+      writeText: text => new Promise(resolve => {
+        window.finishCopy = () => { window.copiedCode = text; resolve(); };
+      }),
+    }});
+  });
+  await copy.click();
+  assert.equal(await copy.isDisabled(), true, 'pending writes cannot overlap');
+  await page.evaluate(() => window.finishCopy());
+  await page.waitForFunction(() => document.querySelector('#artifact-body .codeblock-copy').textContent === 'Copied');
+  assert.equal(await copy.isEnabled(), true);
+  assert.equal(await page.evaluate(() => window.copiedCode), 'const value = 1;\n');
+  assert.equal(await copy.getAttribute('title'), 'Copy code again');
+  assert.deepEqual(errors, [], 'clipboard failures are handled without unhandled exceptions');
+});
+
 test('project Markdown cannot inject scripts, handlers, URLs, SVG, frames, styles, or forms', async t => {
   const browser = await chromium.launch({headless: true});
   t.after(() => browser.close());

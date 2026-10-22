@@ -1505,6 +1505,15 @@ async function main() {
   assert.match(flat, /"className":"tok-kw"/);
   assert.match(flat, /"className":"tok-str"/);
 
+  // Copy uses the code source, not the language/header or highlighted DOM.
+  const copyCode = findByClass(md, 'codeblock-copy');
+  assert.equal(copyCode.type, 'button');
+  assert.equal(copyCode.attributes['aria-live'], 'polite');
+  copyCode.dispatch('click');
+  await waitFor(() => copyCode.textContent === 'Copied', 'code copied');
+  assert.equal(copied, '(defun demo ()\n  "doc")\n');
+  assert.equal(copyCode.disabled, false);
+
   // A pipe table renders as a real table, and a fence longer than the
   // one nested inside it survives to its own closer.
   await deliver({t: 'record', record: {

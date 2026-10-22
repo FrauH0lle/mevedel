@@ -1374,6 +1374,9 @@ before DOM insertion. It supports nested lists, links (including email
 autolinks), tables, and inline formatting on wrapped list lines. Single
 newlines remain visible line breaks. Authored HTML is displayed literally,
 not interpreted; code blocks retain the viewer's text-based highlighting.
+Each code block has a **Copy** button, including unlabeled and diff blocks.
+It copies only the rendered code, preserving its whitespace, and shows **Copied** or
+**Copy failed** according to the browser clipboard result.
 If browser sanitization is unavailable, rendering refuses the content rather
 than inserting unsanitized HTML.
 Images display inline, plain text shows as
