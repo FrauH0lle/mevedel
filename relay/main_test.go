@@ -486,7 +486,7 @@ func TestHealthzAndViewer(t *testing.T) {
 		"/viewer-panel.css", "/viewer-theme.css", "/viewer-room.css",
 		"/viewer-appearance.js", "/viewer-history.js", "/shared-editor-layout.css",
 		"/viewer-agent.css", "/viewer-artifact.css", "/viewer-session.css",
-		"/viewer-task.css", "/attachments.js", "/attachments.css",
+		"/viewer-task.css", "/attachments.js", "/attachments.css", "/composer.js",
 		"/service-worker.js", "/viewer-store.js", "/viewer-header.js",
 		"/qrcode.js", "/viewer-discussions.js", "/viewer-discussions.css",
 	} {

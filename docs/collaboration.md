@@ -319,9 +319,26 @@ is one row with its counts, and it opens as a sheet over the room, closed by ×
 or a tap outside it. On a phone shorter than 700px, such as an iPhone mini in
 Safari, the row leaves the dock for an **In this room** button in the header,
 and the status line under the composer hides while it only says that the room
-is connected. A phone's composer starts at one line and grows with its message. Conversation text and the composer share a
+is connected. The composer starts at one line, grows with its message up to
+40% of the viewport height or 18rem, and shrinks when cleared. On a phone it
+keeps a 44px minimum and a 30% viewport-height cap. Conversation text and the composer share a
 bounded width. The message and name fields have visible labels;
 keyboard users can skip the header directly to the transcript.
+
+At the bottom of the conversation, the viewer follows new messages and streamed
+responses, including content that grows after rendering. Sending a message keeps
+that following state. Even a small upward scroll pauses following and preserves
+the reading position; sending while reading earlier content does not jump to
+the bottom. Scrolling downward back within 40px of the bottom resumes following.
+A compact floating down-arrow button above the dock also jumps to the latest content and resumes
+following. It overlays the conversation without reserving a row or hiding chat
+behind a full-width bar; its accessible label and tooltip are **Jump to latest**.
+
+Room and discussion message boxes use **Enter** for a newline and **Ctrl+Enter**
+or **⌘+Enter** to send. This applies to the room composer and new discussions
+and replies on HTML artifacts, whiteboards and documents. The sending shortcut
+also submits the feedback field on a pending interaction. The sending button's
+tooltip shows the platform's shortcut.
 
 A guest's own chip leads the header's actions on every page. It opens a form
 for the name others see; the composer's **as …** beside Attach opens the same

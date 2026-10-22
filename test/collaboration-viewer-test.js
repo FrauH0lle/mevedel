@@ -824,7 +824,48 @@ function testCompletionRendering() {
   assert.equal(openedArtifact, artifact);
 }
 
+function testComposerShortcut() {
+  for (const [platform, hint] of [['Linux', 'Ctrl+Enter'], ['MacIntel', '⌘+Enter']]) {
+    const window = {};
+    vm.runInNewContext(fs.readFileSync('relay/viewer/composer.js', 'utf8'),
+      {window, navigator: {platform}});
+    const input = new Element('textarea'), button = new Element('button');
+    let clicks = 0;
+    button.title = 'Post reply';
+    button.click = () => { clicks++; };
+    window.mevedelComposer.bind(input, button);
+    assert.equal(button.title, `Post reply (${hint})`);
+    assert.equal(button.attributes['aria-keyshortcuts'], 'Control+Enter Meta+Enter');
+    for (const event of [{key: 'Enter'}, {key: 'Enter', shiftKey: true},
+                         {key: 'Enter', ctrlKey: true, isComposing: true},
+                         {key: 'Enter', ctrlKey: true, altKey: true},
+                         {key: 'Enter', ctrlKey: true, shiftKey: true},
+                         {key: 'Enter', ctrlKey: true, defaultPrevented: true}]) {
+      input.dispatch('keydown', event);
+    }
+    assert.equal(clicks, 0, 'ordinary Enter and composition do not send');
+    input.dispatch('keydown', {key: 'Enter', ctrlKey: true, repeat: true});
+    button.disabled = true;
+    input.dispatch('keydown', {key: 'Enter', ctrlKey: true});
+    button.disabled = false;
+    input.readOnly = true;
+    input.dispatch('keydown', {key: 'Enter', metaKey: true});
+    input.readOnly = false;
+    input.disabled = true;
+    input.dispatch('keydown', {key: 'Enter', ctrlKey: true});
+    input.disabled = false;
+    assert.equal(clicks, 0, 'repeats and unavailable inputs do not send');
+    for (const modifier of ['ctrlKey', 'metaKey']) {
+      const event = {key: 'Enter', [modifier]: true};
+      input.dispatch('keydown', event);
+      assert.equal(event.defaultPrevented, true);
+    }
+    assert.equal(clicks, 2);
+  }
+}
+
 async function main() {
+  testComposerShortcut();
   await testWaitFor();
   testCompletionRendering();
   await runNotificationTests();
@@ -973,6 +1014,7 @@ async function main() {
       return 'granted';
     }
   }
+  const animationFrames = [];
   const window = {
     location: {
       href: `http://127.0.0.1:1/index.html#${roomId}.${ownerSecret}`,
@@ -986,6 +1028,7 @@ async function main() {
     listeners: {},
     addEventListener(type, callback) { (this.listeners[type] ||= []).push(callback); },
     setTimeout(callback) { timer = callback; return 1; },
+    requestAnimationFrame(callback) { animationFrames.push(callback); return animationFrames.length; },
     scrollTo(options) { this.scrollY = options.top; },
     scrollBy(options) { this.scrollY = Math.max(0, this.scrollY + options.top); },
     open() { return null; },
@@ -1091,6 +1134,7 @@ async function main() {
   installMarkdown(context, Element);
   vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/attachments.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/composer.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-artifact.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-history.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-agent.js', 'utf8'), context);
@@ -1193,6 +1237,9 @@ async function main() {
   const scroll = () => (window.listeners.scroll || []).forEach(cb => cb());
   assert.equal('data-reading' in document.body.attributes, false);
   document.documentElement.scrollHeight = 300;
+  window.scrollY = 280;
+  scroll();
+  window.scrollY = 0;
   scroll();
   assert.equal(nodes['live-button'].hidden, false);
   assert.equal('data-reading' in document.body.attributes, true);
@@ -1211,6 +1258,33 @@ async function main() {
   nodes['live-button'].dispatch('click');
   assert.equal(nodes['live-button'].hidden, true);
   assert.equal('data-reading' in document.body.attributes, false);
+  // Layout notifications coalesce, but scrolling away cancels their effect.
+  document.documentElement.scrollHeight = 600;
+  for (const resize of window.listeners.resize) resize();
+  for (const resize of window.listeners.resize) resize();
+  assert.equal(animationFrames.length, 1);
+  animationFrames.shift()();
+  assert.equal(window.scrollY, 600);
+  for (const resize of window.listeners.resize) resize();
+  window.scrollY = 300;
+  scroll();
+  animationFrames.shift()();
+  assert.equal(window.scrollY, 300, 'a queued frame cannot pull a reader back');
+  assert.equal(nodes['live-button'].hidden, false);
+  nodes['live-button'].dispatch('click');
+  window.scrollY = 579;
+  scroll();
+  assert.equal(nodes['live-button'].hidden, false, 'one pixel upward releases following');
+  scroll();
+  assert.equal(nodes['live-button'].hidden, false, 'an unchanged position cannot resume following');
+  window.scrollY = 580;
+  scroll();
+  assert.equal(nodes['live-button'].hidden, true, 'scrolling down to the edge resumes following');
+  animationFrames.shift()();
+  document.documentElement.scrollHeight = 500;
+  window.scrollY = 480;
+  scroll();
+  assert.equal(nodes['live-button'].hidden, true, 'clamping to a shorter page keeps following');
   document.documentElement.scrollHeight = 100;
   window.scrollY = 0;
   scroll();

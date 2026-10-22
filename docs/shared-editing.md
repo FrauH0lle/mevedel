@@ -558,6 +558,10 @@ its text, and no size depends on focus, so pressing a button never moves it.
 An unrecognized saved discussion-draft format is reported and reset without
 blocking recovery of document content or posted discussions.
 
+In every discussion message box, **Enter** inserts a newline and **Ctrl+Enter**
+or **⌘+Enter** submits through the sending button. Its tooltip shows the
+platform's shortcut, including when starting a discussion or replying to one.
+
 ### Sending a selection without a message
 
 A selection can be sent with no message, on a board or in a document: what is

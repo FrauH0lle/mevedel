@@ -430,12 +430,7 @@
       renderComposer(current.kind === NEW ? null : find(current.id));
     });
     attach.addEventListener('click', () => picker.click());
-    input.addEventListener('keydown', event => {
-      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-        event.preventDefault();
-        form.requestSubmit();
-      }
-    });
+    window.mevedelComposer.bind(input, send);
     form.addEventListener('submit', async event => {
       event.preventDefault();
       if (sending || !canWrite()) return;

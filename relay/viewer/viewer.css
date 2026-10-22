@@ -419,25 +419,43 @@ code, pre { font-family: var(--font-mono); }
 .diff .del  { background: var(--diff-del); color: var(--diff-del-ink); }
 
 /* ── Live affordance ────────────────────────────────────────────────── */
-/* Docked above the composer so it never lands inside the transcript on a
-   short viewport. */
+/* Float above the dock without reserving space or intercepting the chat. */
 .live-controls {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  width: 100%;
   display: flex;
   justify-content: center;
+  pointer-events: none;
 }
 .live-controls:not(:has(.live-button:not([hidden]))) { display: none; }
 .live-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
   border: 0;
-  border-radius: var(--control-radius);
-  padding: .5rem 1rem;
-  background: var(--accent);
+  border-radius: 50%;
+  padding: 0;
+  background: transparent;
   color: var(--on-accent);
   cursor: pointer;
-  font: inherit;
-  font-size: .82rem;
-  font-weight: 650;
+  font: 22px/1 var(--font-ui);
+  pointer-events: auto;
+}
+.live-button::before {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--accent);
   box-shadow: var(--shadow);
 }
+.live-button > span { position: relative; }
+.live-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .live-button[hidden] { display: none; }
 
 /* ── Dock: interactions, notice, composer ───────────────────────────── */

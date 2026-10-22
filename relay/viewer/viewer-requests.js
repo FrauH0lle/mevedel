@@ -306,6 +306,7 @@
           button.addEventListener('click', () => {
             if (feedback.value.trim()) send({t: 'ui-response', reqId: frame.reqId, feedback: feedback.value});
           });
+          window.mevedelComposer.bind(feedback, button);
           row.append(feedback, button);
           const disclosure = el('details', 'decision-feedback');
           if (existing && existing.feedbackDisclosure) disclosure.open = existing.feedbackDisclosure.open;

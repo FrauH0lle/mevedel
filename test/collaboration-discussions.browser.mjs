@@ -21,6 +21,7 @@ const kit = await viewer('viewer-artifact-discussions.js');
 const sidebar = await viewer('viewer-discussions.js');
 const markdown = await viewer('markdown.js');
 const renderer = await viewer('renderer.js');
+const composer = await viewer('composer.js');
 
 const ARTIFACT = `<!doctype html><html><head><style>
   body{font:16px/1.5 sans-serif;margin:24px;width:640px}
@@ -64,7 +65,7 @@ const HOST = `<!doctype html><html><head><style>
 
 async function setup(page) {
   await page.setContent(HOST);
-  for (const script of [markdown, renderer, sidebar, kit]) await page.addScriptTag({content: script});
+  for (const script of [markdown, renderer, composer, sidebar, kit]) await page.addScriptTag({content: script});
   await page.evaluate(() => {
     window.sent = [];
     window.openedConversations = [];
@@ -308,13 +309,18 @@ test('artifact discussions: pick, send, marker thread, box, selection, relocatio
     assert.equal(await page.isChecked(`${fresh} .ds-choice input`), true);
     assert.equal(await page.evaluate(() => document.activeElement.className), 'ds-input');
     await page.fill(`${fresh} .ds-input`, 'Say who shares them');
+    assert.match(await page.locator(`${fresh} .ds-send`).getAttribute('title'), /Ctrl\+Enter|⌘\+Enter/);
+    await page.keyboard.press('Enter');
+    assert.equal(await page.locator(`${fresh} .ds-input`).inputValue(), 'Say who shares them\n');
+    assert.equal((await actions(page, 'post')).length, 0);
+    await page.keyboard.type('And why');
     await page.keyboard.press('Control+Enter');
     await page.waitForFunction(() => document.querySelector(
       '#artifact-side .ds-thread:not([hidden]) .ds-subject-title')?.textContent !== 'New discussion');
     const [sent] = await actions(page, 'post');
     assert.equal(sent.t, 'discussion');
     assert.equal(sent.item, 'tool-1');
-    assert.equal(sent.text, 'Say who shares them');
+    assert.equal(sent.text, 'Say who shares them\nAnd why');
     assert.equal(sent.toAssistant, true);
     assert.ok(sent.messageId && sent.messageId !== sent.discussionId);
     assert.equal(sent.target.kind, 'word');

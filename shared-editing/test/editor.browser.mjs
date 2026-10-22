@@ -1291,17 +1291,23 @@ test('editor interaction regressions', async (t) => {
       await frame.locator('#discuss-selection').click();
       assert.equal(await askBox(frame).isChecked(), true, 'asking is the default');
       await box(frame).fill('Explain this word');
-      await send(frame);
+      assert.match(await shown(frame).locator('.ds-send').getAttribute('title'), /Ctrl\+Enter|⌘\+Enter/);
+      await box(frame).press('Enter');
+      assert.equal(await box(frame).inputValue(), 'Explain this word\n');
+      assert.equal((await sent(page, 'post')).length, 0);
+      await page.keyboard.type('In context');
+      await box(frame).press('Control+Enter');
       await shown(frame).locator('.ds-message').waitFor();
       await askedCount(page, 1);
       const [posted] = await sent(page,'post');
+      assert.equal(posted.text, 'Explain this word\nIn context');
       const [first] = await page.evaluate(()=>window.asked());
       assert.deepEqual([first.discussionId, first.version, first.questionId],
         [posted.discussionId, posted.messageId, posted.messageId]);
       assert.deepEqual(first.range, posted.target.range);
       assert.equal(await askBox(frame).isChecked(), true);
       await box(frame).fill('With an example');
-      await send(frame);
+      await box(frame).press('Meta+Enter');
       await askedCount(page, 2);
       const [reply] = await sent(page,'reply');
       const second = (await page.evaluate(()=>window.asked())).at(-1);

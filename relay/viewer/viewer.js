@@ -94,13 +94,40 @@
     return node;
   }
 
-  function atLiveEdge() {
+  // Following is reading intent, not a fresh measurement after each layout.
+  let followingLive = true;
+  let liveFrame = null;
+  let lastScrollY = window.scrollY;
+
+  function atLiveEdge(threshold = 40) {
     return document.documentElement.scrollHeight - window.scrollY
-      - window.innerHeight < 40;
+      - window.innerHeight < threshold;
   }
 
   function scrollToLive() {
     window.scrollTo({top: document.documentElement.scrollHeight, behavior: 'auto'});
+    lastScrollY = window.scrollY;
+  }
+
+  function scheduleLiveScroll() {
+    if (!followingLive || liveFrame !== null) return;
+    liveFrame = window.requestAnimationFrame(() => {
+      liveFrame = null;
+      // A user can scroll away between an update and this frame.
+      if (followingLive) scrollToLive();
+    });
+  }
+
+  function trackLiveScroll() {
+    const movedUp = window.scrollY < lastScrollY;
+    const movedDown = window.scrollY > lastScrollY;
+    lastScrollY = window.scrollY;
+    // Even a small upward gesture releases following. A shorter page can
+    // also clamp scrollY upward; keep following when it still ends here.
+    if (movedUp && !atLiveEdge(1)) followingLive = false;
+    else if (movedDown && atLiveEdge()) followingLive = true;
+    updateLiveAffordance();
+    scheduleLiveScroll();
   }
 
   function setConnection(text, className) {
@@ -454,7 +481,7 @@
   }
 
   function updateLiveAffordance() {
-    setLiveButton(!atLiveEdge());
+    setLiveButton(!followingLive);
     updateReadingMode();
   }
 
@@ -468,7 +495,8 @@
     const distance = document.documentElement.scrollHeight - window.scrollY
       - window.innerHeight;
     const folded = document.body.hasAttribute('data-reading');
-    const next = folded ? distance >= 40 : distance > dock.offsetHeight + 80;
+    const next = !followingLive
+      && (folded ? distance >= 40 : distance > dock.offsetHeight + 80);
     if (next !== folded) document.body.toggleAttribute('data-reading', next);
   }
 
@@ -788,7 +816,6 @@
   }
 
   function replaceSnapshot(records) {
-    const follow = atLiveEdge();
     const previous = new Map(state.elements);
     state.records.clear();
     state.elements.clear();
@@ -803,20 +830,19 @@
     refreshFilter();
     editing.refreshConversation();
     window.mevedelTranscriptRenderer.markContinuations(transcript);
-    if (follow) scrollToLive();
+    scheduleLiveScroll();
     updateLiveAffordance();
   }
 
   function updateRecord(record) {
     if (!record || typeof record.id !== 'string') return;
-    const follow = atLiveEdge();
     state.records.set(record.id, record);
     // Activity outside the selected filter earns its tab an unseen dot.
     if (!recordVisible(record)) state.unseen.add(scopeKey(record) || 'main');
     updateRecordElement(record);
     refreshFilter();
     window.mevedelTranscriptRenderer.markContinuations(transcript);
-    if (follow) scrollToLive();
+    scheduleLiveScroll();
     updateLiveAffordance();
   }
 
@@ -1507,6 +1533,7 @@
   }
 
   if (composer) {
+    window.mevedelComposer.bind(composerInput, document.getElementById('send-button'));
     composer.addEventListener('submit', async event => {
       event.preventDefault();
       if (submitting) return;
@@ -1608,11 +1635,18 @@
   notifications.bind();
 
   liveButton.addEventListener('click', () => {
-    scrollToLive();
-    setLiveButton(false);
+    followingLive = true;
     document.body.removeAttribute('data-reading');
+    scrollToLive();
+    updateLiveAffordance();
+    scheduleLiveScroll();
   });
-  window.addEventListener('scroll', updateLiveAffordance, {passive: true});
+  window.addEventListener('scroll', trackLiveScroll, {passive: true});
+  // Images, status rows and the composer can resize between host records.
+  const liveLayout = new ResizeObserver(scheduleLiveScroll);
+  [document.body, transcript, dock].forEach(node => liveLayout.observe(node));
+  window.addEventListener('resize', scheduleLiveScroll);
+  window.visualViewport?.addEventListener('resize', scheduleLiveScroll);
   const linkFragment = notificationsApi.resolveShare(parseFragment,
                                                      window.mevedelNav.historyShare());
   const rawFragment = linkFragment.split('?')[0];

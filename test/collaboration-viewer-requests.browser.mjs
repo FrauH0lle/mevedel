@@ -57,6 +57,8 @@ function ask(page) {
 
 async function requestRenderer(page) {
   await page.addScriptTag({content: await readFile(
+    resolve(root, 'relay/viewer/composer.js'), 'utf8')});
+  await page.addScriptTag({content: await readFile(
     resolve(root, 'relay/viewer/viewer-requests.js'), 'utf8')});
   await page.addScriptTag({content: `(() => {
     const requests = document.getElementById('requests');
@@ -70,6 +72,32 @@ async function requestRenderer(page) {
     window.requestView = window.mevedelRequestView.create({requests, el, send, state: window.requestState});
   })();`});
 }
+
+test('room composer starts at one line and grows and shrinks with its draft', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 800, 1200]) {
+      const page = await room(browser);
+      await page.setViewportSize({width, height: 800});
+      const input = page.locator('#composer-input');
+      const measure = () => input.evaluate(node => {
+        const style = getComputedStyle(node);
+        return {height: node.getBoundingClientRect().height, line: parseFloat(style.lineHeight),
+          padding: parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)};
+      });
+      const empty = await measure();
+      const minimum = width <= 640 ? 44 : empty.line + empty.padding;
+      assert.ok(empty.height <= minimum + 1,
+        `${width}px: empty composer should start compact: ${JSON.stringify(empty)}`);
+      await input.fill('> First line\nSecond line\nThird line');
+      const multiline = await measure();
+      assert.ok(multiline.height >= empty.line * 3 + empty.padding - 1);
+      await input.fill('');
+      assert.equal((await measure()).height, empty.height);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
 
 test('plan cards render Markdown and expose full implementation instructions', async () => {
   const browser = await chromium.launch();
@@ -151,7 +179,10 @@ test('changed pending cards preserve feedback text, disclosure and focused selec
     await page.locator('#composer-input').focus();
     await page.evaluate(() => requestView.render({reqId: 1, body: 'Updated again', allowFeedback: true}));
     assert.equal(await page.locator('#composer-input').evaluate(node => document.activeElement === node), true);
-    await page.getByRole('button', {name: 'Send feedback', exact: true}).click();
+    assert.match(await page.getByRole('button', {name: 'Send feedback', exact: true}).getAttribute('title'),
+      /Ctrl\+Enter|⌘\+Enter/);
+    await input.focus();
+    await input.press('Control+Enter');
     assert.deepEqual(await page.evaluate(() => requestSent.at(-1)),
       {t: 'ui-response', reqId: 1, feedback: '> keep this draft'});
   } finally { await browser.close(); }

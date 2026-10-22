@@ -247,6 +247,179 @@ async function draft(page) {
   await composer.evaluate(node => node.setSelectionRange(5, 21));
 }
 
+async function liveRoom(browser, viewport) {
+  const page = await open(browser, {viewport, records: [
+    {id: 'question', kind: 'user', text: 'Earlier conversation.\n\n'.repeat(80)},
+    {id: 'answer', kind: 'assistant', text: 'The response starts here.'},
+  ]});
+  await page.goto(sessionRoom.link);
+  await page.locator('#transcript [data-record-id="answer"]').waitFor();
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await page.waitForFunction(() => document.getElementById('live-button').hidden);
+  return page;
+}
+
+const atLiveEdge = () => document.documentElement.scrollHeight - scrollY - innerHeight < 2;
+
+test('room composer keeps Enter for newlines and submits with Control or Command Enter', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await liveRoom(browser, {width: 1200, height: 800});
+    const input = page.locator('#composer-input');
+    assert.match(await page.locator('#send-button').getAttribute('title'), /Ctrl\+Enter|⌘\+Enter/);
+    for (const modifier of ['Control', 'Meta']) {
+      const count = page.received.filter(({frame}) => frame.t === 'prompt').length;
+      await input.fill('First line');
+      await input.press('Enter');
+      assert.equal(await input.inputValue(), 'First line\n');
+      assert.equal(page.received.filter(({frame}) => frame.t === 'prompt').length, count);
+      await input.type('Second line');
+      await input.press(`${modifier}+Enter`);
+      await page.waitForFunction(() => document.getElementById('composer-input').value === '');
+      assert.equal(page.received.filter(({frame}) => frame.t === 'prompt').length, count + 1);
+      assert.equal(page.received.filter(({frame}) => frame.t === 'prompt').at(-1).frame.text,
+        'First line\nSecond line');
+    }
+    await input.press('Control+Enter');
+    assert.equal(page.received.filter(({frame}) => frame.t === 'prompt').length, 2);
+  } finally { await browser.close(); }
+});
+
+test('live arrow floats over the transcript without reserving a bar', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const viewport of [{width: 1200, height: 800}, {width: 375, height: 667}]) {
+      const page = await liveRoom(browser, viewport);
+      await page.mouse.wheel(0, -500);
+      const button = page.getByRole('button', {name: 'Jump to latest', exact: true});
+      await button.waitFor();
+      const geometry = await button.evaluate(node => {
+        const box = node.getBoundingClientRect();
+        const dock = document.querySelector('.dock').getBoundingClientRect();
+        const height = document.documentElement.scrollHeight;
+        node.hidden = true;
+        const hiddenHeight = document.documentElement.scrollHeight;
+        node.hidden = false;
+        const outside = document.elementFromPoint(box.left - 15, box.top + box.height / 2);
+        return {width: box.width, height: box.height, bottom: box.bottom, dockTop: dock.top,
+          pageHeight: height, hiddenHeight, outsideDock: !outside?.closest('.dock')};
+      });
+      assert.equal(geometry.width, 44);
+      assert.equal(geometry.height, 44);
+      assert.ok(geometry.bottom <= geometry.dockTop);
+      assert.equal(geometry.pageHeight, geometry.hiddenHeight);
+      assert.equal(geometry.outsideDock, true);
+      await button.focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.getElementById('live-button').hidden
+        && !document.body.hasAttribute('data-reading'));
+      await page.waitForFunction(atLiveEdge);
+      await page.push[sessionRoom.id]({t: 'record', record: {
+        id: 'answer', kind: 'assistant', text: 'Following after the arrow.\n\n'.repeat(40)}});
+      await page.waitForFunction(() => document.querySelector('[data-record-id="answer"]')
+        .textContent.includes('Following after the arrow.'));
+      await page.waitForFunction(atLiveEdge);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('live following survives send, streaming and delayed transcript or dock growth', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const viewport of [{width: 1200, height: 800}, {width: 375, height: 667}]) {
+      const page = await liveRoom(browser, viewport);
+      await page.locator('#composer-input').fill('Continue please');
+      await page.locator('#send-button').click();
+      await page.waitForFunction(() => document.getElementById('composer-input').value === '');
+      // Content can grow between host records, for example when an image loads.
+      await page.locator('#transcript [data-record-id="answer"]').evaluate(node => {
+        const image = document.createElement('div');
+        image.style.height = '600px';
+        node.append(image);
+      });
+      await page.waitForFunction(atLiveEdge, null, {timeout: 2000});
+      for (let i = 1; i <= 3; i++) {
+        await page.push[sessionRoom.id]({t: 'record', record: {
+          id: 'answer', kind: 'assistant', text: `Stream part ${i}.\n\n`.repeat(i * 35)}});
+        await page.waitForFunction(i => document.querySelector('[data-record-id="answer"]')
+          .textContent.includes(`Stream part ${i}.`), i);
+        await page.waitForFunction(atLiveEdge);
+      }
+      await page.locator('#composer-input').fill('> keep this draft\nsecond line');
+      await page.locator('#composer-input').evaluate(node => { node.style.height = '180px'; });
+      await page.waitForFunction(atLiveEdge);
+      assert.equal(await page.locator('#composer-input').inputValue(), '> keep this draft\nsecond line');
+      await page.push[sessionRoom.id]({t: 'record', record: {
+        id: 'answer', kind: 'assistant', text: 'Shortened response.'}});
+      await page.waitForFunction(() => document.querySelector('[data-record-id="answer"]')
+        .textContent.includes('Shortened response.'));
+      await page.waitForFunction(atLiveEdge);
+      assert.equal(await page.locator('#live-button').isVisible(), false,
+        'a shorter page at the bottom must keep following');
+      await page.push[sessionRoom.id]({t: 'record', record: {
+        id: 'answer', kind: 'assistant', text: 'Growing again.\n\n'.repeat(100)}});
+      await page.waitForFunction(() => document.querySelector('[data-record-id="answer"]')
+        .textContent.includes('Growing again.'));
+      await page.waitForFunction(atLiveEdge);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('reading pauses following through updates and send, and returning to bottom resumes it', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await liveRoom(browser, {width: 1200, height: 800});
+    await page.mouse.wheel(0, -600);
+    await page.locator('#live-button:not([hidden])').waitFor();
+    await page.waitForFunction(() => scrollY < document.documentElement.scrollHeight - innerHeight - 300);
+    const before = await page.evaluate(() => scrollY);
+    await page.push[sessionRoom.id]({t: 'record', record: {
+      id: 'answer', kind: 'assistant', text: 'More streamed text.\n\n'.repeat(100)}});
+    await page.waitForFunction(() => document.querySelector('[data-record-id="answer"]')
+      .textContent.includes('More streamed text.'));
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.evaluate(() => scrollY), before);
+    // Submit without Playwright scrolling the composer into view first.
+    await page.locator('#composer-input').evaluate(node => {
+      node.value = 'A follow-up from this reading position';
+      node.form.requestSubmit();
+    });
+    await page.waitForFunction(() => document.getElementById('composer-input').value === '');
+    assert.equal(await page.evaluate(() => scrollY), before);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForFunction(() => document.getElementById('live-button').hidden);
+    await page.push[sessionRoom.id]({t: 'record', record: {
+      id: 'answer', kind: 'assistant', text: 'Following again.\n\n'.repeat(160)}});
+    await page.waitForFunction(() => document.querySelector('[data-record-id="answer"]')
+      .textContent.includes('Following again.'));
+    await page.waitForFunction(atLiveEdge);
+  } finally { await browser.close(); }
+});
+
+test('a small upward touchpad scroll releases following inside the bottom threshold', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await liveRoom(browser, {width: 1200, height: 800});
+    await page.mouse.move(500, 350);
+    const bottom = await page.evaluate(() => scrollY);
+    await page.mouse.wheel(0, -6);
+    await page.waitForFunction(() => !document.getElementById('live-button').hidden,
+      null, {timeout: 1500});
+    const reading = await page.evaluate(() => scrollY);
+    assert.ok(reading < bottom && bottom - reading < 40,
+      'one small gesture must release following without crossing the 40px threshold');
+    await page.push[sessionRoom.id]({t: 'record', record: {
+      id: 'answer', kind: 'assistant', text: 'The stream continues.\n\n'.repeat(100)}});
+    await page.waitForFunction(() => document.querySelector('[data-record-id="answer"]')
+      .textContent.includes('The stream continues.'));
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.evaluate(() => scrollY), reading);
+    assert.equal(await page.locator('#live-button').isVisible(), true);
+  } finally { await browser.close(); }
+});
+
 async function newTab(source, link, gesture, {room, length, route, ready}) {
   // Target download/reload checks can activate another tab. Native gestures
   // originate in the visible source tab, as they do when a person clicks.
