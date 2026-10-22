@@ -1,0 +1,1967 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and architecture manual for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/adr/0112-debounce-observational-agent-persists/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Debounce observational agent persists - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#debounce-observational-agent-persists" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Debounce observational agent persists
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using mevedel
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using mevedel
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation and workspace view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../collaboration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plans
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mentions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills and plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sessions and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../module-map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource addressing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tool reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Programmatic tool calls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files and search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/applypatch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#current-decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current decision
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rationale-and-consequences" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rationale and consequences
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision history
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/adr/0112-debounce-observational-agent-persists.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="debounce-observational-agent-persists">Debounce observational agent persists<a class="headerlink" href="#debounce-observational-agent-persists" title="Permanent link">&para;</a></h1>
+<p>Status: accepted</p>
+<h2 id="current-decision">Current decision<a class="headerlink" href="#current-decision" title="Permanent link">&para;</a></h2>
+<p>Acknowledged agent mutations remain synchronous: spawn registration, mailbox
+append, RESULT publication, and settlement return only after their publication
+commits. They refuse reentrant queueing. Tentative records are hidden from
+delivery until that acknowledgement, so a nested WAIT cannot consume a RESULT
+whose terminal transaction later rolls back. Observational activity changes and
+explicit mailbox discards schedule one sidecar-only registry save per session, with
+a two-second default debounce through the idle-transport scheduler.</p>
+<p>One acknowledged mutation is asynchronous, for warm local sessions only:
+delivering a background command's completion or monitor batch to its owner's
+mailbox. The producer passes an acknowledgement, and the append commits as a
+session-owned publication job whose callbacks run across event-loop turns. The
+acknowledgement still means what it meant: it runs once, after the new head is
+authoritative and adopted (success) or after a definitive rollback (failure).
+Until then the records are tentative and hidden, and the producer keeps the
+output it would otherwise have consumed. Every other acknowledged mutation, and
+every cold, remote, file-backed or PID-lock session, keeps the synchronous
+path above. <a href="../../sessions/#warm-local-asynchronous-mailbox-publication">Sessions</a>
+owns the job's phases, gate and recovery. Automatic warm-local root and agent
+transcript checkpoints also use that job. Explicit saves and settlement still
+wait synchronously for their commits.</p>
+<p>While a job is accepted, its session's mutation gate is held. Mutations that
+would change acknowledged state or freeze a sidecar -- background mailbox
+arrivals, deferred terminal settlement, autosave, the observational registry
+save -- queue as preparation continuations that run before they mutate or
+capture anything, so no frozen sidecar can outlive a rollback and resurrect its
+rolled-back mail, and no sidecar frozen before a commit can erase it. Queued
+entries hold no snapshot. A caller that must be synchronous (agent mail, spawn
+and activation, manual save, transcript writes, settlement publication or a
+required-commit registry save) drains the gate first and
+never reports queued work as committed. Transcript streaming and composer edits
+are not gated.</p>
+<p>Gate ownership is explicit, not ambient. A queued preparation runs with a
+fresh lexical token, also stored in a session slot for exactly the duration of
+that preparation, and the preparation receives it as an argument. Only a call
+that passes that token may reenter the gate; there is no dynamically bound
+exemption, so an unrelated timer or callback that fires during the preparation
+inherits nothing and defers or drains like any other caller. The drain is
+fail-fast where waiting cannot help: it signals instead of waiting when a
+nested transport frame is in flight, when a preparation is running on the
+stack, or when a synchronous publication on this stack owns the gate. Its
+30-second limit is checked between event-loop pumps, so it bounds the number
+of pumps, not the time a single blocking operation inside one may take.</p>
+<p>Waking a waiter is the boundary where this matters. Its callback resumes
+arbitrary tool code, so notifications (waiter wakes, root and agent wake
+offers, and the reoffer after a vetoed close) never enter the mutation
+preparation queue and never run under a preparation's token. Each session owns
+one coalesced FIFO of pending notifications and at most one timer. A
+notification runs at once only when the publication gate is idle (no job,
+preparation or active publication), the transport is idle, and nothing is
+already pending; otherwise it joins the FIFO, so a later acknowledgement never
+overtakes an earlier one. The timer starts at 50 ms and doubles up to 500 ms
+while the gate or transport stays busy, then flushes in order, and only while
+the root buffer is live and the session is not stopping. Every callback starts
+with fresh transaction observations, including an immediate notification.
+Temporary stopping retains actual suppressed offers without a timer, so a
+vetoed close re-arms the same FIFO once rather than inventing another wake.
+An idle close schedules nothing. A close that proceeds cancels the timer and
+discards the offers during teardown, without invoking them; the mail remains
+durable.</p>
+<p>Acknowledged registry and mailbox mutations publish only the sidecar once the
+first root snapshot exists. <code>mevedel-session-checkpoint.el</code> owns the root fields
+as of the last committed transcript: segment, turn count, prompt index, file
+snapshots, chapters, and first/latest user previews. Ordinary metadata writes
+project those committed fields rather than tentative live values. Terminal
+agent settlement commits its transcript with its metadata.</p>
+<p>Goal accounting, Plan decisions, and native-provider conversation identity are
+independently durable control state, not root transcript projections. Goal
+budgets account for incurred work and restore active Goals paused; Plan metadata
+refers to already published hash-bound artifacts; provider conversation metadata
+names external history and restores in-flight state as uncertain. These fields
+may advance without claiming that the local root transcript has advanced.</p>
+<p>Delivered mail is consumed in memory after successful transcript insertion,
+without a synchronous save. Every record has a durable ID and its transcript
+has a hidden receipt, allowing repeated delivery to be deduplicated. The owner
+retains consumed records in a per-conversation ledger and merges them back into
+ordinary sidecars until that receiving transcript commits. Transcript writers
+capture an opaque candidate at byte freeze; only actual head adoption installs
+it, including retry. A root checkpoint cannot retire an agent's consumption,
+and arrivals or consumption after capture remain pending. File sessions write
+the transcript before the matching sidecar and install after that sidecar write.
+Settled ToolCall audit rows use the same per-conversation deferred-removal rule.</p>
+<p>Queued sidecars are reprojected through the current committed owner before
+publication. Retirement proofs survive only while publication work is active,
+queued, or pending retry. This prevents an older queued sidecar from resurrecting
+mail or ToolCall rows after their receipts move to an archived segment, without
+retaining session-lifetime identity history. Restore and intentional replacement
+seed a new owner epoch; stale candidates cannot install into it.</p>
+<p>Preparation excludes overlapping transcript serializers, but ordinary sidecar
+writes from save hooks are safe through the projection. Terminal settlement
+still excludes nested writers while its tentative registry and RESULT state
+must commit together. Failures unwind this exclusion. A queued or failed save
+does not install its candidate merely because the save function returned.
+Authority admission, sidecar capture, and publication share the existing
+transaction observations; path and instruction I/O precede ancillary capture.
+Otherwise a nested acknowledged arrival during a second recovery read could
+be overwritten by an already-frozen sidecar. Segment transitions identify
+their own adoption through the committed root projection, not unrelated head
+movement from a nested mailbox publication.
+Writers clear a buffer's modified flag only if its full modification tick still
+matches the freeze; property-only gptel changes can alter the next serialized
+bounds even without changing characters. Root writers also check the frozen
+byte identity. Delivery or property changes during publication remain dirty for
+the next checkpoint rather than losing unsaved receipts or bounds.</p>
+<p>New retained transcript text and its transcript metadata share a strict
+publication when the portable sidecar already exists. The session root supplies
+that sidecar even for nested agents. Provider setup reuses the transcript saved
+after frozen configuration was installed, without forcing another write.
+Registry admission still commits before spawn acknowledgement.</p>
+<p>Once terminal settlement has committed the answer, gptel's post-response hooks
+run and their extra transcript checkpoint uses the existing conversation-save
+debounce. A crash in that window can lose only post-commit hook changes, not the
+acknowledged answer. Pending settlement still checkpoints synchronously, and
+explicit saves and teardown flush deferred text normally.</p>
+<p>The registry save does not save the root transcript, rebuild its prompt index,
+or scan snapshots. Portable publication overlays the
+sidecar while retaining other committed artifacts. A session without a committed
+sidecar waits for its next critical commit. Synchronous commit absorbs a pending
+save; active publication defers it; Emacs exit flushes retained transcripts
+through their agent writer before pending registry saves and lease release.</p>
+<p>Mid-turn checkpoints use the native auto-save path. Because Emacs auto-saves
+only after input, a repeating timer drives that same path while any root or
+agent request is in flight, and stops once none is. Warm local portable
+checkpoints submit a preparation to the session-owned publication job. It
+rechecks modified state, save failure and retained batches under the gate;
+only then does the shared root or agent writer freeze the transcript and its
+checkpoint candidate. One accepted checkpoint per buffer coalesces repeated
+opportunities. Nil preparation is a successful no-op when an earlier save
+absorbed the edit. An agent without a canonical transcript instead falls back
+to its synchronous writer after gate release, without clearing the save-failed
+cue for an unsaved transcript. The sidecar marker is last, carries the opaque checkpoint
+candidate and is projected through the current owner. The candidate is
+validated before the head commit and installed only after authoritative head
+adoption, including reconciliation. Success runs the shared post-save finish,
+clearing modified state only if no edit followed capture. Pre-head failure
+retains the frozen batch as pending publication before reporting save-failed;
+automatic checkpoints never blindly retry that recovery. Explicit retry
+installs its candidate without repeating the failed acknowledgement.
+Save-hook cancellation is caught at the asynchronous boundary, not allowed to
+escape its timer and strand the gate. Before a batch exists it leaves modified
+text and the save-failed cue without recovery bytes, permitting a later checkpoint.
+Explicit abandonment deletes staged recovery and fails any unresolved job's
+acknowledgement once; unlike an ordinary checkpoint failure, it never retains
+that job's discarded batch again.
+Close and exit drain accepted work before their synchronous save and lease release.
+Already-pending recovery blocks teardown even when no job remains in flight.
+Retained-agent buffers also query unpublished transcript state before a kill,
+saving first and refusing failed or unresolved publication. Emacs exit uses the
+existing session query, not a parallel agent query. If a caller bypasses the
+buffer query and the kill hook cannot save, it preserves unpublished transcript
+bytes in a temporary recovery file and reports the path. Lease continuations,
+producer acknowledgements and private carrier cleanup catch cancellation at
+their asynchronous boundary so a quit cannot strand a job or its successor.
+The synchronous agent writer drains before checkpoint exclusion and capture,
+not after freezing an overlapping job's tentative state.
+Cold, remote and file-backed checkpoints remain synchronous.
+<a href="../../sessions/">Sessions</a> owns the persistence and recovery contract.</p>
+<p>Preparation shares disposable derived caches between the ordinary synchronous
+writer and the asynchronous job. Each consumer's paired-hook proof records the
+earliest changed body offset; known leading drawer writes rebase positions
+without invalidating unchanged transcript text. Structure, normalization ranges,
+gptel response bounds, audit spans and per-user-segment prompt results reuse
+their proven prefix. Prompt depth state has its own lookahead proof: an
+unresolved tool discriminator or render-data block prevents reuse of dependent
+unit states, including indented controls recognized by the depth grammar.
+Unobserved changes, unsafe hook ordering and potentially mutating overlay hooks
+invalidate the proof. Buffer clones acquire their own proofs and cannot update
+the original's. These caches affect computation only: frozen bytes, checkpoint
+candidates, mutation admission and authoritative-head adoption are unchanged.
+Full transcript capture and encoding remain main-thread work; this is not a
+hard latency bound for arbitrary transcript structure or garbage collection.
+Generated storage disables font-lock and JIT fontification. A compiled-copy
+trace showed JIT writing <code>fontified=nil</code> after the change proof adopted its
+tick, forcing full derivation on every save; controls disabling only that hook
+or both modes eliminated the invalidation without changing saved bytes.
+Disabling stays inside the bare-mode hook boundary, and transcript gptel
+activation unregisters gptel's Org annotator so its registration cannot turn
+JIT back on after restore. Raw inspection remains intentionally unfontified.
+The stream bridge explicitly announces its silent insertion, adopting its tick
+before post-stream observers derive caches. Foreign transformer and observer
+edits remain unproven and fail closed rather than receiving blanket authority.
+Point or buffer redirection also fails closed: gptel inserts at the location
+returned by its transformer, not necessarily at the original tracking marker.</p>
+<h2 id="rationale-and-consequences">Rationale and consequences<a class="headerlink" href="#rationale-and-consequences" title="Permanent link">&para;</a></h2>
+<p>Acknowledgement promises durable delivery; an activity flavor does not. Recovery
+settles all abandoned active flavors identically. A crash during debounce can
+therefore retain a stale activity flavor or repeat an explicit discard. Mail
+delivery remains at-least-once: failure before its consumption checkpoint can
+redeliver mail, but a committed removal never outruns its transcript text.
+A single timer avoids publishing each transient permission-blocked/running pair.</p>
+<p>Diagnostic logs also append only their delta through one pinned target operation.
+A crash can tear the trailing line; logs are observational and never resume
+state. Replacing them atomically on every append was rejected for its copying
+cost. The manual describes this limitation rather than treating logs as a
+transactional journal.</p>
+<h2 id="decision-history">Decision history<a class="headerlink" href="#decision-history" title="Permanent link">&para;</a></h2>
+<p>All revisions belong to ADR 0112:</p>
+<ul>
+<li><strong>2026-10-20 asynchronous automatic transcript checkpoints:</strong> a live trace
+  of the 30-second checkpoint on a 1.6 MB session still blocked the editor
+  for 280-314 ms after mailbox delivery became asynchronous. The auto-save
+  preparation now shares the session publication job rather than calling its
+  synchronous writer from the idle callback. Capture remains under the gate,
+  not at scheduling time, and synchronous and asynchronous writers share the
+  same capture and success-only finish. The persisted format, checkpoint
+  projection, receipt retirement and explicit-save contract are unchanged.
+  A compiled replay on a full <code>cp -a</code> copy of the real session (95 files,
+  27,795,709 bytes; restored root 1,069,346 bytes, selected agent about 1.34 MB)
+  measured six samples per mode, draining pending batch and coalesced-render
+  timers before each edit, not every observer queue. Root synchronous heartbeat gaps
+  (5 ms timer, through the acknowledgement wait and 12 ms afterwards)
+  were 94.42-104.04 ms, versus 40.35-46.18 ms asynchronously; async submission
+  took 0.08-0.11 ms and acknowledgement 105.45-118.50 ms. Agent gaps were
+  81.11-122.33 ms synchronously (41.35 ms GC in the largest sample), versus
+  21.67-57.44 ms asynchronously, with submission 0.07-0.30 ms and
+  acknowledgement 89.42-210.48 ms. No paired async sample collected garbage.
+  The carrier does not remove capture: a separate profile measured root
+  preparation at 37.61 ms, including prompt indexing 15.57 ms and gptel state
+  saving 13.20 ms, and agent preparation at 14.06 ms. The root still exceeds
+  the 20 ms target. Repeated agent instrumentation also attributed a 116.90 ms
+  no-GC gap to a restored-view batch callback (113.55 ms, including a 74.79 ms
+  full-rerender reset). Its archived continuation prompt hit a cold cache: this
+  is restore/first-render work, not checkpoint publication (a warm live probe
+  took 0.5-0.9 ms). It can run during or after the acknowledgement wait.
+  These copied-session timer measurements neither bound all visible stalls
+  nor establish graphical input latency. Capture semantics are unchanged;
+  the gain is event-loop time between target phases, not earlier durability.
+  These samples precede the cancellation, abandonment and buffer-kill guard
+  corrections, validated separately without another performance run.</li>
+<li><strong>Phase B: staged, hashed and selected off the freeze (2026-10-20).</strong> The
+  warm-local checkpoint's freeze used to encode the transcript, hash it for
+  comparison and build its publication in one main-thread turn. Freeze now
+  captures native characters, the detached sidecar and a copy of the committed
+  entries only; staging, a control-program <code>file-hash</code> and selection follow in
+  later turns, so selection compares digests of the staged bytes, never live
+  state. After save hooks serialize property-derived metadata into characters,
+  an acknowledged proof of the exact character/coding identity may skip the
+  transcript's capture, staging and hash. A nil selection is refused while
+  retained recovery exists, so it cannot consume that recovery. The projected
+  staged marker, not an earlier raw sidecar, supplies metadata for stamping;
+  this preserves deferred ToolCall recovery merged during staging. Root and
+  agent finish guards compare full modification ticks, so property-only
+  changes after freeze stay dirty and serialize on the next save.
+  Compiled-copy natural/synthetic prepare medians are now 9.07-11.89 ms,
+  versus 34.77-78.14 ms before this preparation work. All 20 non-GC latency
+  samples stay below 20 ms (largest heartbeat gap 17.94 ms), but four samples
+  with observed GC reach 51.90-61.05 ms; an instrumented run places a
+  40.35 ms GC inside preparation. The unconditional target remains unmet.
+  ACK medians rise 32.33-37.16 ms versus prefix reuse alone, and overall
+  allocation is not reduced. <a href="../../sessions/#warm-local-asynchronous-mailbox-publication">Sessions</a>
+  records exact sizes, allocation, ACK comparisons and limitations. Historical
+  measurements below describe their earlier frozen code.</li>
+<li><strong>2026-10-20 warm-local asynchronous mailbox acknowledgement:</strong> a live trace
+  of one background-command delivery on a local session spent about 98 of its
+  135 ms in synchronous control-program waits, and the user observed the
+  resulting stalls of roughly 120 ms per completion while typing. After the
+  programs were merged (ADR 0101) a delivery still took about 120 ms, most of
+  it the operations' own subprocesses, which merging cannot remove. Waiting for
+  them from the event loop can: the editor runs between phases. The constraint
+  that shaped the design is the one this ADR already records. An append that
+  starts a commit and lets another save freeze the tentative queue can
+  publish mail a failed first commit has just removed, so serialization sits
+  before mutation and capture, not before the subprocess. Two alternatives were
+  rejected. An Emacs Lisp thread does not fix ordering or acknowledgement, its
+  dynamic bindings and transport-depth guards are thread-local, and the
+  main-thread timers cannot see its remote operations. An append-only mailbox
+  journal would change the persisted format and need framing, replay,
+  deduplication and retention coordinated with transcript commits. Scope is
+  deliberately warm local sessions: remote targets, cold materialization,
+  file-backed and PID-lock sessions stay synchronous until separately
+  converted, so no remote safety is inferred from local results. No persisted
+  format changes. Rerun after checkpoint preparation changes on one fixture:
+  compiled modules, an isolated test home, a synthetic local portable session
+  holding 6000 saved turns, one 4000-character execution result per sample,
+  six samples per mode and a 5 ms heartbeat. The synchronous path held the
+  editor 63.907-70.177 ms (heartbeat 63.977-70.228 ms). Asynchronous submission
+  returned in 0.196-0.460 ms and acknowledged after 105.028-115.540 ms, with
+  a maximum heartbeat gap of 6.533-7.159 ms. Earlier async ranges were
+  8.2-10.2 ms gap and 75.4-120.1 ms ACK; no blocking regression was observed,
+  not a general ACK improvement. An explicit drain immediately after submission
+  waited 111.696-119.674 ms (ACK 104.729-114.990 ms, heartbeat 6.237-6.999 ms).
+  A deliberately stalled admission with a 0.25-second limit signalled at
+  250.244 ms and retained the unacknowledged job; releasing its callback led to
+  ACK at 355.000 ms from submission. A separate phase-instrumented pass measured
+  at most 1.674 ms per async advance and 1.704 ms per containing timer. Composer
+  text and point survived all 38 latency/phase samples. The original recipe
+  explicitly collects garbage before each sample; none contained GC. This does
+  not contradict the streaming-checkpoint GC spikes above. Possible independent
+  verifier load was not excluded. The gain is that the editor runs meanwhile,
+  not earlier acknowledgement. These are compiled in-process measurements on
+  one fixture with small samples, not graphical input latency or live-session
+  measurements, nor a hard bound on arbitrary filesystem latency, sidecar size
+  or GC. The 98 ms figure is an upper bound on waiting removed, not a measured
+  saving.</li>
+<li><strong>2026-10-19 unified committed checkpoint:</strong> the full-save fallback added
+  120–132 ms to each root delivery batch in compiled private-copy replays.
+  A single owner now projects committed root fields and retains consumed mail
+  and removed ToolCall rows until the receiving transcript actually commits.
+  This replaces both forced root saves on acknowledgement and synchronous
+  consumption checkpoints, without pretending live metadata is committed.
+  Durable identities and hidden transcript receipts support at-least-once
+  delivery; failed callbacks leave mail queued. A workflow callback can
+  checkpoint its effects before returning, so process loss before its receipt
+  becomes durable can still repeat that callback's RESULT as ordinary mail.</li>
+<li><strong>Consumption checkpoint ordering:</strong> review found that debounced consumption
+  could commit an empty mailbox before the injected transcript text reached disk.
+  A crash then lost both copies. The fallback reused the existing conversation
+  checkpoint, preserving native response boundaries and prompt-index updates;
+  raw text plus a sidecar would leave those offsets stale. This deliberately
+  spent one synchronous checkpoint per delivered batch to close the loss window.
+  Agent delivery replaces its per-block saves with this one checkpoint.</li>
+<li><strong>2026-10-19 acknowledged-save experiment reversed:</strong> a sidecar-only path
+  reduced median compiled acknowledgement from 145.2 to 55.2 ms on a private
+  1.79 MB/27-agent session copy. A real-disk restore at the synchronous turn
+  commit/deferred save seam then reproduced turn 1 metadata against a partial
+  turn 0 transcript. The same hole followed failed root-save preparation.
+  Full acknowledged checkpoints were retained rather than adding a separate
+  committed-root schema and special cases for history and checkpoint writers.
+  Speedup measurements from the rejected narrow-save variant are not evidence
+  for the current design. Reentrant hook testing additionally reproduced lost
+  mail after a nested commit; preparation exclusion closes that independent gap.
+  With full acknowledgements restored, compiled root enqueue/consume cycles on
+  the private session copy add 120–132 ms per delivery batch versus deferred
+  consumption (four alternating observations per variant, batch sizes 1/3/6).
+  This is a measured durability cost, not a performance improvement.</li>
+<li><strong>2026-09-22 agent transition capture:</strong> a 565-ms graphical heartbeat delay
+  coincided with three publications and GC at agent completion. Startup had a
+  similar burst. Five alternating real-storage lifecycle replays reduced startup
+  publications from four to two and median time from 457 to 239 ms. Completion
+  changed from two immediate publications to one, reducing its median from 245
+  to 145 ms; the remaining post-hook checkpoint took about 100 ms separately.
+  These measurements cover the agent lifecycle, not the entire parent tool
+  pipeline or graphical input latency. The change combines initial text and
+  metadata, removes forced re-saving of already configured text, and defers
+  only changes after a successful terminal commit.</li>
+<li><strong>2026-08-25 profile:</strong> 434 publication generations occupied 227 MB, peaking at
+  21/minute. Publication accounted for roughly 30% of 8.6 GB allocations in a
+  31-minute window; GC took 60% of CPU samples. The session had 763 permission
+  decisions, each producing blocked/running observational saves. Debouncing
+  replaced full synchronous saves for those unacknowledged transitions.</li>
+<li><strong>2026-08-26 follow-up:</strong> deferred full saves still allocated over 2 GB and
+  visibly rewrote the modified transcript every few seconds. Sidecar-only
+  registry saves removed that repeated segment work.</li>
+<li><strong>September 2026 portable correction:</strong> the initial change kept full saves for
+  portable sessions, assuming byte comparison made unchanged saves free. A
+  2h45m profile attributed 37% of all allocations to those saves: segment copies,
+  artifact reads, and instruction serialization preceded comparison, while the
+  changed registry prevented elision. Project sessions are portable, so the
+  optimization had missed the default case. Portable registry saves now publish
+  only the sidecar as well.</li>
+<li><strong>Diagnostic delta append:</strong> a 5.2 MB telemetry log caused approximately
+  10–14 MB base64 traffic per flush. Pinned append replaced complete-file
+  read/rewrite while retaining parent and symlink proofs. The accepted tradeoff
+  is a possibly torn diagnostic tail, not weaker critical publication.</li>
+<li><strong>Exit transcript flush:</strong> a regression test showed that exiting inside a
+  transcript's debounce window lost its latest text. The exit loop passed agent
+  buffers to the root writer, which deliberately rejects them. Exit now flushes
+  agent transcripts explicitly before root state and lease release; native Emacs
+  auto-save also checkpoints modified conversations through the correct writer.
+  Reading the immutable publication exposed a second gap: an agent write without
+  a sidecar commit remained invisible to resume. These checkpoints commit the
+  sidecar too, and root auto-save includes retained publication batches even
+  when no transcript buffer remains modified.</li>
+<li><strong>In-flight checkpoints:</strong> the sessions and agents manuals promised that
+  native auto-save checkpoints modified conversations mid-turn, but Emacs runs
+  <code>auto-save-hook</code> only after keyboard input. An unattended Goal or agent run
+  receives none, so its conversations reached disk only at settlement. A timer
+  started at request admission now runs the same coalesced, input-yielding
+  checkpoint every <code>mevedel-session-checkpoint-interval</code> seconds until no
+  request is in flight.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

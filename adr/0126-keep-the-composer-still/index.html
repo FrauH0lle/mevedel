@@ -1,0 +1,2123 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and architecture manual for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/adr/0126-keep-the-composer-still/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Keep the composer still - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#keep-the-composer-still" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Keep the composer still
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using mevedel
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using mevedel
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation and workspace view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../collaboration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plans
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mentions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills and plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sessions and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../module-map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource addressing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tool reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Programmatic tool calls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files and search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/applypatch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tools/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#current-decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current decision
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rationale-and-consequences" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rationale and consequences
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision history
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/adr/0126-keep-the-composer-still.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="keep-the-composer-still">Keep the composer still<a class="headerlink" href="#keep-the-composer-still" title="Permanent link">&para;</a></h1>
+<p>Status: accepted</p>
+<h2 id="current-decision">Current decision<a class="headerlink" href="#current-decision" title="Permanent link">&para;</a></h2>
+<p>The view keeps the user's active surface at its screen position. Zone reconciliation
+and its enclosing full-render transaction
+choose one viewport anchor per window: point inside a surviving visited
+interaction card takes priority; otherwise a previously visible composer keeps
+its position regardless of point. Logical positions are restored before applying
+that anchor. A visited card retains its screen position unless its shrink creates
+new blank space below the buffer; repairing only that excess takes priority over
+the visited row. Existing blank space is retained.</p>
+<p>Chrome above the composer (background work, tasks and interaction prompts)
+changes height while the user types. Composer anchoring scrolls the transcript
+instead, as in a bottom-anchored terminal. While everything from the window start
+through the draft fits, growth uses free space below before scrolling. Growth
+that overflows the window uses the earlier of the saved composer viewport and
+the last full page, consuming remaining free space even in a single large burst.
+This comparison includes partial vertical scroll. A window
+scrolled away from the composer, or starting inside a tall draft, keeps its own
+reading position.</p>
+<p>Zone reconciliation and full re-renders also capture each logical window start
+and its character tail. After logical restoration, they apply this policy:</p>
+<table>
+<thead>
+<tr>
+<th>Window context before mutation</th>
+<th>Viewport policy</th>
+<th>Discriminating case</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Point visits a surviving interaction card</td>
+<td>Retain the visited row, then fill only newly created blank pixels</td>
+<td>Shrinking a visited card below point must not leave a newly empty viewport</td>
+</tr>
+<tr>
+<td>Composer visible, saved logical start survives</td>
+<td>Retain the composer position and pre-existing blank space, except when growth overflows the window</td>
+<td>Shorter status text must not erase intentional blank space; oversized incoming growth fills the last page</td>
+</tr>
+<tr>
+<td>Composer visible, saved logical start removed or truncated</td>
+<td>Fill the last page, bypassing the character-tail guard</td>
+<td>Ask submission can expose longer history lines and increase the tail despite losing rows</td>
+</tr>
+<tr>
+<td>Neither a composer nor visited-card anchor</td>
+<td>Clamp backward only when the character tail shrank</td>
+<td>An offscreen composer returns to a full last page after an interaction disappears</td>
+</tr>
+</tbody>
+</table>
+<p>Earlier history views do not move toward the bottom, and shrink repair leaves a
+window already starting at <code>point-min</code> there. Strict logical-anchor resolution distinguishes
+a surviving row from one removed with its fragment or truncated within it.</p>
+<p>A genuinely unchanged zone does not capture or restore a viewport. It first
+compares the rendered text including properties, verifies complete live-region
+ownership, and checks for stale namespace text outside the region. Property-only
+changes and stale text still take the ordinary reconciliation path.</p>
+<p>Anchors measure body-relative pixels through Emacs's native visibility query,
+not a row loop. Native backward display traversal restores the window start and
+partial vertical scroll, accounting for remapped faces, wrapping and images.
+Measurements are valid before redisplay, when the cached window end is stale.
+Header, tab and mode-line heights are measured freshly with a zero text-height limit:
+the visibility query uses fresh chrome internally, then restores cached heights,
+so subtracting the public cached heights could introduce a pixel error before
+redisplay. The chrome measurement subtracts an otherwise identical text-only
+baseline because pixel scrolling can make that bounded text height negative.
+One shared geometry seam derives both the body's top and usable height, excluding
+the horizontal scrollbar and bottom divider too. These extra measurements do not
+traverse buffer text and run only on paths already measuring geometry.
+Terminal geometry uses the same API in character-cell units. Batch policy tests
+model only the visibility seam; native graphical tests establish pixel geometry.</p>
+<p>Draft commands capture blank pixels before their first mutation and repair only
+newly created blank space after the command. Insertion-before-deletion commands
+must capture before insertion too: a temporary extra line is not the original
+viewport. Ordinary <code>self-insert-command</code> skips capture when overwrite and auto-fill
+are disabled: it can only grow the draft. A short plain deletion also skips
+capture when the entire logical line fits every displaying window. Newlines,
+wrapping, remapping, display/face properties and non-ASCII text take the exact
+path. Graphical windows also require a monospaced default font; proportional
+fonts use exact geometry. Other deletions, including multiline
+delete-selection before typing, and all other insertion-first commands capture.
+Commandless mutations repair immediately. Prompt, history and saved-draft
+replacement and folded prompt submission are single mutations: neither a temporary
+empty draft nor a user echo above the uncleared draft is a viewport state to
+restore. Backward traversal runs only when blank pixels actually increased. View
+buffers set <code>scroll-conservatively</code> to 101 and <code>scroll-margin</code> to 0 so a draft
+growing past the bottom scrolls one line.</p>
+<p>Command scope is explicit: a view's pre-command hook arms the transaction, and
+post-command clears it before repairing the originating buffer, even if the
+command switched buffers. <code>this-command</code> alone is not evidence that a command
+is executing; it retains its last value between commands. A timer or process
+mutation outside the armed scope repairs immediately rather than leaving a stale
+capture for the user's next unrelated command.</p>
+<p>Table splices preserve point, mark and window starts by cell identity and offset.
+Their viewport transaction must not replace that exact mapping with a source-run
+character offset or mistake the changed offset for a lost start. They therefore
+reuse the same viewport policy while retaining the splice's position mapping.</p>
+<p>Height-only window growth repairs newly exposed blank space using the height
+delta, provided the same buffer and width were displayed previously. This
+inference covers popup closure with an unchanged start, not arbitrary simultaneous
+scrolling, reflow or buffer replacement. The buffer-local window-size-change hook
+requires no continuous geometry recording. Text scaling uses one guarded advice
+around <code>text-scale-mode</code>: capture actual blank pixels before face remapping and
+fill only the new excess afterward. Other buffers take the direct path. Both
+repairs preserve deliberate pre-existing blank space.</p>
+<p>The line next to the composer never appears or disappears: one permanent rail
+carries the mode badge, an actionable pending count with <code>C-c C-j</code>, and the
+turn's activity, replacing the separate progress row and the badge line. The
+blank separator above the rail depends on how the text before it ends, so it is
+checked again whenever a transcript writer finishes and redrawn only when it no
+longer fits.</p>
+<p>Arriving permission prompts and questions do not move point. They render, the
+rail shows them as pending, and <code>C-c C-j</code> visits the next one from the invoking
+window, which returns to its draft position on settlement only if it is still
+visiting that prompt.</p>
+<p>Interaction cards stack in arrival order, the newest farthest from the
+composer; only the pending-input card, which the composer itself queues, stays
+pinned next to it. No other producer, patch review included, carries a type
+priority; arrival alone orders them. A card arriving while another is pending
+therefore moves only the transcript above it, never a card the user may be
+reading or answering. <code>C-c C-j</code> starts at the card nearest the composer, the
+one that has waited longest, and repeated presses cycle outward. In a window
+not yet full, where free space is used first, an arrival pushes the cards
+below it down like any other growth above the composer.</p>
+<p>Browser request cards likewise keep their arrival slot on updates. Its
+scrollable stack reads oldest first from the top, exposing the longest-waiting
+decision initially. Replacing a changed card in place, rather than removing it
+and appending a new one, preserves that order; an unchanged frame leaves the
+card, its draft and its scroll untouched.</p>
+<p>Closing an agent inspection's side window rewraps the parent's text without
+any zone change. A parent window gets the composer's screen row from before
+the inspection opened back only if, just before the close, it still shows the
+composer with point in it. A window the user moved into history is left alone,
+and a same-window inspection always returns to the parent at that row. Reflow
+caused by the close itself does not make a window eligible.</p>
+<p>Background-work rows are in stable start order, newest farthest from the
+composer. Agent trees form units, with members in path order. Equal unit starts
+put agents before executions, then sort lexicographically by agent root path or
+execution owner path and ID, ascending; live, held and retained rows use the
+same identity tiebreaks. State changes, including blocking, update rows in place.
+While focused point or a bounded mouse visit protects the panel, it keeps
+exactly the rows it showed: finished rows stay as inert lines and new work is
+only counted. Mouse-only protection expires after 60 seconds, without renewal
+by polling, status updates or motion within the panel. An observed exit, panel
+disappearance or focus loss resets the visit. Both protections need a visible
+frame with a focused top-level frame; terminals may also protect on unknown
+focus, since their window system may not report it. Explicitly unfocused frames
+never hold rows. Completion glyphs and state labels use success/error faces for known
+outcomes, warning for explicit stops, and a subdued face while unknown; names
+and metadata remain dim. Explicit Show fewer is a user-requested layout change,
+so it applies the normal limit under the pointer while preserving selected
+inspectors and retained finished rows. Subsequent passive updates freeze that
+reduced set. This intent survives deferred and coalesced status rendering.
+A finished row also lingers for ten seconds after protection ends, including
+mouse-lease expiry or focus loss. Ending protection restarts that period;
+explicitly expanded execution inspectors remain independently retained.</p>
+<p>Panel heights depend only on which rows exist, not on their text. Every row,
+finished line, preview line and rule fits one screen row of the narrowest
+window showing the view, and re-renders when that width changes. An open
+execution preview is always three lines. Expanded controls pack whole buttons
+into explicit fitted rows, using short labels only when a button cannot fit
+alone. The live layout sets the completion budget: an execution reserves its
+Stop slot as inert space, and a held finished agent replaces its actions with
+a padded finished notice. Model details are fitted in both states. Thus a
+finished expansion keeps its displayed height, not just its logical line count.</p>
+<h2 id="rationale-and-consequences">Rationale and consequences<a class="headerlink" href="#rationale-and-consequences" title="Permanent link">&para;</a></h2>
+<p>Measured in a terminal Emacs (100x30) with the composer on the last row: the
+previous top anchoring recentred the composer by thirteen rows when the first
+status row appeared, then moved it a row on every later change. Composer
+anchoring with <code>scroll-conservatively</code> kept it on its row through additions,
+removals and a typed newline. Claude Code and Codex both anchor their prompt at
+the bottom; a Claude Code and a Codex consultation reached the same conclusion.</p>
+<p>Status stays above the composer. Status after the composer would need an
+editable input-end boundary in place of roughly forty composer <code>point-max</code> uses
+and, with the composer anchored low, reserved space or its rows fall off the
+window. Display-only after-strings were rejected because rows must be real text
+that point can reach and activate.</p>
+<p>With the composer anchored, only text above a change moves, so new rows go to the
+far edge and existing rows keep their place. Reordering (previously "blocked
+first") and removals under the pointer still moved targets. Indefinite hover
+protection initially avoided expiry under an active mouse, but also accumulated
+hours-old completions under a parked pointer while the user was absent. The
+bounded mouse visit and focused-frame requirement trade that stale retention
+for expiry after a minute plus the existing grace period. Focused keyboard point
+and explicit execution inspection retain their intentional-reading protection.
+The same short timer, active only while rows are held, observes protection
+changes and expiry; no additional timer or motion tracking is needed.</p>
+<p>Automatic focus let a keystroke typed into the draft land on a newly arrived
+approval's RET action. An idle delay (as in Codex) only narrows that window, so
+focus is explicit.</p>
+<h2 id="decision-history">Decision history<a class="headerlink" href="#decision-history" title="Permanent link">&para;</a></h2>
+<ul>
+<li>
+<p><strong>Bound passive pointer protection (2026-10-19).</strong> The user reported many
+  hours-old completed rows after returning from a locked screen. Previously,
+  any mouse presence or window point held rows indefinitely, regardless of
+  frame focus. Passive mouse visits now last at most 60 seconds, then use the
+  ordinary ten-second grace, and unfocused frames cannot hold rows. Repeated
+  updates cannot renew the lease; observed exit, panel disappearance or focus
+  loss starts a new visit next time. Focused point and expanded execution
+  inspectors keep their independent protection.</p>
+</li>
+<li>
+<p><strong>Explicit overflow reduction and outcome colors (2026-10-19).</strong> Applying
+  passive row freezing after Show fewer left every expanded row visible while
+  point remained on the control, even though its label changed to Show all.
+  Explicit reduction now bypasses only that row-selection freeze, not the
+  pointer tracking that protects completed rows and their grace periods.
+  Previously dimmed completion labels also hid known success and failure;
+  bounded terminal facts and a snapshot of each finished agent's outcome now
+  color the label without making held rows interactive or changing their size.</p>
+</li>
+<li>
+<p><strong>Compare before capturing (2026-10-19).</strong> An unchanged zone still spent
+  0.60--0.99 milliseconds capturing composer geometry, even though its mutation
+  stage already checked text equality. Rendering and checking before capture
+  reduces a compiled unchanged reconcile to 4.8--5.0 microseconds in matched
+  GUI/TTY plain and wrapped-history fixtures (three batches of 300 calls each).
+  Text, character tick, point, buffer end, window start and partial scroll remain
+  unchanged across all 900 calls per layout. The fixture includes the
+  <code>fontified</code> property added by redisplay: genuinely changed properties are not
+  ignored to obtain a no-op. This is a synthetic unchanged-zone measurement,
+  not a claim that every production redraw is unchanged.</p>
+</li>
+<li>
+<p><strong>Overflowing bursts consume free space (2026-10-19).</strong> A short transcript
+  followed by more than a window of incoming output retained the composer's old
+  high position and left blank space below the draft. The regression reproduces
+  this through the render preserver with both single-line and multiline drafts;
+  small growth remains a keep-start control. When growth no longer fits from the
+  current start, restoration now chooses the earlier of the composer anchor and
+  last-page viewport. Only that overflow branch computes the extra last page;
+  shrinkage still preserves deliberate blanks. Native pixel traversal retains
+  the final draft line's height and compares partial vertical scroll as well as
+  buffer positions.</p>
+</li>
+<li>
+<p><strong>Draft commands are one mutation (2026-10-18).</strong> Per-change repair moved a
+  five-line replacement before its insertion half, consuming five deliberate
+  blank rows. Deferring repair until <code>post-command-hook</code> fixes that ordering,
+  but capturing at the first deletion is insufficient: <code>transpose-lines</code>
+  inserts first. A native replay captured EOF at pixel 525 after that temporary
+  insertion, then repaired the original pixel 504 position to 525 after deletion,
+  consuming a row although the command changed no height. Capture now starts at
+  the first mutation, and the repair compares actual blank pixels, including the
+  final line's height. The first short-line gate was removed: besides missing
+  insertion-first commands, its <code>window-max-chars-per-line</code> call alone cost
+  639--647 microseconds in quiet graphical plain/wrapped-history probes. Its
+  replacement uses cheap body width and conservative line-local checks only
+  for deletions; insertion-first transactions still capture at their first edit.</p>
+</li>
+<li>
+<p><strong>Lost starts still fill the last page (2026-10-18).</strong> Exempting every visible
+  composer from the shrink clamp regressed the original Ask submission: a
+  recentered submission left roughly eighteen blank rows. Comparing numeric
+  start movement was insufficient, and the character-tail guard could reject a
+  real row loss: an 83-character tail became 98 characters after anchoring
+  exposed longer history lines. Strict anchor resolution now distinguishes a
+  surviving row from a removed or truncated one; a lost start bypasses that
+  character guard. A surviving composer anchor still preserves deliberate
+  blanks. A visited card that shrinks below point repairs only newly created
+  blank pixels rather than retaining an otherwise empty viewport.</p>
+</li>
+<li>
+<p><strong>Native pixel anchors and event-local geometry repair (2026-10-18).</strong> Counting
+  rows loses image height, remapped glyph height and partial scrolling. Native
+  geometry replaces the production row loop rather than adding a second path.
+  Popup closure in a graphical probe enlarged the body by 160 pixels and created
+  exactly 160 new blank pixels while retaining the start and content height;
+  subtracting the height delta recovered the previous 98 blank pixels. Text
+  scaling from +2 to 0 created 216 blank pixels without running a size-change
+  hook; a row-count approximation predicted 240, so scaling captures actual
+  geometry at its own event. A folded 20-line submission previously consumed
+  three deliberate blank rows because deletion captured the end after the folded
+  echo was inserted. Submission now repairs net shrink from before that insertion.
+  A later native table-shrink check exposed a two-pixel drift: the visibility
+  query used an 18-pixel tab line while the cached accessor still returned 20.
+  Fresh bounded chrome measurements now keep both coordinate calculations in
+  the same frame before redisplay; exact header/tab change tests reject the
+  previous cached subtraction. The same correction applies to usable body
+  height: a larger tab line changed a cached 640-pixel body to 624 pixels, so
+  mixing fresh EOF coordinates with cached body height overstated the blank
+  area by 16 pixels until redisplay.</p>
+</li>
+<li>
+<p><strong>One viewport anchor per window (2026-10-18).</strong> Logical window-start
+  restoration previously overrode the composer's row inside growing cards,
+  while composer anchoring displaced visited controls when unrelated cards
+  arrived or disappeared. A graphical replay kept a visited Ask control at row
+  3 through arrivals above and below it and removal after choosing the visited
+  row first. Only visiting windows pay for the additional bounded row capture.</p>
+</li>
+<li>
+<p><strong>Equal-start ordering (2026-10).</strong> Sorting only by start time let completion
+  reorder tied rows as they moved between the live, held and retained lists.
+  A held finished agent could shift a retained execution's action despite the
+  unchanged panel height. Kind and stable unit identity now break start-time
+  ties, independently of collection order and lifecycle state.</p>
+</li>
+<li>
+<p><strong>Narrow expanded controls (2026-10).</strong> A 47-column display wrapped live
+  execution controls onto two rows but finished controls onto one; expanded
+  agents had the same gap, and their model metadata was unbounded. Holding
+  row identities alone did not protect mouse targets. Explicit control-row
+  layout now keeps every action and reserves the live height on completion;
+  truncation applies to metadata, never to the set of actions. Packing whole
+  buttons can use an extra row in a narrow window instead of allowing a
+  button's label to wrap. A compiled hot status-render fixture with expanded
+  agent and execution controls remained around 0.40 ms before and after the
+  change, at both normal and narrow widths; differences were within run noise.</p>
+</li>
+<li>
+<p><strong>One-row panel lines and constant-height expansions (2026-10).</strong> Holding
+  the row set did not hold the height. Measured in a 100-column graphical
+  window with the composer fixed at row 40:</p>
+</li>
+<li>An open inspector grew from 11 to 15 rows as output arrived, moving its own
+    row from row 32 to 28.</li>
+<li>A two-row agent row became a one-row finished line, so the panel went from
+    8 to 7 rows.</li>
+<li>An expanded agent that finished lost its four detail rows under a pointer
+    on <code>[Interrupt]</code>.</li>
+<li>Separator rules sized for the widest window took three rows in a 48-column
+    split, then shrank at the next unrelated status redraw (6 to 4 rows).</li>
+</ul>
+<p>Fitting every line to the narrowest window and fixing the preview and agent
+  expansion heights keeps all four constant (12, 7, 10 and 4 rows). The extra
+  layout work costs about 21 µs per panel render.</p>
+<ul>
+<li>
+<p><strong>Arrival order for interaction cards (2026-10).</strong> Cards were ordered by
+  kind: patch preview, Plan, Ask and requests, permissions, pending input,
+  then notices. With the composer anchored, every card ranked below an
+  existing one was inserted between it and the composer and pushed it up.
+  Measured in a graphical 42-row view, a 10-line permission card arriving
+  while the user was in an Ask moved the form and the cursor up 9 rows; a
+  sub-agent permission, a control-transfer request, or the permission
+  expiry notice can arrive this way at any moment. No kind needed a fixed
+  place: each card is answered on its own, and only pending input belongs
+  to the composer. Arrival order applies the principle the background panel
+  already follows, new rows at the far edge, at no rendering cost.
+  <code>C-c C-j</code> used to start at the top card; it now starts at the one nearest
+  the composer, which in arrival order has waited longest and needs the
+  least scrolling from the draft.</p>
+</li>
+<li>
+<p><strong>Rail refresh outside redisplay (2026-10).</strong> The rail was refitted from one
+  handler on both <code>window-size-change-functions</code> and <code>window-scroll-functions</code>.
+  The scroll hook runs inside the window's redisplay, which restores point to its
+  earlier buffer position afterwards, so a rail text change there shifted the
+  draft cursor. A GUI reproduction crossed the elapsed label from <code>9s</code> to <code>10s</code>
+  before the once-a-second tick and typed RET then <code>x</code> at the window bottom.
+  The redisplay scroll rendered <code>10s</code>, point fell back one character, and <code>x</code>
+  joined the previous line. Only the size hook now refits the rail; it runs
+  before windows redisplay. Scrolling still reschedules animation. A compiled
+  probe put the scroll hook at 0.21 µs per call, down from 5.8 µs for the
+  unchanged-rail check alone.</p>
+</li>
+<li>
+<p><strong>Rail separator after transcript writes (2026-10).</strong> The separator was
+  chosen only when the rail itself redrew. A batched history refresh published
+  placeholders ending in a single newline, so the rail took an extra blank
+  line; replacing the last placeholder did not redraw the rail, and the next
+  unrelated rail update removed the line again. A 43-row window measured
+  266, then 267, then 266 buffer lines, moving the transcript a row each time.
+  The writer queue now rechecks the separator when it drains; an unchanged
+  separator costs 0.38 µs (compiled).</p>
+</li>
+<li>
+<p><strong>Preserve intentional blank space, repair draft shrink (2026-10-18).</strong> A
+  recentered transcript with a visible composer jumped 24 rows in a 41-row
+  terminal window when a streaming status summary became shorter in characters
+  but not in display rows. The character-count gate alone cannot distinguish
+  this from removed content. A captured composer row already carries the needed
+  viewport intent, so full re-renders initially exempted those windows from the
+  fallback rather than adding an end-of-buffer geometry scan to every render.
+  The lost-start refinement above supersedes that blanket exemption. Separately,
+  deleting five draft lines left five new blank rows; clearing a tall draft could
+  leave almost the entire window empty. The first repair captured and restored
+  the old end row, bounded by one window; pixel geometry and first-mutation
+  capture now supersede that representation. Replacing a draft runs this repair once,
+  after insertion, so navigating to a shorter history entry does not scroll for
+  the temporary empty draft. These paths preserve pre-existing blank space
+  instead of consuming it.</p>
+</li>
+<li>
+<p><strong>Last-page clamp after shrink (2026-10).</strong> Preserving a screen row alone
+  preserved empty space too: submitting a question from a scrolled viewport
+  left the composer at row 5 in a 41-row window. When the composer had been
+  offscreen, deleting the interaction collapsed the saved start marker to the
+  rail and left only the rail and composer at the top. An initial unconditional
+  backward clamp fixed these views but broke six reader-position regressions:
+  pinned prompts, history readers, permission starts, and the parent viewport
+  after inspecting an agent transcript all legitimately retained blank space.
+  Restricting the clamp to starts lost by fragment removal or truncation fixed
+  those regressions but missed another real case: a split window starting in
+  surviving transcript just above the Ask card, with the composer offscreen,
+  retained only lines 79--90 in a 39-row window after submission. The subsequent
+  net-tail shrink gate covered both cases without coupling viewport policy to
+  fragment identity. Zone reconciliation and full re-renders capture tail
+  lengths before mutation and clamp after logical and composer restoration.
+  A truncation regression established that clamping before logical restoration
+  lets the latter undo the correction. The six original reader assertions
+  remain unchanged.</p>
+</li>
+</ul>
+<p>At that stage, one backward <code>vertical-motion</code> computed the last page when a restored
+  tail shrank; starts at <code>point-min</code> skip it. Equal-length reflow alone does not
+  trigger this character-count gate. Cached <code>window-end</code> cannot safely gate
+  this calculation because mutations and <code>set-window-start</code> leave it stale.
+  Visual spinner frames only change display properties and do not traverse
+  this path. A separate graphical probe with wrapped text and a 1.5-height face
+  kept the buffer end visible and the composer at row 33 in a 34-row window
+  after submission.</p>
+<ul>
+<li><strong>Grace period for finished rows (2026-10).</strong> Finished rows first left the
+  panel at once, since the transcript notice takes over. The user asked for a
+  short grace period, as Claude Code keeps finished agents for 30 s, restarted
+  whenever the pointer leaves the panel. Ten seconds was chosen: the notice is
+  the durable record, so the panel only needs to show what just ended at a glance.</li>
+</ul>
+<p>The original terminal benchmark measured anchoring at about 41 µs per displayed
+window per mutation (compiled, 20-row window), dominated by <code>vertical-motion</code>;
+the rail's no-op render about 7 µs and its once-per-second elapsed update about
+41 µs. Those measurements predate the last-page clamp. Visual spinner frames
+are unchanged.</p>
+<p>A compiled graphical probe of the net-tail rule (20-row window, medians of
+seven batches of 10,000 calls) measured unchanged-tail capture/check at 0.32 µs
+and a forced shrink calculation at 115 µs. Anchoring alone and anchoring plus
+the unchanged-tail check both measured about 382 µs; their difference was below
+the probe's noise. These graphical timings are not comparable to the earlier
+terminal baseline. Ordinary no-op and growing-tail updates do not pay for the
+last-page display-row calculation.</p>
+<p>The revised first-mutation transaction was measured compiled in Emacs 31.1,
+using real keyboard commands and post-command hooks (60 observations per command
+and layout). Plain / wrapped transcript-history medians, in microseconds:</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th style="text-align: right;">TTY, 41 rows</th>
+<th style="text-align: right;">TTY draft hooks disabled</th>
+<th style="text-align: right;">GUI, 30 rows</th>
+<th style="text-align: right;">GUI draft hooks disabled</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Self-insert</td>
+<td style="text-align: right;">42.2 / 43.4</td>
+<td style="text-align: right;">41.1 / 41.0</td>
+<td style="text-align: right;">47.9 / 48.3</td>
+<td style="text-align: right;">45.8 / 46.0</td>
+</tr>
+<tr>
+<td>Short-line Backspace</td>
+<td style="text-align: right;">51.5 / 53.2</td>
+<td style="text-align: right;">37.9 / 37.7</td>
+<td style="text-align: right;">58.2 / 58.5</td>
+<td style="text-align: right;">42.6 / 43.2</td>
+</tr>
+<tr>
+<td>C-k joining lines</td>
+<td style="text-align: right;">1282 / 2315</td>
+<td style="text-align: right;">285 / 500</td>
+<td style="text-align: right;">1469 / 2778</td>
+<td style="text-align: right;">299 / 416</td>
+</tr>
+<tr>
+<td>Yank</td>
+<td style="text-align: right;">1010 / 1589</td>
+<td style="text-align: right;">46 / 44</td>
+<td style="text-align: right;">1251 / 2101</td>
+<td style="text-align: right;">54 / 55</td>
+</tr>
+<tr>
+<td>Transpose lines</td>
+<td style="text-align: right;">1012 / 1589</td>
+<td style="text-align: right;">66 / 65</td>
+<td style="text-align: right;">1164 / 2025</td>
+<td style="text-align: right;">69 / 68</td>
+</tr>
+</tbody>
+</table>
+<p>The GUI body geometry matches its control (636 pixels, 90 columns). Typing stays
+near baseline; the cheap deletion gate replaces the initial 440--767 microsecond
+TTY Backspace capture. Backspace in a <em>wrapped draft</em>, where deleting one character
+can remove a row, still takes the exact path: about 2.03 milliseconds in both
+environments (TTY/GUI hooks-off controls 266/153 microseconds). These command timings
+include dispatch and garbage collection, not the following explicit redisplay.
+Every candidate preserves the expected draft text and blank-space budget;
+hooks-off controls fail the shrink cases. Correct wrapped and multiline edits
+remain more expensive than edits without viewport repair.</p>
+<p>The final GUI typing difference is 2.1 / 2.3 microseconds. A separate interleaved
+probe measured roughly 2--3 microseconds and no geometry calls during plain
+self-insertion. An earlier 42-row fixture measured a 27--31 microsecond difference;
+its cause remains unestablished, and the changed fixture does not explain it.
+Several exact-repair costs also increased between successive builds, so those
+cross-run differences are not attributed to one geometry change.</p>
+<p>The same final compiled build measured zone reconciliation separately (medians
+of three 300-call batches, microseconds per call):</p>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th style="text-align: right;">TTY plain / wrapped history</th>
+<th style="text-align: right;">GUI plain / wrapped history</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Genuinely unchanged zone</td>
+<td style="text-align: right;">4.81 / 4.83</td>
+<td style="text-align: right;">4.87 / 4.86</td>
+</tr>
+<tr>
+<td>Changed equal-height zone</td>
+<td style="text-align: right;">346 / 754</td>
+<td style="text-align: right;">424 / 911</td>
+</tr>
+</tbody>
+</table>
+<p>Both paths preserve draft, point and viewport through redisplay; only the changed
+path advances the character tick. These fixtures use a 634-pixel GUI body and
+41-row terminal body. They measure the reconcile seam, not a complete session
+redraw or provider response.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
