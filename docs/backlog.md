@@ -32,6 +32,65 @@ Claude Code caps background commands at 10 minutes by default and 2 hours at
 most. Expiry would reuse the existing TERM/KILL process-group teardown and
 report a timeout outcome.
 
+## View performance
+
+Leads from ETAF's Ebox renderer (https://github.com/emacs-taf/ebox). Its
+commit `faee59e` (2026-10) removed its Rust layout module along with its
+rebuild-prove-publish pipeline, in favor of one Elisp node tree updated in
+place. Measure each lead before implementing it.
+
+### Rewrite only the changed part of a zone
+
+`mevedel-view-zone--reconcile` deletes every owned span and inserts the whole
+new text whenever anything differs. One ticking elapsed digit therefore
+replaces the whole zone and moves point, markers and window starts, which the
+reconcile path then captures and restores. Instead, keep the common character
+prefix and suffix and set only the property runs that changed; a property-only
+change then leaves the characters in place (Ebox `ebox--rewrite-span`,
+`4785ad7`). Measure the redisplay cost of a status tick, and check whether some
+of the logical-state capture and restore becomes unnecessary.
+
+### Reuse rendered turns in a full projection
+
+A full projection costs 153.7 ms for a 40-exchange history and about 200 ms for
+a restored real session
+([ADR 0119](adr/0119-keep-views-reconstructable-and-rendering-bounded.md#decision-history),
+`cfea5b70`). Tool renderings are cached by `mevedel-view--source-revision`;
+complete turns are not. First profile whether the time goes to segmentation
+and parsing or to rendering turns. If it goes to rendering, cache each turn's
+rendered text keyed by source revision, fold state and width. The cache must
+stay derived, so views remain reconstructable.
+
+### Interrupt large single-turn preparation on input
+
+Scheduled projection treats one turn as indivisible, so a very large turn
+delays input for its whole preparation ([Render flow](view.md#render-flow)).
+ETAF runs idle preparation under `while-no-input`, puts the pending work back
+and reschedules when input arrives (etaf `c60063f`). A projection plan is
+built off-buffer and checked against the source tick before publication, so
+its preparation could be abandoned the same way. Wrap only pure preparation,
+never buffer writes.
+
+### Allocation budgets for hot paths
+
+The [profiler ledger](../benchmark/profiler-optimization-results.md) measures
+allocation for each candidate optimization, but no test fails when a hot path
+starts allocating more. ETAF's gate (`emacs-taf/benchmarks/performance-gate.el`)
+records conses per operation, net of the measurement's own allocation, plus the
+GC count, and fails above a per-scenario budget. Cons counts are
+deterministic, unlike wall time. Bounding a stream chunk, a composer keystroke
+and a zone tick would extend the pattern that
+`test/test-mevedel-session-control-fs.el` already uses for one path.
+
+### Measure updates against the minimal edit
+
+ETAF's "diff twin" derives the smallest plain buffer edit that yields the same
+text and properties, replays it on a buffer copy with the same redisplay, and
+reports the framework's cost against that floor. It also checks that the
+reported change ranges reproduce the buffer. Applied to streaming and zone
+updates, it would show how far each is from the cheapest possible edit, not
+only whether it got faster.
+
 ## Whiteboard
 
 ### Excalidraw parity left out of the element model
