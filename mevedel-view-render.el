@@ -7929,8 +7929,18 @@ When COLLAPSE-NEWEST is non-nil, collapse that turn too."
                       mevedel-view--missing-directive-collapse-state)))
                (later-turn-p
                 (and (< next limit)
-                     (text-property-not-all
-                      next limit 'mevedel-view-turn-id nil))))
+                     (let ((later next) found)
+                       ;; A deferred placeholder can stand for metadata that
+                       ;; renders no turn at all.  Do not let partial output
+                       ;; collapse the newest directive or remember that fold.
+                       (while (and (< later limit) (not found))
+                         (if (and (get-text-property later 'mevedel-view-turn-id)
+                                  (not (eq (get-text-property later 'mevedel-view-type)
+                                           'history-pending)))
+                             (setq found t)
+                           (setq later (next-single-property-change
+                                        later 'mevedel-view-turn-id nil limit))))
+                       found))))
           (when (and directive
                      (plist-get directive :outcome)
                      (not (eq collapse-state nil))
