@@ -5096,6 +5096,45 @@ With DIRECTIVE, wrap the turn in directive boundary records."
           '((1 . ((:turn 1 :preview "   "))))))))
 
 
+(mevedel-deftest mevedel-session-artifacts-fork-point-at-source ()
+  ,test
+  (test)
+  :doc "indexed lookup keeps source bounds and never rediscovers supplied spans"
+  (with-temp-buffer
+    (let* ((first '(:fork-point-id "first" :record-start 10 :transcript-cutoff 20))
+           (second '(:fork-point-id "second" :record-start 30 :transcript-cutoff 40))
+           (points (vector first second)))
+      (cl-letf (((symbol-function 'mevedel-session-artifacts-fork-point-spans)
+                 (lambda (_buffer) (ert-fail "Indexed lookup rescanned source"))))
+        (should (eq first (mevedel-session-artifacts-fork-point-at-source
+                           (current-buffer) 10 20 points)))
+        (should (eq second (mevedel-session-artifacts-fork-point-at-source
+                            (current-buffer) 21 40 points)))
+        (should-not (mevedel-session-artifacts-fork-point-at-source
+                     (current-buffer) 11 20 points))
+        (should-not (mevedel-session-artifacts-fork-point-at-source
+                     (current-buffer) 10 19 points))
+        (should-not (mevedel-session-artifacts-fork-point-at-source
+                     (current-buffer) 41 99 points))
+        (should-not (mevedel-session-artifacts-fork-point-at-source
+                     (current-buffer) 1 99 [])))))
+  :doc "standalone discovery respects trusted records and the current restriction"
+  (with-temp-buffer
+    (insert (mevedel--format-hook-audit-record
+             '(:type fork-point :fork-point-id "first")))
+    (let ((start (point)))
+      (insert (mevedel--format-hook-audit-record
+               '(:type fork-point :fork-point-id "second")))
+      (save-restriction
+        (narrow-to-region start (point-max))
+        (should (equal "second"
+                       (plist-get (mevedel-session-artifacts-fork-point-at-source
+                                   (current-buffer) 1 (point-max)) :fork-point-id)))
+        (remove-text-properties (point-min) (point-max)
+                                '(gptel nil mevedel-hook-audit nil))
+        (should-not (mevedel-session-artifacts-fork-point-at-source
+                     (current-buffer) 1 (point-max)))))))
+
 (mevedel-deftest mevedel-session-artifacts-fork-point-spans ()
   ,test
   (test)

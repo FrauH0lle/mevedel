@@ -121,7 +121,11 @@ callbacks. The scanner and the synchronous correctness path use the same
 classification and repair rules; independent per-chunk classification is not
 trusted. Markdown mode and grammar availability are resolved once per projection
 and retained through a batch's preparation and publication; missing grammars are
-not memoized beyond that projection. Source identity and its full modification tick are checked before
+not memoized beyond that projection. The plan also indexes trusted fork-point
+records once under its source restriction; assistant headers use ordered lookup
+instead of rescanning the transcript. Variant listing and activation remain
+late-bound to the live session context. Source identity and its full modification
+tick are checked before
 publishing the complete plan. On publication, reader-visible turns and all chat
 prompt turns render first, then remaining response turns fill one per callback.
 This gives a window moved onto a pending response the correct pinned prompt

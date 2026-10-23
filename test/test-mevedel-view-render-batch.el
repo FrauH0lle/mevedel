@@ -430,6 +430,40 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
           (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
           (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
 
+(mevedel-deftest mevedel-view-render-batched-full/fork-index ()
+  ,test
+  (test)
+  :doc "sync and deferred batch headers share one restricted fork-point scan"
+  (dolist (batched '(nil t))
+    (mevedel-batch-test--with-history
+      (let ((session (mevedel-session--create :session-id "source" :save-path "/tmp/source/"))
+            (calls 0)
+            (discover (symbol-function 'mevedel-session-artifacts-fork-point-spans)))
+        (with-current-buffer data-buf
+          (setq-local mevedel--session session)
+          (goto-char (point-max))
+          (insert (mevedel--format-hook-audit-record
+                   '(:type fork-point :fork-point-id "last-response"))))
+        (setq-local mevedel--session session)
+        (cl-letf (((symbol-function 'mevedel-session-artifacts-fork-point-spans)
+                   (lambda (data) (cl-incf calls) (funcall discover data)))
+                  ((symbol-function 'mevedel-session-persistence-conversation-variants)
+                   (lambda (_session id &optional _sessions)
+                     (should (equal "last-response" id))
+                     '((:variant-origin source :summary (:session-id "source"))
+                       (:variant-origin conversation :summary (:session-id "child"))))))
+          (if batched
+              (progn
+                (mevedel-view-render-batched-full)
+                (cl-loop repeat 150 while mevedel-view-render--batch do
+                         (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+                (should-not mevedel-view-render--batch))
+            (mevedel-view--full-rerender))
+          (should (= calls 1))
+          (should (string-search "[⇆ Source · 2 variants]" (buffer-string)))
+          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
+
 (mevedel-deftest mevedel-view-render-batched-full/tool-preparation ()
   ,test
   (test)

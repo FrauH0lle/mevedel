@@ -1418,15 +1418,27 @@ Respect BUFFER's current restriction and record provenance."
       'fork-point (point-min) (point-max)))))
 
 (defun mevedel-session-artifacts-fork-point-at-source
-    (buffer source-start source-end)
+    (buffer source-start source-end &optional fork-points)
   "Return the stable fork point inside BUFFER source bounds.
 
-SOURCE-START and SOURCE-END must bound one rendered assistant turn."
-  (cl-find-if
-   (lambda (fork-point)
-     (and (<= source-start (plist-get fork-point :record-start))
-          (<= (plist-get fork-point :transcript-cutoff) source-end)))
-   (mevedel-session-artifacts-fork-point-spans buffer)))
+SOURCE-START and SOURCE-END must bound one rendered assistant turn.
+FORK-POINTS, when supplied, is a projection-scoped vector of provenance-checked
+records in source order, built under the projection's source restriction."
+  (let* ((points (or fork-points
+                     (vconcat (mevedel-session-artifacts-fork-point-spans buffer))))
+         (low 0)
+         (high (length points)))
+    ;; Find the first record at or after this turn's start.  Audit spans are
+    ;; disjoint and ordered, so if it ends after this turn no later one fits.
+    (while (< low high)
+      (let ((middle (/ (+ low high) 2)))
+        (if (< (plist-get (aref points middle) :record-start) source-start)
+            (setq low (1+ middle))
+          (setq high middle))))
+    (when (< low (length points))
+      (let ((record (aref points low)))
+        (when (<= (plist-get record :transcript-cutoff) source-end)
+          record)))))
 
 (defun mevedel-session-artifacts--prompt-fork-point
     (prompt next-position fork-points)

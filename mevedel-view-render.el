@@ -85,7 +85,7 @@
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-fork-point-at-source
                   "mevedel-session-artifacts"
-                  (buffer source-start source-end))
+                  (buffer source-start source-end &optional fork-points))
 (declare-function mevedel-session-artifacts-fork-point-spans
                   "mevedel-session-artifacts" (buffer))
 
@@ -705,6 +705,10 @@ interaction zones instead of inside them.")
 
 (defvar mevedel-view--conversation-variant-sessions nil
   "Persisted session summaries bound once around a full render.")
+
+(defvar mevedel-view--conversation-fork-points nil
+  "Ordered vector of fork-point records bound by the current projection.
+Nil asks standalone renderers to query their current source instead.")
 
 (defvar-local mevedel-view--user-pre-rendered nil
   "Non-nil when the most recent user turn was pre-rendered by the view.
@@ -4686,7 +4690,8 @@ SESSION supplies live session context when DATA-BUF is archived."
               ((mevedel-session-save-path session))
               (fork-point
                (mevedel-session-artifacts-fork-point-at-source
-                data-buf source-start source-end))
+                data-buf source-start source-end
+                mevedel-view--conversation-fork-points))
               (fork-point-id (plist-get fork-point :fork-point-id))
               (variants
                (progn
@@ -4738,6 +4743,7 @@ CONTINUATION-P appends an already-started assistant turn without a new header."
                      (list :data data-buf :tick (buffer-modified-tick)
                            :turn turn :start (point-min) :end (point-max)
                            :session variant-session
+                           :fork-points mevedel-view--conversation-fork-points
                            :variants mevedel-view--conversation-variant-sessions))))
         (turn-source nil))
     (setq turn-source
@@ -8515,17 +8521,23 @@ Call after restoring properties.  This does not mutate the view."
   "Add TURNS and variant metadata to PLAN without changing the view."
   (let* ((session (and (not agent-transcript-p)
                        (buffer-local-value 'mevedel--session session-data-buf)))
+         (fork-points
+          (vconcat
+           (when (and session (mevedel-session-save-path session))
+             (with-current-buffer data-buf
+               (save-restriction
+                 (narrow-to-region (or (plist-get plan :start) (point-min))
+                                   (or (plist-get plan :end) (point-max)))
+                 (mevedel-session-artifacts-fork-point-spans data-buf))))))
          (variants
-          (when (and session
-                     (mevedel-session-save-path session)
-                     (mevedel-session-workspace session)
-                     (with-current-buffer data-buf
-                       (mevedel-session-artifacts-fork-point-spans data-buf)))
+          (when (and (> (length fork-points) 0)
+                     (mevedel-session-workspace session))
             ;; Settled buttons use the last live listing; activation enumerates
             ;; live instead of requiring a target round trip per rendered turn.
             (mevedel-session-persistence-list-sessions
              (mevedel-session-workspace session) 'cached))))
-    (append plan (list :turns turns :session session :variants variants))))
+    (append plan (list :turns turns :session session :variants variants
+                       :fork-points fork-points))))
 
 (defun mevedel-view--full-rerender-plan
     (data-buf session-data-buf view-buf agent-transcript-p)
@@ -8727,6 +8739,7 @@ turn.  SAVED-STATES restores matching disclosure state."
          (plan (mevedel-view--full-rerender-plan
                 data-buf session-data-buf view-buf agent-transcript-p))
          (mevedel-view--conversation-variant-sessions (plist-get plan :variants))
+         (mevedel-view--conversation-fork-points (plist-get plan :fork-points))
          last-assistant-turn-start last-assistant-turn-end
          last-assistant-turn-data-start last-current-assistant-turn-start
          last-current-assistant-turn-data-start last-turn-role)
@@ -8868,6 +8881,7 @@ turns may follow in callbacks."
               (plist-get job :markdown-mode)
             (mevedel-view--markdown-fontify-mode)))
          (mevedel-view--conversation-variant-sessions (plist-get plan :variants))
+         (mevedel-view--conversation-fork-points (plist-get plan :fork-points))
          (mevedel-transcript--tool-block-index (plist-get job :index))
          (mevedel-transcript-audit--decode-cache (plist-get job :audits))
          (mevedel-view--activity-entry-cache (plist-get job :tool-cache))
@@ -8985,13 +8999,13 @@ projection.  The caller owns view mutation."
                 ((eq (plist-get fresh :role) 'assistant))
                 ((eql (plist-get fresh :start) (plist-get turn :start)))
                 ((equal (plist-get fresh :directive) (plist-get turn :directive))))
-      (let ((plan (copy-sequence context)))
+      (let ((plan (copy-sequence context))
+            (metadata (mevedel-view-render--plan-finish
+                       nil nil data mevedel--data-buffer
+                       mevedel-view--agent-transcript-p)))
         (setf (plist-get plan :end) end
-              (plist-get plan :variants)
-              (and (not mevedel-view--agent-transcript-p)
-                   (plist-get (mevedel-view-render--plan-finish
-                               nil nil data mevedel--data-buffer nil)
-                              :variants)))
+              (plist-get plan :variants) (plist-get metadata :variants)
+              (plist-get plan :fork-points) (plist-get metadata :fork-points))
         (mevedel-view-render--replace-turn data plan fresh pos))))))
 
 (defun mevedel-view-render-refresh-latest-turn (data)
