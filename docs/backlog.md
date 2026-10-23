@@ -32,44 +32,6 @@ Claude Code caps background commands at 10 minutes by default and 2 hours at
 most. Expiry would reuse the existing TERM/KILL process-group teardown and
 report a timeout outcome.
 
-## View performance
-
-Leads from ETAF's Ebox renderer (https://github.com/emacs-taf/ebox). Its
-commit `faee59e` (2026-10) removed its Rust layout module along with its
-rebuild-prove-publish pipeline, in favor of one Elisp node tree updated in
-place. Measure each lead before implementing it.
-
-### Rewrite only the changed part of a zone
-
-`mevedel-view-zone--reconcile` deletes every owned span and inserts the whole
-new text whenever anything differs. One ticking elapsed digit therefore
-replaces the whole zone and moves point, markers and window starts, which the
-reconcile path then captures and restores. Instead, keep the common character
-prefix and suffix and set only the property runs that changed; a property-only
-change then leaves the characters in place (Ebox `ebox--rewrite-span`,
-`4785ad7`). Measure the redisplay cost of a status tick, and check whether some
-of the logical-state capture and restore becomes unnecessary.
-
-### Allocation budgets for hot paths
-
-The [profiler ledger](../benchmark/profiler-optimization-results.md) measures
-allocation for each candidate optimization, but no test fails when a hot path
-starts allocating more. ETAF's gate (`emacs-taf/benchmarks/performance-gate.el`)
-records conses per operation, net of the measurement's own allocation, plus the
-GC count, and fails above a per-scenario budget. Cons counts are
-deterministic, unlike wall time. Bounding a stream chunk, a composer keystroke
-and a zone tick would extend the pattern that
-`test/test-mevedel-session-control-fs.el` already uses for one path.
-
-### Measure updates against the minimal edit
-
-ETAF's "diff twin" derives the smallest plain buffer edit that yields the same
-text and properties, replays it on a buffer copy with the same redisplay, and
-reports the framework's cost against that floor. It also checks that the
-reported change ranges reproduce the buffer. Applied to streaming and zone
-updates, it would show how far each is from the cheapest possible edit, not
-only whether it got faster.
-
 ## Whiteboard
 
 ### Excalidraw parity left out of the element model

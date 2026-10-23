@@ -2304,3 +2304,52 @@ sweep: 12 ms. The sweep itself, about 10 ms per reconciliation at 1 MB,
 remains: orphan cleanup
 anywhere in the buffer is a tested contract of ADR 0126, and directive
 inspector text legitimately lives inside the transcript.
+
+### October 24, 2026: reject partial managed-zone rewrites
+
+The allocation gate and minimal-edit twin made a once-per-second elapsed tick
+reproducible: `12s` to `13s` deletes and inserts the rail's full 27 characters,
+while the character/property floor needs one deletion, one insertion and no
+explicit property assignments. We implemented a fully owned single-span path
+that retained the common character prefix and nonoverlapping suffix, inserted
+only the middle with its final properties, and coalesced assignments only for
+differing retained-property runs. Initial, empty and multiple-span renders kept
+their existing replacement path.
+
+The trial reduced zone-tick allocation from 1,732 to 1,580 conses and matched
+the twin's 1-deleted/1-inserted character floor. It did not meet the hard
+no-CPU-regression constraint: six alternating fixed-base/change runs measured
+whole-zone CPU at 0.151 -> 0.165 ms (+9.3%), with all six changes slower.
+Ordinary-bytecode twin whole-update time also rose, 0.136159 -> 0.159104 ms.
+The final bounded attempt collected desired runs with C `object-intervals`
+instead of repeated property lookups. It used 1,600 conses but still lost:
+0.1715 -> 0.1950 ms whole-zone CPU (+13.7%), all six changes slower.
+
+Comparing retained prefix/suffix properties with `equal-including-properties`
+was not an acceptable shortcut either: its 2,076 conses breached the unchanged
+1,832-cons budget. For this approximately 27-character zone, C whole-region
+deletion/insertion is cheaper than the measured Lisp-level property
+reconciliation, even when the latter performs fewer character mutations.
+
+The preservation captures could not safely be removed. Character equality alone
+does not establish unchanged layout or fragment identity; boundary edits still
+affect neighboring regions and trailing foreign overlays, while semantic
+selections and composer drafts require their transaction. Partial edits also
+exposed dependencies on whole-deletion marker movement in composer viewport
+restoration and the in-flight/history boundary. Fixing them preserved correctness
+but did not establish a performance win. An earlier trial with a redundant
+composer viewport query measured graphical wall/Emacs CPU +1.3%/+1.1%; removing
+that query did not resolve the independently measured whole-zone CPU regression.
+
+No graphical redisplay saving was established. After the desktop locked, an
+isolated virtual KWin probe confirmed exactly 200 ticks and 200 reconciliations,
+but the tight `redisplay` loop produced only one Wayland commit/frame callback.
+It therefore cannot substantiate 200 presented frames or a redisplay speedup.
+
+Decision: retain whole-zone replacement and its preservation machinery; leave
+the zone allocation budget at 1,832. Keep general draft, anchor, foreign-overlay
+and undo regressions, not implementation-specific minimal-edit assertions.
+Reopen this tradeoff if a C-level property-diff primitive becomes available or
+zones become large enough that whole-zone insertion dominates. The
+[measurement ledger](../../benchmark/profiler-optimization-results.md#partial-managed-zone-rewrites-2026-10-24)
+records the controlled comparisons and their limits.

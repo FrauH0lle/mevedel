@@ -798,3 +798,109 @@ attempts are not successful timing samples.
 
 Conditional environment/transport checks and real graphical/keyboard latency
 remain unverified. No worktree code was loaded into the running editor.
+
+## Partial managed-zone rewrites (2026-10-24)
+
+**Decision: rejected; product behavior and allocation budgets are unchanged.**
+The fixed base was `0d5b2a3147cec22ab0658d3cafea96bf90d83ef1`, checked out
+detached for comparisons. The trial retained a fully owned zone's character
+prefix/nonoverlapping suffix, inserted only its changed middle, and assigned
+only differing property runs. Empty, initial and multiple-span paths retained
+whole replacement. Preservation captures remained necessary. Correctness fixes
+for composer viewport and in-flight marker movement were part of the trial,
+not shipped independently.
+
+### Allocation and edit distance
+
+Commands: `npx @emacs-eask/cli run script bench-gate` and
+`npx @emacs-eask/cli run script bench-twin`, using their private compiled
+builds and the same 1 MiB history, static elapsed rail and multiline `>` draft.
+
+| Zone tick | Base | Partial rewrite | Bulk desired intervals |
+| --- | ---: | ---: | ---: |
+| Net conses | 1,732 | 1,580 | 1,600 |
+| String characters | 721 | 722 | 722 |
+| Vector cells | 637 | 642 | 642 |
+| GCs | 0 | 0 | 0 |
+| Observed deleted / inserted characters | 27 / 27 | 1 / 1 | 1 / 1 |
+| Explicit property calls | 0 | 0 | 0 |
+
+Both trials matched the twin's 1/1/0 floor and passed replay equality. Stream
+allocation was 864 -> 865 conses; composer remained 50. The separate attempted
+C `equal-including-properties` checks on retained prefix/suffix used **2,076
+conses**, failing the existing **1,832** zone budget; that shortcut was reverted.
+No budget was raised to accept a candidate. The retained implementation keeps
+the original 1,732 baseline and 1,832 budget, including the same 100 margin.
+
+### Six alternating CPU and ordinary-bytecode twin comparisons
+
+Each base/change pair used fresh isolated `emacs -Q` processes and private
+ordinary bytecode, with temporary HOME, every inherited `XDG_*_HOME` and native
+cache redirected. Dependencies came from `.eask/31.1/elpa/*`. Heavy work was
+serialized. Whole-zone samples reused the gate fixture, with five warmups and
+five fresh-fixture samples per process. CPU used `get-internal-run-time`; wall
+time and twin timing were measured separately. Tables show medians of six run
+medians, not profiler sample counts.
+
+| Candidate / operation | Base ms | Change ms | Delta | Slower pairs |
+| --- | ---: | ---: | ---: | ---: |
+| Partial rewrite, whole-zone CPU | 0.151000 | 0.165000 | +9.27% | 6 / 6 |
+| Partial rewrite, whole-zone wall | 0.152029 | 0.164369 | +8.12% | 6 / 6 |
+| Partial rewrite, twin whole-zone wall | 0.136159 | 0.159104 | +16.85% | 5 / 6 |
+| Bulk desired intervals, whole-zone CPU | 0.171500 | 0.195000 | +13.70% | 6 / 6 |
+| Bulk desired intervals, whole-zone wall | 0.170124 | 0.196649 | +15.59% | 6 / 6 |
+| Bulk desired intervals, twin whole-zone wall | 0.175169 | 0.193659 | +10.56% | 6 / 6 |
+
+The final bounded candidate collected desired property runs once with
+`object-intervals`; the actual-buffer walk remained bounded and coalesced
+assignments. `object-intervals` on a buffer ignores narrowing, so using it on
+the whole history was not an acceptable no-copy optimization. Its six CPU run
+medians were base `[0.170, 0.182, 0.171, 0.171, 0.172, 0.172]` versus change
+`[0.199, 0.197, 0.193, 0.188, 0.202, 0.190]` ms. The no-regression acceptance
+rule required CPU median <= base and a majority of pairs not slower. It failed;
+there were no further variants.
+
+For attribution, the earlier partial-rewrite zone source SHA256 was
+`4ffbdd8867086866ddb70666c09762a5aea13710c5f3be2895cfbcb9f3aa8f7f`;
+the final bulk-interval candidate was
+`42afca3ca9e186ffa4d18ec59efe7d4d0998603ac4f9d8a9f49d15b3d3aa9957`.
+Both used stream source
+`bb812e0797051671d430e81119281c809b5ce03a51ea4c88793ca7b688893e4d`.
+
+Existing `spinner-ticks` and `status-history` profiler scenarios also ran in six
+alternating pairs. The last partial-rewrite batch comparison measured spinner
+100-call medians 0.348108 -> 0.350663 ms, status refresh 0.041060 -> 0.041694 ms,
+and history fallback 0.005370 -> 0.005735 ms. Batch spinner reported zero inline
+refresh calls/characters, so it was not active-rendering evidence. Native CPU
+profiles had zero samples; they do not establish CPU parity.
+
+### Graphical checks and limits
+
+Separate PGTK Emacs processes used fresh HOME/XDG roots, a visible focused 80x25
+frame, 20 warmups and 200 manually driven elapsed ticks, each followed by
+`(redisplay t)`. Exact guards required 200 spinner calls and 200 progress
+reconciliations, final `3m 52s`, and unchanged draft and point. The existing
+automatic timer was postponed outside timing, preserving its identity and
+production rearm behavior; earlier extra-callback datasets were excluded.
+
+An earlier trial with a duplicate composer viewport query measured wall
+491.653 -> 497.919 ms (+1.27%, five of six changes slower), Emacs CPU
+489.100 -> 494.302 ms (+1.06%, all six slower), per 200 ticks. Attribution
+found viewport queries rising from 401 to 601; removing the duplicate did not
+eliminate the independently measured whole-zone CPU regression above.
+
+The desktop subsequently locked; those graphical runs were blocked rather than
+unlocking it or accepting unattended zero-work ticks. An authorized isolated
+virtual KWin proof ran both revisions with private HOME/XDG/DBus, pure PGTK
+Wayland and no Xwayland. Both passed the 200/200 guards, but each timed loop
+produced only **one Wayland commit, frame request and callback**. KWin CPU was
+below the `/proc` accounting resolution of 10 ms; there was no Xwayland process
+to account. The tight loop coalesced presentation, so no 200-frame redisplay
+saving or sustained compositor-CPU improvement is claimed.
+
+For this approximately 27-character zone, whole deletion/insertion in C beat
+the measured Lisp-level property reconciliation. Lower consing and fewer
+mutations alone are insufficient under the no-CPU-regression constraint.
+Reconsider only with a cheaper C-level property-diff operation or evidence that
+larger zones make whole insertion dominant. ADR 0119 records the decision;
+general composer/anchor/foreign-overlay/undo regressions remain in the suite.
