@@ -417,6 +417,28 @@ and retains the last good display where possible.
 
 ## Decision history
 
+### October 24, 2026: remove repeated projection preparation first
+
+Complete-projection profiles exposed repeated grammar probes, whole-source
+fork discovery per header and repeated constant-property suffix walks. Batch
+tool preparation also used raw spans where publication merged tool/audit spans,
+and completed batch Markdown did not enter the persistent response cache.
+Fix these local owners rather than adding a position-bearing final-turn cache.
+Publication keeps fresh reader/composer capture; remembered fold snapshots and
+view mutation guards prevent stale prepared summaries from masquerading as
+complete expanded rows.
+
+Seven alternating compiled baseline/change pairs per fixture and GC setting,
+with installed grammars, reduced the restored fixture's full projection from
+712.9 to 560.8 ms synchronously and 930.9 to 638.3 ms batched at default GC;
+64 MiB medians fell from 375.2 to 265.3 ms and 475.3 to 325.5 ms. Batch-only
+second projections start zero Markdown jobs instead of 190. Stream and composer
+allocation budgets remain unchanged. The remaining uncached turn share is
+71.55% / 52.70% at default GC and 61.20% / 47.50% at 64 MiB, still above the
+25% materiality gate; it includes insertion and is not a predicted cache speedup.
+The [benchmark ledger](../../benchmark/profiler-optimization-results.md#targeted-full-projection-fixes-2026-10-24)
+records the same-stage tables, cold-cache checks, verification and limitations.
+
 ### October 2026: failures and prepared results keep a run's grouping
 
 September's change made failed calls split their group so a failure was not
