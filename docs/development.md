@@ -204,6 +204,42 @@ tests exercise compiled behavior before loading their ordinary test fixtures.
 Required dependencies loaded from source can also hide missing compile-time
 imports; use compiled dependency copies when testing that boundary.
 
+### View allocation gate
+
+```bash
+npx @emacs-eask/cli run script bench-gate
+```
+
+This standalone gate compiles the package and measurement helpers into a
+temporary directory, then measures in a fresh batch Emacs. It refuses
+interpreted hot paths and removes its bytecode, private HOME, XDG roots and
+native cache afterwards. No code is loaded into the running editor.
+
+Each scenario uses a fresh 1 MiB synthetic rendered history shared with the
+profiler harness, a selected 80-column, 25-line frame and a multiline composer
+draft beginning with `>`. Five warmups precede each sample. Fixture setup and
+output assertions are outside the measured operation:
+
+- `stream-chunk`: append a fixed response chunk to a prepared in-flight turn,
+  then call `mevedel-view--render-stream-update` directly.
+- `composer-keystroke`: `self-insert-command` followed by the actual view's
+  `post-command-hook`, with window geometry primed before measurement.
+- `zone-tick`: cross a deterministic second boundary in
+  `mevedel-view--spinner-tick`, rewriting the progress rail from `12s` to `13s`.
+  Static spinner styles isolate the semantic elapsed-label update.
+
+The gate checks that each update modified the buffer and produced its intended
+output without corrupting the composer. The clock binding and reconciliation
+counter are included in the operation, consistently across runs. Every raw
+sample starts with `garbage-collect`; net counters subtract the componentwise
+minimum of three no-op measurements, clamped at zero. Output includes conses,
+string characters, vector cells and GC count. Only conses gate acceptance;
+budgets are the recorded baseline plus 100 conses per operation. A breach
+signals an error and returns a nonzero process status. The baseline and
+repeatability evidence live in
+[`benchmark/profiler-optimization-results.md`](../benchmark/profiler-optimization-results.md).
+ERT covers counter arithmetic and path guards, not absolute budgets.
+
 ### Reloading into a running Emacs
 
 Load compiled code into a live editor, never bare sources. Interpreted

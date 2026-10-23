@@ -170,3 +170,36 @@ The remaining large full rerenders measured 191 ms median, 443 ms p95, and
 556 ms maximum for the 347 KiB worker transcript. That path is real but
 infrequent in this run, so broader incremental-render changes remain deferred
 until a reproducible interaction shows they dominate user-visible latency.
+
+## Compiled hot-path allocation gate (2026-10-23)
+
+Command: `npx @emacs-eask/cli run script bench-gate`.
+Package baseline: `6d6f4a95`, with measurement-only harness changes. Emacs
+31.1, x86_64 Linux. The runner compiles into a temporary directory and loads
+the result in a fresh batch subprocess with private HOME/XDG/native caches.
+The three scenarios use the profiler's shared view fixture, 1 MiB synthetic
+rendered response history, a selected 80-column/25-line frame and a multiline
+draft starting with `>`. Five warmups precede each fresh-fixture sample.
+
+The stream sample renders one appended ` fixed stream chunk.` on an in-flight
+response. The composer sample inserts `x` and runs the view's actual
+`post-command-hook` after priming its window geometry. The static-spinner tick
+crosses a bound clock from 1000.25 to 1001.25 seconds, rewriting the progress
+rail elapsed label from `12s` to `13s`. Guards check modified ticks, the actual
+chunk/elapsed label and composer text/point. Setup and assertions are not
+measured; clock binding and reconciliation counting are measured consistently.
+
+Each sample starts after full GC and subtracts the componentwise minimum of
+three no-op samples, clamped at zero. GC settings: 16 MiB threshold, 0.1 heap
+percentage. Three independent command invocations produced identical counters:
+
+| Scenario | Net conses (all three runs) | String chars | Vector cells | GCs | Cons budget |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Stream chunk | 864 | 7,592 | 1,740 | 0 | 964 |
+| Composer keystroke | 50 | 22 | 62 | 0 | 150 |
+| Zone tick | 1,732 | 721 | 637 | 0 | 1,832 |
+
+Cons range and population variance are **0** for every scenario. Budgets are
+baseline + **100 conses** (fixed absolute margin, not a percentage); only conses
+gate acceptance. These are allocation counts, not live-heap sizes, profiler
+byte samples, graphical redisplay cost or real-session latency.

@@ -25,6 +25,10 @@
 (require 'mevedel-view-stream)
 (require 'mevedel-view-zone)
 (require 'profiler)
+(require 'mevedel-view-fixtures
+         (file-name-concat
+          (file-name-directory (or load-file-name buffer-file-name))
+          "mevedel-view-fixtures"))
 
 (defvar mevedel-session--read-only-mode)
 (defvar org-persist-directory)
@@ -156,25 +160,6 @@ returns additional counters from one unprofiled workload run."
          'retry-gap
          (list :gap-bytes size :iterations iterations)
          workload directory)))))
-
-(defun mevedel-benchmark--with-view (function)
-  "Call FUNCTION with initialized data and view buffers."
-  (let ((data-buf (generate-new-buffer " *mevedel-benchmark-data*"))
-        (view-buf (generate-new-buffer " *mevedel-benchmark-view*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer data-buf
-            (mevedel--transcript-org-mode)
-            (setq-local gptel-response-separator "\n\n")
-            (setq-local mevedel-session--read-only-mode nil))
-          (mevedel-view--setup view-buf data-buf)
-          (save-window-excursion
-            (switch-to-buffer view-buf)
-            (funcall function data-buf view-buf)))
-      (when (buffer-live-p view-buf)
-        (kill-buffer view-buf))
-      (when (buffer-live-p data-buf)
-        (kill-buffer data-buf)))))
 
 (defun mevedel-benchmark--prompt-redraw (directory)
   "Run large-view prompt lookup and redraw workload below DIRECTORY."
@@ -368,14 +353,7 @@ returns additional counters from one unprofiled workload run."
     (mevedel-benchmark--with-view
      (lambda (_data-buf view-buf)
        (with-current-buffer view-buf
-         (let ((inhibit-read-only t))
-           (mevedel-view--call-with-render-boundaries-advancing
-            (lambda ()
-              (goto-char (mevedel-view--history-insertion-marker))
-              (let ((start (point)))
-                (insert (make-string transcript-bytes ?x))
-                (put-text-property start (point)
-                                   'mevedel-view-type 'response)))))
+         (mevedel-benchmark--insert-history transcript-bytes)
          (goto-char (mevedel-view--input-start))
          (insert "> benchmark draft\nsecond line")
          (goto-char (+ (mevedel-view--input-start) 4))

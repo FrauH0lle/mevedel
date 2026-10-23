@@ -34,6 +34,7 @@
        '("prompts/tools" "prompts/tools/*.md"))
 
 (script "test" "python3 test/run_tests.py")
+(script "bench-gate" "eask emacs --batch -L . -L benchmark -l benchmark/mevedel-bench-runner.el -- gate")
 
 ;; Eask's script exporter inherits its source file's CRLF coding on some
 ;; installations, which otherwise becomes part of the last shell argument.
