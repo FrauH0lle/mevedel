@@ -203,3 +203,32 @@ Cons range and population variance are **0** for every scenario. Budgets are
 baseline + **100 conses** (fixed absolute margin, not a percentage); only conses
 gate acceptance. These are allocation counts, not live-heap sizes, profiler
 byte samples, graphical redisplay cost or real-session latency.
+
+## Minimal contiguous-edit twin (2026-10-23)
+
+Command: `npx @emacs-eask/cli run script bench-twin`. Same package baseline,
+fixture, Emacs and GC settings as the gate above. Each timing is a median of
+five fresh-fixture samples after five warmups. All replays matched the live
+buffer with `equal-including-properties`.
+
+| Scenario | Observed real chars deleted / inserted | Floor chars deleted / inserted | Observed property calls / floor runs | Whole update | Floor replay |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Stream chunk | 21 / 41 | 0 / 20 | 9 / 5 | 0.609 ms | 0.00564 ms |
+| Zone tick (`12s` -> `13s`) | 27 / 27 | 1 / 1 | 0 / 0 | 0.141 ms | 0.00334 ms |
+
+Timing uses ordinary bytecode without observation advice. Counts use a separate
+build where `insert` and `delete-region` compile as generic calls, because
+their normal bytecode opcodes bypass advice. The source and scenario remain
+the same; only the count build is instrumentable, and it is never timed.
+Observed property counts are successful nonempty calls to
+`set-text-properties`, `add-text-properties` and `put-text-property`, including
+redundant calls; properties carried by inserted strings are not explicit
+property writes. Other primitives and internal C mutations are not counted.
+
+The floor keeps the common character prefix and nonoverlapping suffix,
+inserts the changed middle including its final properties, then assigns only
+differing property runs. It is a single-span text/property floor, not a
+globally minimal multi-edit script. Snapshot copying, derivation and equality
+checks are outside both timings; replay has no product hooks, overlays, marker
+state or graphical redisplay. Timing ratios are diagnostic, not a claimed
+achievable renderer speedup. This report does not gate acceptance.

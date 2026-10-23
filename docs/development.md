@@ -240,6 +240,47 @@ repeatability evidence live in
 [`benchmark/profiler-optimization-results.md`](../benchmark/profiler-optimization-results.md).
 ERT covers counter arithmetic and path guards, not absolute budgets.
 
+### Minimal-edit twin report
+
+```bash
+npx @emacs-eask/cli run script bench-twin
+```
+
+The twin reuses the allocation gate's stream-chunk and elapsed-zone fixtures.
+It reports, not gates. It snapshots the buffer including properties, runs the
+update, derives one contiguous character replacement from the longest common
+character prefix and a nonoverlapping suffix, and adds only differing property
+runs. Inserted text carries its final properties. Replaying on a snapshot copy
+must be `equal-including-properties` to the live result.
+
+`normal-bytecode` lines report floor deleted/inserted characters and explicit
+property runs, plus five-sample median times for the unadvised whole update
+and the floor replay. Five warmups precede the samples, with GC before each
+sample. Snapshot creation, edit derivation and equality assertions are untimed.
+
+`generic-call-counts` lines report observed real deleted/inserted characters
+and nonempty property primitive calls (including redundant writes). These
+come from a separate fresh-fixture process and count-only build: Emacs's
+normal `insert` and `delete-region` bytecode opcodes bypass advice, so this
+build temporarily disables those two byte-compile handlers to emit generic
+calls instead. Timings always use the ordinary, uninstrumented bytecode build.
+The runner restores the handlers and deletes both builds afterwards.
+
+The observer covers successful calls to `delete-region`, `insert`,
+`set-text-properties`, `add-text-properties` and `put-text-property` targeting
+the view, even with modification hooks inhibited. It excludes edits to other
+buffers/strings, properties carried by an inserted string, other mutation
+primitives and internal C work. A reported property "run" on the real side is
+one nonempty primitive call, not the number of internal interval splits.
+The floor side counts explicit differing-property assignments. These counters
+describe the observed writes, not a complete accounting of all renderer work.
+
+This is the minimal *single-span* character edit plus property corrections,
+not a globally minimal multi-edit script. The replay has the same text and
+text properties, not equivalent hooks, overlays, markers, mode state, layout
+or redisplay. Its time is a text-mutation floor, not an achievable UI latency
+target or a graphical redisplay measurement.
+
 ### Reloading into a running Emacs
 
 Load compiled code into a live editor, never bare sources. Interpreted
