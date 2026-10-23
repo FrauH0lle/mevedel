@@ -198,7 +198,7 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
   (with-temp-buffer
     (insert "old view")
     (let ((job (list :turns nil :fontify nil :fontify-turns nil
-                     :fontify-segments nil :tools-turns nil :tool-state-tick nil
+                     :fontify-segments nil :tools-turns nil :tool-state-tick nil :tool-states nil
                      :prepare-stage 'fontify)))
       (cl-letf (((symbol-function 'mevedel-view-disclosure-capture-state)
                  (lambda (&rest _) (ert-fail "Unexpected preparation capture"))))
@@ -375,6 +375,8 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
         (should (equal before (buffer-substring-no-properties (point-min) (point-max))))))
   :doc "a source edit cancels an unfinished private Markdown job"
   (mevedel-batch-test--with-history
+    (clrhash mevedel-view--response-fontify-cache)
+    (setq mevedel-view--response-cache-entries 0)
     (let (cancelled)
       (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
                  (lambda () 'markdown-ts-mode))
@@ -388,10 +390,12 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
         (cl-loop repeat 100 until (plist-get mevedel-view-render--batch :fontify)
                  do (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
         (should (plist-get mevedel-view-render--batch :fontify))
+        (should (zerop (hash-table-count mevedel-view--response-fontify-cache)))
         (with-current-buffer data-buf
           (goto-char (point-max)) (insert "edited"))
         (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)
         (should cancelled)
+        (should (zerop (hash-table-count mevedel-view--response-fontify-cache)))
         (should (eq 'prepare (plist-get mevedel-view-render--batch :phase)))))))
 
 (mevedel-deftest mevedel-view-render-batched-full/markdown-snapshot ()
@@ -463,6 +467,124 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
           (should (string-search "[⇆ Source · 2 variants]" (buffer-string)))
           (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
           (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
+
+(mevedel-deftest mevedel-view-render-batched-full/response-promotion ()
+  ,test
+  (test)
+  :doc "cold batch-only Markdown output survives the job and skips the next preparation"
+  (dolist (capacity '(256 2))
+    (mevedel-batch-test--with-history
+      (let ((starts 0) (mevedel-view-render-cache-max-entries capacity))
+        (clrhash mevedel-view--response-fontify-cache)
+        (setq mevedel-view--response-cache-entries 0)
+        (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+                   (lambda () 'markdown-ts-mode))
+                  ((symbol-function 'mevedel-view--markdown-fontify-job-start)
+                   (lambda (text) (cl-incf starts) (list text)))
+                  ((symbol-function 'mevedel-view--markdown-fontify-job-step)
+                   (lambda (&rest _) t))
+                  ((symbol-function 'mevedel-view--markdown-fontify-job-result)
+                   (lambda (job) (propertize (car job) 'font-lock-face 'bold)))
+                  ((symbol-function 'mevedel-view--markdown-fontify-job-cancel) #'ignore))
+          (dotimes (_ (if (= capacity 256) 2 1))
+            (mevedel-view-render-batched-full)
+            (cl-loop repeat 150 while mevedel-view-render--batch do
+                     (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)
+                     (should (<= (hash-table-count mevedel-view--response-fontify-cache) capacity))
+                     (should (<= mevedel-view--response-cache-entries capacity)))
+            (should-not mevedel-view-render--batch)
+            (should (= starts 6))
+            (should (= (hash-table-count mevedel-view--response-fontify-cache)
+                       mevedel-view--response-cache-entries))
+            (save-excursion
+              (goto-char (point-min)) (search-forward "Response 5")
+              (should (eq 'bold (get-text-property (1- (point)) 'font-lock-face))))
+            (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+            (should (= (point) (+ 4 (mevedel-view--input-start))))))))))
+
+(mevedel-deftest mevedel-view-render--plan-tool-step ()
+  ,test
+  (test)
+  :doc "preparation and publication request the same merged tool-audit tuple"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf "(:name \"Unknown\" :args nil)\nFirst result.\n" '(tool . "one"))
+    (mevedel-view-test--insert-data
+     data-buf (mevedel--format-hook-audit-record
+               '(:type tool-hook :phase post-tool :message "Audit"))
+     'mevedel-hook-audit)
+    (mevedel-view-test--insert-data data-buf "Remaining result.\n" '(tool . "one"))
+    (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+      (let ((original (symbol-function 'mevedel-view--tool-segment-entry))
+            prepared published (phase 'prepare))
+        (cl-letf (((symbol-function 'mevedel-view--tool-segment-entry)
+                   (lambda (segment data)
+                     (if (eq phase 'prepare) (push segment prepared) (push segment published))
+                     (funcall original segment data))))
+          (mevedel-view-render-batched-full)
+          (cl-loop repeat 150
+                   until (eq 'finish (plist-get mevedel-view-render--batch :prepare-stage))
+                   do (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+          (setq phase 'publish)
+          (cl-loop repeat 150 while mevedel-view-render--batch do
+                   (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+          (should (= (length prepared) 1))
+          (should published)
+          (should (cl-every (lambda (segment) (equal (car prepared) segment)) published))
+          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))
+  :doc "an interrupted entry resumes without repeating previously committed entries"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf (insert (make-string 30 ?x)))
+    (let* ((segments '((tool 1 10) (tool 10 20) (tool 20 31)))
+           (job (list :data data-buf :view view-buf :plan '(:start 1 :end 31)
+                      :tools-turns (list (list :segments segments)) :tools-segments nil
+                      :tool-cache (make-hash-table :test 'equal) :prepare-stage 'tools))
+           calls)
+      (cl-letf (((symbol-function 'mevedel-view--tool-segment-entry)
+                 (lambda (segment _data)
+                   (push segment calls)
+                   (when (= (cadr segment) 10) (throw 'interrupt nil)))))
+        (catch 'interrupt (mevedel-view-render--plan-tool-step job)))
+      (should (equal (cdr segments) (plist-get job :tools-segments)))
+      (setq calls nil)
+      (cl-letf (((symbol-function 'mevedel-view--tool-segment-entry)
+                 (lambda (segment _data) (push segment calls))))
+        (mevedel-view-render--plan-tool-step job))
+      (should (equal (cdr segments) (nreverse calls)))
+      (should (eq 'finish (plist-get job :prepare-stage))))))
+
+(mevedel-deftest mevedel-view-render-batched-full/newly-remembered-fold ()
+  ,test
+  (test)
+  :doc "publication capture cannot mark a prepared summary-only row as fully expanded"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat "(:name \"Read\" :args (:file_path \"/tmp/remembered.el\"))\n\n"
+             (make-string 800 ?x) "\nUntruncated last body line.\n")
+     '(tool . "remembered"))
+    (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min)) (search-forward "Read:")
+      (mevedel-view-toggle-section)
+      (should (string-search "Untruncated last body line." (buffer-string)))
+      (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+      ;; The old view still displays an expanded row.  Only publication's fresh
+      ;; capture will remember it, after cold tool preparation chose a summary.
+      (mevedel-view-disclosure-reset-state)
+      (mevedel-view-render-batched-full)
+      (cl-loop repeat 150 while mevedel-view-render--batch do
+               (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+      (should-not mevedel-view-render--batch)
+      (should (string-search "Untruncated last body line." (buffer-string)))
+      (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+      (should (= (point) (+ 4 (mevedel-view--input-start)))))))
 
 (mevedel-deftest mevedel-view-render-batched-full/tool-preparation ()
   ,test

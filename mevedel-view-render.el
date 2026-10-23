@@ -339,6 +339,8 @@
 (declare-function mevedel-view-disclosure-state-key
                   "mevedel-view-disclosure"
                   (source vtype &optional previous-key))
+(declare-function mevedel-view-disclosure-state-snapshot
+                  "mevedel-view-disclosure" ())
 (declare-function mevedel-view-disclosure-truncate-line
                   "mevedel-view-disclosure" (text limit))
 (defvar mevedel-view-disclosure--settling-p)
@@ -8557,13 +8559,16 @@ headerless agent history.  Return source limits, turns, summary and variants."
 
 (defun mevedel-view-render--plan-fontify-step (job)
   "Prepare one response's Markdown in JOB without projecting a partial turn.
-Non-response segments are skipped in groups.  The result remains job-local
-until every response has finished and the source is revalidated."
+Non-response segments are skipped in groups.  Completed output enters the
+bounded persistent response cache as well as JOB's publication table."
   (if-let* ((fontify (plist-get job :fontify)))
       (when (mevedel-view--markdown-fontify-job-step fontify 2048)
-        (puthash (plist-get job :fontify-key)
-                 (mevedel-view--markdown-fontify-job-result fontify)
-                 (plist-get job :fontified))
+        (let ((key (plist-get job :fontify-key))
+              (output (mevedel-view--markdown-fontify-job-result fontify)))
+          (when (hash-table-p mevedel-view--response-fontify-cache)
+            (mevedel-view--cache-put mevedel-view--response-fontify-cache key output
+                                    'mevedel-view--response-cache-entries))
+          (puthash key output (plist-get job :fontified)))
         (mevedel-view--markdown-fontify-job-cancel fontify)
         (setf (plist-get job :fontify) nil
               (plist-get job :fontify-key) nil))
@@ -8602,6 +8607,8 @@ until every response has finished and the source is revalidated."
               ;; anchors.  Any intervening view mutation invalidates its entries;
               ;; publication still captures the reader's current state below.
               (plist-get job :tool-state-tick) (buffer-modified-tick)
+              (plist-get job :tool-states)
+              (mevedel-view-disclosure-state-snapshot)
               (plist-get job :prepare-stage) 'tools)))))
 
 (defun mevedel-view-render--plan-tool-step (job)
@@ -8616,18 +8623,29 @@ the reader's disclosure state are checked again before publication."
         (mevedel-view--activity-entry-cache (plist-get job :tool-cache)))
     (while (and (< count 4) (or segments turns))
       (unless segments
-        (setq segments (plist-get (car turns) :segments)
-              turns (cdr turns)))
-      (when-let* ((segment (pop segments))
-                  ((eq (car segment) 'tool)))
+        (setq segments
+              (with-current-buffer data
+                (save-restriction
+                  (narrow-to-region (plist-get plan :start) (plist-get plan :end))
+                  (cl-remove-if-not
+                   (lambda (segment)
+                     (mevedel-view--tool-activity-tool-segment-p segment data))
+                   (mevedel-view--merge-tool-hook-audit-segments
+                    (plist-get (car turns) :segments) data))))
+              turns (cdr turns))
+        (setf (plist-get job :tools-turns) turns
+              (plist-get job :tools-segments) segments))
+      (when-let* ((segment (car segments)))
         (with-current-buffer data
           (save-restriction
             (narrow-to-region (plist-get plan :start) (plist-get plan :end))
             (with-current-buffer (plist-get job :view)
-              (mevedel-view--tool-segment-entry segment data)))))
+              (mevedel-view--tool-segment-entry segment data))))
+        ;; Commit each normalized entry independently.  An interrupted callback
+        ;; may repeat the current entry, never the earlier entries in its group.
+        (setq segments (cdr segments))
+        (setf (plist-get job :tools-segments) segments))
       (setq count (1+ count)))
-    (setf (plist-get job :tools-turns) turns
-          (plist-get job :tools-segments) segments)
     (unless (or turns segments)
       (setf (plist-get job :prepare-stage) 'finish))))
 
@@ -9115,6 +9133,7 @@ In-flight streaming retains synchronous reconciliation of view-only live text."
                       :fontify nil :fontify-key nil
                       :fontified (make-hash-table :test #'equal)
                       :tools-turns nil :tools-segments nil :tool-state-tick nil
+                      :tool-states nil
                       :tool-cache (make-hash-table :test #'equal)
                       :cache-used (make-hash-table :test #'equal)
                       :plan nil :states nil :pending nil :timer nil
@@ -9162,7 +9181,11 @@ Until the complete plan is ready, keep the previous view in place."
           (when (eq (plist-get turn :role) 'user)
             (push turn immediate))))
       (setf (plist-get job :states) states)
-      (unless (eql (buffer-modified-tick) (plist-get job :tool-state-tick))
+      (unless (and (eql (buffer-modified-tick) (plist-get job :tool-state-tick))
+                   ;; The fresh capture above can itself remember choices that
+                   ;; preparation had not seen, without modifying view text.
+                   (equal (mevedel-view-disclosure-state-snapshot)
+                          (plist-get job :tool-states)))
         (clrhash (plist-get job :tool-cache)))
       (unwind-protect
           (progn

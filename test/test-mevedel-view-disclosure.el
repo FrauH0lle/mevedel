@@ -1037,6 +1037,20 @@ the preceding header."
           (should (equal '(child-id) (nthcdr 4 key)))
           (should (= 0 (hash-table-count counts))))))))
 
+(mevedel-deftest mevedel-view-disclosure-state-snapshot ()
+  ,test
+  (test)
+  :doc "snapshots remembered choices without reading view text or losing explicit nil"
+  (with-temp-buffer
+    (mevedel-view-disclosure-initialize)
+    (should-not (mevedel-view-disclosure-state-snapshot))
+    (mevedel-view-disclosure-record-state-for-key '(source tool-summary 1 a) nil)
+    (let ((snapshot (mevedel-view-disclosure-state-snapshot)))
+      (should (equal snapshot '(((source tool-summary 1 a)))))
+      (mevedel-view-disclosure-record-state-for-key '(source tool-summary 1 a) t)
+      (should-not (equal snapshot (mevedel-view-disclosure-state-snapshot)))
+      (should-not (cdar snapshot)))))
+
 (mevedel-deftest mevedel-view-disclosure--next-state-change ()
   ,test
   (test)

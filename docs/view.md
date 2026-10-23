@@ -337,7 +337,11 @@ retains that snapshot through preparation and publication. A later projection
 checks again, so installing missing grammars does not require restarting Emacs.
 Markdown fontification sees each whole response but yields between line-aligned
 regions. Tool entries are prepared in small groups; the job owns and releases
-their private buffers and caches. Once ready, the refresh
+their private buffers and caches. Preparation uses the same merged tool/audit
+source spans as publication and commits its cursor after each normalized entry.
+Completed batch Markdown enters the bounded per-view response cache, so a later
+batch-only projection can reuse it; unfinished output never enters that cache.
+Once ready, the refresh
 renders every turn a displaying window shows, the turns needed to restore
 point, selection, and window anchors, and all chat prompt turns immediately (so
 moving onto pending responses still has an accurate prompt and click target).

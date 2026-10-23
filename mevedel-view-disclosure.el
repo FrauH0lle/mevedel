@@ -293,6 +293,16 @@ Preserve any discriminator from PREVIOUS-KEY while rebasing its source."
        (eq (car key) 'source)
        (equal (nth 3 key) '(in-flight))))
 
+(defun mevedel-view-disclosure-state-snapshot ()
+  "Return an alist snapshot of this view's remembered source fold choices.
+Absent keys remain absent, distinct from an explicitly expanded nil value.
+This reads the state table only, not the rendered view or reader anchors."
+  (let (states)
+    (when (hash-table-p mevedel-view-disclosure--source-states)
+      (maphash (lambda (key value) (push (cons key value) states))
+               mevedel-view-disclosure--source-states))
+    states))
+
 (defun mevedel-view-disclosure--ensure-states ()
   "Return the view-local source-backed collapse-state table."
   (unless (hash-table-p mevedel-view-disclosure--source-states)

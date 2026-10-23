@@ -24,7 +24,8 @@ each remaining suffix again. Restoration reseeds after every toggle because
 even a same-length replacement can change property boundaries. Batch tool
 preparation records a view modification guard rather than capturing the whole
 old view; publication still captures fresh reader/composer and disclosure state,
-and discards prepared tool entries after an intervening view mutation.
+and discards prepared tool entries after an intervening view mutation or a change
+to remembered fold choices, including choices newly remembered by that capture.
 
 Managed Bash output remains on its initiating source-backed row. Routine
 successful empty-input polling rows are suppressed in the view, without removing
@@ -124,7 +125,10 @@ and retained through a batch's preparation and publication; missing grammars are
 not memoized beyond that projection. The plan also indexes trusted fork-point
 records once under its source restriction; assistant headers use ordered lookup
 instead of rescanning the transcript. Variant listing and activation remain
-late-bound to the live session context. Source identity and its full modification
+late-bound to the live session context. Tool preparation uses publication's
+canonical merged tool/audit spans and advances its cursor after each normalized
+entry. Completed batch Markdown output is promoted through the existing bounded
+response-cache owner; partial output is never retained there. Source identity and its full modification
 tick are checked before
 publishing the complete plan. On publication, reader-visible turns and all chat
 prompt turns render first, then remaining response turns fill one per callback.
