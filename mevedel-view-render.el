@@ -2907,19 +2907,26 @@ Call after a successful complete projection, never for an incremental tail."
     (data-buf seg-start seg-end collapsed-only)
   "Return a source-tracked key for DATA-BUF SEG-START..SEG-END rendering.
 COLLAPSED-ONLY distinguishes header and body renderings.  Unchanged source
-characters and provenance reuse the key without copying or hashing payloads."
-  (with-current-buffer data-buf
-    (let ((start (mevedel-view--source-position seg-start))
-          (end (mevedel-view--source-position seg-end)))
-      (let ((key (list data-buf start end
-                       (mevedel-view--source-revision start end)
-                       (and (boundp 'mevedel--session)
-                            (mevedel-view--session-render-state-fingerprint mevedel--session))
-                       (and collapsed-only t)
-                       (mevedel-view--tool-source-properties start end))))
-        (when mevedel-view--tool-cache-used
-          (puthash key t mevedel-view--tool-cache-used))
-        key))))
+characters and provenance reuse the key without copying or hashing payloads.
+Archived rows also depend on the live transcript's terminal completions."
+  (let ((live-data mevedel--data-buffer))
+    (with-current-buffer data-buf
+      (let ((start (mevedel-view--source-position seg-start))
+            (end (mevedel-view--source-position seg-end)))
+        (let ((key (list data-buf start end
+                         (mevedel-view--source-revision start end)
+                         (and (boundp 'mevedel--session)
+                              (mevedel-view--session-render-state-fingerprint mevedel--session))
+                         (and collapsed-only t)
+                         (mevedel-view--tool-source-properties start end)
+                         (and (buffer-live-p live-data)
+                              (not (eq live-data data-buf))
+                              (list live-data
+                                    (with-current-buffer live-data
+                                      (buffer-modified-tick)))))))
+          (when mevedel-view--tool-cache-used
+            (puthash key t mevedel-view--tool-cache-used))
+          key)))))
 
 (defun mevedel-view--collapsed-rendering-p (rendering)
   "Return non-nil when RENDERING initially renders as a collapsed header."
