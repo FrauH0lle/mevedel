@@ -1610,9 +1610,15 @@ the execution boundary owns the session's single unavailable warning"
     (cl-letf (((symbol-function 'mevedel-execution-start-one-shot)
                (lambda (&rest args)
                  (cl-incf child-starts)
-                 (should (file-in-directory-p
-                          (plist-get (cdr args) :workdir)
-                          temporary-file-directory))
+                 (let ((workdir (plist-get (cdr args) :workdir)))
+                   (should (file-directory-p workdir))
+                   ;; `file-in-directory-p' stats the shared temporary root
+                   ;; twice; parallel workers can change its metadata between
+                   ;; those reads.  Check the exact canonical fixture instead.
+                   (should
+                    (equal (file-name-as-directory (file-truename workdir))
+                           (file-name-as-directory
+                            (file-truename eval-directory)))))
                  (apply original-start args))))
       (mevedel-tool-exec--eval
        (lambda (r)
