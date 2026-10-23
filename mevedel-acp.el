@@ -11,6 +11,7 @@
 (require 'acp)
 (require 'cl-lib)
 (require 'seq)
+(require 'mevedel-structs)
 (require 'mevedel-transport)
 
 ;; `mevedel-gptel-stream-bridge'
@@ -26,6 +27,9 @@
 
 (defconst mevedel-acp--stderr-limit 2048
   "Characters of agent stderr retained to explain a process exit.")
+
+(defconst mevedel-acp--stderr-log-limit 65536
+  "Characters of recent agent exits retained in the stderr log.")
 
 (defun mevedel-acp--cancel-timer (connection)
   "Cancel CONNECTION's pending control timeout."
@@ -132,6 +136,34 @@ acp.el's sentinel ignores stop and continue events."
                                             (error-message-string err)))))))
     (funcall (plist-get turn :complete) outcome)))
 
+(defun mevedel-acp--log-stderr (connection message stderr)
+  "Append CONNECTION's exit MESSAGE and STDERR to the agent stderr log.
+The log outlives the warning buffer, which popup managers kill when it is
+dismissed.  It keeps the most recent `mevedel-acp--stderr-log-limit'
+characters and is private to the user: stderr holds host logs.  Return
+the log file, or nil when it cannot be written."
+  (let ((file (file-name-concat mevedel-user-dir "agent-stderr.log")))
+    (condition-case nil
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-buffer
+            (when (file-readable-p file)
+              (insert-file-contents file))
+            (goto-char (point-max))
+            (insert (format "%s %s\n%s\nAgent stderr:\n%s\n\n"
+                            (format-time-string "%F %T")
+                            (plist-get (mevedel-acp-launch connection) :command)
+                            message stderr))
+            (when (> (buffer-size) mevedel-acp--stderr-log-limit)
+              (goto-char (- (point-max) mevedel-acp--stderr-log-limit))
+              (delete-region (point-min) (line-beginning-position 2)))
+            (let ((coding-system-for-write 'utf-8-unix)
+                  (create-lockfiles nil))
+              (with-file-modes #o600
+                (write-region nil nil file nil 'silent))))
+          file)
+      (file-error nil))))
+
 (defun mevedel-acp--shutdown (connection outcome)
   "Close CONNECTION and deliver terminal OUTCOME to its owner."
   (mevedel-acp--wake connection)
@@ -153,8 +185,10 @@ acp.el's sentinel ignores stop and continue events."
 (defun mevedel-acp--fail (connection error)
   "Close CONNECTION after protocol or process ERROR.
 A process exit warns the host with the agent's last stderr output, its only
-explanation.  The outcome message omits it: that text is classified, shown to
-collaboration guests and returned to models, and stderr holds host logs.
+explanation, and appends it to the agent stderr log, which survives the
+warning buffer.  The outcome message names the log but omits the text: that
+message is classified, shown to collaboration guests and returned to models,
+and stderr holds host logs.
 A closed CONNECTION is ignored: `delete-process' runs the sentinel during an
 orderly close, and that exit is no failure."
   (let ((message (if (stringp error) error
@@ -163,8 +197,11 @@ orderly close, and that exit is no failure."
         (stderr (string-trim (or (mevedel-acp-stderr connection) ""))))
     (when (and (not (eq (mevedel-acp-state connection) 'closed))
                process (not (process-live-p process)) (not (string-empty-p stderr)))
-      (display-warning 'mevedel (format "%s\nAgent stderr:\n%s" message stderr))
-      (setq message (concat message "; agent stderr is in *Warnings*")))
+      (let* ((file (mevedel-acp--log-stderr connection message stderr))
+             (where (if file (abbreviate-file-name file) "*Warnings*")))
+        (display-warning 'mevedel (format "%s\nAgent stderr (also in %s):\n%s"
+                                          message where stderr))
+        (setq message (format "%s; agent stderr is in %s" message where))))
     (mevedel-acp--shutdown
      connection (list :status 'error
                       :code (and (listp error) (alist-get 'code error))

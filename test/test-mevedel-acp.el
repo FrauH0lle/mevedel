@@ -17,6 +17,7 @@
   "Run BODY with an ACP peer, optionally resuming SESSION-ID."
   (declare (indent 1) (debug t))
   `(let* ((directory (make-temp-file "mevedel-acp-test-" t))
+          (mevedel-user-dir (file-name-concat directory "user/"))
           ready failure
           (connection
            (mevedel-acp-open
@@ -163,10 +164,17 @@
         (await (lambda () outcomes)))
       (should (= 1 (length outcomes)))
       (should (eq 'error (plist-get (car outcomes) :status)))
-      ;; Host logs stay out of the classified, shared outcome message.
-      (should-not (string-search "fixture crash: native binary missing"
+      (let ((log (file-name-concat mevedel-user-dir "agent-stderr.log")))
+        ;; Host logs stay out of the classified, shared outcome message,
+        ;; which names the log that outlives the warning buffer instead.
+        (should-not (string-search "fixture crash: native binary missing"
+                                   (plist-get (car outcomes) :message)))
+        (should (string-suffix-p (concat "; agent stderr is in " (abbreviate-file-name log))
                                  (plist-get (car outcomes) :message)))
-      (should (string-search "fixture crash: native binary missing" (car warnings)))
+        (should (string-search "fixture crash: native binary missing" (car warnings)))
+        (should (string-search "fixture crash: native binary missing"
+                               (with-temp-buffer (insert-file-contents log) (buffer-string))))
+        (should (= #o600 (file-modes log))))
       (should-error
        (mevedel-acp-prompt connection [((type . "text") (text . "again"))]
                            #'ignore #'ignore))))
@@ -528,8 +536,40 @@
           (await (lambda () (and outcome (mevedel-acp-stderr connection))))
           (should (eq 'success (plist-get outcome :status)))
           ;; `delete-process' runs the agent's sentinel synchronously.
-          (mevedel-acp-close connection))))
+          (mevedel-acp-close connection)
+          (should-not (file-exists-p (file-name-concat mevedel-user-dir "agent-stderr.log"))))))
     (should-not warnings)))
+
+(mevedel-deftest mevedel-acp--log-stderr ()
+  ,test
+  (test)
+  :doc "appends exits after earlier ones and keeps only the most recent text"
+  (let* ((mevedel-user-dir (file-name-as-directory (make-temp-file "mevedel-acp-log-" t)))
+         (connection (mevedel-acp--create :launch '(:command "agent")))
+         (mevedel-acp--stderr-log-limit 200))
+    (unwind-protect
+        (let ((file (mevedel-acp--log-stderr connection "first exit" "old line")))
+          (should (equal (file-name-concat mevedel-user-dir "agent-stderr.log") file))
+          (mevedel-acp--log-stderr connection "second exit" "new line")
+          (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
+            (should (string-search "first exit" text))
+            (should (< (string-search "old line" text) (string-search "new line" text)))
+            (should (string-search " agent\nsecond exit\nAgent stderr:\nnew line\n" text)))
+          (mevedel-acp--log-stderr connection "third exit" (make-string 150 ?x))
+          (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
+            (should (<= (length text) 200))
+            (should-not (string-search "old line" text))
+            (should (string-search (make-string 150 ?x) text))))
+      (delete-directory mevedel-user-dir t)))
+  :doc "an unwritable log returns nil instead of signalling"
+  (let* ((root (make-temp-file "mevedel-acp-log-" t))
+         (mevedel-user-dir (file-name-concat root "blocked/"))
+         (connection (mevedel-acp--create :launch '(:command "agent"))))
+    (unwind-protect
+        (progn
+          (with-temp-file (directory-file-name mevedel-user-dir))
+          (should-not (mevedel-acp--log-stderr connection "exit" "text")))
+      (delete-directory root t))))
 
 (provide 'test-mevedel-acp)
 ;;; test-mevedel-acp.el ends here

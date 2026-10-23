@@ -183,8 +183,10 @@ capture and terminal settlement. Native Claude `PreToolUse`, `PostToolBatch`
 and `SessionStart(compact)` hooks query the same private endpoint for context
 and stop decisions; they are absent from tool discovery. Hook handlers complete
 asynchronously. Event, hook and tool-admission ordering and cancellation follow
-[ADR 0123](adr/0123-keep-turn-authority-in-mevedel.md). A process exit reports
-the agent's last stderr output.
+[ADR 0123](adr/0123-keep-turn-authority-in-mevedel.md). A process exit warns
+with the agent's last stderr output and appends it to the private
+`agent-stderr.log` under `mevedel-user-dir`, which keeps recent exits after the
+warning buffer is dismissed; the turn's error names that log, not the text.
 Native tool calls run the data buffer's `gptel-pre-tool-call-functions` and
 `gptel-post-tool-call-functions` (tool repair already ran in the pipeline), so
 views, collaboration rooms and agent activity observe them as gptel calls.
