@@ -31,6 +31,64 @@
             ".." "benchmark" "mevedel-profiler-optimization.el")))
 
 
+(mevedel-deftest mevedel-benchmark--compiled-harness ()
+  ,test
+  (test)
+  :doc "plain batch byte compilation and cold compiled loading find sibling fixtures"
+  (let* ((root mevedel-benchmark--repository-directory)
+         (temporary (make-temp-file "mevedel-benchmark-compile-test-" t))
+         (benchmark (file-name-concat temporary "benchmark"))
+         (source (file-name-concat benchmark "mevedel-profiler-optimization.el"))
+         (compiled (byte-compile-dest-file source))
+         (emacs (expand-file-name invocation-name invocation-directory)))
+    (unwind-protect
+        (progn
+          (make-directory benchmark)
+          (dolist (name '("mevedel-profiler-optimization.el" "mevedel-view-fixtures.el"))
+            (copy-file (file-name-concat root "benchmark" name)
+                       (file-name-concat benchmark name)))
+          (with-temp-buffer
+            (let ((status
+                   (call-process
+                    emacs nil t nil "--batch" "-Q"
+                    "--eval" (prin1-to-string
+                              `(progn
+                                 (setq load-path ',load-path
+                                       byte-compile-error-on-warn t
+                                       mevedel-benchmark--no-main t)
+                                 (startup-redirect-eln-cache
+                                  ,(file-name-concat temporary "eln"))))
+                    "-f" "batch-byte-compile" source)))
+              (ert-info ((buffer-string))
+                (should (eql status 0))
+                (should (equal "" (buffer-string))))))
+          (should (file-exists-p compiled))
+          (with-temp-buffer
+            (let ((status
+                   (call-process
+                    emacs nil t nil "--batch" "-Q"
+                    "--eval" (prin1-to-string
+                              `(progn
+                                 (setq load-path ',load-path
+                                       mevedel-benchmark--no-main t)
+                                 (startup-redirect-eln-cache
+                                  ,(file-name-concat temporary "eln"))))
+                    "-l" compiled
+                    "--eval" (prin1-to-string
+                              `(progn
+                                 (cl-assert (featurep 'mevedel-view-fixtures))
+                                 (cl-assert (byte-code-function-p
+                                             (symbol-function 'mevedel-benchmark-run)))
+                                 (cl-assert (equal mevedel-benchmark--harness-file
+                                                   ,compiled))
+                                 (cl-assert (equal mevedel-benchmark--repository-directory
+                                                   ,(file-name-as-directory temporary))))))))
+              (ert-info ((buffer-string))
+                (should (eql status 0))
+                (should (equal "" (buffer-string)))))))
+      (delete-directory temporary t))))
+
+
 (mevedel-deftest mevedel-benchmark--projection-history ()
   ,test
   (test)

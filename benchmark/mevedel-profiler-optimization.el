@@ -30,7 +30,8 @@
 (require 'profiler)
 (require 'mevedel-view-fixtures
          (file-name-concat
-          (file-name-directory (or load-file-name buffer-file-name))
+          (file-name-directory
+           (or load-file-name buffer-file-name byte-compile-current-file))
           "mevedel-view-fixtures"))
 
 (defvar mevedel-session--read-only-mode)
