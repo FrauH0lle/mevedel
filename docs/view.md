@@ -332,6 +332,9 @@ place while callbacks restore properties, scan the full canonical source with
 retained parser context, group and annotate turns, and prepare response Markdown
 and tool entries. A complete plan is checked against the source's modification
 tick before publication; changing the source cancels and restarts the job.
+Each projection resolves Markdown mode and grammar availability once; a batch
+retains that snapshot through preparation and publication. A later projection
+checks again, so installing missing grammars does not require restarting Emacs.
 Markdown fontification sees each whole response but yields between line-aligned
 regions. Tool entries are prepared in small groups; the job owns and releases
 their private buffers and caches. Once ready, the refresh

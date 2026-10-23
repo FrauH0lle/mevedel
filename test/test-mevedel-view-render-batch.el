@@ -394,6 +394,42 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
         (should cancelled)
         (should (eq 'prepare (plist-get mevedel-view-render--batch :phase)))))))
 
+(mevedel-deftest mevedel-view-render-batched-full/markdown-snapshot ()
+  ,test
+  (test)
+  :doc "sync and batch probe grammars once and a new projection sees installation"
+  (dolist (batched '(nil t))
+    (mevedel-batch-test--with-history
+      (let ((available nil) (probes 0) (starts 0)
+            (start (symbol-function 'mevedel-view--markdown-fontify-job-start)))
+        (cl-letf (((symbol-function 'treesit-language-available-p)
+                   (lambda (_language &rest _) (cl-incf probes) available))
+                  ((symbol-function 'mevedel-view--fontify-as)
+                   (lambda (text _mode) text))
+                  ((symbol-function 'mevedel-view--markdown-fontify-setup)
+                   (lambda (buffer _mode)
+                     (with-current-buffer buffer (fundamental-mode))))
+                  ((symbol-function 'mevedel-view--markdown-fontify-job-start)
+                   (lambda (text) (cl-incf starts) (funcall start text))))
+          (dotimes (round 2)
+            (setq probes 0)
+            (if batched
+                (progn
+                  (mevedel-view-render-batched-full)
+                  ;; Availability changes between preparation callbacks must not
+                  ;; change this job's key or publication mode mid-projection.
+                  (setq available t)
+                  (cl-loop repeat 150 while mevedel-view-render--batch do
+                           (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+                  (should-not mevedel-view-render--batch))
+              (mevedel-view--full-rerender))
+            (should (= probes (if (zerop round) 1 2)))
+            (when (and batched (zerop round)) (should (zerop starts)))
+            (setq available t))
+          (when batched (should (= starts 6)))
+          (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
+
 (mevedel-deftest mevedel-view-render-batched-full/tool-preparation ()
   ,test
   (test)

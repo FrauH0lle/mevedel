@@ -94,14 +94,21 @@ availability is checked before the mode is ever invoked."
        (treesit-language-available-p 'markdown)
        (treesit-language-available-p 'markdown-inline)))
 
+(defvar mevedel-view--markdown-resolved-mode 'unresolved
+  "Markdown mode snapshot dynamically bound by a projection owner.
+The value `unresolved' requests a fresh availability check; nil is a resolved
+snapshot with missing grammars, not a permanent negative cache.")
+
 (defun mevedel-view--markdown-fontify-mode ()
   "Return the Markdown major mode to fontify view text with, or nil.
 Emacs 31.1 ships `markdown-ts-mode\=', so mevedel needs no Markdown package.
 Returns nil when its grammars are missing, which leaves view text as plain
 unfontified Markdown."
-  (and (fboundp 'markdown-ts-mode)
-       (mevedel-view--markdown-grammars-ready-p)
-       'markdown-ts-mode))
+  (if (eq mevedel-view--markdown-resolved-mode 'unresolved)
+      (and (fboundp 'markdown-ts-mode)
+           (mevedel-view--markdown-grammars-ready-p)
+           'markdown-ts-mode)
+    mevedel-view--markdown-resolved-mode))
 
 (defvar mevedel-view--markdown-fontify-buffer nil
   "Reusable buffer whose major mode fontifies Markdown view text.

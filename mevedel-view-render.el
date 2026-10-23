@@ -8719,7 +8719,10 @@ remains intact; no unclassified placeholder can acquire a wrong prompt."
 SESSION-DATA-BUF supplies live session metadata.  RENDER-VIEW-BUF is
 used for agent transcripts.  DATA-TURN-START-POS identifies the live
 turn.  SAVED-STATES restores matching disclosure state."
-  (let* ((view-buf (if agent-transcript-p render-view-buf
+  (let* ((mevedel-view--markdown-resolved-mode
+          (let ((mevedel-view--markdown-resolved-mode 'unresolved))
+            (mevedel-view--markdown-fontify-mode)))
+         (view-buf (if agent-transcript-p render-view-buf
                      (buffer-local-value 'mevedel--view-buffer data-buf)))
          (plan (mevedel-view--full-rerender-plan
                 data-buf session-data-buf view-buf agent-transcript-p))
@@ -8860,6 +8863,10 @@ turns may follow in callbacks."
          (end (nth 2 entry))
          (insertion (copy-marker start t))
          (mevedel-view--render-insertion-marker insertion)
+         (mevedel-view--markdown-resolved-mode
+          (if (plist-member job :markdown-mode)
+              (plist-get job :markdown-mode)
+            (mevedel-view--markdown-fontify-mode)))
          (mevedel-view--conversation-variant-sessions (plist-get plan :variants))
          (mevedel-transcript--tool-block-index (plist-get job :index))
          (mevedel-transcript-audit--decode-cache (plist-get job :audits))
@@ -9013,7 +9020,8 @@ to DATA's tail, schedule a full projection instead."
         (mevedel-view-render-mutate
          'full-batch
          (lambda ()
-           (let ((mevedel-view-prepare-enabled t)
+           (let ((mevedel-view--markdown-resolved-mode (plist-get job :markdown-mode))
+                 (mevedel-view-prepare-enabled t)
                  (mevedel-view--tool-cache-used (plist-get job :cache-used)))
              ;; Timers can fire inside a yielding writer.  Validate and consume
              ;; the job only after acquiring ownership, never when merely queued.
@@ -9080,6 +9088,9 @@ In-flight streaming retains synchronous reconciliation of view-only live text."
       (mevedel-view-render--full-now)
     (let* ((data (mevedel-view-segments-display-buffer))
            (job (list :data data :view (current-buffer)
+                      :markdown-mode
+                      (let ((mevedel-view--markdown-resolved-mode 'unresolved))
+                        (mevedel-view--markdown-fontify-mode))
                       :live-data mevedel--data-buffer
                       :agent mevedel-view--agent-transcript-p
                       :started (float-time) :phase 'prepare

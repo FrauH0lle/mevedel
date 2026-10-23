@@ -119,7 +119,9 @@ restores source properties, resumes full-context canonical scanning, groups and
 annotates turns, and prepares whole-response Markdown and tool entries across
 callbacks. The scanner and the synchronous correctness path use the same
 classification and repair rules; independent per-chunk classification is not
-trusted. Source identity and its full modification tick are checked before
+trusted. Markdown mode and grammar availability are resolved once per projection
+and retained through a batch's preparation and publication; missing grammars are
+not memoized beyond that projection. Source identity and its full modification tick are checked before
 publishing the complete plan. On publication, reader-visible turns and all chat
 prompt turns render first, then remaining response turns fill one per callback.
 This gives a window moved onto a pending response the correct pinned prompt
