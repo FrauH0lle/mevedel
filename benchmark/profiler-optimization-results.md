@@ -232,3 +232,71 @@ globally minimal multi-edit script. Snapshot copying, derivation and equality
 checks are outside both timings; replay has no product hooks, overlays, marker
 state or graphical redisplay. Timing ratios are diagnostic, not a claimed
 achievable renderer speedup. This report does not gate acceptance.
+
+## Full projection attribution
+
+`full-projection` measures a deterministic forty-exchange source history
+(312,920 characters: prose, Markdown/code panels, 120 tools and 40 reasoning
+blocks), or restores a session directory through the production loader. The
+restored path always makes a private temporary copy, relocates its workspace,
+forces read-only acquisition, and deletes the working copy afterward. The
+fixture itself must remain local, not committed.
+
+Compile the package and harness before running:
+
+```sh
+npx @emacs-eask/cli compile
+npx @emacs-eask/cli emacs --batch -L . \
+  --eval '(setq mevedel-benchmark--no-main t)' \
+  -f batch-byte-compile benchmark/mevedel-profiler-optimization.el
+npx @emacs-eask/cli emacs --batch -L . \
+  -l benchmark/mevedel-profiler-optimization.elc -- \
+  full-projection OUTPUT-DIRECTORY [SESSION-DIRECTORY]
+```
+
+Set `treesit-extra-load-path` before loading the harness if Markdown grammars
+are installed outside Emacs's default search path. Metrics record the resolved
+mode; a nil mode measures the unfontified fallback, not Markdown fontification.
+Bind `mevedel-benchmark--projection-gc-threshold` before loading to compare a
+tuned heap; the default is 800,000 bytes with `gc-cons-percentage` 0.1.
+
+Both synchronous projection and scheduled projection driven deterministically
+to completion get two warmups, seven uninstrumented timing rounds, a separate
+CPU+memory profile, and seven nested exclusive stage-timing rounds. The latter
+record restore, scan, grouping/annotation, fontification, tool preparation,
+reasoning cleanup, turn work, insertion helpers, and remaining publication work.
+GC is included where it occurs. Inline bytecode insertion stays inside turn
+time; named tool insertion and display-property helpers are reported separately.
+The cached-turn partition includes calls to the existing response, reasoning,
+and tool cache owners, including their lookups and misses; uncached-turn time
+includes uncached prompt/code-panel fontification and insertion. This is not a
+cache-hit rate or a predicted speedup. Sync/batch history text and the multiline
+`>` composer draft are checked.
+
+2026-10-23, base package `6d6f4a95`, Emacs 31.1, 80-column batch window,
+installed Markdown grammars: representative root session
+`2026-10-17T08-06-5eea23ca6f19`, current `segment-0001.chat.org`, 3,199,884
+bytes / 3,185,854 restored characters, SHA-256
+`8347f883ad7839abb37f669acf1f22894ea0c3d4c53829f6c49c204c464cd16a`.
+Its canonical scan contains 642 tools, 104 reasoning and 99 mailbox segments.
+
+| Fixture / path | Default-GC median | GC time / collections | Uncached turn share | 64 MiB median | Uncached turn share |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Synthetic synchronous | 433.2 ms | 186.5 ms / 7 | 51.7% | 264.4 ms | 27.1% |
+| Synthetic batched | 428.8 ms | 143.7 ms / 7 | 37.4% | 289.2 ms | 24.9% |
+| Restored synchronous | 745.0 ms | 342.4 ms / 9 | 58.7% | 401.5 ms | 54.3% |
+| Restored batched | 996.6 ms | 472.4 ms / 11 | 39.4% | 508.7 ms | 41.9% |
+
+Shares are medians of each instrumented round's uncached-turn/total ratio,
+not ratios mixing separate timing populations. All 64 MiB timing rounds had
+zero collections. These are repeated full projections with current caches,
+not cold session-load timings, timer-wait latency, or graphical redisplay.
+Restoration during projection measures normalization of already restored
+properties; initial disk loading/hydration is outside the measured workload.
+
+Decision: proceed to the turn-cache design, rather than close the backlog
+entry as immaterial. The real transcript remains well above the approximately
+25% threshold under both GC settings. It does not establish a cache's eventual
+speedup: insertion, source mapping and position-dependent affordances still
+need recreation, and substantial publication/disclosure work remains outside
+the turn renderer. No product cache is implemented by this measurement change.

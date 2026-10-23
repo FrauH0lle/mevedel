@@ -8,7 +8,9 @@
 ;;     -l benchmark/mevedel-profiler-optimization.el -- SCENARIO OUTPUT-DIR
 ;;
 ;; Each scenario writes metrics.el plus native CPU and memory profiler
-;; artifacts below OUTPUT-DIR.
+;; artifacts below OUTPUT-DIR.  full-projection accepts an optional session
+;; directory, copies it privately, and measures synchronous and drained batched
+;; projection.  Compile the package and this harness before measuring it.
 
 ;;; Code:
 
@@ -17,6 +19,7 @@
 (require 'mevedel-file-state)
 (require 'mevedel)
 (require 'mevedel-structs)
+(require 'mevedel-session-persistence)
 (require 'mevedel-telemetry)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
@@ -32,6 +35,9 @@
 
 (defvar mevedel-session--read-only-mode)
 (defvar org-persist-directory)
+(defvar mevedel-benchmark--no-main nil)
+(defvar mevedel-benchmark--projection-gc-threshold 800000
+  "GC threshold for full projection; bind to compare a tuned editor heap.")
 
 (setq org-persist-directory
       (file-name-as-directory
@@ -42,6 +48,9 @@
 (defconst mevedel-benchmark--rounds 5)
 (defconst mevedel-benchmark--harness-file
   (or load-file-name buffer-file-name))
+(defconst mevedel-benchmark--repository-directory
+  (file-name-directory
+   (directory-file-name (file-name-directory mevedel-benchmark--harness-file))))
 
 (defun mevedel-benchmark--median (values)
   "Return the median of numeric VALUES."
@@ -82,11 +91,12 @@
 
 (defun mevedel-benchmark--worktree-diff-sha256 ()
   "Return the SHA-256 digest of the current tracked worktree diff."
-  (with-temp-buffer
-    (unless (zerop (process-file "git" nil t nil
-                                 "diff" "--binary" "HEAD"))
-      (error "Could not read worktree diff"))
-    (secure-hash 'sha256 (current-buffer))))
+  (let ((default-directory mevedel-benchmark--repository-directory))
+    (with-temp-buffer
+      (unless (zerop (process-file "git" nil t nil
+                                  "diff" "--binary" "HEAD"))
+        (error "Could not read worktree diff"))
+      (secure-hash 'sha256 (current-buffer)))))
 
 (defun mevedel-benchmark--measure
     (scenario parameters workload directory &optional observe)
@@ -126,14 +136,16 @@ returns additional counters from one unprofiled workload run."
                    :cpu-samples
                    (mevedel-benchmark--profile-total profiler-cpu-log)
                    :git-head
-                   (car (process-lines "git" "rev-parse" "HEAD"))
+                   (let ((default-directory mevedel-benchmark--repository-directory))
+                     (car (process-lines "git" "rev-parse" "HEAD")))
                    :harness-sha256
                    (mevedel-benchmark--file-sha256
                     mevedel-benchmark--harness-file)
                    :worktree-diff-sha256
                    (mevedel-benchmark--worktree-diff-sha256)
                    :dirty-files
-                   (process-lines "git" "status" "--short")
+                   (let ((default-directory mevedel-benchmark--repository-directory))
+                     (process-lines "git" "status" "--short"))
                    :emacs-version emacs-version
                    :system-configuration system-configuration)
              (and observe (funcall observe)))))
@@ -598,8 +610,238 @@ A 1 MiB transcript precedes the turn and the composer holds a draft."
              (error "Tool burst benchmark moved the composer")))
          metrics)))))
 
-(defun mevedel-benchmark-run (scenario directory)
-  "Run named SCENARIO and write its artifacts below DIRECTORY."
+(defun mevedel-benchmark--projection-history ()
+  "Insert forty deterministic mixed exchanges into the current data buffer."
+  (dotimes (index 40)
+    (insert (format "* Prompt %d\nExplain the change and check its invariants.\n\n" index))
+    (let ((start (point)))
+      (insert "#+begin_reasoning\nCompare the alternatives, preserve source identity, and verify the result.\n#+end_reasoning\n")
+      (put-text-property start (point) 'gptel 'reasoning))
+    (dotimes (tool 3)
+      (let ((start (point)))
+        (insert (format "#+begin_tool (Read :file_path \"src/file-%d-%d.el\")\n(:name \"Read\" :args (:file_path \"src/file-%d-%d.el\"))\n\n" index tool index tool)
+                (make-string 2048 (+ ?a tool)) "\n#+end_tool\n")
+        (put-text-property start (point) 'gptel
+                           (cons 'tool (format "projection-%d-%d" index tool)))))
+    (let ((start (point)))
+      (insert (format "## Result %d\n\nThe implementation preserves **source identity** and keeps the draft intact.\n\n" index))
+      (dotimes (_ 8)
+        (insert "- Check the bounded scan and its _unchanged_ suffix.\n- Keep the observable result, not a second durable model.\n\n```elisp\n(+ 1 2)\n```\n\n"))
+      (put-text-property start (point) 'gptel 'response))
+    (insert "\n\n")))
+
+(defun mevedel-benchmark--projection-drain ()
+  "Start scheduled full projection and drive its callbacks to completion.
+No sleeps or timer dispatch are needed.  Fail on recovery to synchronous work."
+  (let ((steps 0))
+    (cl-letf (((symbol-function 'mevedel-view-render--full-now)
+               (lambda (&rest _) (error "Batched projection fell back"))))
+      (mevedel-view-render-batched-full)
+      (while mevedel-view-render--batch
+        (when (> (cl-incf steps) 100000)
+          (error "Batched projection did not finish"))
+        (mevedel-view-render--batch-step
+         (current-buffer) mevedel-view-render--batch)))
+    steps))
+
+(defconst mevedel-benchmark--projection-stages
+  '((mevedel-transcript-restore-properties . restore)
+    (mevedel-transcript-segments . scan)
+    (mevedel-transcript-scan-start . scan)
+    (mevedel-transcript-scan-step . scan)
+    (mevedel-transcript-scan-result . scan)
+    (mevedel-view--group-transcript-turns . group)
+    (mevedel-view--group-into-turns . group)
+    (mevedel-view-render--annotate-directive-turn . group)
+    (mevedel-view--directive-ranges . group)
+    (mevedel-view--directive-boundary-segment-p . group)
+    (mevedel-view--render-turn . turn)
+    (mevedel-view--fontify-response . response-cache)
+    (mevedel-view-render--plan-fontify-step . response-cache)
+    (mevedel-view--clean-reasoning-text . reasoning-cache)
+    (mevedel-view--segment-rendering . tool-cache)
+    (mevedel-view-render--plan-tool-step . tool-cache)
+    (mevedel-view--fontify-as . markdown)
+    (mevedel-view--markdown-fontify-job-start . markdown)
+    (mevedel-view--markdown-fontify-job-step . markdown)
+    (mevedel-view--markdown-fontify-job-result . markdown)
+    (mevedel-view--insert-rendered-tool . insertion)
+    (mevedel-view-render-add-display-properties . insertion))
+  "Instrumented boundaries; nested times are charged only to the inner stage.
+Cache categories include lookup and misses, not just successful cache hits.")
+
+(defun mevedel-benchmark--projection-attribution (workload &optional stages)
+  "Time WORKLOAD with nested exclusive timing wrappers around STAGES.
+Return seconds and call counts.  Insertion helpers are measured inside turns;
+inline bytecode insertion remains in turn time.  Publication is the
+unattributed remainder, including preservation, reset, and batch bookkeeping."
+  (let ((times (make-hash-table)) (turn-times (make-hash-table))
+        (counts (make-hash-table)) (turn-depth 0) (cache-depth 0)
+        (uncached-turn 0.0) (cached-turn 0.0)
+        (category 'publication) (since (float-time))
+        (stages (or stages mevedel-benchmark--projection-stages)))
+    (cl-labels
+        ((charge ()
+           (let ((now (float-time)))
+             (puthash category (+ (gethash category times 0) (- now since)) times)
+             (when (> turn-depth 0)
+               (puthash category (+ (gethash category turn-times 0) (- now since))
+                        turn-times)
+               (if (> cache-depth 0)
+                   (cl-incf cached-turn (- now since))
+                 (cl-incf uncached-turn (- now since))))
+             (setq since now)))
+         (install (rest)
+           (if (null rest)
+               (progn
+                 (setq since (float-time))
+                 (prog1 (funcall workload) (charge)))
+             (let* ((symbol (caar rest)) (kind (cdar rest))
+                    (original (symbol-function symbol)))
+               (cl-letf (((symbol-function symbol)
+                          (lambda (&rest args)
+                            (if (and (eq kind 'insertion) (zerop turn-depth))
+                                (apply original args)
+                              (charge)
+                              (let ((parent category)
+                                    (depth turn-depth)
+                                    (cached-depth cache-depth))
+                                (setq category kind)
+                                (when (eq kind 'turn) (cl-incf turn-depth))
+                                (when (memq kind '(response-cache reasoning-cache tool-cache))
+                                  (cl-incf cache-depth))
+                                (puthash kind (1+ (gethash kind counts 0)) counts)
+                                (unwind-protect (apply original args)
+                                  (charge)
+                                  (setq category parent turn-depth depth
+                                        cache-depth cached-depth)))))))
+                 (install (cdr rest)))))))
+      ;; Installing and restoring wrappers is not part of projection time.
+      (install stages))
+    (let (seconds inside-turn calls)
+      (maphash (lambda (key value) (push (cons key value) seconds)) times)
+      (maphash (lambda (key value) (push (cons key value) inside-turn)) turn-times)
+      (maphash (lambda (key value) (push (cons key value) calls)) counts)
+      (list :seconds seconds :inside-turn-seconds inside-turn :calls calls
+            :turn-uncached-seconds uncached-turn
+            :turn-cached-seconds cached-turn))))
+
+(defun mevedel-benchmark--projection-measure (data view directory parameters)
+  "Measure DATA's projection in VIEW below DIRECTORY with PARAMETERS."
+  (with-current-buffer view
+    (setq parameters
+          (append parameters
+                  (list :gc-cons-threshold gc-cons-threshold
+                        :gc-cons-percentage gc-cons-percentage
+                        :markdown-mode (mevedel-view--markdown-fontify-mode)
+                        :window-width (window-body-width)
+                        :segment-counts
+                        (let ((counts (make-hash-table)))
+                          (with-current-buffer data
+                            (dolist (segment (mevedel-transcript-segments
+                                              (point-min) (point-max)))
+                              (cl-incf (gethash (car segment) counts 0))))
+                          (let (result)
+                            (maphash (lambda (key value)
+                                       (push (cons key value) result)) counts)
+                            result)))))
+    (goto-char (mevedel-view--input-start))
+    (insert "> benchmark draft\nsecond line")
+    (goto-char (+ (mevedel-view--input-start) 4))
+    (set-window-point (selected-window) (point))
+    (let ((mevedel-benchmark--rounds 7) results reference)
+      (dolist (path '(synchronous batched))
+        (let* ((workload (if (eq path 'synchronous)
+                             (lambda () (mevedel-view--full-rerender data))
+                           #'mevedel-benchmark--projection-drain))
+               (metrics
+                (mevedel-benchmark--measure
+                 'full-projection (append parameters (list :path path))
+                 workload (file-name-concat directory (symbol-name path))
+                 (lambda ()
+                   (let (rounds)
+                     (dotimes (_ 7)
+                       (garbage-collect)
+                       (push (mevedel-benchmark--projection-attribution workload)
+                             rounds))
+                     (list :attribution-rounds (nreverse rounds)))))))
+          (unless (and (equal (mevedel-view--input-text)
+                              "> benchmark draft\nsecond line")
+                       (= (point) (+ (mevedel-view--input-start) 4)))
+            (error "Projection benchmark moved the composer"))
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (when (and reference (not (equal text reference)))
+              (error "Batched and synchronous projection differ"))
+            (setq reference text)
+            (setq metrics (append metrics (list :history-sha256
+                                               (secure-hash 'sha256 text)))))
+          (mevedel-benchmark--write-metrics
+           (file-name-concat directory (symbol-name path)) metrics)
+          (push (cons path metrics) results)))
+      (mevedel-benchmark--write-metrics directory (nreverse results)))))
+
+(defun mevedel-benchmark--projection-restored (directory source)
+  "Measure a private copy of session directory SOURCE below DIRECTORY.
+Use the production restore entry point with a temporary project workspace.
+Force read-only acquisition: no lease or repair writes, even on the copy."
+  (let* ((root (make-temp-file "mevedel-projection-" t))
+         (copy (file-name-concat root "session"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id root :root root :name "projection"))
+         data view session)
+    (unwind-protect
+        (progn
+          (copy-directory source copy nil t t)
+          ;; A copied project keeps its durable identity, not its original root.
+          (let* ((publication (mevedel-session-publication-read copy))
+                 (sidecar (mevedel-session-persistence-load-sidecar
+                           (plist-get publication :sidecar)))
+                 (identity (plist-get (plist-get sidecar :workspace) :workspace-id))
+                 (identity-path (file-name-concat root ".mevedel" "workspace-id")))
+            (make-directory (file-name-directory identity-path) t)
+            (with-temp-file identity-path (insert identity "\n")))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-lock-acquire)
+                     (lambda (&rest _) nil)))
+            (setq data (mevedel-session-persistence-restore
+                        copy "benchmark" nil workspace)))
+          (setq session (buffer-local-value 'mevedel--session data)
+                view (buffer-local-value 'mevedel--view-buffer data))
+          (save-window-excursion
+            (switch-to-buffer view)
+            (mevedel-benchmark--projection-measure
+             data view directory
+             (list :fixture 'restored :session-id (mevedel-session-session-id session)
+                   :segment (mevedel-session-current-segment session)
+                   :characters (with-current-buffer data (buffer-size))
+                   :source-sha256 (with-current-buffer data
+                                    (secure-hash 'sha256 (current-buffer)))))))
+      (dolist (buffer (buffer-list))
+        (when (or (eq buffer view)
+                  (and session (eq (buffer-local-value 'mevedel--session buffer)
+                                   session)))
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (delete-directory root t))))
+
+(defun mevedel-benchmark--full-projection (directory &optional session-directory)
+  "Measure full projection below DIRECTORY, optionally from SESSION-DIRECTORY."
+  (when (interpreted-function-p (symbol-function 'mevedel-view--render-turn))
+    (error "Full projection requires byte-compiled package code"))
+  (let ((gc-cons-threshold mevedel-benchmark--projection-gc-threshold)
+        (gc-cons-percentage 0.1))
+    (if session-directory
+        (mevedel-benchmark--projection-restored directory session-directory)
+      (mevedel-benchmark--with-view
+       (lambda (data view)
+         (with-current-buffer data (mevedel-benchmark--projection-history))
+         (mevedel-benchmark--projection-measure
+          data view directory (list :fixture 'synthetic :exchanges 40
+                                    :characters (with-current-buffer data
+                                                  (buffer-size)))))))))
+
+(defun mevedel-benchmark-run (scenario directory &optional session-directory)
+  "Run named SCENARIO below DIRECTORY, optionally using SESSION-DIRECTORY."
   (pcase scenario
     ("retry-gap" (mevedel-benchmark--retry-gap directory))
     ("prompt-redraw" (mevedel-benchmark--prompt-redraw directory))
@@ -609,16 +851,20 @@ A 1 MiB transcript precedes the turn and the composer holds a draft."
      (mevedel-benchmark--telemetry-perturbation directory))
     ("tool-segments" (mevedel-benchmark--tool-segments directory))
     ("tool-burst" (mevedel-benchmark--tool-burst directory))
+    ("full-projection"
+     (mevedel-benchmark--full-projection directory session-directory))
     (_ (error "Unknown benchmark scenario: %s" scenario))))
 
-(when noninteractive
+(when (and noninteractive (not mevedel-benchmark--no-main))
   (when (equal (car command-line-args-left) "--")
     (pop command-line-args-left))
   (let ((scenario (pop command-line-args-left))
-        (directory (pop command-line-args-left)))
-    (unless (and scenario directory (null command-line-args-left))
-      (error "Usage: ... -- SCENARIO OUTPUT-DIR"))
-    (prin1 (mevedel-benchmark-run scenario (expand-file-name directory)))
+        (directory (pop command-line-args-left))
+        (session (pop command-line-args-left)))
+    (unless (and scenario directory (null command-line-args-left)
+                 (or (null session) (equal scenario "full-projection")))
+      (error "Usage: ... -- SCENARIO OUTPUT-DIR [SESSION-DIRECTORY]"))
+    (prin1 (mevedel-benchmark-run scenario (expand-file-name directory) session))
     (terpri)))
 
 (provide 'mevedel-profiler-optimization)
