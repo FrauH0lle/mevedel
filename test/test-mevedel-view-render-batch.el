@@ -191,6 +191,38 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
     (should-not (string-search "Loading conversation turn" (buffer-string)))
     (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))
 
+(mevedel-deftest mevedel-view-render--plan-fontify-step/disclosure ()
+  ,test
+  (test)
+  :doc "tool preparation records a mutation guard without capturing the view"
+  (with-temp-buffer
+    (insert "old view")
+    (let ((job (list :turns nil :fontify nil :fontify-turns nil
+                     :fontify-segments nil :tools-turns nil :tool-state-tick nil
+                     :prepare-stage 'fontify)))
+      (cl-letf (((symbol-function 'mevedel-view-disclosure-capture-state)
+                 (lambda (&rest _) (ert-fail "Unexpected preparation capture"))))
+        (mevedel-view-render--plan-fontify-step job))
+      (should (eq 'tools (plist-get job :prepare-stage)))
+      (should (eql (buffer-modified-tick) (plist-get job :tool-state-tick)))
+      (put-text-property 1 2 'mevedel-view-collapsed t)
+      (should-not (eql (buffer-modified-tick) (plist-get job :tool-state-tick)))))
+  :doc "publication invalidates prepared tools after a newer draft edit"
+  (mevedel-batch-test--with-history
+    (mevedel-view-render-batched-full)
+    (cl-loop repeat 100
+             until (eq 'finish (plist-get mevedel-view-render--batch :prepare-stage))
+             do (mevedel-view-render--batch-step view-buf mevedel-view-render--batch))
+    (let* ((job mevedel-view-render--batch)
+           (cache (plist-get job :tool-cache)))
+      (puthash 'sentinel t cache)
+      (goto-char (point-max)) (insert " newer")
+      (mevedel-view-render--batch-step view-buf job)
+      (should-not (gethash 'sentinel cache))
+      (should (equal "> draft\nsecond line newer" (mevedel-view--input-text)))
+      (cl-loop repeat 30 while mevedel-view-render--batch do
+               (mevedel-view-render--batch-step view-buf mevedel-view-render--batch)))))
+
 (mevedel-deftest mevedel-view-render-batched-full/other-writers ()
   ,test
   (test)

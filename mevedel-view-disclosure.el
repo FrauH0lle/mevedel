@@ -341,14 +341,21 @@ When no saved state exists, return RENDERING unchanged."
                    :initially-collapsed-p (cdr entry))
       rendering)))
 
-(defun mevedel-view-disclosure--next-state-change (pos limit)
-  "Return the next fold-relevant property change after POS before LIMIT."
-  (let ((next limit))
+(defun mevedel-view-disclosure--next-state-change (pos limit boundaries)
+  "Return the next fold-relevant property change after POS before LIMIT.
+BOUNDARIES is a three-element vector, initially zeroed, retaining the next
+source, type and mailbox boundary.  Advance POS monotonically with the same
+LIMIT, and clear the vector after a toggle can change text or properties."
+  (let ((next limit)
+        (index 0))
     (dolist (prop '(mevedel-view-source
                     mevedel-view-type
                     mevedel-view-mailbox-card))
-      (when-let* ((change (next-single-property-change pos prop nil limit)))
-        (setq next (min next change))))
+      (when (<= (aref boundaries index) pos)
+        (aset boundaries index
+              (or (next-single-property-change pos prop nil limit) limit)))
+      (setq next (min next (aref boundaries index))
+            index (1+ index)))
     next))
 
 (defun mevedel-view-disclosure--mailbox-bounds-at (position)
@@ -442,6 +449,7 @@ shown in its default state is not a choice; remembering it would later
 override a better default, such as a new group staying open over an open row."
   (let ((mailbox-counts (make-hash-table :test 'equal))
         (seen (make-hash-table :test 'equal))
+        (boundaries (make-vector 3 0))
         (states nil)
         (pos from))
     (while (< pos to)
@@ -452,7 +460,8 @@ override a better default, such as a new group staying open over an open row."
                    (mevedel-view-disclosure--mailbox-bounds-at pos)))
              (next (if mailbox-bounds
                        (min to (cdr mailbox-bounds))
-                     (mevedel-view-disclosure--next-state-change pos to)))
+                     (mevedel-view-disclosure--next-state-change
+                      pos to boundaries)))
              (key (mevedel-view-disclosure--state-key-at pos mailbox-counts)))
         (when (and key (not (gethash key seen)))
           (let ((state (and collapsed t)))
@@ -485,6 +494,7 @@ knows the freshly rendered span was rewritten after insertion."
       (let ((mailbox-counts (make-hash-table :test 'equal))
             (to-marker (copy-marker to t))
             (wanted (make-hash-table :test 'equal))
+            (boundaries (make-vector 3 0))
             (toggled nil))
         ;; A live turn holds hundreds of sections; look each one up once.
         (dolist (entry (reverse states))
@@ -527,7 +537,10 @@ knows the freshly rendered span was rewritten after insertion."
                        ((cdr entry)
                         (mevedel-view-disclosure--collapse-now source vtype))
                        (t
-                        (mevedel-view-disclosure--expand-now source vtype))))
+                        (mevedel-view-disclosure--expand-now source vtype)))
+                      ;; Even a length-preserving replacement can move property
+                      ;; boundaries.  Only unchanged runs may reuse the cursor.
+                      (fillarray boundaries 0))
                     (setq pos
                           (if mailbox-bounds
                               (min (marker-position to-marker)
@@ -535,7 +548,7 @@ knows the freshly rendered span was rewritten after insertion."
                                              pos))
                                        (cdr mailbox-bounds)))
                             (mevedel-view-disclosure--next-state-change
-                             pos (marker-position to-marker)))))))
+                             pos (marker-position to-marker) boundaries))))))
               toggled)
           (set-marker to-marker nil))))))
 

@@ -8586,9 +8586,10 @@ until every response has finished and the source is revalidated."
             (plist-get job :fontify-segments) segments)
       (unless (or turns segments (plist-get job :fontify))
         (setf (plist-get job :tools-turns) (plist-get job :turns)
-              (plist-get job :tool-states)
-              (mevedel-view-disclosure-capture-state
-               (point-min) (mevedel-view--input-marker-position))
+              ;; Preparation reads remembered fold choices, not reader/composer
+              ;; anchors.  Any intervening view mutation invalidates its entries;
+              ;; publication still captures the reader's current state below.
+              (plist-get job :tool-state-tick) (buffer-modified-tick)
               (plist-get job :prepare-stage) 'tools)))))
 
 (defun mevedel-view-render--plan-tool-step (job)
@@ -9088,7 +9089,7 @@ In-flight streaming retains synchronous reconciliation of view-only live text."
                       :fontify-turns nil :fontify-segments nil
                       :fontify nil :fontify-key nil
                       :fontified (make-hash-table :test #'equal)
-                      :tools-turns nil :tools-segments nil :tool-states nil
+                      :tools-turns nil :tools-segments nil :tool-state-tick nil
                       :tool-cache (make-hash-table :test #'equal)
                       :cache-used (make-hash-table :test #'equal)
                       :plan nil :states nil :pending nil :timer nil
@@ -9136,7 +9137,7 @@ Until the complete plan is ready, keep the previous view in place."
           (when (eq (plist-get turn :role) 'user)
             (push turn immediate))))
       (setf (plist-get job :states) states)
-      (unless (equal states (plist-get job :tool-states))
+      (unless (eql (buffer-modified-tick) (plist-get job :tool-state-tick))
         (clrhash (plist-get job :tool-cache)))
       (unwind-protect
           (progn

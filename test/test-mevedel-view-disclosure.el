@@ -1037,6 +1037,26 @@ the preceding header."
           (should (equal '(child-id) (nthcdr 4 key)))
           (should (= 0 (hash-table-count counts))))))))
 
+(mevedel-deftest mevedel-view-disclosure--next-state-change ()
+  ,test
+  (test)
+  :doc "retains eq boundaries across monotone steps, skips, and a bounded limit"
+  (with-temp-buffer
+    (insert "abcdefghijkl")
+    (let ((boundaries (make-vector 3 0))
+          (first (cons 1 2))
+          (second (cons 1 2)))
+      (should-not (eq first second))
+      (put-text-property 1 5 'mevedel-view-source first)
+      (put-text-property 5 13 'mevedel-view-source second)
+      (put-text-property 3 7 'mevedel-view-type 'response)
+      (put-text-property 9 13 'mevedel-view-mailbox-card t)
+      (should (= 3 (mevedel-view-disclosure--next-state-change 1 11 boundaries)))
+      (should (= 5 (mevedel-view-disclosure--next-state-change 3 11 boundaries)))
+      ;; A mailbox skip may jump past a retained boundary.
+      (should (= 9 (mevedel-view-disclosure--next-state-change 8 11 boundaries)))
+      (should (= 11 (mevedel-view-disclosure--next-state-change 9 11 boundaries))))))
+
 (mevedel-deftest mevedel-view-disclosure-capture-state ()
   ,test
   (test)
@@ -1177,7 +1197,75 @@ the preceding header."
         (mevedel-view-disclosure-capture-state
          (point-min) mevedel-view--input-marker)
         (should (eq t (cdr (mevedel-view-disclosure-state-entry
-                            tool 'tool-summary))))))))
+                            tool 'tool-summary)))))))
+
+  :doc "constant properties traverse formatted spans once in capture and matching restore"
+  (dolist (constant '(mevedel-view-source mevedel-view-type))
+    (with-temp-buffer
+      (insert (make-string (+ 16 (* 64 64)) ?x))
+      (let ((from 9)
+            (to (+ 9 (* 64 64)))
+            (source (cons 1 2))
+            (primitive (symbol-function 'next-single-property-change))
+            states)
+        (dotimes (i 64)
+          (let* ((start (+ from (* i 64)))
+                 (type (if (or (eq constant 'mevedel-view-type)
+                               (zerop (% i 2)))
+                           'tool-summary 'thinking-summary)))
+            (add-text-properties
+             start (+ start 64)
+             (list 'mevedel-view-source
+                   ;; Equal but non-eq sources must still delimit runs.
+                   (if (eq constant 'mevedel-view-source) source (cons 1 2))
+                   'mevedel-view-type type
+                   'mevedel-view-source-key (list 'source type i 'fixed)
+                   'mevedel-view-collapsed t))))
+        ;; Thousands of unrelated property runs make repeated suffix walks costly.
+        (dotimes (i (- to from))
+          (put-text-property (+ from i) (+ from i 1)
+                             'face (if (zerop (% i 2)) 'bold 'italic)))
+        (dolist (operation '(capture restore))
+          (let ((distance (make-hash-table :test #'eq))
+                (calls (make-hash-table :test #'eq)))
+            (cl-letf (((symbol-function 'next-single-property-change)
+                       (lambda (pos prop &optional object limit)
+                         (when (memq prop '(mevedel-view-source mevedel-view-type
+                                           mevedel-view-mailbox-card))
+                           (should (= to limit))
+                           (puthash prop (1+ (gethash prop calls 0)) calls))
+                         (let ((next (funcall primitive pos prop object limit)))
+                           (when (memq prop '(mevedel-view-source mevedel-view-type
+                                             mevedel-view-mailbox-card))
+                             (puthash prop (+ (gethash prop distance 0)
+                                              (- (or next limit) pos)) distance))
+                           next))))
+              (if (eq operation 'capture)
+                  (setq states (mevedel-view-disclosure-capture-state from to))
+                (should-not (mevedel-view-disclosure-restore-state from to states))))
+            (should (= 64 (length states)))
+            (should (equal (number-sequence 63 0 -1)
+                           (mapcar (lambda (entry) (nth 2 (car entry))) states)))
+            (should (= 1 (gethash constant calls)))
+            (should (= 1 (gethash 'mevedel-view-mailbox-card calls)))
+            (dolist (prop '(mevedel-view-source mevedel-view-type
+                            mevedel-view-mailbox-card))
+              (should (<= (gethash prop distance) (- to from)))))))))
+
+  :doc "duplicate keys keep the first display occurrence's state"
+  (with-temp-buffer
+    (let ((key '(source tool-summary 1 fixed)))
+      (insert (propertize "first" 'mevedel-view-source (cons 1 2)
+                          'mevedel-view-type 'tool-summary
+                          'mevedel-view-source-key key
+                          'mevedel-view-collapsed nil)
+              (propertize "second" 'mevedel-view-source (cons 1 2)
+                          'mevedel-view-type 'tool-summary
+                          'mevedel-view-source-key key
+                          'mevedel-view-collapsed t))
+      (should (equal (list (cons key nil))
+                     (mevedel-view-disclosure-capture-state
+                      (point-min) (point-max)))))))
 
 (mevedel-deftest mevedel-view-disclosure--default-collapsed-p ()
   ,test
@@ -1191,6 +1279,46 @@ the preceding header."
 (mevedel-deftest mevedel-view-disclosure-restore-state ()
   ,test
   (test)
+  :doc "reseeds boundaries after real toggles grow and shrink several rows"
+  (let ((mevedel-view-tool-group-collapse-threshold 0))
+    (mevedel-view-test--with-buffers
+      (mevedel-view-test--insert-data data-buf "Prompt\n" nil)
+      (dotimes (i 3)
+        (mevedel-view-test--insert-data
+         data-buf
+         (format "(:name \"Read\" :args (:file_path \"/tmp/%d.el\"))\n\nbody %d\n%s\n"
+                 i i (make-string (+ 300 (* i 100)) ?x))
+         (cons 'tool (format "restore-%d" i))))
+      (mevedel-view-test--insert-data data-buf "Trailing response.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 4)
+        (let* ((collapsed (mevedel-view-disclosure-capture-state
+                           (point-min) mevedel-view--input-marker))
+               (expanded (mapcar (lambda (entry) (cons (car entry) nil)) collapsed))
+               (short-length (buffer-size)))
+          (dotimes (_ 2)
+            ;; First alist occurrence wins even if a later duplicate disagrees.
+            (should (mevedel-view-disclosure-restore-state
+                     (point-min) (marker-position mevedel-view--input-marker)
+                     (append expanded collapsed)))
+            (should (> (buffer-size) (+ short-length 800)))
+            (dotimes (i 3)
+              (should (= 1 (mevedel-view-test--count-substring
+                            (format "body %d" i) (buffer-string)))))
+            (should (equal expanded (mevedel-view-disclosure-capture-state
+                                    (point-min) mevedel-view--input-marker)))
+            (should (mevedel-view-disclosure-restore-state
+                     (point-min) (marker-position mevedel-view--input-marker) collapsed))
+            (should (= short-length (buffer-size)))
+            (dotimes (i 3)
+              (should-not (string-search (format "body %d" i) (buffer-string))))
+            (should (equal collapsed (mevedel-view-disclosure-capture-state
+                                     (point-min) mevedel-view--input-marker)))
+            (should (string-search "Trailing response." (buffer-string)))
+            (should (equal "> keep\nsecond line" (mevedel-view--input-text)))
+            (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
+
   :doc "returns non-nil only when a section was actually toggled"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data

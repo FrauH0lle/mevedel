@@ -18,6 +18,13 @@ geometrically only when no boundary is found. A constant property's search must
 not scan the remaining suffix again at every changing source boundary. C owns
 interval traversal across unrelated formatting; it does not create reader runs,
 and values retain `eq` boundary semantics.
+Disclosure capture and restoration likewise retain the next source, role and
+mailbox-card boundary, advancing only consumed boundaries instead of searching
+each remaining suffix again. Restoration reseeds after every toggle because
+even a same-length replacement can change property boundaries. Batch tool
+preparation records a view modification guard rather than capturing the whole
+old view; publication still captures fresh reader/composer and disclosure state,
+and discards prepared tool entries after an intervening view mutation.
 
 Managed Bash output remains on its initiating source-backed row. Routine
 successful empty-input polling rows are suppressed in the view, without removing
