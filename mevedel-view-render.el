@@ -4620,7 +4620,8 @@ operations call their owned implementations rather than entering here again."
                            ;; update must not synchronously finish the batch.
                            (when (and mevedel-view-render--batch
                                       (not (memq work-key
-                                                 '(full-batch status interaction))))
+                                                 '(full-batch status interaction
+                                                   background-elapsed))))
                              (mevedel-view-render-cancel-batch)
                              (unless (eq work-key 'full)
                                (mevedel-view-render--full-now)))

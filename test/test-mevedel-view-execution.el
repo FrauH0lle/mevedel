@@ -11,8 +11,11 @@
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view)
+(require 'mevedel-view-agent)
 (require 'mevedel-view-execution)
 (require 'mevedel-view-audit)
+(require 'mevedel-view-render)
+(require 'mevedel-view-stream)
 (require 'mevedel-execution)
 (require 'mevedel-execution-spool)
 (require 'mevedel-agents)
@@ -125,7 +128,9 @@ mouse events in them, which later interactive calls would read."
                      (list :execution-id "e1" :owner "/root/counter" :yielded t
                            :state 'running :command "make test" :description "Run tests"
                            :started-at 30.0)))
-    (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+    (cl-letf (((symbol-function 'float-time)
+               (lambda (&optional time) (if time (time-convert time 'integer) 60.0)))
+              ((symbol-function 'mevedel-view--agent-status-collect)
                (lambda ()
                  (list (list :path "/root/counter" :status 'running :depth 0
                              :model-metadata '(:model "opus" :effort "medium")
@@ -141,11 +146,11 @@ mouse events in them, which later interactive calls would read."
                  " ─── background work · 1 blocked · 3 agents · 1 command · 1 monitor [-] ─"
                  text))
         (should (string-search
-                 (concat "  ▸ Running   bash     Run tests · /root/counter\n"
-                         "  ▸ Watching  monitor  test ticker · 1 event\n"
-                         "  ▸ Running   agent    /root/counter · opus:medium\n"
-                         "    ▸ Running   agent    /root/counter/sub\n"
-                         "  ▸ Blocked   agent    /root/reviewer · waiting for permission\n")
+                 (concat "  ▸ Running   bash     Run tests · 30s · /root/counter\n"
+                         "  ▸ Watching  monitor  test ticker · 40s · 1 event\n"
+                         "  ▸ Running   agent    /root/counter · 50s · opus:medium\n"
+                         "    ▸ Running   agent    /root/counter/sub · 10s\n"
+                         "  ▸ Blocked   agent    /root/reviewer · 55s · waiting for permission\n")
                  text)))))
   :doc "equal starts keep a held agent and retained execution in place across completion"
   (mevedel-view-execution-test--with-view
@@ -1573,6 +1578,181 @@ mouse events in them, which later interactive calls would read."
                   ((:terminal-p t :state lost) . "Output unavailable.")
                   ((:output-tail "" :output-bytes 10) . "Output unavailable.")))
     (should (string-search (cdr case) (mevedel-view-execution--preview (car case))))))
+
+(mevedel-deftest mevedel-view-execution-tick ()
+  ,test
+  (test)
+  :doc "idle-root Bash, Monitor and agent rows share one metadata timer and preserve the draft"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (let ((clock 59.0)
+            (original-float-time (symbol-function 'float-time))
+            (mevedel-view-spinner-animate nil)
+            (mevedel-view-execution--layout-width 65))
+        (setf (plist-get (car live) :started-at) 0.0)
+        (setf (plist-get (car live) :description)
+              "Run the complete enormous regression suite across every supported environment")
+        (setq live (append live
+                           (list (list :execution-id "m1" :owner "/root" :yielded t
+                                       :state 'running :kind 'monitor :started-at 0.0
+                                       :description "Watch quiet server" :event-count 0))))
+        (cl-letf (((symbol-function 'float-time)
+                   (lambda (&optional time)
+                     (if time (funcall original-float-time time) clock)))
+                  ((symbol-function 'window-end) (lambda (&rest _) (point-max)))
+                  ((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda () (list '(:path "/root/worker" :status running :started-at 0.0)))))
+          (mevedel-view--render-status)
+          (mevedel-view-test--insert-composer-draft "> active draft\nsecond line")
+          (goto-char (1- (point-max)))
+          (let ((offset (- (point) mevedel-view--input-marker))
+                (timer mevedel-view--spinner-timer))
+            (should (timerp timer))
+            (should (equal '((metadata . 1.0)) mevedel-view--spinner-timer-plan))
+            (should (= 3 (length mevedel-view-execution--elapsed-targets)))
+            (should (= 3 (mevedel-view-test--count-substring " · 59s" (buffer-string))))
+            (setq clock 60.0)
+            (cl-letf (((symbol-function 'mevedel-view--render-status)
+                       (lambda (&rest _) (ert-fail "tick rebuilt status")))
+                      ((symbol-function 'mevedel-execution-list-user)
+                       (lambda (_) (ert-fail "tick enumerated work")))
+                      ((symbol-function 'mevedel-view--full-rerender)
+                       (lambda () (ert-fail "tick rebuilt transcript"))))
+              (funcall (timer--function timer)))
+            (should (= 3 (mevedel-view-test--count-substring " · 1m 00s" (buffer-string))))
+            (should (eq timer mevedel-view--spinner-timer))
+            (should (equal "> active draft\nsecond line" (mevedel-view--input-text)))
+            (should (= offset (- (point) mevedel-view--input-marker)))
+            (dolist (target mevedel-view-execution--elapsed-targets)
+              (should (<= (string-width (buffer-substring-no-properties
+                                        (car target) (1- (cdr target)))) 64))
+              (should (get-text-property (car target) 'mevedel-view-zone-activate))
+              (should (get-text-property (car target) 'mevedel-view-zone-anchor))
+              (should (get-text-property (car target) 'mevedel-view-zone-region)))
+            ;; The same second writes nothing, even if decorative frames tick.
+            (let ((before (buffer-modified-tick)))
+              (mevedel-view--spinner-tick)
+              (should (= before (buffer-modified-tick))))
+            ;; Stopping foreground activity must not stop independent work.
+            (mevedel-view--stop-spinner)
+            (should (timerp mevedel-view--spinner-timer))
+            (mevedel-view-stream--release-turn)
+            (should (timerp mevedel-view--spinner-timer))
+            ;; Background wall time advances independently of a paused root.
+            (cl-letf (((symbol-function 'mevedel-view--spinner-request)
+                       (lambda () (mevedel-request--create
+                                   :active-work-pause-started-at 60.0))))
+              (dolist (sample '((3599.0 . "59m 59s") (3600.0 . "1h 00m")))
+                (setq clock (car sample))
+                (mevedel-view--spinner-tick)
+                (should (= 3 (mevedel-view-test--count-substring
+                              (concat " · " (cdr sample)) (buffer-string))))
+                (dolist (target mevedel-view-execution--elapsed-targets)
+                  (should (<= (string-width (buffer-substring-no-properties
+                                            (car target) (1- (cdr target)))) 64))))
+              (should (equal '((metadata . 1.0)) mevedel-view--spinner-timer-plan)))
+            ;; Completed status reconciliation still consumes the edited rows.
+            (mevedel-view--render-status)
+            (should (= 3 (mevedel-view-test--count-substring " · 1h 00m" (buffer-string)))))))))
+  :doc "hidden, unfocused and collapsed rows do not keep metadata ticking; visibility rearms"
+  (mevedel-view-execution-test--with-view
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (setf (plist-get (car live) :started-at) (- (float-time) 10))
+      (cl-letf (((symbol-function 'window-end) (lambda (&rest _) (point-max))))
+        (mevedel-view--render-status)
+        (should (mevedel-view--background-metadata-visible-p))
+        (cl-letf (((symbol-function 'window-end) (lambda (&rest _) (point-min))))
+          (mevedel-view--start-spinner-timer)
+          (should-not mevedel-view--spinner-timer)
+          (let ((before (buffer-modified-tick)))
+            (mevedel-view--spinner-tick)
+            (should (= before (buffer-modified-tick)))))
+        (cl-letf (((symbol-function 'mevedel-view--animation-window-attended-p)
+                   (lambda (_) nil)))
+          (mevedel-view--start-spinner-timer)
+          (should-not mevedel-view--spinner-timer))
+        (mevedel-view--resume-render-if-attended view-buf)
+        (should (timerp mevedel-view--spinner-timer))
+        (mevedel-view-zone-set-collapse-state mevedel-view-execution--collapse-key t)
+        (mevedel-view--render-status)
+        (should-not mevedel-view-execution--elapsed-targets)
+        (should-not mevedel-view--spinner-timer)
+        (cl-letf (((symbol-function 'mevedel-view--start-spinner-timer)
+                   (lambda (&rest _) (ert-fail "idle status replanned timer"))))
+          (mevedel-view--render-status)))))
+  :doc "root response settlement keeps quiet Monitor-only and agent-only elapsed updates alive"
+  (dolist (kind '(bash monitor agent))
+    (mevedel-view-execution-test--with-view
+      (save-window-excursion
+        (switch-to-buffer view-buf)
+        (let ((clock 9.0)
+              (original-float-time (symbol-function 'float-time)))
+          (setf (plist-get (car live) :started-at) 0.0
+                (plist-get (car live) :kind) kind)
+          (when (eq kind 'agent) (setq live nil))
+          (cl-letf (((symbol-function 'float-time)
+                     (lambda (&optional time)
+                       (if time (funcall original-float-time time) clock)))
+                    ((symbol-function 'window-end) (lambda (&rest _) (point-max)))
+                    ((symbol-function 'mevedel-view--agent-status-collect)
+                     (lambda () (when (eq kind 'agent)
+                                  (list '(:path "/root/worker" :status running :started-at 0.0))))))
+            (mevedel-view-test--insert-data data-buf "Root completed.\n" 'response)
+            (mevedel-view--render-status)
+            (mevedel-view-test--insert-composer-draft "> keep draft\nsecond line")
+            (with-current-buffer data-buf
+              (mevedel-view-stream-render-response (point-min) (point-max)))
+            (should (timerp mevedel-view--spinner-timer))
+            (should (string-search " · 9s" (buffer-string)))
+            (setq clock 10.0)
+            (funcall (timer--function mevedel-view--spinner-timer))
+            (should (string-search " · 10s" (buffer-string)))
+            (should (equal "> keep draft\nsecond line" (mevedel-view--input-text))))))))
+  :doc "a finished agent freezes its invocation duration during the grace period"
+  (mevedel-view-execution-test--with-view
+    (let ((clock 59.0)
+          (original-float-time (symbol-function 'float-time))
+          (agents (list '(:path "/root/worker" :status running :started-at 0.0))))
+      (setq live nil)
+      (cl-letf (((symbol-function 'float-time)
+                 (lambda (&optional time)
+                   (if time (funcall original-float-time time) clock)))
+                ((symbol-function 'mevedel-view--agent-status-collect) (lambda () agents)))
+        (unwind-protect
+            (progn
+              (mevedel-view--render-status)
+              (setq agents nil)
+              (mevedel-view--render-status)
+              (should (string-search "/root/worker · 59s" (buffer-string)))
+              (setq clock 61.0)
+              (mevedel-view--render-status)
+              (should (string-search "/root/worker · 59s" (buffer-string)))
+              (should-not mevedel-view-execution--elapsed-targets))
+          (mevedel-view-execution--cancel-release)))))
+  :doc "terminal durations freeze in held and selected rows in both event orderings"
+  (dolist (terminal-first '(nil t))
+    (dolist (selected '(nil t))
+      (mevedel-view-execution-test--with-view
+        (setf (plist-get (car live) :started-at) (- (float-time) 100))
+        (mevedel-view--render-status)
+        (when selected (mevedel-view-execution-test--activate "  ▸ Running"))
+        (let ((event (list :session session :data-buffer data-buf :owner "/root" :type 'terminal
+                           :facts '(:execution-id "e1" :state completed :termination exited
+                                    :exit-code 0 :wall-time-seconds 99.0))))
+          (setq live nil)
+          (when terminal-first (mevedel-view-execution--event event))
+          (mevedel-view--render-status)
+          (unless terminal-first (mevedel-view-execution--event event))
+          (unwind-protect
+              (progn
+                (should (string-search "same command · 1m 39s" (buffer-string)))
+                (should-not mevedel-view-execution--elapsed-targets)
+                (let ((before (buffer-string)))
+                  (mevedel-view-execution-tick)
+                  (should (equal-including-properties before (buffer-string)))))
+            (mevedel-view-execution--cancel-release)))))))
 
 (mevedel-deftest mevedel-view-execution--state-label ()
   (dolist (case '(((:state running) . "Running")

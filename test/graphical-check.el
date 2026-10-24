@@ -170,8 +170,10 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
 (defun mevedel-graphical-check--capture (output)
   "Render a real transcript and save fontified frame exports under OUTPUT."
   (require 'helpers)
+  (require 'mevedel-execution)
   (require 'mevedel-pending-inputs)
   (require 'mevedel-view)
+  (require 'mevedel-view-agent)
   (require 'mevedel-view-render)
   (unless (file-equal-p (symbol-file 'mevedel-view--full-rerender 'defun)
                         (file-name-concat mevedel-graphical-check--root
@@ -198,23 +200,50 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
         (setq-local mevedel--session session))
       (setq-local mevedel--session session)
       (mevedel-view-test--insert-composer-draft "> active draft\nsecond line")
-      (mevedel-view--full-rerender)
-      ;; Reproduce the failure-review queue with the long file mention that
-      ;; used to appear in both the expanded header and the detail body.
-      (mevedel-session-enqueue-pending-input
-       session 'steering
-       '(:input "@file:/home/roland/Bilder/Bildschirmfotos/Bildschirmfoto_20261024_160228.png Can we add an elapsed time beside the background jobs?"))
-      (mevedel-session-set-pending-input-failure-paused session t)
-      (mevedel-view--interaction-rebuild)
-      (goto-char (point-min))
-      (search-forward "1. [+]")
-      (backward-char)
-      (let ((last-nonmenu-event nil))
-        (call-interactively (key-binding (kbd "RET"))))
-      (mevedel-view--interaction-rebuild)
-      (unless (and (string-search "Steering\n  1. [-]\n    @file:" (buffer-string))
-                   (= 1 (mevedel-view-test--count-substring "@file:" (buffer-string))))
-        (error "Failure-paused steering fixture duplicates or omits expanded input"))
+      (let* ((clock (float-time))
+             (original-float-time (symbol-function 'float-time))
+             (executions
+              (list (list :execution-id "graphical-bash" :owner "/root" :yielded t
+                          :state 'running :description "Commit, run check, fresh, remote"
+                          :started-at (- clock 847))
+                    (list :execution-id "graphical-monitor" :owner "/root" :yielded t
+                          :state 'running :kind 'monitor :description "Watch build events"
+                          :event-count 3 :started-at (- clock 65)))))
+        (cl-letf (((symbol-function 'float-time)
+                   (lambda (&optional time)
+                     (if time (funcall original-float-time time) clock)))
+                  ((symbol-function 'frame-focus-state) (lambda (&optional _) t))
+                  ((symbol-function 'mevedel-execution-count-user) (lambda (_) 2))
+                  ((symbol-function 'mevedel-execution-list-user) (lambda (_) executions))
+                  ((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda ()
+                     (list (list :path "/root/reviewer" :status 'running
+                                 :model-metadata '(:model "opus" :effort "medium")
+                                 :started-at (- clock 130))))))
+          (mevedel-view--full-rerender)
+          ;; Reproduce the failure-review queue with the long file mention that
+          ;; used to appear in both the expanded header and the detail body.
+          (mevedel-session-enqueue-pending-input
+           session 'steering
+           '(:input "@file:/home/roland/Bilder/Bildschirmfotos/Bildschirmfoto_20261024_160228.png Can we add an elapsed time beside the background jobs?"))
+          (mevedel-session-set-pending-input-failure-paused session t)
+          (mevedel-view--interaction-rebuild)
+          (goto-char (point-min))
+          (search-forward "1. [+]")
+          (backward-char)
+          (let ((last-nonmenu-event nil))
+            (call-interactively (key-binding (kbd "RET"))))
+          (mevedel-view--interaction-rebuild)
+          (unless (and (string-search "Steering\n  1. [-]\n    @file:" (buffer-string))
+                       (= 1 (mevedel-view-test--count-substring "@file:" (buffer-string))))
+            (error "Failure-paused steering fixture duplicates or omits expanded input"))
+          (redisplay t)
+          ;; Exercise the shared semantic tick, not another full/status render.
+          (setq clock (1+ clock))
+          (mevedel-view--spinner-tick)
+          (dolist (label '("remote · 14m 08s" "events · 1m 06s" "reviewer · 2m 11s"))
+            (unless (string-search label (buffer-string))
+              (error "Background elapsed fixture did not render %s" label)))))
       ;; Views defer table layout to idle.  Drain that production operation
       ;; explicitly: this bootstrap exits before the ordinary idle loop.
       (redisplay t)

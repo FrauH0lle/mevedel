@@ -14,6 +14,7 @@
 (require 'mevedel-view-animation)
 (require 'mevedel-present)
 (require 'mevedel-view-power)
+(require 'mevedel-view-execution)
 (require 'mevedel-ptc-interpreter)
 (require 'mevedel-tool-registry)
 (require 'mevedel-view-zone)
@@ -679,6 +680,7 @@ Only activity is animated; the controls remain ordinary interactive text."
 (defun mevedel-view--spinner-active-p ()
   "Return non-nil when this view buffer has visible spinner work."
   (or mevedel-view--pending-tool-calls
+      mevedel-view-execution--elapsed-targets
       (mevedel-view--request-progress-active-p)))
 
 (defun mevedel-view--release-animation-targets (&rest targets)
@@ -873,6 +875,13 @@ If ANY-VALUE is non-nil, accept any non-nil PROPERTY value, not just t."
    mevedel-view--spinner-metadata-target
    'mevedel-view-spinner-status t))
 
+(defun mevedel-view--background-metadata-visible-p ()
+  "Return non-nil when a running background row is on screen and attended."
+  (cl-some (lambda (target)
+             (mevedel-view--animation-target-visible-p
+              target 'mevedel-view-background-elapsed t))
+           mevedel-view-execution--elapsed-targets))
+
 (defun mevedel-view--animation-target-frame (target &optional all)
   "Return TARGET's visible frame, or `:multiple' across display frames.
 Color display properties cannot use two palettes simultaneously, so the
@@ -1062,7 +1071,8 @@ spans is probed once: a span still off screen waits for scrolling or
 a window resize."
   (let ((targets (list mevedel-view--spinner-label-target
                        mevedel-view--spinner-metadata-target
-                       mevedel-view--spinner-tool-targets)))
+                       mevedel-view--spinner-tool-targets
+                       mevedel-view-execution--elapsed-targets)))
     (when (and (mevedel-view--spinner-active-p)
                (cl-some #'car-safe targets)
                (not (equal targets mevedel-view--spinner-probed-targets))
@@ -1223,9 +1233,10 @@ rechecked without changing the displayed animation phase."
                                         (eq kind 'glyph))))
                       (cons kind period)))
                   (sort tool-kinds #'string-lessp))
-                 (list (and mevedel-view--spinner-status
-                            (not paused)
-                            (mevedel-view--spinner-metadata-visible-p)
+                 (list (and (or (and mevedel-view--spinner-status
+                                     (not paused)
+                                     (mevedel-view--spinner-metadata-visible-p))
+                                (mevedel-view--background-metadata-visible-p))
                             '(metadata . 1.0))))))
          (period (and plan (apply #'min (mapcar #'cdr plan)))))
     (unless period
@@ -1256,10 +1267,10 @@ rechecked without changing the displayed animation phase."
                  (mevedel--ui-timer-cancel timer)
                (with-current-buffer buffer
                  (if (and (eq timer mevedel-view--spinner-timer)
-                          (or mevedel-view--spinner-status
-                              mevedel-view--pending-tool-calls)
+                          (mevedel-view--spinner-active-p)
                           (or (mevedel-view--animation-visible-p)
-                              (mevedel-view--spinner-metadata-visible-p)))
+                              (mevedel-view--spinner-metadata-visible-p)
+                              (mevedel-view--background-metadata-visible-p)))
                      (condition-case nil
                          (progn
                            (let ((mevedel-view--spinner-delivering timer))
@@ -1365,6 +1376,8 @@ animation or elapsed timer remains to notice the new colors."
     (unless (eql second mevedel-view--spinner-last-second)
       (setq mevedel-view--spinner-last-second second)
       (mevedel-view-animation-check-colors)
+      (when (mevedel-view--background-metadata-visible-p)
+        (mevedel-view-execution-tick))
       (when (and mevedel-view--spinner-status
                  (or (mevedel-view--animation-target-visible-p
                       mevedel-view--spinner-label-target
@@ -1560,7 +1573,9 @@ Return non-nil when the status was restored."
                      (buffer-local-value 'mevedel--current-request
                                          mevedel--data-buffer))
           (setq mevedel-view--spinner-start-time nil))
-        (mevedel-view--stop-spinner-timer))
+        (if mevedel-view-execution--elapsed-targets
+            (mevedel-view--start-spinner-timer)
+          (mevedel-view--stop-spinner-timer)))
      (mevedel-view--render-request-progress))))
 
 (defun mevedel-view--stop-request-progress ()
@@ -2056,7 +2071,9 @@ render draws the calls settled; until then their rows keep running."
               (delq entry mevedel-view--pending-tool-calls)))
       (unless (or mevedel-view--pending-tool-calls
                   (mevedel-view--request-progress-visible-p))
-        (mevedel-view--stop-spinner-timer))
+        (if mevedel-view-execution--elapsed-targets
+            (mevedel-view--start-spinner-timer)
+          (mevedel-view--stop-spinner-timer)))
       (when (and (mevedel-view-stream-in-flight-turn-start-position)
                  (markerp mevedel-view--data-turn-start))
         (mevedel-view--schedule-tool-boundary-render data-buf)
@@ -2210,12 +2227,25 @@ NO-PROGRESS suppresses active-turn presentation."
   ;; Retire obsolete streamed work; a pending full render survives.
   (mevedel-view--cancel-scheduled-render t)
   (mevedel-view--stop-spinner-timer)
+  ;; Terminal cleanup can run after a failed or superseded projection, before
+  ;; its ordinary spinner stop.  Background metadata must not revive stale
+  ;; foreground spans when it rearms the shared timer below.
+  (apply #'mevedel-view--release-animation-targets
+         mevedel-view--spinner-label-target mevedel-view--spinner-metadata-target
+         mevedel-view--spinner-tool-targets)
+  (setq mevedel-view--spinner-status nil
+        mevedel-view--spinner-owner nil
+        mevedel-view--spinner-label-target nil
+        mevedel-view--spinner-metadata-target nil
+        mevedel-view--spinner-tool-targets nil)
   (when (markerp mevedel-view--in-flight-turn-start)
     (set-marker mevedel-view--in-flight-turn-start nil))
   (setq mevedel-view--in-flight-turn-start nil)
   (when (markerp mevedel-view--data-turn-start)
     (set-marker mevedel-view--data-turn-start nil))
-  (setq mevedel-view--data-turn-start nil))
+  (setq mevedel-view--data-turn-start nil)
+  (when mevedel-view-execution--elapsed-targets
+    (mevedel-view--start-spinner-timer)))
 
 (defun mevedel-view-stream-render-response (start end)
   "Finish and render gptel response bounds START and END."

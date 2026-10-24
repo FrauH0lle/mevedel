@@ -1969,7 +1969,11 @@ idle status redraws remain immediate."
                          (or (not input-pos) (<= interaction-pos input-pos)))
                     interaction-pos
                   start)))
-      (mevedel-view-zone-reconcile 'status start end fragments))))
+      (mevedel-view-zone-reconcile 'status start end fragments)
+      (let ((had-elapsed mevedel-view-execution--elapsed-targets))
+        (mevedel-view-execution-capture-elapsed)
+        (when (or had-elapsed mevedel-view-execution--elapsed-targets)
+          (mevedel-view--start-spinner-timer))))))
 
 (defun mevedel-view--zone-separator (label)
   "Return a propertized zone separator line for LABEL.

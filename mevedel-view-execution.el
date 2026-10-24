@@ -20,6 +20,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'mevedel-structs)
+(require 'mevedel-utilities)
 ;; Agent rows are half the panel; every view loads this module anyway.
 (require 'mevedel-view-agent)
 
@@ -69,6 +70,19 @@
 (declare-function mevedel-view-audit-show-result "mevedel-view-audit" (record))
 (autoload 'mevedel-view-audit-show-result "mevedel-view-audit" nil t)
 
+;; `mevedel-view-composer'
+(declare-function mevedel-view--call-preserving-user-view-state
+                  "mevedel-view-composer" (thunk &optional region))
+
+;; `mevedel-view-render'
+(declare-function mevedel-view-render-mutate
+                  "mevedel-view-render" (key function &optional replacement cleanup))
+(defvar mevedel-view-render--owner)
+
+;; `mevedel-view-stream'
+(declare-function mevedel-view--animation-target-visible-p
+                  "mevedel-view-stream" (target property &optional any-value))
+
 ;; `mevedel-view-zone'
 (declare-function mevedel-view-zone-collapse-state
                   "mevedel-view-zone" (key &optional default))
@@ -101,6 +115,9 @@ Keep this intent through deferred and coalesced status redraws.")
 
 (defvar-local mevedel-view-execution--shown nil
   "Rows of the last rendered panel, as (KEY KIND DATA) in display order.")
+
+(defvar-local mevedel-view-execution--elapsed-targets nil
+  "Marker pairs for running rows maintained by the shared view metadata tick.")
 
 (defvar-local mevedel-view-execution--held nil
   "Finished rows kept as inert lines during pointer protection and grace.
@@ -427,6 +444,11 @@ point or a mouse lease, rows stay; losing protection restarts the period."
                         (nth 2 shown) mevedel-view-execution--selected)))
         (let ((data (copy-sequence (nth 2 shown))))
           ;; Capture this turn's outcome once, not a later turn's result.
+          (when (and (plist-get data :started-at)
+                     (not (plist-get data :terminal-p)))
+            (setq data (plist-put data :wall-time-seconds
+                                  (- (float-time)
+                                     (mevedel-view-execution--start-time data)))))
           (when (eq (nth 1 shown) 'agent)
             (setq data
                   (plist-put data :outcome
@@ -505,6 +527,8 @@ continuation column of a window without fringes is left free."
                       (or (plist-get data :description) (plist-get data :command)))
                     ""))
                60 nil nil "…")
+              (when-let* ((duration (plist-get data :wall-time-seconds)))
+                (concat " · " (mevedel--duration-label duration)))
               (when-let* ((exit (and (eq (plist-get data :termination) 'exited)
                                      (plist-get data :exit-code))))
                 (format " · exit %s" exit)))
@@ -630,13 +654,20 @@ Agent actions receive the agent's canonical path as OWNER and no ID."
 (defun mevedel-view-execution--row (spec)
   "Return one whole clickable panel row described by plist SPEC.
 SPEC holds :selected, :state, :state-face, :kind, :label, :facts (a list of
-strings), :depth and :callback.  Every kind shares this grammar:
+strings), :depth, :callback and :started-at or a frozen :duration.
+Every kind shares this grammar:
 chevron, padded state, padded kind, label, then metadata.  The row is
 one screen row: the label gives way first, down to twenty columns, then
 the metadata is cut."
   (let* ((depth (or (plist-get spec :depth) 0))
          (state (string-pad (plist-get spec :state) 9))
-         (facts (mapconcat (lambda (fact) (concat " · " fact)) (plist-get spec :facts) ""))
+         (duration (or (and (plist-get spec :started-at)
+                            (- (float-time) (plist-get spec :started-at)))
+                       (plist-get spec :duration)))
+         (facts (mapconcat (lambda (fact) (concat " · " fact))
+                           (append (when duration
+                                     (list (mevedel--duration-label duration)))
+                                   (plist-get spec :facts)) ""))
          (limit (1- (mevedel-view-execution--width)))
          ;; Indent, chevron, state, kind and their separators.
          (head-width (+ 2 (* 2 depth) 2 (string-width state) 1 8 1))
@@ -655,12 +686,15 @@ the metadata is cut."
                        " "
                        label
                        (mevedel-view-execution--face facts 'mevedel-view-tool-metadata))))
-    (mevedel-view-execution--action
-     (concat (if (> (+ head-width (string-width label) facts-width) limit)
-                 (truncate-string-to-width line limit nil nil "…")
-               line)
-             "\n")
-     (plist-get spec :callback))))
+    (let ((row (mevedel-view-execution--action
+                (concat (if (> (+ head-width (string-width label) facts-width) limit)
+                            (truncate-string-to-width line limit nil nil "…")
+                          line)
+                        "\n")
+                (plist-get spec :callback))))
+      (when (plist-get spec :started-at)
+        (put-text-property 0 (length row) 'mevedel-view-background-elapsed spec row))
+      row)))
 
 (defun mevedel-view-execution--line (snapshot)
   "Return a whole clickable status row for execution SNAPSHOT."
@@ -675,6 +709,15 @@ the metadata is cut."
            :state (mevedel-view-execution--state-label snapshot)
            :state-face (mevedel-view-execution--state-face snapshot)
            :kind (if monitor "monitor" "bash")
+           :started-at (and (not (or (plist-get snapshot :terminal-p)
+                                    (plist-get snapshot :unavailable-p)
+                                    (memq (plist-get snapshot :state) '(completed lost failed))))
+                            (plist-get snapshot :started-at)
+                            (mevedel-view-execution--start-time snapshot))
+           :duration (and (or (plist-get snapshot :terminal-p)
+                              (plist-get snapshot :unavailable-p)
+                              (memq (plist-get snapshot :state) '(completed lost failed)))
+                          (plist-get snapshot :wall-time-seconds))
            :label (or (plist-get snapshot :description)
                       (plist-get snapshot :command) "Bash")
            :facts (delq nil
@@ -697,6 +740,8 @@ the metadata is cut."
                            'mevedel-view-agent-running
                          'mevedel-view-tool-warning)
            :kind "agent"
+           :started-at (and (plist-get row :started-at)
+                            (mevedel-view-execution--start-time row))
            :label path
            :depth (plist-get row :depth)
            :facts (delq nil
@@ -706,6 +751,56 @@ the metadata is cut."
                                 (_ (mevedel-view-agent-model-label
                                     (plist-get row :model-metadata))))))
            :callback (mevedel-view-execution--callback 'agent-toggle session path)))))
+
+(defun mevedel-view-execution-capture-elapsed ()
+  "Capture the rendered live row spans after status reconciliation."
+  (dolist (target mevedel-view-execution--elapsed-targets)
+    (set-marker (car target) nil)
+    (set-marker (cdr target) nil))
+  (setq mevedel-view-execution--elapsed-targets nil)
+  (when-let* ((bounds (mevedel-view-zone-fragment-bounds 'status 'background)))
+    (let ((pos (plist-get bounds :start))
+          (end (plist-get bounds :end)))
+      (while (< pos end)
+        (let* ((spec (get-text-property pos 'mevedel-view-background-elapsed))
+               (next (next-single-property-change
+                      pos 'mevedel-view-background-elapsed nil end)))
+          (when spec
+            (push (cons (copy-marker pos t) (copy-marker next nil))
+                  mevedel-view-execution--elapsed-targets))
+          (setq pos next))))))
+
+(defun mevedel-view-execution-tick ()
+  "Refresh visible elapsed rows without collecting work or rebuilding status."
+  (let ((refresh
+         (lambda ()
+           (dolist (target mevedel-view-execution--elapsed-targets)
+             (when (mevedel-view--animation-target-visible-p
+                    target 'mevedel-view-background-elapsed t)
+               (let* ((start (marker-position (car target)))
+                      (end (marker-position (cdr target)))
+                      (spec (get-text-property start 'mevedel-view-background-elapsed))
+                      (row (mevedel-view-execution--row spec)))
+                 (unless (equal row (buffer-substring-no-properties start end))
+                   ;; The newline carries the zone's ownership, navigation and
+                   ;; row actions, but no hover face.  Keep the new row's faces.
+                   (let ((properties (text-properties-at (1- end))))
+                     (cl-remf properties 'face)
+                     (cl-remf properties 'font-lock-face)
+                     (add-text-properties 0 (length row) properties row))
+                   (mevedel-view--call-preserving-user-view-state
+                    (lambda ()
+                      (let ((inhibit-read-only t)
+                            (inhibit-modification-hooks t))
+                        (goto-char start)
+                        (insert row)
+                        (delete-region (point) (+ (point) (- end start)))
+                        (set-marker (car target) start)
+                        (set-marker (cdr target) (point))))
+                    (cons start end)))))))))
+    (if mevedel-view-render--owner
+        (mevedel-view-render-mutate 'background-elapsed refresh)
+      (funcall refresh))))
 
 (defun mevedel-view-execution--control-lines (controls &optional finished)
   "Lay out CONTROLS as explicit one-screen-row lines.
@@ -1166,6 +1261,9 @@ the row, so both the last shown rows and the held rows take the facts."
               (setq data (plist-put data :terminal-p t))
               (dolist (key '(:state :outcome :termination :exit-code))
                 (setq data (plist-put data key (plist-get facts key))))
+              (when (plist-member facts :wall-time-seconds)
+                (setq data (plist-put data :wall-time-seconds
+                                      (plist-get facts :wall-time-seconds))))
               (setcar (nthcdr 2 entry) data)
               (when (plist-get data :held-p) (setq rendered t)))))
         (when rendered (mevedel-view--render-status))))))

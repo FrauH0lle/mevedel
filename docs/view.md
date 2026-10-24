@@ -1659,10 +1659,10 @@ width, fringeless, applies.
 
 ```text
  ─── background work · 1 blocked · 2 agents · 1 command · 1 monitor [-] ──
-  ▸ Blocked   agent    /root/reviewer · waiting for permission
-  ▸ Running   agent    /root/counter · opus:medium
-  ▸ Running   bash     Run test suite
-  ▸ Watching  monitor  Server log errors · 3 events · until 08:40
+  ▸ Blocked   agent    /root/reviewer · 1m 05s · waiting for permission
+  ▸ Running   agent    /root/counter · 35s · opus:medium
+  ▸ Running   bash     Run test suite · 14m 07s
+  ▸ Watching  monitor  Server log errors · 2m 10s · 3 events · until 08:40
   [Manage]
 ```
 
@@ -1682,6 +1682,16 @@ when a row finishes or is retained. A Bash row shows the
 model-written `description` when present, else the command; a row owned by an
 agent names that owner. The footer progress line shows only the root turn's
 own activity and elapsed time; it never repeats these counts.
+
+Background rows show elapsed wall time with the same compact whole-second
+format as inline tool rows (`14m 07s`, or `1h 02m`). Agents measure their current
+invocation rather than their retained lifetime. The existing view metadata
+timer updates only visible, attended live rows, including quiet Monitors and
+agents while the root is idle or awaiting input. It uses cached row facts and
+re-fits only changed rows, without enumerating work, rebuilding status or
+redrawing the transcript. Hidden/collapsed rows do not keep that timer awake.
+Finished rows and retained completed inspectors keep their final duration
+instead of continuing to count during inspection or the removal grace period.
 
 Click, `RET`, or `TAB` anywhere on a row, including its indentation or line end,
 expands it in place; activating it again collapses it. `TAB` in an expanded
