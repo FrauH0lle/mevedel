@@ -52,9 +52,9 @@
           (workspace (mevedel-session-workspace session))
           (old (cl-loop for (key value) on (mevedel-session-codec-serialize session) by #'cddr
                         ;; Strip exactly the fields VERSION predates.
-                        unless (or (and (not (member ,version '("v0.5.13" "v0.5.14")))
+                        unless (or (and (not (member ,version '("v0.5.13" "v0.5.14" "v0.5.15")))
                                         (eq key :chapters))
-                                   (and (not (member ,version '("v0.5.12" "v0.5.13" "v0.5.14")))
+                                   (and (not (member ,version '("v0.5.12" "v0.5.13" "v0.5.14" "v0.5.15")))
                                         (eq key :naming-input))
                                    (and (member ,version '("v0.5.6" "v0.5.9"))
                                         (memq key '(:recovery-issues :pending-follow-ups :pending-steering
@@ -118,6 +118,40 @@
     (should-error
      (mevedel-migrate-session--v0.5.13-to-v0.5.14
       (list :agent-registry registry) nil))))
+
+(mevedel-deftest mevedel-migrate-session--v0.5.14-to-v0.5.15 ()
+  ,test
+  (test)
+  :doc "collapses frozen mode recipes, preserves other recipes and loads the converted agents"
+  (let* ((agents (mevedel-migration-test--legacy-agents))
+         (agent (plist-get (plist-get (car agents) :configuration) :agent))
+         (recipes '((pending-events) (mode-constraints 5) (full-auto-mode nil)
+                    (task-nudge 8) (full-auto-mode-exit)))
+         (_ (setf (plist-get agent :reminders) recipes))
+         (data (test-mevedel-session-persistence--complete-sidecar
+                (list :version "v0.5.14" :agent-registry
+                      (mapcar (lambda (entry) (plist-put entry :working-directory nil)) agents))))
+         (converted (mevedel-migrate-session--sidecar data))
+         (loaded (mevedel-agent-persistence-deserialize-registry
+                  (plist-get converted :agent-registry)
+                  (mevedel-execution-target-create "/"))))
+    (should (equal recipes (plist-get agent :reminders)))
+    (should (equal "v0.5.15" (plist-get converted :version)))
+    (should (equal '(pending-events mode-constraints task-nudge)
+                   (mapcar #'mevedel-reminder-type
+                           (mevedel-agent-reminders
+                            (mevedel-agent-configuration-agent
+                             (mevedel-agent-record-configuration
+                              (cdar loaded)))))))
+    (should (equal converted (mevedel-migrate-session--sidecar converted))))
+
+  :doc "refuses malformed legacy mode recipes instead of dropping them"
+  (dolist (recipe '((mode-constraints -1) (full-auto-mode 1 2)
+                    (full-auto-mode-exit 3)))
+    (should-error
+     (mevedel-migrate-session--v0.5.14-to-v0.5.15
+      (list :agent-registry
+            (list (list :configuration (list :agent (list :reminders (list recipe)))))) nil))))
 
 (mevedel-deftest mevedel-migrate-session--sidecar ()
   ,test
@@ -334,7 +368,7 @@
   ,test
   (test)
   :doc "converts all retained heads, preserves bytes and loads through the current reader"
-  (dolist (version '("v0.5.6" "v0.5.9" "v0.5.10" "v0.5.11" "v0.5.12" "v0.5.13"))
+  (dolist (version '("v0.5.6" "v0.5.9" "v0.5.10" "v0.5.11" "v0.5.12" "v0.5.13" "v0.5.14"))
     (mevedel-migration-test--with-source version
       (let ((before (mapcar (lambda (file) (cons file (mevedel-migrate-session--hash file)))
                             (directory-files-recursively source "."))))
@@ -360,9 +394,13 @@
         ;; Runtime loading remains strict; only this explicit script accepts old data.
         (should-error (mevedel-session-codec-deserialize old workspace)))))
 
-  :doc "adds nil cwd to legacy agents in fixed and retained publication sidecars"
+  :doc "migrates v0.5.13 cwd and mode recipes in one run across fixed and retained sidecars"
   (mevedel-migration-test--with-source "v0.5.13"
     (setq old (plist-put old :agent-registry (mevedel-migration-test--legacy-agents)))
+    (dolist (entry (plist-get old :agent-registry))
+      (setf (plist-get (plist-get (plist-get entry :configuration) :agent) :reminders)
+            '((pending-events) (mode-constraints 5) (full-auto-mode nil)
+              (full-auto-mode-exit))))
     (mevedel-migrate-session--write (file-name-concat source "session.meta.el") old)
     (dolist (name '("aaaaaaaaaaaaaaaaaaaa" "bbbbbbbbbbbbbbbbbbbb"))
       (let* ((directory (concat ".publications/generation-" name))
@@ -378,19 +416,32 @@
       (should (= 3 (mevedel-migrate-session-copy source destination)))
       (dolist (row before)
         (should (equal (cdr row) (mevedel-migrate-session--hash (car row)))))
+      (let ((fixed (mevedel-migrate-session--read
+                    (file-name-concat destination "session.meta.el"))))
+        (should (equal "v0.5.15" (plist-get fixed :version)))
+        (dolist (entry (plist-get fixed :agent-registry))
+          (should (equal '((pending-events) (mode-constraints))
+                         (plist-get (plist-get (plist-get entry :configuration) :agent)
+                                    :reminders)))))
       (dolist (name '("aaaaaaaaaaaaaaaaaaaa" "bbbbbbbbbbbbbbbbbbbb"))
         (let* ((publication (mevedel-session-publication-read
                              destination (concat ".publications/generation-" name "/manifest.el")))
                (data (mevedel-session-codec-read (plist-get publication :sidecar)))
                (loaded (plist-get (mevedel-session-codec-deserialize data workspace) :session))
                (registry (mevedel-session-agent-registry loaded)))
+          (should (equal "v0.5.15" (plist-get data :version)))
           (should (= 2 (length registry)))
           (should (equal "Kept result" (mevedel-agent-record-settled-result (cdar registry))))
           (dolist (entry (plist-get data :agent-registry))
             (should (plist-member entry :working-directory))
             (should-not (plist-get entry :working-directory)))
           (dolist (entry registry)
-            (should-not (mevedel-agent-record-working-directory (cdr entry))))))
+            (should-not (mevedel-agent-record-working-directory (cdr entry)))
+            (should (equal '(pending-events mode-constraints)
+                           (mapcar #'mevedel-reminder-type
+                                   (mevedel-agent-reminders
+                                    (mevedel-agent-configuration-agent
+                                     (mevedel-agent-record-configuration (cdr entry))))))))))
       (should (eq 'current (plist-get (cdar (mevedel-migrate-sessions destination)) :status)))))
 
   :doc "converts unprepared Worktree retries in every head and refuses prepared ones without source writes"

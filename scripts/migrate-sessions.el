@@ -159,13 +159,43 @@ one sidecar.  DATA is the private copy owned by the converter."
         (plist-put entry :working-directory nil))
       registry))))
 
+(defun mevedel-migrate-session--v0.5.14-to-v0.5.15 (data _attached)
+  "Consolidate frozen mode reminder recipes in v0.5.14 DATA."
+  (dolist (entry (plist-get data :agent-registry))
+    (let* ((configuration (plist-get entry :configuration))
+           (agent (plist-get configuration :agent))
+           (recipes (plist-get agent :reminders))
+           converted seen-mode)
+      (unless (proper-list-p recipes)
+        (error "Invalid legacy agent reminder recipes"))
+      (dolist (recipe recipes)
+        (if (memq (car-safe recipe)
+                  '(mode-constraints full-auto-mode full-auto-mode-exit))
+            (progn
+              (unless (and (proper-list-p recipe)
+                           (if (eq (car recipe) 'full-auto-mode-exit)
+                               (null (cdr recipe))
+                             (and (= 2 (length recipe))
+                                  (or (null (cadr recipe))
+                                      (and (integerp (cadr recipe))
+                                           (>= (cadr recipe) 0))))))
+                (error "Invalid legacy mode reminder recipe: %S" recipe))
+              (unless seen-mode
+                (push '(mode-constraints) converted)
+                (setq seen-mode t)))
+          (push recipe converted)))
+      (when recipes
+        (setf (plist-get agent :reminders) (nreverse converted)))))
+  data)
+
 (defconst mevedel-migrate-session--steps
   '(("v0.5.6" "v0.5.9" mevedel-migrate-session--v0.5.6-to-v0.5.9)
     ("v0.5.9" "v0.5.10" mevedel-migrate-session--v0.5.9-to-v0.5.10)
     ("v0.5.10" "v0.5.11" mevedel-migrate-session--v0.5.10-to-v0.5.11)
     ("v0.5.11" "v0.5.12" mevedel-migrate-session--v0.5.11-to-v0.5.12)
     ("v0.5.12" "v0.5.13" mevedel-migrate-session--v0.5.12-to-v0.5.13)
-    ("v0.5.13" "v0.5.14" mevedel-migrate-session--v0.5.13-to-v0.5.14))
+    ("v0.5.13" "v0.5.14" mevedel-migrate-session--v0.5.13-to-v0.5.14)
+    ("v0.5.14" "v0.5.15" mevedel-migrate-session--v0.5.14-to-v0.5.15))
   "Ordered (SOURCE TARGET FUNCTION) format steps.
 Retire old formats by deleting a prefix and its unused step functions.
 Append a step whenever the runtime codec's current format changes.")

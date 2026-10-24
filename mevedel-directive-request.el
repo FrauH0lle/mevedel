@@ -135,6 +135,10 @@
 (autoload 'mevedel-plan-handoff-validate-skill-bindings
   "mevedel-plan-handoff")
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-rearm-plan-mode "mevedel-reminders" (session))
+(autoload 'mevedel-reminders-rearm-plan-mode "mevedel-reminders")
+
 ;; `mevedel-session-naming'
 (declare-function mevedel-session-naming-consider "mevedel-session-naming" (session prompt))
 (autoload 'mevedel-session-naming-consider "mevedel-session-naming")
@@ -958,6 +962,8 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
             (mevedel-request-push-canceller reserved-request cleanup-owned)
             (setq reserved-turn (mevedel-request-turn reserved-request))
             (when planning-p
+              (unless (plist-get options :plan-continuation)
+                (mevedel-reminders-rearm-plan-mode mevedel--session))
               (setf (mevedel-session-directive-planning mevedel--session)
                     (list :directive-id directive-uuid
                           :action (plist-get options :planned-action)

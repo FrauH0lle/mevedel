@@ -190,7 +190,7 @@ Transport and publication scheduling defer metadata work until it can run safely
 It updates the persisted name and buffer/view presentation, without moving files.
 Save As creates a new identity with the explicitly supplied display name.
 
-The closed sidecar schema is `v0.5.14`, including recovery issues, retained input and pause state,
+The closed sidecar schema is `v0.5.15`, including recovery issues, retained input and pause state,
 naming input, closed chats (`:chapters`),
 the ids of attached [store artifacts](view.md#artifact-store) (`:attached-artifacts`),
 and, for an artifact's own conversation, that artifact's id (`:dedicated-artifact`).
@@ -853,7 +853,7 @@ identity. Superseded sidecar shapes are not migrated during resume; the
 [explicit migration](#explicit-session-migration) runs separately.
 
 The package release is `0.5.0`; its persisted session format is independently
-`v0.5.14`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
+`v0.5.15`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
 execution-target incarnation are
 required by that session format:
 project sessions persist `portable`, while file-workspace sessions
@@ -2234,7 +2234,7 @@ failures, not successful skips. A live session or pending recovery aborts the
 whole run before any session is changed.
 
 Supported source versions are v0.5.6, v0.5.9, v0.5.10, v0.5.11, v0.5.12,
-v0.5.13 and v0.5.14; the current target is v0.5.14. Versions v0.5.7 and v0.5.8 are not
+v0.5.13, v0.5.14 and v0.5.15; the current target is v0.5.15. Versions v0.5.7 and v0.5.8 are not
 supported. Each source follows an ordered chain of version-to-next-version
 steps. The script checks that the chain ends at the runtime codec's current
 format. To retire old support, remove the oldest prefix of steps and their
@@ -2283,6 +2283,11 @@ before v0.5.12, and chat boundaries before v0.5.13. Retained agents from before
 v0.5.14 gain an explicit `:working-directory nil`; migration does not guess a
 per-agent override from the root directory or transcript location. A legacy
 record already containing that field is refused instead of overwritten.
+v0.5.15 consolidates frozen `mode-constraints`, `full-auto-mode`, and
+`full-auto-mode-exit` reminder recipes into one argument-free `mode-constraints`
+recipe, preserving all other reminders and their order. Invalid legacy mode
+recipes refuse conversion. Runtime readers accept only the current recipe shape;
+close and explicitly migrate older sessions before reopening them.
 Unsaved queues and earlier
 chat titles cannot be reconstructed. Retrying an old attempted title asks for
 a description rather than guessing from history. Migration makes no model

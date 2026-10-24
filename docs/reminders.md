@@ -13,9 +13,9 @@ raw specialist-tool usage establishes whether guidance improved a task.
 
 Keep reminder bodies specific to the firing state. Stable task and tool policy
 belongs in its prompt component or tool contract, not another recurring copy.
-Plan guidance keeps its authority limits, proposal tags, replacement rule, and
-compact proposal skeleton inline; it must survive compaction without requiring
-a manual read. The task nudge supplies stale task rows and ownership recovery,
+Plan guidance includes authority limits and the proposal skeleton on its first
+delivery, then references the retained contract and the recoverable
+[Plan manual](plan-mode.md#proposal-guidance). The task nudge supplies stale task rows and ownership recovery,
 leaving TaskWrite field/status syntax to that tool's contract.
 
 ## Delivery and history
@@ -160,17 +160,21 @@ sample boundaries; see [Agents](agents.md) for their sample accounting.
 
 ### Session state and mode guidance (evaluated from current state)
 
-- **Plan-mode workflow:** the every-turn `plan-mode` reminder
+- **Plan-mode workflow:** the first delivered `plan-mode` reminder
   describes read-only project inspection, unavailable Eval, session-only
   ApplyPatch in standalone/sticky Plan, and no writes in directive Planning.
   It retains exploration-first behavior,
   replacement semantics, exact proposal tags, and the preferred
-  proposal shape. Rebuilding a root tool continuation after compaction stages
-  the same active Plan reminder again, unless it is already staged; this also
-  covers directive planning. A generated summary cannot replace the current
-  proposal contract.
-- **Mode constraints / full-auto:** permission-mode guidance, including the
-  disclosure that live Eval runs inside Emacs without confinement.
+  proposal shape. Subsequent turns, including continuation after compaction,
+  use a one-line reference with exact tags and a recovery pointer to
+  [Proposal guidance](plan-mode.md#proposal-guidance). A new sticky Plan episode
+  or directive planning conversation rearms the template; feedback does not.
+- **Mode constraints:** one advisory on initial delivery and each effective
+  permission-mode change, including request overrides and returning to Ask.
+  Unchanged modes never repeat it. Full Access, default protected paths,
+  unconstrained live Eval, remaining hard denies/Plan/integrity checks, and
+  deliberate destructive calls are disclosed together. There are no separate
+  full-auto entry/exit reminders.
 - **Fork provenance:** the sparse (interval 20) `fork-provenance`
   reminder regenerates a fork's provenance from durable session slots
   via `mevedel-session-fork-provenance-body`: source session and, for
@@ -193,10 +197,13 @@ sample boundaries; see [Agents](agents.md) for their sample accounting.
   handoff does not use this reminder. Native Claude compaction restores an
   eligible reference immediately through the same producer; it does not wait
   for the next user prompt.
-- **Recent-edit verification:** `verification-suggestion` requires a
-  recorded file modification in the latest committed turn or the active
-  turn, and fires at most once every ten turns. Reading a file does not
-  qualify; older edits do not keep the suggestion eligible. When an
+- **Recent-edit verification:** `verification-suggestion` requires at least two
+  recently modified implementation files in the latest committed or active turn,
+  and fires at most once every ten turns, never twice in a delivered turn.
+  Documentation, isolated edits, generated/dependency/build paths, reads and old
+  edits do not qualify. The conservative path/extension heuristic intentionally
+  misses large single-file changes; the model can still choose verification.
+  Collection performs no file reads or new mutation accounting. When an
   accepted plan's verification is pending, the suggestion also asks for
   evidence that the plan was executed. Spawning a verifier clears that
   plan flag. The generic suggestion remains applicable to recent edits.

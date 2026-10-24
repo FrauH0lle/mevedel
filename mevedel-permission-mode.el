@@ -41,18 +41,12 @@
 (autoload 'mevedel-plan-mode-exit "mevedel-plan-mode" nil t)
 
 ;; `mevedel-reminders'
-(declare-function mevedel-reminders-make-full-auto-mode
-                  "mevedel-reminders" ())
-(declare-function mevedel-reminders-make-full-auto-mode-exit
+(declare-function mevedel-reminders-make-mode-constraints
                   "mevedel-reminders" ())
 (declare-function mevedel-session-ensure-reminder
                   "mevedel-reminders" (session reminder))
-(declare-function mevedel-session-remove-reminder
-                  "mevedel-reminders" (session type))
-(autoload 'mevedel-reminders-make-full-auto-mode "mevedel-reminders")
-(autoload 'mevedel-reminders-make-full-auto-mode-exit "mevedel-reminders")
+(autoload 'mevedel-reminders-make-mode-constraints "mevedel-reminders")
 (autoload 'mevedel-session-ensure-reminder "mevedel-reminders")
-(autoload 'mevedel-session-remove-reminder "mevedel-reminders")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-mutation-authority
@@ -213,28 +207,6 @@ Tool contexts use `:buffer'; queue entries use `:data-buffer'."
    (or (plist-get context :buffer) (plist-get context :data-buffer))
    nil (plist-get context :request) (plist-get context :invocation)))
 
-(defun mevedel-permission-mode--apply-full-auto-lifecycle
-    (previous-mode target-mode &optional session)
-  "Synchronize full-auto reminders for PREVIOUS-MODE -> TARGET-MODE.
-SESSION defaults to the current data buffer's session."
-  (let* ((previous-mode (mevedel-permission-mode-normalize previous-mode))
-         (target-mode (mevedel-permission-mode-normalize target-mode))
-         (data-buf (mevedel-permission-mode-data-buffer))
-         (session (or session
-                      (and data-buf
-                           (buffer-local-value 'mevedel--session data-buf)))))
-    (when session
-      (cond
-       ((eq target-mode 'full-auto)
-        (mevedel-session-remove-reminder session 'full-auto-mode-exit)
-        (mevedel-session-ensure-reminder
-         session (mevedel-reminders-make-full-auto-mode)))
-       (t
-        (mevedel-session-remove-reminder session 'full-auto-mode)
-        (when (eq previous-mode 'full-auto)
-          (mevedel-session-ensure-reminder
-           session (mevedel-reminders-make-full-auto-mode-exit))))))))
-
 (defun mevedel-permission-mode-transition (mode)
   "Transition the current session to permission MODE.
 Runs mode-specific lifecycle hooks."
@@ -253,8 +225,8 @@ Runs mode-specific lifecycle hooks."
         (let ((previous (mevedel-permission-mode--effective-session-mode
                          session)))
           (mevedel-permission-mode-set-raw target)
-          (mevedel-permission-mode--apply-full-auto-lifecycle
-           previous target session)
+          (mevedel-session-ensure-reminder
+           session (mevedel-reminders-make-mode-constraints))
           (when (and (not (eq previous target))
                      (fboundp 'mevedel-permission-review-cancel))
             (mevedel-permission-review-cancel session nil 'policy))

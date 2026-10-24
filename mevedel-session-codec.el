@@ -163,7 +163,7 @@
 ;;
 ;;; Constants
 
-(defconst mevedel-session-codec-format-version "v0.5.14"
+(defconst mevedel-session-codec-format-version "v0.5.15"
   "Current on-disk session sidecar format.
 
 The authority profile is part of this format.  Readers accept exactly this

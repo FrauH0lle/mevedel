@@ -177,12 +177,14 @@ becomes the one actionable proposal. A later proposal replaces it; an accepted
 user follow-up demotes it to a non-actionable draft while preserving the
 selected axes.
 
-Every Plan turn includes the preferred proposal shape: a concrete title,
-Summary, Key Changes, Regression Coverage, Validation, and Assumptions. This
-is model guidance rather than a parser-enforced schema; the proposal parser
-continues to accept any nonblank Markdown inside the proposal tags. Automatic
-continuation compaction restores this guidance before the next provider call,
-so the proposal contract does not depend on the generated summary.
+The first delivered reminder in a Plan episode includes the full preferred
+proposal shape. Later turns carry a one-line reference to the earlier contract
+and this manual, including after compaction. A cancelled dispatch does not mark
+the template delivered. Leaving and re-entering sticky Plan, or starting a new
+directive planning conversation, rearms the full template; feedback continues
+the existing episode. Reopening a session or starting a fresh child reestablishes
+its guidance independently. This is model guidance, not a parser-enforced
+schema: the proposal parser accepts any nonblank Markdown inside the tags.
 
 The opening tag must end its line and the closing tag must occupy its own line.
 Both may be indented. Prose immediately before the opening tag is accepted:
@@ -196,6 +198,43 @@ tags. It does not repair the transcript, publish a proposal, or leave Plan mode.
 Ordinary inline discussion of tag names, tool output, and injected agent output
 do not trigger this warning. Responses without proposal delimiters remain
 ordinary discussion; the diagnostic does not try to infer plan intent from prose.
+
+### Proposal guidance
+
+Recover the complete Plan contract here when its earlier reminder is unavailable:
+
+- Inspect and discuss, not implement. Bash is limited to read-only-classified
+  commands; Eval is unavailable. Standalone/sticky Plan permits ApplyPatch only
+  for session-owned `work://` descendants. Directive Planning permits no file
+  writes. Children inherit these limits; delegate independent investigation or
+  critique of a draft supplied in the task when useful.
+- Treat implementation requests as requests to produce or revise the plan.
+  Explore available evidence first; ask only about genuine user preferences the
+  evidence cannot resolve. Do not ask whether to proceed with implementation.
+- Finish with exactly one line-oriented block below. Every new block replaces
+  the previous proposal completely. The opening tag ends its line; the closing
+  tag occupies its own line.
+
+```text
+<proposed_plan>
+# Concrete Plan Title
+
+## Summary
+- Root cause or goal, behavior change, non-goals.
+
+## Key Changes
+- Group by subsystem or behavior; name files, APIs, interfaces, or data shapes only to remove ambiguity.
+
+## Regression Coverage
+- User-visible flows, edge cases, and failures to test.
+
+## Validation
+- Exact focused test/build commands.
+
+## Assumptions
+- Defaults, compatibility assumptions, unchanged behavior.
+</proposed_plan>
+```
 
 The approval interaction has these axes:
 

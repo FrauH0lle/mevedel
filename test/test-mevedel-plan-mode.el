@@ -17,6 +17,7 @@
 (require 'mevedel-view-render)
 (require 'mevedel-permissions)
 (require 'mevedel-prompt-submission)
+(require 'mevedel-reminders)
 (require 'mevedel-session-persistence)
 (require 'mevedel-skills-ui)
 (require 'mevedel-structs)
@@ -52,10 +53,16 @@
   (:doc "enters Plan without changing the underlying permission mode")
   ,test
   (test)
-  (let ((session (mevedel-session--create
-                  :authority-mode 'pid-lock
-                  :name "test" :permission-mode 'full-auto)))
+  (let* ((reminder (mevedel-reminders-make-plan-mode))
+         (session (mevedel-session--create
+                   :authority-mode 'pid-lock :reminders (list reminder)
+                   :name "test" :permission-mode 'full-auto)))
+    (setf (mevedel-reminder-last-fired reminder) 5)
     (mevedel-plan-mode-enter session)
+    (should-not (mevedel-reminder-last-fired reminder))
+    (setf (mevedel-reminder-last-fired reminder) 6)
+    (mevedel-plan-mode-enter session)
+    (should (= 6 (mevedel-reminder-last-fired reminder)))
     (should (mevedel-session-plan-mode session))
     (should (eq 'full-auto (mevedel-session-permission-mode session))))
 

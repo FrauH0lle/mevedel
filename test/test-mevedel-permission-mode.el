@@ -353,7 +353,7 @@
             (with-current-buffer data-a
               (mevedel-permission-mode--set 'mevedel-permission-mode 'full-auto))
             (should (eq (mevedel-session-permission-mode sess-a) 'full-auto))
-            (should (memq 'full-auto-mode
+            (should (memq 'mode-constraints
                           (mapcar #'mevedel-reminder-type
                                   (mevedel-session-reminders sess-a))))
             ;; Session B and the global default are untouched.

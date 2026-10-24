@@ -79,6 +79,10 @@
 (autoload 'mevedel-queue--entry-metadata-put "mevedel-queue")
 (autoload 'mevedel-queue--unregister-entry-interaction "mevedel-queue")
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-rearm-plan-mode "mevedel-reminders" (session))
+(autoload 'mevedel-reminders-rearm-plan-mode "mevedel-reminders")
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
                   "mevedel-session-artifacts" (session))
@@ -202,6 +206,7 @@
       (unless (eq (mevedel-goal-status goal) 'complete)
         (user-error "Finish or clear the current Goal before entering Plan")))
     (unless (mevedel-session-plan-mode session)
+      (mevedel-reminders-rearm-plan-mode session)
       (let ((metadata (copy-sequence
                        (or (mevedel-session-plan-metadata session) nil))))
         (cl-remf metadata :selection)

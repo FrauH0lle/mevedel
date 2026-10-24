@@ -2288,16 +2288,16 @@ spanning lines")))
         (mevedel-cmd--mode "full-auto"))
       (should (eq 'full-auto
                   (mevedel-session-permission-mode session)))
-      (should (memq 'full-auto-mode
+      (should (memq 'mode-constraints
                     (mapcar #'mevedel-reminder-type
                             (mevedel-session-reminders session))))))
 
-  :doc "leaving full-auto via /mode installs its exit reminder"
+  :doc "leaving full-auto via /mode keeps one effective-mode advisory"
   (with-temp-buffer
     (let ((session (mevedel-session--create
                     :name "test" :permission-mode 'full-auto)))
       (setf (mevedel-session-reminders session)
-            (list (mevedel-reminders-make-full-auto-mode)))
+            (list (mevedel-reminders-make-mode-constraints)))
       (setq-local mevedel--session session)
       (mevedel-test--with-captured-messages nil
         (mevedel-cmd--mode "ask"))
@@ -2305,8 +2305,7 @@ spanning lines")))
                            (mevedel-session-reminders session))))
         (should (eq 'ask
                     (mevedel-session-permission-mode session)))
-        (should-not (memq 'full-auto-mode types))
-        (should (memq 'full-auto-mode-exit types)))))
+        (should (equal '(mode-constraints) types)))))
 
   :doc "rejects unknown modes"
   (with-temp-buffer
@@ -2475,7 +2474,9 @@ spanning lines")))
               (mevedel-cmd--edits nil))
             (should (eq 'ask
                         (mevedel-session-permission-mode session)))
-            (should-not (mevedel-session-reminders session))))
+            (should (equal '(mode-constraints)
+                           (mapcar #'mevedel-reminder-type
+                                   (mevedel-session-reminders session))))))
       (set-default-toplevel-value 'mevedel-permission-mode saved)))
 
   :doc "switches full-auto to edits and records the boundary change"
@@ -2485,7 +2486,7 @@ spanning lines")))
           (let ((session (mevedel-session--create
                           :name "test" :permission-mode 'full-auto)))
             (setf (mevedel-session-reminders session)
-                  (list (mevedel-reminders-make-full-auto-mode)))
+                  (list (mevedel-reminders-make-mode-constraints)))
             (setq-local mevedel--session session)
             (mevedel-test--with-captured-messages nil
               (mevedel-cmd--edits nil))
@@ -2493,8 +2494,7 @@ spanning lines")))
                         (mevedel-session-permission-mode session)))
             (let ((types (mapcar #'mevedel-reminder-type
                                  (mevedel-session-reminders session))))
-              (should-not (memq 'full-auto-mode types))
-              (should (memq 'full-auto-mode-exit types)))))
+              (should (equal '(mode-constraints) types)))))
       (set-default-toplevel-value 'mevedel-permission-mode saved))))
 
 

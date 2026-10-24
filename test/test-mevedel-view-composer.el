@@ -1359,15 +1359,14 @@ Policy tests use terminal rows, not production's pixel measurement helper."
             (with-current-buffer view-buf
               (should (eq 'full-auto
                           (mevedel-view-cycle-permission-mode)))
-              (should (memq 'full-auto-mode
+              (should (memq 'mode-constraints
                             (mapcar #'mevedel-reminder-type
                                     (mevedel-session-reminders session))))
               (should (eq 'ask
                           (mevedel-view-cycle-permission-mode)))
               (let ((types (mapcar #'mevedel-reminder-type
                                    (mevedel-session-reminders session))))
-                (should-not (memq 'full-auto-mode types))
-                (should (memq 'full-auto-mode-exit types)))
+                (should (equal '(mode-constraints) types)))
               (should (eq 'ask
                           (mevedel-session-permission-mode session)))
               (should (equal "> first\nsecond"

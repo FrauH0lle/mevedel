@@ -139,8 +139,13 @@
             (should (equal (pcase receipt ('nil '("INITIAL-HOOK-4813")) ('late '("LATER-HOOK-2974")))
                            (mapcar (lambda (entry) (plist-get entry :body))
                                    (mevedel-session-hook-context-pending session))))
-            (should (= (if (eq receipt 'compact) 2 0)
+            (should (= (if (eq receipt 'compact) 1 0)
                        (mevedel-engine-test--count-evidence "Plan mode is active")))
+            (should (= (if (eq receipt 'compact) 1 0)
+                       (mevedel-engine-test--count-evidence "Plan mode remains active")))
+            (when (eq receipt 'compact)
+              (should (string-search "mevedel://plan-mode.md"
+                                     (mevedel-engine-test--evidence))))
             (should-not (string-search "Context pressure is high" (mevedel-engine-test--evidence)))))))))
 
 (mevedel-deftest mevedel--send-request/claude-compacted-plan-reference (:quiet t)

@@ -219,10 +219,8 @@ only when a frozen agent template must survive a cold session resume."
   recipe)
 
 (defvar mevedel-reminders--recipe-schemas
-  '((mode-constraints mevedel-reminders-make-mode-constraints interval)
+  '((mode-constraints mevedel-reminders-make-mode-constraints no-args)
     (plan-mode mevedel-reminders-make-plan-mode no-args)
-    (full-auto-mode mevedel-reminders-make-full-auto-mode interval)
-    (full-auto-mode-exit mevedel-reminders-make-full-auto-mode-exit no-args)
     (plan-reference mevedel-reminders-make-plan-reference no-args)
     (pending-events mevedel-reminders-make-pending-events no-args)
     (date-change mevedel-reminders-make-date-change no-args)
@@ -398,7 +396,7 @@ A reminder fires when its trigger returns non-nil AND the interval
 policy permits firing.  For nil interval the reminder always fires,
 for `one-shot' it fires only if it has never fired, for integer
 interval it fires once enough turns have passed since the last fire.
-Mode constraints bypass throttling when the delivered permission mode changes."
+Mode constraints fire only when the delivered permission mode changes."
   (and (funcall (mevedel-reminder-trigger reminder) ctx)
        (let ((interval (mevedel-reminder-interval reminder))
              (last-fired (mevedel-reminder-last-fired reminder)))
@@ -410,9 +408,7 @@ Mode constraints bypass throttling when the delivered permission mode changes."
            (if (eq (mevedel-reminder-type reminder) 'mode-constraints)
                (let ((mode (mevedel-reminders--session-mode ctx))
                      (observed (mevedel-reminder-permission-mode-observation reminder)))
-                 (or (and observed (not (eq observed mode)))
-                     (null observed)
-                     (and (not (eq mode 'ask)) due)))
+                 (not (eq observed mode)))
              due)))))
 
 (defun mevedel-reminders-format-block (content)
@@ -847,51 +843,63 @@ Falls back to the global `mevedel-permission-mode' default."
 (defvar mevedel-reminders--mode-constraint-messages
   '((ask . "Permission mode: `ask'. Full Access is not active. Native edits use patch review; uncertain Bash, live Eval and additional authority require approval. Execution uses the configured sandbox preference. Explicit hard denies, Plan restrictions and resource boundaries remain.")
     (edits . "Permission mode: `edits'. Native edits and confined Bash/batch Eval are automatic. Ordinary native reads include OS-readable paths; configured credential masks remain. Live Eval and additional authority require approval.")
-    (full-auto . "Permission mode: `full-auto'. Full Access under the target OS account: no confinement or permission prompts. Native tools and live Eval are automatic. Explicit hard denies, Plan restrictions and integrity checks remain."))
+    (full-auto . "Permission mode: `full-auto'. Full Access under the target OS account disables confinement and permission prompts, including default protected paths. Native tools and live Eval are automatic. Live Eval runs inside Emacs without confinement. Explicit hard denies, Plan restrictions and integrity checks remain. Keep destructive tool calls deliberate."))
   "Alist mapping permission mode symbols to reminder body strings.")
 
-(defun mevedel-reminders-make-mode-constraints (&optional interval)
+(defun mevedel-reminders-make-mode-constraints ()
   "Create the mode-constraints reminder.
 
 Fires initially and on every delivered effective-mode change, including
-returning to Ask.  INTERVAL defaults to 5 turns between unchanged non-Ask
-repeats.
+returning to Ask, without repeating an unchanged advisory.
 The delivery observation changes only when the payload reaches the request."
   (mevedel-reminder-create
    :type 'mode-constraints
-   :recipe (list 'mode-constraints interval)
+   :recipe '(mode-constraints)
    :trigger (lambda (_session) t)
    :content (lambda (session)
               (let ((mode (mevedel-reminders--session-mode session)))
                 (or (alist-get mode mevedel-reminders--mode-constraint-messages)
                     (format "Permission mode: `%s'." mode))))
-   :interval (or interval 5)))
+   :interval nil))
 
 (defun mevedel-reminders-make-plan-mode ()
-  "Create the every-turn Plan conversation reminder."
+  "Create Plan guidance: full on first delivery, then a recovery reference."
   (mevedel-reminder-create
    :type 'plan-mode
    :recipe '(plan-mode)
    :trigger (lambda (session)
-              (or (mevedel-session-plan-mode session)
+              (or (and (mevedel-session-p session)
+                       (mevedel-session-plan-mode session))
                   (mevedel-plan-read-only-request-p)))
    :content
-   (lambda (_session)
-     (concat
-      "Plan mode is active: inspect and discuss, not implement. Bash is limited to read-only-classified commands; Eval is unavailable. Standalone/sticky Plan permits ApplyPatch only for session-owned work:// descendants; directive Planning permits no file writes. Agents you start inherit these Plan limits. Delegate independent investigation or critique of a draft plan supplied in the task when useful. An implementation request means produce or revise the plan. Explore available evidence before asking about genuine user preferences it cannot resolve. Every new <proposed_plan> block replaces the previous proposal completely. Do not ask whether you should proceed with implementation. Finish with exactly one line-oriented block:\n\n"
-      "<proposed_plan>\n"
-      "# Concrete Plan Title\n\n"
-      "## Summary\n"
-      "- Root cause or goal, behavior change, non-goals.\n\n"
-      "## Key Changes\n"
-      "- Group by subsystem or behavior; name files, APIs, interfaces, or data shapes only to remove ambiguity.\n\n"
-      "## Regression Coverage\n"
-      "- User-visible flows, edge cases, and failures to test.\n\n"
-      "## Validation\n"
-      "- Exact focused test/build commands.\n\n"
-      "## Assumptions\n"
-      "- Defaults, compatibility assumptions, unchanged behavior.\n"
-      "</proposed_plan>\n\n"))))
+   (lambda (context)
+     (let* ((reminders (if (mevedel-session-p context)
+                           (mevedel-session-reminders context)
+                         (mevedel-agent-invocation-reminders context)))
+            (reminder (cl-find 'plan-mode reminders :key #'mevedel-reminder-type)))
+       (if (and reminder (mevedel-reminder-last-fired reminder))
+           "Plan mode remains active. Follow the earlier contract; if unavailable, read `mevedel://plan-mode.md` (Proposal guidance). Finish with one <proposed_plan>...</proposed_plan> block replacing the prior proposal."
+         (concat
+          "Plan mode is active: inspect and discuss, not implement. Bash is limited to read-only-classified commands; Eval is unavailable. Standalone/sticky Plan permits ApplyPatch only for session-owned work:// descendants; directive Planning permits no file writes. Agents you start inherit these Plan limits. Delegate independent investigation or critique of a draft plan supplied in the task when useful. An implementation request means produce or revise the plan. Explore available evidence before asking about genuine user preferences it cannot resolve. Every new <proposed_plan> block replaces the previous proposal completely. Do not ask whether you should proceed with implementation. Finish with exactly one line-oriented block:\n\n"
+          "<proposed_plan>\n"
+          "# Concrete Plan Title\n\n"
+          "## Summary\n"
+          "- Root cause or goal, behavior change, non-goals.\n\n"
+          "## Key Changes\n"
+          "- Group by subsystem or behavior; name files, APIs, interfaces, or data shapes only to remove ambiguity.\n\n"
+          "## Regression Coverage\n"
+          "- User-visible flows, edge cases, and failures to test.\n\n"
+          "## Validation\n"
+          "- Exact focused test/build commands.\n\n"
+          "## Assumptions\n"
+          "- Defaults, compatibility assumptions, unchanged behavior.\n"
+          "</proposed_plan>\n\n"))))))
+
+(defun mevedel-reminders-rearm-plan-mode (session)
+  "Make SESSION's next Plan delivery include the full template again."
+  (when-let* ((reminder (cl-find 'plan-mode (mevedel-session-reminders session)
+                                 :key #'mevedel-reminder-type)))
+    (setf (mevedel-reminder-last-fired reminder) nil)))
 
 (defun mevedel-reminders-stage-plan-mode (fsm)
   "Restore active root Plan guidance after FSM's history is compacted.
@@ -909,30 +917,6 @@ Reuse the normal reminder and avoid duplicating an already staged entry."
           (mevedel-reminders-stage-entry
            fsm 'plan-mode
            (funcall (mevedel-reminder-content reminder) session)))))))
-
-(defun mevedel-reminders-make-full-auto-mode (&optional interval)
-  "Create the `full-auto-mode' reminder with INTERVAL.
-Fires immediately after entering full-auto mode, then repeats
-sparsely while that mode remains active."
-  (mevedel-reminder-create
-   :type 'full-auto-mode
-   :recipe (list 'full-auto-mode interval)
-   :trigger (lambda (session)
-              (eq (mevedel-reminders--session-mode session) 'full-auto))
-   :content (lambda (_session)
-              "Full-auto mode is active. Full Access disables confinement and permission prompts, including default protected paths. Explicit hard denies, Plan restrictions and integrity checks remain. Live Eval runs inside Emacs without confinement. Keep destructive tool calls deliberate.")
-   :interval (or interval 5)))
-
-(defun mevedel-reminders-make-full-auto-mode-exit ()
-  "Create the one-shot `full-auto-mode-exit' reminder."
-  (mevedel-reminder-create
-   :type 'full-auto-mode-exit
-   :recipe '(full-auto-mode-exit)
-   :trigger (lambda (session)
-              (not (eq (mevedel-reminders--session-mode session) 'full-auto)))
-   :content (lambda (_session)
-              "Full-auto mode has been turned off. Normal permission checks are active again.")
-   :interval 'one-shot))
 
 (defun mevedel-reminders-make-user-revised-patch (summary)
   "Create the one-shot `user-revised-patch' reminder for SUMMARY.
@@ -1473,10 +1457,10 @@ INTERVAL defaults to 8 turns.  Child-owned work is labelled as such."
    :interval (or interval 8)))
 
 (defun mevedel-reminders-make-verification-suggestion ()
-  "Suggest verification after a recent file modification.
+  "Suggest verification after recent multi-file implementation work.
 
-Only modifications in the latest committed turn or the active turn
-qualify.  Reads and older edits do not establish implementation work.
+At least two implementation files modified in the latest committed turn
+or the active turn qualify.  Documentation and isolated edits do not.
 Delivery remains throttled to once every ten turns."
   (mevedel-reminder-create
    :type 'verification-suggestion
@@ -1484,25 +1468,29 @@ Delivery remains throttled to once every ten turns."
    :trigger (lambda (session)
               (and (mevedel-session-p session)
                    (mevedel-session-touched-files session)
-                   (cl-some
-                    (lambda (entry)
-                      (when-let* ((modified
-                                   (mevedel-file-interaction-modified-turn entry)))
-                        (>= modified
-                            (or (mevedel-session-turn-count session) 0))))
-                    (hash-table-values
-                     (mevedel-session-touched-files session)))))
+                   (let ((count 0)
+                         (case-fold-search t))
+                     (maphash
+                      (lambda (path entry)
+                        (when (and (mevedel-file-interaction-modified-turn entry)
+                                   (>= (mevedel-file-interaction-modified-turn entry)
+                                       (or (mevedel-session-turn-count session) 0))
+                                   (not (string-match-p
+                                         "/\\(?:docs?\\|node_modules\\|vendor\\|generated\\|build\\|dist\\|target\\|\\.git\\|\\.eask\\|\\.scratch\\|\\.mevedel\\)/"
+                                         path))
+                                   (string-match-p
+                                    "\\.\\(?:el\\|py\\|[cm]?js\\|jsx\\|ts\\|tsx\\|c\\|h\\|cc\\|cpp\\|cxx\\|hpp\\|cs\\|java\\|go\\|rs\\|rb\\|sh\\|bash\\|zsh\\|fish\\|ex\\|exs\\|erl\\|hs\\|lua\\|php\\|swift\\|kt\\|kts\\|scala\\|clj\\|cljs\\|vue\\|svelte\\)\\'"
+                                    path))
+                          (cl-incf count)))
+                      (mevedel-session-touched-files session))
+                     (>= count 2))))
    :content (lambda (session)
               (concat
-               "Consider spawning the verifier agent before reporting \
-completion on non-trivial implementations."
+               "Multi-file implementation changes: consider independent verification before completion."
                (let ((metadata (mevedel-session-plan-metadata session)))
                  (when (and (eq (plist-get metadata :status) 'accepted)
                             (plist-get metadata :verification-pending))
-                   " Since you are implementing an accepted plan, verify \
-that the plan was actually executed, not merely that tests pass."))
-               " Adversarial verification often catches regressions \
-that pass local tests."))
+                   " Check that the accepted plan was executed, not only that tests pass."))))
    :interval 10))
 
 

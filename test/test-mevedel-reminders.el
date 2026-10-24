@@ -374,7 +374,8 @@ this collapses both shapes to the delivered text."
   ,test
   (test)
   :doc "accepts only trusted constructors with valid argument contracts"
-  (should (mevedel-reminders--recipe-p '(mode-constraints 9)))
+  (should (mevedel-reminders--recipe-p '(mode-constraints)))
+  (should-not (mevedel-reminders--recipe-p '(mode-constraints 9)))
   (should (mevedel-reminders--recipe-p '(pending-events)))
   (should-not (mevedel-reminders--recipe-p '(unknown-recipe)))
   (should-not (mevedel-reminders--recipe-p '(mode-constraints . 9)))
@@ -413,9 +414,9 @@ this collapses both shapes to the delivered text."
   :doc "serializes trusted recipes and rejects closure-only templates"
   (let ((recipes
          (mevedel-reminders-serialize-agent-templates
-          (list (mevedel-reminders-make-mode-constraints 9)
+          (list (mevedel-reminders-make-mode-constraints)
                 (mevedel-reminders-make-pending-events)))))
-    (should (equal '((mode-constraints 9) (pending-events)) recipes)))
+    (should (equal '((mode-constraints) (pending-events)) recipes)))
   (should-error
    (mevedel-reminders-serialize-agent-templates
     (list (mevedel-reminder-create
@@ -430,10 +431,10 @@ this collapses both shapes to the delivered text."
   :doc "rebuilds frozen templates only through trusted recipe factories"
   (let ((restored
          (mevedel-reminders-restore-agent-templates
-          '((mode-constraints 9) (pending-events)))))
+          '((mode-constraints) (pending-events)))))
     (should (equal '(mode-constraints pending-events)
                    (mapcar #'mevedel-reminder-type restored)))
-    (should (= 9 (mevedel-reminder-interval (car restored)))))
+    (should-not (mevedel-reminder-interval (car restored))))
   (should-error
    (mevedel-reminders-restore-agent-templates
     '((erase-buffer))))
@@ -1172,7 +1173,6 @@ this collapses both shapes to the delivered text."
         (let* ((session (mevedel-session--create
                          :permission-mode (car scenario)))
                (reminder (mevedel-reminders-make-mode-constraints))
-               (full-auto (mevedel-reminders-make-full-auto-mode))
                (backend (gptel-make-openai
                          "scoped-reminder" :host host :key "test" :models '(test)))
                ;; The default OpenAI host selects the native Responses backend.
@@ -1185,7 +1185,7 @@ this collapses both shapes to the delivered text."
                          :session session :permission-mode-override override))
             (let* ((mode (or override (car scenario)))
                    (batch (mevedel-reminders--collect-from
-                           (list reminder full-auto) 0 session))
+                           (list reminder) 0 session))
                    (data (list payload-key (vector (list :role "user" :content "task"))))
                    (fsm (gptel-make-fsm
                          :info (list :buffer (current-buffer) :backend backend
@@ -1194,9 +1194,7 @@ this collapses both shapes to the delivered text."
               (should (eq mode (mevedel-reminders--session-mode session)))
               (should (cl-find 'mode-constraints (plist-get batch :entries)
                                :key (lambda (entry) (plist-get entry :type))))
-              (when (eq mode 'ask)
-                (should-not (cl-find 'full-auto-mode (plist-get batch :entries)
-                                     :key (lambda (entry) (plist-get entry :type)))))
+              (should (= 1 (length (plist-get batch :entries))))
               (mevedel-reminders--stage-batch
                fsm (plist-get batch :entries) (plist-get batch :commits))
               (should (eq data (plist-get (gptel-fsm-info fsm) :data)))
@@ -1214,9 +1212,20 @@ this collapses both shapes to the delivered text."
           (should-not (plist-get (mevedel-reminders--collect-from (list reminder) 0 session)
                                  :entries))))))
 
-  :doc "default interval throttles to 5 turns"
-  (let ((r (mevedel-reminders-make-mode-constraints)))
-    (should (equal 5 (mevedel-reminder-interval r)))))
+  :doc "each mode advisory fires once until the effective mode changes"
+  (let* ((session (mevedel-session--create :permission-mode 'ask))
+         (r (mevedel-reminders-make-mode-constraints)))
+    (dolist (mode '(ask edits full-auto ask full-auto))
+      (setf (mevedel-session-permission-mode session) mode)
+      (should (= 1 (length (test-mevedel-reminders--collect-and-commit
+                            (list r) 0 session))))
+      (dolist (turn '(0 1 5 10 100))
+        (should-not (mevedel-reminders--should-fire-p r turn session))))
+    (let ((body (funcall (mevedel-reminder-content r) session)))
+      (dolist (text '("default protected paths" "Live Eval runs inside Emacs without confinement"
+                      "Explicit hard denies" "Plan restrictions" "integrity checks"
+                      "Keep destructive tool calls deliberate"))
+        (should (string-search text body))))))
 
 (mevedel-deftest mevedel-reminders-stage-plan-mode
   (:doc "restores sticky and directive Plan guidance once, without changing history")
@@ -1246,7 +1255,17 @@ this collapses both shapes to the delivered text."
                          (funcall (mevedel-reminder-content
                                    (mevedel-reminders-make-plan-mode))
                                   mevedel--session)
-                         (plist-get (car entries) :body))))
+                         (plist-get (car entries) :body)))
+                (let ((reminder (mevedel-reminders-make-plan-mode)))
+                  (setf (mevedel-session-reminders mevedel--session) (list reminder))
+                  (test-mevedel-reminders--collect-and-commit
+                   (list reminder) 1 mevedel--session)
+                  (let ((next (gptel-make-fsm :info (list :buffer (current-buffer)))))
+                    (mevedel-reminders-stage-plan-mode next)
+                    (let ((body (plist-get (car (plist-get (gptel-fsm-info next)
+                                                          :mevedel-reminder-entries)) :body)))
+                      (should (string-search "mevedel://plan-mode.md" body))
+                      (should-not (string-search "## Summary" body))))))
             (should-not entries)))
         (should (equal "Compacted conversation\n" (buffer-string)))))))
 
@@ -1271,6 +1290,7 @@ this collapses both shapes to the delivered text."
            "## Assumptions\n"
            "- Defaults, compatibility assumptions, unchanged behavior.\n"
            "</proposed_plan>")))
+    (setf (mevedel-session-reminders session) (list reminder))
     (should (funcall (mevedel-reminder-trigger reminder) session))
     (should-not (mevedel-reminder-interval reminder))
     (let ((content (funcall (mevedel-reminder-content reminder) session)))
@@ -1287,12 +1307,13 @@ this collapses both shapes to the delivered text."
                       "Do not ask whether you should proceed"))
         (should (string-match-p text content)))
       (should (string-match-p (regexp-quote skeleton) content)))
-    (setf (mevedel-reminder-last-fired reminder) 1)
+    (test-mevedel-reminders--collect-and-commit (list reminder) 1 session)
     (should (mevedel-reminders--should-fire-p reminder 2 session))
-    (should
-     (string-match-p
-      (regexp-quote skeleton)
-      (funcall (mevedel-reminder-content reminder) session)))
+    (let ((reference (funcall (mevedel-reminder-content reminder) session)))
+      (should (string-search "mevedel://plan-mode.md" reference))
+      (should (string-search "<proposed_plan>...</proposed_plan>" reference))
+      (should-not (string-search "## Summary" reference))
+      (should-not (string-search "\n" reference)))
     (setf (mevedel-session-plan-mode session) nil)
     (should-not (funcall (mevedel-reminder-trigger reminder) session))
     (let ((mevedel--current-request
@@ -1300,37 +1321,33 @@ this collapses both shapes to the delivered text."
       (should (funcall (mevedel-reminder-trigger reminder) session)))
     (let ((mevedel--agent-invocation
            (mevedel-agent-invocation--create :plan-read-only t)))
-      (should (funcall (mevedel-reminder-trigger reminder) session)))))
+      (should (funcall (mevedel-reminder-trigger reminder) session))))
 
-(mevedel-deftest mevedel-reminders-make-full-auto-mode
-  (:after-each (mevedel-workspace-clear-registry))
-  ,test
-  (test)
+  :doc "retained Plan agents get one full template and then a recovery reference"
+  (let* ((reminder (mevedel-reminders-make-plan-mode))
+         (mevedel--agent-invocation
+          (mevedel-agent-invocation--create :plan-read-only t :reminders (list reminder))))
+    (let ((first (mevedel-reminders--collect-from (list reminder) 0 mevedel--agent-invocation)))
+      (should (string-search "## Summary" (plist-get (car (plist-get first :entries)) :body)))
+      ;; Staging without receipt leaves the full contract retryable.
+      (should-not (mevedel-reminder-last-fired reminder)))
+    (test-mevedel-reminders--collect-and-commit (list reminder) 0 mevedel--agent-invocation)
+    (let ((next (mevedel-reminders--collect-from (list reminder) 1 mevedel--agent-invocation)))
+      (should (string-search "mevedel://plan-mode.md"
+                             (plist-get (car (plist-get next :entries)) :body)))
+      (should-not (string-search "## Summary"
+                                 (plist-get (car (plist-get next :entries)) :body))))))
 
-  :doc "fires on full-auto entry and then sparsely"
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-full-auto-mode)))
-    (should (string-search "Live Eval runs inside Emacs without confinement."
-                           (funcall (mevedel-reminder-content r) session)))
-    (setf (mevedel-session-permission-mode session) 'full-auto)
-    (should (mevedel-reminders--should-fire-p r 0 session))
-    (setf (mevedel-reminder-last-fired r) 0)
-    (should-not (mevedel-reminders--should-fire-p r 1 session))
-    (should (mevedel-reminders--should-fire-p r 5 session))))
-
-(mevedel-deftest mevedel-reminders-make-full-auto-mode-exit
-  (:after-each (mevedel-workspace-clear-registry))
-  ,test
-  (test)
-  :doc "full-auto-mode-exit fires once after leaving full-auto"
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p2/" "/tmp/p2/" "p2"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-full-auto-mode-exit)))
-    (setf (mevedel-session-permission-mode session) 'ask)
-    (should (mevedel-reminders--should-fire-p r 0 session))
-    (setf (mevedel-reminder-last-fired r) 0)
-    (should-not (mevedel-reminders--should-fire-p r 1 session))))
+(mevedel-deftest mevedel-reminders-rearm-plan-mode
+  (:doc "new Plan episodes restore the full template without changing other reminders")
+  (let* ((r (mevedel-reminders-make-plan-mode))
+         (mode (mevedel-reminders-make-mode-constraints))
+         (session (mevedel-session--create :plan-mode t :reminders (list r mode))))
+    (test-mevedel-reminders--collect-and-commit (list r mode) 1 session)
+    (should-not (string-search "## Summary" (funcall (mevedel-reminder-content r) session)))
+    (mevedel-reminders-rearm-plan-mode session)
+    (should (string-search "## Summary" (funcall (mevedel-reminder-content r) session)))
+    (should (= 1 (mevedel-reminder-last-fired mode)))))
 
 
 (mevedel-deftest mevedel-reminders-make-max-turns-warning
@@ -1423,6 +1440,8 @@ this collapses both shapes to the delivered text."
     (mevedel-session-record-interaction session "/tmp/example.el" 'read 12)
     (should-not (mevedel-reminders--should-fire-p reminder 12 session))
     (mevedel-session-record-interaction session "/tmp/example.el" 'modify 12)
+    (should-not (mevedel-reminders--should-fire-p reminder 12 session))
+    (mevedel-session-record-interaction session "/tmp/second.el" 'modify 12)
     (should (mevedel-reminders--should-fire-p reminder 12 session)))
 
   :doc "does not fire when session has no touched files"
@@ -1437,7 +1456,7 @@ this collapses both shapes to the delivered text."
           (should-not (funcall (mevedel-reminder-trigger r) session)))
       (delete-directory tmp t)))
 
-  :doc "fires after the latest turn modified a file"
+  :doc "fires after the latest turn modified multiple implementation files"
   (let* ((tmp (make-temp-file "mevedel-vs-" t))
          (ws (mevedel-workspace-get-or-create
               'project (file-name-as-directory tmp)
@@ -1447,8 +1466,9 @@ this collapses both shapes to the delivered text."
     (unwind-protect
         (progn
           (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
+          (mevedel-session-record-interaction session "/tmp/second.el" 'modify 0)
           (should (funcall (mevedel-reminder-trigger r) session))
-          (should (string-match-p "verifier"
+          (should (string-match-p "independent verification"
                                   (funcall (mevedel-reminder-content r) session))))
       (delete-directory tmp t)))
 
@@ -1464,6 +1484,7 @@ this collapses both shapes to the delivered text."
           (setf (mevedel-session-plan-metadata session)
                 '(:status accepted :verification-pending nil))
           (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
+          (mevedel-session-record-interaction session "/tmp/second.el" 'modify 0)
           (should (funcall (mevedel-reminder-trigger r) session))
           (should-not (string-match-p
                        "accepted plan"
@@ -1480,6 +1501,7 @@ this collapses both shapes to the delivered text."
     (unwind-protect
         (progn
           (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
+          (mevedel-session-record-interaction session "/tmp/second.el" 'modify 0)
           (dolist (status '(rejected cancelled presented))
             (setf (mevedel-session-plan-metadata session)
                   (list :status status :verification-pending t))
@@ -1501,10 +1523,72 @@ this collapses both shapes to the delivered text."
           (setf (mevedel-session-plan-metadata session)
                 '(:status accepted :verification-pending t))
           (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
+          (mevedel-session-record-interaction session "/tmp/second.el" 'modify 0)
           (should (funcall (mevedel-reminder-trigger r) session))
           (should (string-match-p "plan"
                                   (funcall (mevedel-reminder-content r) session))))
-      (delete-directory tmp t))))
+      (delete-directory tmp t)))
+
+  :doc "ignores docs, isolated edits, and generated or vendored code"
+  (dolist (paths '(("/tmp/one.el")
+                   ("/tmp/README.md" "/tmp/guide.org")
+                   ("/tmp/one.el" "/tmp/guide.md")
+                   ("/tmp/docs/one.el" "/tmp/docs/two.el")
+                   ("/tmp/build/one.js" "/tmp/vendor/two.el")
+                   ("/tmp/node_modules/a.js" "/tmp/.eask/b.el")))
+    (let ((session (mevedel-session--create
+                    :turn-count 0 :touched-files (make-hash-table :test #'equal)))
+          (r (mevedel-reminders-make-verification-suggestion)))
+      (dolist (path paths)
+        (mevedel-session-record-interaction session path 'modify 0))
+      (should-not (mevedel-reminders--should-fire-p r 0 session))))
+
+  :doc "commits at most once in a turn and preserves retry and ten-turn throttle"
+  (let ((session (mevedel-session--create
+                  :turn-count 0 :touched-files (make-hash-table :test #'equal)))
+        (r (mevedel-reminders-make-verification-suggestion)))
+    (dolist (path '("/tmp/src/a.el" "/tmp/test/a.el"))
+      (mevedel-session-record-interaction session path 'modify 0))
+    ;; Cancelled collection must remain retryable; delivery is the commit seam.
+    (should (plist-get (mevedel-reminders--collect-from (list r) 0 session) :entries))
+    (should (= 1 (length (test-mevedel-reminders--collect-and-commit (list r) 0 session))))
+    (should-not (plist-get (mevedel-reminders--collect-from (list r) 0 session) :entries))
+    (dolist (turn '(1 9 10))
+      (setf (mevedel-session-turn-count session) turn)
+      (dolist (path '("/tmp/src/a.el" "/tmp/test/a.el"))
+        (mevedel-session-record-interaction session path 'modify turn))
+      (should (eq (>= turn 10)
+                  (and (mevedel-reminders--should-fire-p r turn session) t)))))
+
+  :doc "WAIT injection delivers the advisory once and unsubmitted staging stays retryable"
+  (with-temp-buffer
+    (let* ((r (mevedel-reminders-make-verification-suggestion))
+           (session (mevedel-session--create
+                     :turn-count 0 :touched-files (make-hash-table :test #'equal)
+                     :reminders (list r)))
+           (backend (gptel-make-openai "verification-delivery"
+                      :host "example.test" :key "test" :models '(test)))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer (current-buffer) :backend backend
+                             :position (copy-marker (point-max))))))
+      (setq-local mevedel--session session)
+      (dolist (path '("/tmp/src/a.el" "/tmp/src/b.el"))
+        (mevedel-session-record-interaction session path 'modify 0))
+      (let ((batch (mevedel-reminders--collect-from (list r) 0 session)))
+        (mevedel-reminders--stage-batch
+         fsm (plist-get batch :entries) (plist-get batch :commits)))
+      (mevedel-reminders--handle-inject fsm)
+      (should-not (mevedel-reminder-last-fired r))
+      (should (plist-get (mevedel-reminders--collect-from (list r) 0 session) :entries))
+      (let ((data (list :messages (vector (list :role "user" :content "task")))))
+        (setf (gptel-fsm-info fsm) (plist-put (gptel-fsm-info fsm) :data data))
+        (mevedel-reminders--handle-inject fsm)
+        (mevedel-reminders--handle-inject fsm)
+        (should (= 2 (length (plist-get data :messages))))
+        (should (string-search "independent verification"
+                               (plist-get (aref (plist-get data :messages) 1) :content))))
+      (should (= 0 (mevedel-reminder-last-fired r)))
+      (should-not (plist-get (mevedel-reminders--collect-from (list r) 0 session) :entries)))))
 
 
 (mevedel-deftest mevedel-reminders-make-user-revised-patch
