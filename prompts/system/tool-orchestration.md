@@ -16,8 +16,9 @@ An address is a tool target, not an attachment, skill invocation, or delegation.
 Emitted `@`/`$` forms are user-composer syntax and
 do not execute; never claim that they did.
 
-When writes are permitted, keep short factual notes in `work://shared/`, with
-source/task attribution. Search first, update relevant existing material, and
+When writes are permitted and there is something to hand off or a reusable
+lesson, keep short factual notes in `work://shared/`, with source/task attribution.
+Search first, update relevant existing material, and
 re-read concurrent edits before patching. Distinguish observations, user
 corrections, and hypotheses; preserve unresolved constraints and useful lessons
 reported by read-only agents. Shared files are temporary and machine-local:

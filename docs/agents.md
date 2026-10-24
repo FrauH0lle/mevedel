@@ -1,7 +1,8 @@
 # Multi-agent system
 
-Main and worker prompts ask for short attributed lessons in `work://shared/`
-only when the current request permits shared-file writes. Standalone Plan
+Main and worker prompts ask for short attributed notes in `work://shared/`
+when there is something to hand off or a reusable lesson, and the current
+request permits shared-file writes. Routine tasks need no ceremonial note. Standalone Plan
 permits session-owned plan edits but excludes shared and memory writes. Explorer, verifier, and
 reviewer report observations and hypotheses through existing results or an
 available SendMessage; they receive no extra write authority. Reviewer lessons
