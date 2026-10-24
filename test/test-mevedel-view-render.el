@@ -1926,13 +1926,22 @@
                                 (point-min)
                                 mevedel-view--input-marker)))
         (should (string-match-p "Read: a.el" text))
+        (should (string-match-p "I will inspect the file" text))
+        (should (string-match-p "Then I will summarize" text))
         (should-not (string-match-p "tool result line" text))
         (should-not (string-match-p "(:name \\\"Read\\\"" text)))
       (goto-char (point-min))
       (search-forward "Thinking...")
       (mevedel-view-toggle-section)
+      (should-not (string-search "I will inspect the file" (buffer-string)))
+      (should (string-search "Then I will summarize" (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "Thinking...")
+      (mevedel-view-toggle-section)
       (search-forward "Read: a.el")
       (search-forward "Thinking...")
+      (mevedel-view-toggle-section)
+      (should-not (string-search "Then I will summarize" (buffer-string)))
       (mevedel-view-toggle-section)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
@@ -2087,6 +2096,9 @@
       (save-excursion
         (goto-char (point-min))
         (search-forward "Thinking...")
+        (should-not (get-text-property (point) 'mevedel-view-collapsed))
+        (mevedel-view-toggle-section)
+        (should (get-text-property (point) 'mevedel-view-collapsed))
         (mevedel-view-toggle-section)
         (should-not (get-text-property (point) 'mevedel-view-collapsed))
         (goto-char (point-min))
@@ -2306,22 +2318,23 @@
         (goto-char (point-min))
         (search-forward "Thinking...")
         (goto-char (match-beginning 0))
-        (mevedel-view-toggle-section)
         (should (search-forward "old thinking tail"
-                                mevedel-view--input-marker t)))
+                                mevedel-view--input-marker t))
+        (mevedel-view-toggle-section)
+        (should-not (string-search "old thinking tail" (buffer-string))))
       (with-current-buffer data-buf
         (erase-buffer)
         (mevedel-view-test--insert-data
-         data-buf (concat prefix "\nnew thinking starts collapsed\n")
+         data-buf (concat prefix "\nnew thinking starts expanded\n")
          'ignore))
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (goto-char (point-min))
         (search-forward "Thinking...")
         (goto-char (match-beginning 0))
-        (should (get-text-property (point) 'mevedel-view-collapsed))
-        (should-not (search-forward "new thinking starts collapsed"
-                                    mevedel-view--input-marker t)))))
+        (should-not (get-text-property (point) 'mevedel-view-collapsed))
+        (should (search-forward "new thinking starts expanded"
+                                mevedel-view--input-marker t)))))
 
   :doc "reanchors in-flight assistant after restoring earlier expanded fold"
   (mevedel-view-test--with-buffers
@@ -3083,7 +3096,7 @@
         (should (search-forward "Xirst paragraph"
                                 mevedel-view--input-marker t)))))
 
-  :doc "streamed tool and reasoning events grow one group and preserve the draft"
+  :doc "streamed reasoning stays visible between tool runs and preserves the draft"
   (mevedel-view-test--with-buffers
     (let ((draft "> quoted\nsecond line"))
       (with-current-buffer view-buf
@@ -3106,9 +3119,20 @@
           (should (equal draft (mevedel-view--input-text)))
           (should (= (point) (+ (mevedel-view--input-start) 3)))))
       (with-current-buffer view-buf
-        (should (string-match-p "Read 6 files, thought 6 times" (buffer-string)))
-        (should-not (string-match-p "f0.el" (buffer-string)))
+        (should-not (text-property-any (point-min) mevedel-view--input-marker
+                                       'mevedel-view-type 'tool-group))
+        (should (= 6 (mevedel-view-test--count-substring
+                      "Next file" (buffer-string))))
+        (goto-char (point-min))
+        (dotimes (i 6)
+          (should (search-forward (format "f%d.el" i)
+                                  mevedel-view--input-marker t))
+          (should (search-forward "Next file" mevedel-view--input-marker t))
+          (should-not (invisible-p (match-beginning 0))))
+        (goto-char (+ (mevedel-view--input-start) 3))
         (mevedel-view--full-rerender)
+        (should (= 6 (mevedel-view-test--count-substring
+                      "Next file" (buffer-string))))
         (should (equal draft (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 3))))))
 
@@ -3165,12 +3189,12 @@
   (dolist (interleaved '(nil t))
     (save-window-excursion
       (mevedel-view-test--with-buffers
-        (dotimes (i 4)
+        (dotimes (i (if interleaved 8 4))
           (mevedel-view-test--insert-data
            data-buf
            (format "(:name \"Read\" :args (:file_path \"f%d.el\"))\n\ncontent %d\n" i i)
            `(tool . ,(format "call_%d" i)))
-          (when interleaved
+          (when (and interleaved (= i 3))
             (mevedel-view-test--insert-data
              data-buf "#+begin_reasoning\nNext file\n#+end_reasoning\n" 'ignore)))
         (with-current-buffer view-buf
@@ -3470,6 +3494,9 @@
               (copy-marker view-assistant-start nil))
         (search-forward "Thinking...")
         (goto-char (match-beginning 0))
+        (should (search-forward "short thought" mevedel-view--input-marker t))
+        (mevedel-view-toggle-section)
+        (should-not (string-search "short thought" (buffer-string)))
         (mevedel-view-toggle-section)
         (should (search-forward "short thought"
                                 mevedel-view--input-marker t)))
@@ -3968,7 +3995,7 @@
             (should (= calls 2))
             (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
             (should (= (point) (+ 3 (mevedel-view--input-start)))))))))
-  :doc "a single coalescing row groups only in an uninterrupted tool run"
+  :doc "a single coalescing row groups within its own tool run"
   (dolist (mixed '(nil t))
     (mevedel-view-test--with-buffers
       (let ((mevedel-view-tool-group-collapse-threshold 1)
@@ -3997,14 +4024,17 @@
           (with-current-buffer view-buf
             (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
             (mevedel-view--full-rerender)
-            (should (eq (not mixed)
-                        (and (text-property-any
-                              (point-min) mevedel-view--input-marker
-                              'mevedel-view-type 'tool-group) t)))
+            (should (text-property-any
+                     (point-min) mevedel-view--input-marker
+                     'mevedel-view-type 'tool-group))
+            (when mixed
+              (should (string-search "Consider it." (buffer-string)))
+              (should (string-search "f2.el" (buffer-string)))
+              (should-not (string-search "f0.el" (buffer-string))))
             (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
             (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
 
-  :doc "hidden rows separate coalescing runs when reasoning is interleaved"
+  :doc "substantive reasoning separates coalescing runs even beside hidden rows"
   (dolist (mixed '(nil t))
     (mevedel-view-test--with-buffers
       (let ((mevedel-view-tool-group-collapse-threshold 0)
@@ -4021,10 +4051,11 @@
                  for i from 0 do
                  (mevedel-view-test--insert-data
                   data-buf (format "(:name %S :args nil)\n\nlatest\n" name)
-                  `(tool . ,(format "call-%d" i))))
-        (when mixed
-          (mevedel-view-test--insert-data
-           data-buf "#+begin_reasoning\nConsider it.\n#+end_reasoning\n" 'ignore))
+                  `(tool . ,(format "call-%d" i)))
+                 (when (and mixed (= i 1))
+                   (mevedel-view-test--insert-data
+                    data-buf "#+begin_reasoning\nConsider it.\n#+end_reasoning\n"
+                    'ignore)))
         (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
         (cl-letf (((symbol-function 'mevedel-tool-get)
                    (lambda (name &optional category)
@@ -5911,6 +5942,8 @@
       (with-current-buffer data-buf
         (setq run-start (point-min))
         (setq run-end (point-max)))
+      (mevedel-view-test--insert-data
+       data-buf "#+begin_reasoning\nFollowing thought.\n#+end_reasoning\n" 'ignore)
       (mevedel-view-test--insert-data data-buf "Following response.\n" 'response)
       (let ((children
              (plist-get
@@ -8704,14 +8737,7 @@
   :doc "a single unknown tool shows its bare name"
   (should (equal "Read 2 files, LspRename"
                  (mevedel-view--tool-group-header
-                  '((:tool "Read") (:tool "LspRename") (:tool "Read")))))
-  :doc "reasoning occurrences use singular or plural wording"
-  (should (equal "Read 1 file, thought 1 time"
-                 (mevedel-view--tool-group-header
-                  '((:tool "Read") (:kind reasoning)))))
-  (should (equal "Read 1 file, thought 2 times"
-                 (mevedel-view--tool-group-header
-                  '((:kind reasoning) (:tool "Read") (:kind reasoning))))))
+                  '((:tool "Read") (:tool "LspRename") (:tool "Read"))))))
 
 (mevedel-deftest mevedel-view--group-completions ()
   ,test
@@ -8913,7 +8939,7 @@
   (with-temp-buffer
     (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 50)))
       (let* ((header (concat "Read 5 files, searched 3 patterns, ran 2 commands, "
-                             "fetched 1 page, thought 4 times"))
+                             "fetched 1 page, queried 4 symbols"))
              (running (list :header header :vtype 'tool-group :pending-count 2))
              (settled (list :header header :vtype 'tool-group :failed-count 1)))
         (dolist (rendering (list running settled))
@@ -9063,58 +9089,80 @@
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Read 4 files" text))
         (should-not (string-match-p "f0\\.el\\|content 0" text)))))
-  :doc "reasoning is transparent to a long plain tool run"
+  :doc "thinking partitions long tool runs and stays visible through either group fold"
   (mevedel-view-test--with-buffers
-    (dotimes (i 4)
-      (mevedel-view-test--insert-data
-       data-buf
-       (format
-        "(:name \"Read\" :args (:file_path \"/tmp/f%d.el\"))\n\ncontent %d\n"
-        i i)
-       `(tool . ,(format "call_%d" i)))
-      (when (< i 3)
+    (let ((thought "I recommend skipping a separate wiki and instead mapping its jobs onto mevedel's existing systems: preferences go in Memory, decisions in ADRs/commit messages, follow-ups in docs/backlog.md, and in-flight coordination in the shared workstream folder—symlinking would break both memory indexing and consolidation. I'll proceed with this approach while awaiting any pushback, and now I'm setting up worktrees for the first wave of 11 planned workstreams.")
+          thought-start thought-end)
+      (dotimes (i 8)
         (mevedel-view-test--insert-data
          data-buf
-         (format "#+begin_reasoning\nthought %d\n#+end_reasoning\n" i)
-         'ignore)))
-    (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
-    (with-current-buffer data-buf
-      (mevedel-view-stream-render-response (point-min) (point-max)))
-    (with-current-buffer view-buf
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "Read 4 files, thought 3 times" text))
-        (should-not (string-match-p "Thinking" text))
-        (should-not (string-match-p "f0\\.el\\|thought 0" text)))
-      (goto-char (point-min))
-      (search-forward "Read 4 files, thought 3 times")
-      (goto-char (match-beginning 0))
-      (mevedel-view-toggle-section)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "f0\\.el" text))
-        (should (string-match-p "f3\\.el" text))
-        (should (string-match-p "Thinking" text))
-        (should-not (string-match-p "thought 0" text)))
-      (goto-char (point-min))
-      (search-forward "f0.el")
-      (search-forward "Thinking")
-      (search-forward "f1.el")
-      (search-forward "Thinking")
-      (search-forward "f2.el")
-      (search-forward "Thinking")
-      (search-forward "f3.el")
-      (goto-char (point-min))
-      (search-forward "Thinking")
-      (goto-char (match-beginning 0))
-      (should (eq 'tool-child
-                  (get-text-property (point) 'mevedel-view-type)))
-      (mevedel-view-toggle-section)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "thought 0" text))
-        (should (string-match-p "f0\\.el" text))
-        (should-not (string-match-p "thought 1\\|thought 2" text)))))
+         (format
+          "(:name \"Read\" :args (:file_path \"/tmp/f%d.el\"))\n\ncontent %d\n"
+          i i)
+         `(tool . ,(format "call_%d" i)))
+        (when (= i 3)
+          (setq thought-start (with-current-buffer data-buf (point-max)))
+          (mevedel-view-test--insert-data
+           data-buf
+           (concat "#+begin_reasoning\n" thought "\n#+end_reasoning\n")
+           'ignore)
+          (setq thought-end (with-current-buffer data-buf (point-max)))))
+      (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+      (with-current-buffer data-buf
+        (mevedel-view-stream-render-response (point-min) (point-max)))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> keep\nsecond line" 4)
+        (cl-flet ((check-thinking ()
+                    (save-excursion
+                      (goto-char (point-min))
+                      (should (search-forward "Thinking..." mevedel-view--input-marker t))
+                      (should (eq 'thinking-summary
+                                  (get-text-property (match-beginning 0)
+                                                     'mevedel-view-type)))
+                      (let ((source (get-text-property (match-beginning 0)
+                                                       'mevedel-view-source)))
+                        (should (eq data-buf (marker-buffer (car source))))
+                        (should (eq data-buf (marker-buffer (cdr source))))
+                        (should (= thought-start (marker-position (car source))))
+                        (should (= thought-end (marker-position (cdr source)))))
+                      (should (search-forward thought mevedel-view--input-marker t))
+                      (should-not (invisible-p (match-beginning 0)))
+                      (should-not (get-text-property (match-beginning 0)
+                                                     'mevedel-view-collapsed))
+                      (should (= 1 (mevedel-view-test--count-substring
+                                    thought (buffer-string)))))))
+          (check-thinking)
+          (should (= 2 (mevedel-view-test--count-substring
+                        "Read 4 files" (buffer-string))))
+          (should-not (string-search "thought 1 time" (buffer-string)))
+          (dolist (group '(0 1))
+            (dotimes (_ 2)
+              (save-excursion
+                (goto-char (point-min))
+                (dotimes (_ (1+ group)) (search-forward "Read 4 files"))
+                (mevedel-view-toggle-section))
+              (check-thinking)
+              (should (equal "> keep\nsecond line" (mevedel-view--input-text)))
+              (should (= (point) (+ 4 (mevedel-view--input-start))))))
+          ;; Expand both groups to prove every tool remains on its own side.
+          (goto-char (point-min))
+          (search-forward "Read 4 files")
+          (mevedel-view-toggle-section)
+          (search-forward thought)
+          (search-forward "Read 4 files")
+          (mevedel-view-toggle-section)
+          (goto-char (point-min))
+          (dotimes (i 8)
+            (when (= i 4) (search-forward thought))
+            (should (search-forward (format "f%d.el" i) mevedel-view--input-marker t)))
+          (dotimes (i 8)
+            (should (= 1 (mevedel-view-test--count-substring
+                          (format "f%d.el" i) (buffer-string)))))
+          (goto-char (+ 4 (mevedel-view--input-start)))
+          (mevedel-view--full-rerender)
+          (check-thinking)
+          (should (equal "> keep\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ 4 (mevedel-view--input-start))))))))
   :doc "a short interleaved run keeps source order"
   (mevedel-view-test--with-buffers
     (dotimes (i 2)
@@ -9136,6 +9184,8 @@
       (goto-char (point-min))
       (search-forward "f0.el")
       (search-forward "Thinking")
+      (should (search-forward "short thought" mevedel-view--input-marker t))
+      (should-not (invisible-p (match-beginning 0)))
       (search-forward "f1.el")
       (should-not (save-excursion
                     (goto-char (point-min))
@@ -9174,8 +9224,12 @@
         (with-current-buffer data-buf
           (mevedel-view-stream-render-response (point-min) (point-max))))
       (with-current-buffer view-buf
-        (should (string-match-p "Read 4 files, thought 1 time"
-                                (buffer-string)))
+        (should-not (text-property-any (point-min) mevedel-view--input-marker
+                                       'mevedel-view-type 'tool-group))
+        (should (string-search "keep going" (buffer-string)))
+        (goto-char (point-min))
+        (search-forward "keep going")
+        (should-not (invisible-p (match-beginning 0)))
         (should-not (string-match-p "HiddenMixed" (buffer-string))))))
   :doc "a failed call stays in its run, counted in the folded header, through redraws"
   (mevedel-view-test--with-buffers

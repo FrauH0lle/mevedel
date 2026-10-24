@@ -2195,8 +2195,7 @@ Execution outcome remains independent of lifecycle and disclosure state."
          (tool-split
           (and (not agent-p)
                (mevedel-view--split-rendering-tool-header header))))
-    (if (or (eq vtype 'system-reminder-summary)
-            (plist-get rendering :reasoning-p))
+    (if (memq vtype '(system-reminder-summary thinking-summary))
         header
       (let ((line
              (if tool-split
@@ -2422,7 +2421,10 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
                            `(line-prefix ,inset
                              wrap-prefix ,inset
                              rear-nonsticky (line-prefix wrap-prefix)))
-      (mevedel-view--decorate-markdown-in-range ins-start (point))
+      ;; Thinking uses the same fontification-only body as an explicit
+      ;; disclosure expansion, preserving the exact reasoning payload.
+      (unless (eq vtype 'thinking-summary)
+        (mevedel-view--decorate-markdown-in-range ins-start (point)))
       (add-text-properties body-start (point)
                            `(line-prefix ,inset
                              wrap-prefix ,inset
@@ -2491,7 +2493,7 @@ the raw tool segment.  When `:hidden-p' is non-nil, insert nothing."
 CHILD is one `:child-calls' entry.  The nested tool's own registered
 renderer produces the row, which is why a nested Grep gets Grep's header
 and `grep-mode' body without the compound tool formatting anything
-itself.  Reasoning and mailbox children carry their prepared rendering.
+itself.  Mailbox and completion children carry their prepared rendering.
 Tool rows start collapsed, including failures.
 
 A nested compound call keeps its own `:child-calls', so expanding it
@@ -2560,7 +2562,7 @@ folding a run into a group does not lose the boundary it ran with."
                 (t (plist-get child :render-data))))
          (tool (and (stringp name) (mevedel-tool-get name)))
          (rendering
-          (if (memq (plist-get child :kind) '(reasoning mailbox completion))
+          (if (memq (plist-get child :kind) '(mailbox completion))
               (plist-get child :rendering)
             (or (and tool
                      (mevedel-view--invoke-renderer tool render-data args result))
@@ -2568,8 +2570,6 @@ folding a run into a group does not lose the boundary it ran with."
                  name args result nil render-data)))))
     (when rendering
       (setq rendering (copy-sequence rendering))
-      (when (eq (plist-get child :kind) 'reasoning)
-        (setq rendering (plist-put rendering :reasoning-p t)))
       (dolist (cell (list (cons :vtype 'tool-child)
                           (cons :expandable-p t)
                           (cons :coalesce-key nil)
@@ -2608,10 +2608,9 @@ Grouped transcript rows keep their standalone identity.  Compound-tool
 children use their id to discriminate one block's shared coordinates."
   (if-let* ((own-source (plist-get child :source)))
       (mevedel-view-disclosure-state-key
-       own-source (pcase (plist-get child :kind)
-                    ('reasoning 'thinking-summary)
-                    ('mailbox 'tool-child)
-                    (_ 'tool-summary)))
+       own-source (if (eq (plist-get child :kind) 'mailbox)
+                      'tool-child
+                    'tool-summary))
     (when-let* ((base (mevedel-view-disclosure-state-key source 'tool-child))
                 (id (plist-get child :id)))
       (append base (list id)))))
@@ -6102,7 +6101,7 @@ Each plist contains :start, :end, and :body for a `:PROMPT:' drawer."
 
 (defun mevedel-view--flush-thinking-group (thinking-group data-buf)
   "Render accumulated THINKING-GROUP segments from DATA-BUF.
-Merges adjacent thinking/reasoning segments into a single summary."
+Merge fragments of one reasoning block into an expanded disclosure."
   (when thinking-group
     (let* ((segs (nreverse thinking-group))
            (first-start (cadr (car segs)))
@@ -6118,15 +6117,17 @@ Merges adjacent thinking/reasoning segments into a single summary."
       (unless (string-empty-p summary)
         (let ((unit-start (point)))
           (mevedel-view--ensure-blank-line-after-response)
-          (mevedel-view--insert-summary-region
-           (mevedel-view--summary-with-face
-            summary 'mevedel-view-thinking-summary)
-           `(mevedel-view-type thinking-summary
-             mevedel-view-collapsed t
-             mevedel-view-source ,source
-             mevedel-view-source-key ,(mevedel-view-disclosure-state-key
-                                       source
-                                       'thinking-summary)))
+          (mevedel-view--insert-rendered-tool
+           (list :header (mevedel-view--summary-with-face
+                          summary 'mevedel-view-thinking-summary)
+                 :body (with-current-buffer data-buf
+                         (string-trim
+                          (mevedel-view--clean-reasoning-text
+                           (buffer-substring first-start last-end))))
+                 :body-mode 'markdown-mode
+                 :vtype 'thinking-summary
+                 :initially-collapsed-p nil)
+           source)
           (mevedel-view--mark-live-render-unit unit-start first-start))))))
 
 (defun mevedel-view--render-system-reminder-segment (seg data-buf)
@@ -6332,33 +6333,6 @@ Each caller owns the returned entry's coalescing count."
         entry))))
 
 
-(defun mevedel-view--thinking-group-entry (segments data-buf)
-  "Return one grouped reasoning entry for SEGMENTS in DATA-BUF, or nil."
-  (when segments
-    (let* ((first-start (cadr (car segments)))
-           (last-end (caddr (car (last segments))))
-           (bounds (mevedel-view--reasoning-source-bounds
-                    data-buf first-start last-end))
-           (start (or (car-safe bounds) first-start))
-           (end (or (cdr-safe bounds) last-end))
-           (summary (mevedel-view--thinking-summary data-buf start end))
-           (body
-            (with-current-buffer data-buf
-              (mevedel-view--clean-reasoning-text
-               (buffer-substring start end)))))
-      (unless (or (string-empty-p summary)
-                  (string-empty-p (string-trim body)))
-        (list :kind 'reasoning
-              :start start
-              :end end
-              :group-child
-              (list :kind 'reasoning
-                    :status 'success
-                    :rendering
-                    (list :header summary
-                          :body body
-                          :body-mode 'markdown-mode)))))))
-
 (defun mevedel-view--mailbox-activity-entry (seg data-buf)
   "Return the activity entry for mailbox SEG in DATA-BUF.
 Keep the canonical card text so grouped and standalone deliveries use
@@ -6443,41 +6417,22 @@ there, and still renders as its own line when no group absorbs it."
    entries))
 
 (defun mevedel-view--tool-activity-entries (segments data-buf)
-  "Return ordered tool, reasoning, and mailbox entries for SEGMENTS in DATA-BUF."
-  (let (out thinking-group)
-    (cl-labels
-        ((flush-thinking
-          ()
-          (when thinking-group
-            (when-let* ((entry (mevedel-view--thinking-group-entry
-                                (nreverse thinking-group) data-buf)))
-              (push entry out))
-            (setq thinking-group nil))))
-      (dolist (seg (mevedel-view--merge-tool-hook-audit-segments
-                    segments data-buf))
-        (pcase (car seg)
-          ('tool
-           (flush-thinking)
-           (when-let* ((entry (mevedel-view--tool-segment-entry seg data-buf)))
-             (push entry out)))
-          ('mailbox
-           (when-let* ((entry (mevedel-view--mailbox-activity-entry seg data-buf)))
-             (flush-thinking)
-             (push entry out)))
-          ('ignored
-           (if (mevedel-view--hook-audit-only-segment-p
-                data-buf (cadr seg) (caddr seg))
-               (progn
-                 (flush-thinking)
-                 (when-let* ((entry (mevedel-view--tool-segment-entry seg data-buf)))
-                   (push entry out)))
-             (push seg thinking-group)))
-          (_ (push seg thinking-group))))
-      (flush-thinking))
+  "Return ordered tool and mailbox entries for SEGMENTS in DATA-BUF."
+  (let (out)
+    (dolist (seg (mevedel-view--merge-tool-hook-audit-segments segments data-buf))
+      (when-let* ((entry
+                   (pcase (car seg)
+                     ('tool (mevedel-view--tool-segment-entry seg data-buf))
+                     ('mailbox (mevedel-view--mailbox-activity-entry seg data-buf))
+                     ('ignored
+                      (when (mevedel-view--hook-audit-only-segment-p
+                             data-buf (cadr seg) (caddr seg))
+                        (mevedel-view--tool-segment-entry seg data-buf))))))
+        (push entry out)))
     (mevedel-view--split-completion-entries (nreverse out))))
 
 (defun mevedel-view--tool-activity-groupable-p (entries &optional pending)
-  "Return non-nil when activity ENTRIES may fold across thinking.
+  "Return non-nil when activity ENTRIES may fold into one group.
 PENDING in-flight calls count toward the threshold, as they will once
 settled."
   (let ((tool-entries
@@ -6500,7 +6455,7 @@ settled."
 
 (defun mevedel-view--render-tool-activity (segments data-buf &optional pending)
   "Render activity SEGMENTS from DATA-BUF in source order.
-Special tool rows split otherwise groupable tool/reasoning runs.  Keep
+Special tool rows split otherwise groupable tool runs.  Keep
 this activity mutable as one live unit until a response or other turn
 boundary arrives, so later tool calls can join the same group.
 PENDING in-flight tool entries join the trailing tool run, or follow the
@@ -6520,37 +6475,25 @@ activity when it ends in something they cannot join."
                    (progn
                      (mevedel-view--ensure-blank-line-after-response)
                      (mevedel-view--insert-tool-group entries data-buf pending))
-                 (let (tool-group thinking-group)
+                 (let (tool-group)
                    (dolist (seg segments)
                      (if (mevedel-view--tool-activity-tool-segment-p seg data-buf)
-                         (progn
-                           (when thinking-group
-                             (mevedel-view--flush-thinking-group
-                              thinking-group data-buf)
-                             (setq thinking-group nil))
-                           (push seg tool-group))
+                         (push seg tool-group)
                        (when tool-group
                          (mevedel-view--render-tool-group
                           (nreverse tool-group) data-buf)
                          (setq tool-group nil))
-                       (if (eq (car seg) 'mailbox)
-                           (progn
-                             (mevedel-view--flush-thinking-group
-                              thinking-group data-buf)
-                             (setq thinking-group nil)
-                             (when-let* ((entry (mevedel-view--mailbox-activity-entry
-                                                 seg data-buf))
-                                         (child (mevedel-view--tool-group-child
-                                                 entry data-buf 0)))
-                               (mevedel-view--insert-child-call-block
-                                child (plist-get child :source) 'derive "")))
-                         (push seg thinking-group))))
+                       (when (eq (car seg) 'mailbox)
+                         (when-let* ((entry (mevedel-view--mailbox-activity-entry
+                                             seg data-buf))
+                                     (child (mevedel-view--tool-group-child
+                                             entry data-buf 0)))
+                           (mevedel-view--insert-child-call-block
+                            child (plist-get child :source) 'derive "")))))
                    (when tool-group
                      (mevedel-view--render-tool-group
                       (nreverse tool-group) data-buf pending)
                      (setq pending nil))
-                   (mevedel-view--flush-thinking-group
-                    thinking-group data-buf)
                    (when pending
                      (mevedel-view--insert-pending-run pending))))))))
       (if (cl-every
@@ -6624,9 +6567,9 @@ DATA-BUF has its own heading, so it never needs one."
     (segments data-buf &optional variant-button directive continuation-p)
   "Render assistant SEGMENTS from DATA-BUF.
 Response text is shown inline, tool calls as collapsed one-liners,
-reasoning blocks as collapsed summaries.  Reasoning inside a plain tool
-activity run does not prevent that run from folding.  Adjacent thinking
-segments are merged into a single summary.  VARIANT-BUTTON, when non-nil,
+and substantive reasoning as standalone, initially expanded disclosures.
+Reasoning splits tool activity runs.  Fragments of one thinking block
+are merged into a single disclosure.  VARIANT-BUTTON, when non-nil,
 is inserted beside the header.  CONTINUATION-P suppresses that header."
   (unless (or directive continuation-p)
     (mevedel-view--insert-assistant-header variant-button))
@@ -6758,17 +6701,17 @@ is inserted beside the header.  CONTINUATION-P suppresses that header."
                     (mevedel-view--hook-audit-only-segment-p
                      data-buf (cadr seg) (caddr seg)))
                (push seg tool-group))
-              (t
-                 ;; Drop org-only glue (`#+end_tool', `#+begin_tool …', blank
-                 ;; lines) so it doesn't surface as a one-line `Thinking…'
-                 ;; between adjacent tool blocks.  Skip without flushing the
-                 ;; tool-group so consecutive tool segments separated only
-                 ;; by glue still group / render together.
-                 ;; Thinking after a tool stays pending so a long plain tool run
-                 ;; can fold across it.  Leading thinking keeps its old path.
-                 (if tool-group
-                     (push seg tool-group)
-                   (push seg thinking-group))))))))
+              ((not (mevedel-view--scaffolding-only-p
+                     data-buf (cadr seg) (caddr seg)))
+               ;; Only substantive thinking partitions a run.  Empty blocks
+               ;; and org glue must not stop neighboring tools grouping.
+               (flush-tools)
+               ;; The grammar keeps distinct structural reasoning blocks as
+               ;; distinct segments, even when their gptel properties match.
+               (when (and (eq (caar thinking-group) 'reasoning)
+                          (eq type 'reasoning))
+                 (flush-thinking))
+               (push seg thinking-group)))))))
       ;; Flush remaining groups
       (flush-thinking)
       (flush-tools t)
@@ -6878,12 +6821,11 @@ without an entry -- MCP tools included -- fall back to \"NAME xN\".")
 (defun mevedel-view--tool-group-header (children &optional completions)
   "Return the one-line activity summary for grouped CHILDREN.
 COMPLETIONS are the distinct execution completions among them."
-  (let (names counts (thought-count 0) (message-count 0))
+  (let (names counts (message-count 0))
     (dolist (child children)
       (cond
        ((mevedel-view--group-child-completion child))
        ((eq (plist-get child :kind) 'mailbox) (cl-incf message-count))
-       ((eq (plist-get child :kind) 'reasoning) (cl-incf thought-count))
        (t
         (let ((name (or (plist-get child :tool) "Tool")))
           (unless (member name names)
@@ -6908,12 +6850,7 @@ COMPLETIONS are the distinct execution completions among them."
                (list (format (if (= message-count 1)
                                  "received %d message"
                                "received %d messages")
-                             message-count)))
-             (when (> thought-count 0)
-               (list (format (if (= thought-count 1)
-                                 "thought %d time"
-                               "thought %d times")
-                             thought-count)))))
+                             message-count)))))
            (summary (string-join parts ", ")))
       ;; Capitalize only a verb phrase; a leading tool name keeps its
       ;; own casing.
@@ -6964,8 +6901,8 @@ here; its row shows the call as running until the result is published."
 (defun mevedel-view--tool-group-rendering
     (entries data-buf &optional summary-only pending)
   "Return the grouped rendering for activity ENTRIES in DATA-BUF, or nil.
-The result reuses the compound-tool row machinery: each tool, reasoning
-occurrence, or delivery is a `:child-calls' entry with its own disclosure
+The result reuses the compound-tool row machinery: each tool or delivery
+is a `:child-calls' entry with its own disclosure
 state.  A newly formed group keeps an already open child visible.
 SUMMARY-ONLY omits cached tool bodies; recompute before expanding children.
 PENDING in-flight tool entries count into the summary as running calls
@@ -7117,7 +7054,7 @@ bound tool-use id is the id its result carries in the transcript."
 run, so re-segmenting a folded run also returns the segment that begins
 where the run ended.  That row was never part of the group: keeping it
 summarizes the following response, mailbox, or prompt as one more
-reasoning occurrence."
+delivery."
   (let ((entries
          (with-current-buffer data-buf
            (save-restriction

@@ -89,8 +89,9 @@ block and whitespace rules. A single user-text part needs no joining copy.
 Grouping also skips the unused scaffolding cleanup of a confirmed audit-only
 segment; its audit verdict already determines attachment and preceding-type
 preservation. Other ignored segments still require scaffolding classification.
-A tool/reasoning/delivery activity run remains mutable until its surrounding
-transcript boundary closes it; an individual completed call can still join a
+A tool/delivery activity run remains mutable until its surrounding
+transcript boundary closes it; substantive reasoning is a standalone,
+initially expanded disclosure and closes the preceding tool run. An individual completed call can still join a
 growing group. Grouped rows retain their individual source identities across
 changes in presentation. A settled direct ToolCall caches its recognized
 specialist as the group presentation name while retaining its canonical
@@ -949,6 +950,18 @@ outcome and exit status. A successful compound program that handled a failed
 child warns without changing its execution outcome, while the child remains
 an error. These changes distinguish a usable result with caveats from an
 operation that failed, without restoring full-line coloring or auto-expansion.
+
+### October 2026: thinking visibility independent of tool folds
+
+A reported recommendation and progress update was retained by Claude as native
+thinking, not ordinary assistant prose. Folding it into tool activity hid
+information the user needed to see. Thinking now splits tool runs and opens by
+default, retaining its label, muted header and provider content type. Manual
+collapse remains available and source-backed choices override the new default,
+including during streaming and in archived views. Empty reasoning does not
+create a card or partition tools. This replaces reasoning's earlier membership
+in grouped activity; tool and delivery grouping and bounded live-tail rendering
+remain unchanged.
 
 ### September 2026: streaming groups and managed boundaries
 

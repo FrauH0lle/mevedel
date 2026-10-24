@@ -488,7 +488,7 @@ override a better default, such as a new group staying open over an open row."
 
 (defun mevedel-view-disclosure--default-collapsed-p (state-type)
   "Return non-nil when sections of STATE-TYPE render collapsed by default."
-  (not (memq state-type '(response turn-summary))))
+  (not (memq state-type '(response turn-summary thinking-summary))))
 
 (defun mevedel-view-disclosure-restore-state (from to states)
   "Toggle sections in FROM..TO so collapse state matches STATES.

@@ -317,6 +317,30 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
 (mevedel-deftest mevedel-view-go-to-segment ()
   ,test
   (test)
+  :doc "restored archived thinking opens by default and retains explicit fold choices"
+  (mevedel-view-segments-test--with-view
+    (with-temp-file (mevedel-session-artifacts-segment-path directory 2)
+      (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"
+              "Second prompt\n#+begin_reasoning\nArchived thought\n#+end_reasoning\n"))
+    (mevedel-view-test--insert-composer-draft "> live draft\nsecond line" 4)
+    (mevedel-view-go-to-segment 2)
+    (should (string-search "Archived thought" (buffer-string)))
+    (goto-char (point-min))
+    (search-forward "Thinking...")
+    (mevedel-view-toggle-section)
+    (should-not (string-search "Archived thought" (buffer-string)))
+    (mevedel-view-next-segment)
+    (should (equal "> live draft\nsecond line" (mevedel-view--input-text)))
+    (should (= 4 (- (point) (mevedel-view--input-start))))
+    (mevedel-view-previous-segment)
+    (should-not (string-search "Archived thought" (buffer-string)))
+    (goto-char (point-min))
+    (search-forward "Thinking...")
+    (mevedel-view-toggle-section)
+    (should (string-search "Archived thought" (buffer-string)))
+    (mevedel-view-next-segment)
+    (mevedel-view-previous-segment)
+    (should (string-search "Archived thought" (buffer-string))))
   :doc "pinned header uses only the currently displayed archived segment"
   (save-window-excursion
     (mevedel-view-segments-test--with-view

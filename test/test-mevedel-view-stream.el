@@ -5096,14 +5096,14 @@ turn's later text, live and after reconstruction."
           (should (string-match-p "Bash" text))
           (should (string-match-p "Thinking" text))
           (should (string-match-p "Final answer" text))
-          (should-not (string-match-p "root cause thought" text)))
+          (should (string-match-p "root cause thought" text)))
         (goto-char (point-min))
         (search-forward "Thinking...")
         (goto-char (match-beginning 0))
         (mevedel-view-toggle-section)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "root cause thought" text))))))
+          (should-not (string-match-p "root cause thought" text))))))
 
   :doc "final response widening does not duplicate visible user echo"
   (mevedel-view-stream-test--with-buffers
@@ -5246,7 +5246,7 @@ turn's later text, live and after reconstruction."
           (should (= 1 you-count))
           (should (string-match-p "Assistant text" text))))))
 
-  :doc "renders thinking blocks as summaries"
+  :doc "renders thinking blocks expanded with a labelled summary"
   (mevedel-view-stream-test--with-buffers
     (mevedel-view-stream-test--insert-data data-buf "line 1\nline 2\nline 3\n" 'ignore)
     (mevedel-view-stream-test--insert-data data-buf "The answer is 42.\n" 'response)
@@ -5255,7 +5255,7 @@ turn's later text, live and after reconstruction."
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Thinking" text))
-        (should-not (string-match-p "line 1" text))
+        (should (string-match-p "line 1" text))
         (should (string-match-p "42" text)))))
 
   :doc "trims contaminated thinking source to structural reasoning block"
@@ -5285,12 +5285,13 @@ turn's later text, live and after reconstruction."
                      (line-beginning-position) (line-end-position))))
           (should (= (marker-position (car source)) reasoning-start))
           (should (string-match-p "Thinking\\.\\.\\. (1 lines)" line)))
-        (mevedel-view-toggle-section)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "real thought" text))
           (should-not (string-match-p "VERDICT: PASS" text))
-          (should-not (string-match-p "</agent-result>" text))))))
+          (should-not (string-match-p "</agent-result>" text)))
+        (mevedel-view-toggle-section)
+        (should-not (string-search "real thought" (buffer-string))))))
 
   :doc "hides complete proposed-plan protocol outside Goal planning"
   (mevedel-view-stream-test--with-buffers

@@ -853,10 +853,12 @@ state of its inner sections"
        (put-text-property start (point) 'gptel 'response))
      (mevedel-view-stream-render-response (point-min) (point-max)))
    (with-current-buffer view-buf
-     ;; Expand the thinking section first.
+     ;; Explicitly collapse and re-expand the initially open section first.
      (goto-char (point-min))
      (search-forward "Thinking...")
      (goto-char (match-beginning 0))
+     (mevedel-view-toggle-section)
+     (should-not (string-search "deep thoughts live here" (buffer-string)))
      (mevedel-view-toggle-section)
      (let ((text (buffer-substring-no-properties
                   (point-min) mevedel-view--input-marker)))
@@ -1284,10 +1286,11 @@ the preceding header."
 (mevedel-deftest mevedel-view-disclosure--default-collapsed-p ()
   ,test
   (test)
-  :doc "responses and turns render open; other sections render folded"
+  :doc "responses, turns and thinking render open; tools render folded"
   (should-not (mevedel-view-disclosure--default-collapsed-p 'response))
   (should-not (mevedel-view-disclosure--default-collapsed-p 'turn-summary))
-  (dolist (type '(tool-summary tool-group thinking-summary tool-child))
+  (should-not (mevedel-view-disclosure--default-collapsed-p 'thinking-summary))
+  (dolist (type '(tool-summary tool-group tool-child))
     (should (mevedel-view-disclosure--default-collapsed-p type))))
 
 (mevedel-deftest mevedel-view-disclosure-restore-state ()

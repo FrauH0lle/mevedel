@@ -709,8 +709,8 @@ may indent further to express their hierarchy. Ordinary response prose and
 whole-turn headers or folds remain flush-left. Body insets are display-only,
 including on wrapped continuation lines, so copied disclosure content retains
 its authoritative text without presentation padding.
-Grouped thinking rows keep the same muted thinking marker and summary face as
-standalone rows. Nested row toggles retain the complete parent inset immediately;
+Thinking keeps its muted marker and summary face, including when manually
+collapsed. Nested row toggles retain the complete parent inset immediately;
 their header and body indentation do not wait for a later transcript redraw.
 Expanded ordinary tool text aligns with its parent's text label. View mode
 disables `adaptive-wrap-prefix-mode` and `visual-wrap-prefix-mode` after major-mode
@@ -817,13 +817,13 @@ turn before it. Activity that ends a turn is closed by the turn's rule.
 
 Runs of more than `mevedel-view-tool-group-collapse-threshold` (default 3)
 plain tool rows fold into one grouped activity row such as
-`Searched 5 patterns, read 1 file, ran 5 commands, thought 8 times`; tools
+`Searched 5 patterns, read 1 file, ran 5 commands`; tools
 without a verb mapping — MCP tools included — appear as `NAME ×N`. A summary
 too long for the narrowest window showing the view ends in `…`, leaving room for
 its running and failed counts, so the folded row stays one screen line as they
 come and go. The
 expanded group reuses the compound-tool nested-row machinery: each tool call
-and substantive reasoning occurrence is a `tool-child` row in chronological
+is a `tool-child` row in chronological
 order with its own collapse state, and collapsing the group takes its rows
 with it. Collapse removes only rows whose source the group's source range
 contains, so that range spans every member, including a call that ends after
@@ -845,7 +845,17 @@ does not hide or move text the reader is inspecting. An explicit group fold wins
 its children's states. Rows that demand individual presentation — agent
 handles, compound tools, rows carrying hook audits, rows their renderer wants expanded or
 compact, and coalesced rows — never fold into a group; they split the run
-around themselves, including runs interleaved with reasoning. An unfinished
+around themselves. Substantive thinking also splits surrounding tool runs:
+it renders as a standalone **Thinking...** disclosure, expanded by default,
+so collapsing either neighboring group never hides it. Explicit manual
+collapse and expansion survive streaming chunks, tool completion, settlement,
+full redraws and revisiting an archived segment. A distinct reasoning block
+gets its own default. Empty blocks and signature-only provider metadata produce
+no blank cards and do not split a tool run. Tools nested in reasoning retain
+their own rows in source order; their payloads never enter the thinking body.
+The provider's reasoning type and stored transcript remain unchanged, even
+when a thought contains user-facing recommendations or progress updates.
+An unfinished
 activity run remains mutable across streaming events so later calls can join
 its group.
 
@@ -1983,8 +1993,8 @@ body, including the number of failed attempts. Legacy failures without these
 fields keep their ordinary rendering. See [bounded sample recovery](architecture.md#bounded-native-gptel-sample-recovery).
 `mevedel-view-render-live-update` retains completed
 semantic units in the view and reparses only the mutable source-backed tail.
-Standalone reasoning summaries and grouped activity runs are units; reasoning
-nested in a qualifying activity run belongs to that one group unit. Response
+Standalone reasoning disclosures and grouped tool activity runs are separate
+units; substantive reasoning closes the preceding tool run. Response
 prose advances at the last blank-line boundary outside fenced code. Terminal
 settlement calls `mevedel-view-render-settle` for one exact whole-turn
 reconciliation. A full rerender, a new turn, or stream cancellation invalidates
@@ -2493,7 +2503,9 @@ live refreshes. Rebuilding the same transcript retains remembered states for
 children hidden inside folded groups; an explicit transcript-source change
 clears them. Only chosen states are remembered: a toggle, a state already
 remembered, or a captured state that differs from its section type's default
-(responses and turns open, other sections folded). A section shown in its
+(responses, turns and thinking open, other sections folded). Existing explicit
+source-backed thinking choices still override the default; no persisted
+transcript format changes. A section shown in its
 default state is not remembered, so a group that once folded by default does
 not later fold over a row the reader opened. Source anchors prevent unmatched states from applying to rewritten
 content at the same position.

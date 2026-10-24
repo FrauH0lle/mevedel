@@ -28,6 +28,8 @@
       (search-forward "Thinking...")
       (goto-char (match-beginning 0))
       (mevedel-view-toggle-section)
+      (should-not (string-search "short thought" (buffer-string)))
+      (mevedel-view-toggle-section)
       (let ((inhibit-read-only t))
         (goto-char (mevedel-view--input-start))
         (insert "> keep this\nsecond line"))
@@ -53,7 +55,7 @@
         (should (= 3 (mevedel-view-test--count-substring "more" text)))))))
 
 (mevedel-deftest mevedel-view-live-tail-rewritten-disclosure
-  (:doc "Expanded final thinking is rebuilt whole across successive chunks.")
+  (:doc "Expanded final thinking retains a complete reusable unit across chunks.")
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "short thought\n" 'ignore)
     (with-current-buffer view-buf
@@ -65,6 +67,8 @@
       (search-forward "Thinking...")
       (goto-char (match-beginning 0))
       (mevedel-view-toggle-section)
+      (should-not (string-search "short thought" (buffer-string)))
+      (mevedel-view-toggle-section)
       (let ((inhibit-read-only t))
         (goto-char (mevedel-view--input-start))
         (insert "> keep this\nsecond line"))
@@ -72,7 +76,9 @@
       (dotimes (_ 3)
         (mevedel-view-test--insert-data data-buf "more thought\n" 'ignore)
         (mevedel-view-render-live-update data-buf)
-        (should-not (mevedel-view--live-tail-valid-p data-buf))
+        ;; The renderer now inserts the expanded body directly.  No later
+        ;; default-state restoration splits the final unit after insertion.
+        (should (mevedel-view--live-tail-valid-p data-buf))
         (should (equal (mevedel-view--input-text) "> keep this\nsecond line"))
         (should (= 4 (- (point) (mevedel-view--input-start)))))
       (let ((text (buffer-string)))
