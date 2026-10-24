@@ -1009,7 +1009,15 @@
         (should (string-match-p "Working directory: /srv/project/lib/"
                                 result))
         (should (string-match-p "Platform: linux" result))
-        (should (string-match-p "OS Version: 6.8.0-target" result)))))
+        (should (string-match-p "OS Version: 6.8.0-target" result))
+        (should-not (string-match-p "Virtualization:" result)))
+      (setf (mevedel-execution-target-readiness target)
+            (append '(:virtualization "docker")
+                    (mevedel-execution-target-readiness target)))
+      (should (string-match-p
+               "OS Version: 6.8.0-target\nVirtualization: docker\nEmacs version: "
+               (mevedel--environment-info-string
+                nil "/ssh:user@host:/srv/project/" target)))))
 
   :doc "identifies remote directories with or without a target and no readiness"
   (dolist (case '(("/ssh:user@host:/workspace/" . "ssh:user@host")

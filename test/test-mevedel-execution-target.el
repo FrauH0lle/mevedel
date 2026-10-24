@@ -406,6 +406,43 @@
       (mevedel-execution-target-probe target)
       (should (= 6 lookups))))
 
+  :doc "caches container, VM or WSL detection for local and remote targets"
+  (dolist (case '(("/ssh:user@host:/srv/project/" "podman\n" "podman")
+                  ("/tmp/" "wsl\n" "wsl")
+                  ("/tmp/" "none\n" nil)
+                  ("/tmp/" "<garbage>\n" nil)
+                  ("/ssh:user@host:/srv/project/" fail nil)))
+    (let ((target (mevedel-execution-target-create (nth 0 case)))
+          (scripts 0))
+      (cl-letf (((symbol-function 'executable-find)
+                 (lambda (name &optional _remote) (concat "/usr/bin/" name)))
+                ((symbol-function 'process-file)
+                 (lambda (program _in destination _display &rest args)
+                   (if (equal program "sh")
+                       (progn
+                         (cl-incf scripts)
+                         (should (equal "-c" (car args)))
+                         (if (eq (nth 1 case) 'fail)
+                             1
+                           (with-current-buffer destination
+                             (insert (nth 1 case)))
+                           0))
+                     (with-current-buffer destination
+                       (insert
+                        (cond
+                         ((equal program "env") "HOME=/home/user\0")
+                         ((equal args '("-r")) "6.8.0-target\n")
+                         ((string-suffix-p "bash" program)
+                          "boot=fixture\nmachine=fixture\npid1-start=1\nhostname=fixture\n")
+                         (t "Linux\n"))))
+                     0))))
+        (let ((readiness (mevedel-execution-target-probe target)))
+          (should (eq 'ready (plist-get readiness :status)))
+          (should (equal (nth 2 case)
+                         (plist-get readiness :virtualization))))
+        (mevedel-execution-target-probe target)
+        (should (= 1 scripts)))))
+
   :doc "does not forward dynamically bound client environment variables"
   (let* ((process-environment
           (cons "MEVEDEL_CLIENT_SECRET=do-not-forward" process-environment))
@@ -859,7 +896,8 @@
       (should (eq 'ready
                   (plist-get (mevedel-execution-target-probe target)
                              :status)))
-      (should (= 4 probes)))))
+      ;; env, uname -s, uname -r and the virtualization script.
+      (should (= 5 probes)))))
 
 (mevedel-deftest mevedel-execution-target-observe-incarnation ()
   ,test

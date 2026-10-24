@@ -11,8 +11,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 ## Inbox
 
 - Consider making mevedel's data buffers hidden
-- Add optional cached container/VM/WSL detection to environment context for
-  local and SSH targets; TRAMP execution targets are already reported.
 - Check if memory and journal processing could be async
 
 

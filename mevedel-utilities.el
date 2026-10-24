@@ -1127,6 +1127,7 @@ The string includes:
 - Working directory
 - Platform (operating system type)
 - OS version
+- Virtualization (container, VM or WSL), when the target probe found one
 - Emacs version
 - Current date"
   (let* ((dir (file-name-as-directory
@@ -1170,12 +1171,16 @@ The string includes:
          (display-directory
           (or (file-remote-p dir 'localname 'never)
               (expand-file-name dir)))
+         (virtualization (plist-get readiness :virtualization))
          (date (format-time-string "%Y-%m-%d")))
-    (format "Execution target: %s\nWorking directory: %s\nPlatform: %s\nOS Version: %s\nEmacs version: %s\nToday's date: %s"
+    (format "Execution target: %s\nWorking directory: %s\nPlatform: %s\nOS Version: %s\n%sEmacs version: %s\nToday's date: %s"
             (mevedel-execution-target-label execution-target dir)
             display-directory
             platform
             os-version
+            (if virtualization
+                (format "Virtualization: %s\n" virtualization)
+              "")
             emacs-version
             date)))
 

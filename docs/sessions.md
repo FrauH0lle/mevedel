@@ -883,6 +883,13 @@ connection is replaced, and on `mevedel-retry-target-readiness`.  A failed
 observation falls back to the full probe, which settles the blocked readiness
 that admission reports.
 
+The full probe also reports the target's container, VM or WSL kind from
+`/.dockerenv`, `/run/.containerenv`, `/proc/version` and, when installed,
+`systemd-detect-virt`. It is one extra shell command per probe, cached with
+readiness, so the system prompt's `<env>` block shows a `Virtualization:`
+line for local and remote targets without probing per request. A failed or
+unexpected answer omits the line and never blocks readiness.
+
 Durable mutation's incarnation fence checks target identity and reachability,
 not the current mode's child-confinement requirement. This lets a session leave
 Edits when remote confinement is unavailable without skipping ownership or

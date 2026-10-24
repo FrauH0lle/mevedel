@@ -394,6 +394,32 @@ DIRECTORY may be target-native or already qualified for TARGET."
           (error "Target probe command failed: %s" program))
         (buffer-string)))))
 
+(defconst mevedel-execution-target--virtualization-script
+  "if [ -f /.dockerenv ]; then echo docker
+elif [ -f /run/.containerenv ]; then echo podman
+elif grep -qi microsoft /proc/version 2>/dev/null; then echo wsl
+elif command -v systemd-detect-virt >/dev/null 2>&1; then
+  systemd-detect-virt 2>/dev/null || true
+fi"
+  "POSIX shell script printing the target's container, VM or WSL kind.
+Container and WSL markers are file tests; `systemd-detect-virt' is
+consulted only when present.  The script exits zero and prints nothing
+or \"none\" when no virtualization is detected.")
+
+(defun mevedel-execution-target--probe-virtualization (target)
+  "Return TARGET's container, VM or WSL kind as a string, or nil.
+Run once per readiness probe, so the result is cached with readiness.
+A failed or unexpected answer yields nil and never blocks readiness."
+  (when-let* ((output
+               (ignore-errors
+                 (mevedel-execution-target--process-output
+                  target "sh" "-c"
+                  mevedel-execution-target--virtualization-script)))
+              (kind (string-trim (car (split-string output "\n")))))
+    (and (string-match-p "\\`[a-z0-9-]\\{1,32\\}\\'" kind)
+         (not (equal kind "none"))
+         kind)))
+
 (defun mevedel-execution-target--live-connection (target)
   "Return TARGET's live TRAMP connection process, or nil."
   (when (mevedel-execution-target-remote-p target)
@@ -722,6 +748,9 @@ reconnect or non-nil REFRESH discards it and the matching Bubblewrap cache.
                              (string-trim
                               (mevedel-execution-target--process-output
                                target "uname" "-r")))
+                            (virtualization
+                             (mevedel-execution-target--probe-virtualization
+                              target))
                             (capabilities
                              (mevedel-execution-target--probe-capabilities target))
                             (missing
@@ -785,6 +814,7 @@ reconnect or non-nil REFRESH discards it and the matching Bubblewrap cache.
                                    "; "))
                              :operating-system operating-system
                              :operating-system-version operating-system-version
+                             :virtualization virtualization
                              :capabilities capabilities
                              :missing-dependencies missing
                              :install-hint install-hint
