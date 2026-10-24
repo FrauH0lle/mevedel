@@ -19,6 +19,22 @@
 (require 'mevedel-cockpit)
 (require 'transient)
 
+(defcustom mevedel-worktree-setup-enabled nil
+  "Whether newly created worktrees run the configured setup command.
+Directory-local values use the `mevedel-worktree-setup-mode' key in the
+source checkout's .dir-locals.el and Emacs's normal local-variable approval.
+Enabling this executes project code."
+  :type 'boolean
+  :group 'mevedel)
+
+(defcustom mevedel-worktree-setup-command nil
+  "Program and arguments to run in a newly created worktree.
+Only used when `mevedel-worktree-setup-enabled' is non-nil.  This is an
+argument list, not a shell command.  Setup must exit zero before a session
+is opened; output is retained in `*mevedel worktree setup*'."
+  :type '(repeat string)
+  :group 'mevedel)
+
 (defvar mevedel-worktree-list--surface)
 
 ;; `mevedel-chat'
@@ -1111,6 +1127,7 @@ or directory signals instead of choosing another."
                     branch
                     native-directory
                     (plist-get result :output))))
+    (mevedel-worktree--setup source-directory directory)
     reservation))
 
 (defun mevedel-worktree-fork-validate-reservation (session reservation)
@@ -1168,6 +1185,54 @@ or directory signals instead of choosing another."
           (insert "\n"))
         (insert entry "\n")
         (write-region (point-min) (point-max) exclude-file nil 'silent)))))
+
+(define-derived-mode mevedel-worktree-setup-mode fundamental-mode "Mevedel-Setup"
+  "Major mode for reading project worktree setup configuration.
+Use `mevedel-worktree-setup-mode' as the .dir-locals.el key, not nil, to
+keep command-executing setup locals out of ordinary file buffers.")
+
+(defun mevedel-worktree--setup (source-root directory)
+  "Run explicitly authorized project setup in new worktree DIRECTORY.
+Read directory locals from SOURCE-ROOT in `mevedel-worktree-setup-mode'.
+Use that mode as the .dir-locals.el key to scope configuration to this
+lookup.  Neither setup option is a safe local variable: an untrusted
+project must not authorize its own code.
+Leave the worktree intact on failure, with diagnostics and a retry path."
+  (with-temp-buffer
+    (mevedel-worktree-setup-mode)
+    (setq default-directory (file-name-as-directory source-root))
+    (hack-dir-local-variables-non-file-buffer)
+    (when mevedel-worktree-setup-enabled
+      (unless (and (consp mevedel-worktree-setup-command)
+                   (cl-every #'stringp mevedel-worktree-setup-command))
+        (user-error "Worktree created at %s, but setup command is not configured"
+                    directory))
+      (let* ((command mevedel-worktree-setup-command)
+             (default-directory (file-name-as-directory directory))
+             (target (mevedel-worktree--execution-target directory))
+             (process-environment
+              (unless (mevedel-execution-target-remote-p target)
+                process-environment))
+             (output (get-buffer-create "*mevedel worktree setup*"))
+             exit)
+        (with-current-buffer output
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert (format "Worktree: %s\nCommand: %S\n\n"
+                            directory command))
+            (let ((default-directory (file-name-as-directory directory)))
+              (condition-case err
+                  (setq exit (apply #'process-file (car command) nil
+                                    (list t t) nil (cdr command)))
+                (file-error
+                 (setq exit 127)
+                 (insert (error-message-string err)))))
+            (special-mode)))
+        (unless (eq exit 0)
+          (user-error
+           "Worktree created at %s, but setup failed (%s); see %s. Fix the cause and rerun %S in that worktree"
+           directory exit (buffer-name output) command))
+        (message "Worktree setup ready; report in %s" (buffer-name output))))))
 
 (defun mevedel-worktree--open-session (workspace worktree-directory)
   "Open a new mevedel session for WORKSPACE at WORKTREE-DIRECTORY."
@@ -1330,7 +1395,9 @@ The return value is a plist with `:buffer', `:branch', `:directory', and
               (user-error "Git worktree add failed: %s"
                           (plist-get result :output))))
           (condition-case err
-              (let ((chat-buffer
+              (let* ((_setup (mevedel-worktree--setup
+                              source-directory worktree-directory))
+                     (chat-buffer
                      (mevedel-worktree--open-session
                       workspace worktree-directory)))
                 (unless clean

@@ -54,7 +54,13 @@ Mirror `/worktree` defaults when creating through Bash:
 - Add `/.worktrees/` to `.git/info/exclude`; do not edit `.gitignore`.
 - Create a new branch from current `HEAD`; do not reuse existing branches.
 - Map branch `worktree/foo` to directory `.worktrees/foo`.
-- Do not run setup, dependency installation, or tests as part of creation.
+- Run a project setup command in the new worktree only when the user has
+  explicitly authorized it. `/worktree` uses the separate
+  `mevedel-worktree-setup-enabled` and `mevedel-worktree-setup-command` options
+  (including approved source-checkout directory locals). Bash fallback must
+  honor the same authorization; a script's presence is not permission to run it.
+  If enabled setup fails, stop before implementation and report its output and
+  the retained worktree path. Do not silently install or upgrade dependencies.
 - After creation, verify the project baseline with the repo's documented
   commands before implementation.
 

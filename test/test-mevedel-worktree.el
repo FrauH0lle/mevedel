@@ -24,6 +24,10 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+;; `eask'
+(defvar eask-depends-on)
+(defvar eask-depends-on-dev)
+
 ;; `mevedel-cockpit'
 (defvar mevedel-cockpit--context)
 
@@ -505,7 +509,9 @@
       (mevedel-workspace-clear-registry)))
   :doc "creates a linked worktree and branch at the reserved base commit"
   (let ((root (file-name-as-directory
-               (make-temp-file "mevedel-worktree-fork-create-" t))))
+               (make-temp-file "mevedel-worktree-fork-create-" t)))
+        (mevedel-worktree-setup-enabled t)
+        (mevedel-worktree-setup-command '("sh" "-c" "touch setup-ready")))
     (unwind-protect
         (let* ((workspace (mevedel-worktree-test--workspace root))
                (session (mevedel-session-create "main" workspace root)))
@@ -513,8 +519,10 @@
           (let* ((reservation
                   (mevedel-worktree-fork-reservation session))
                  (directory (plist-get reservation :directory)))
-            (mevedel-worktree-fork-create reservation)
+            (mevedel-test--with-captured-messages nil
+              (mevedel-worktree-fork-create reservation))
             (should (file-directory-p directory))
+            (should (file-exists-p (file-name-concat directory "setup-ready")))
             (should
              (equal
               (plist-get reservation :base-commit)
@@ -530,7 +538,9 @@
                 directory "branch" "--show-current")
                :output)))))
       (delete-directory root t)
-      (mevedel-workspace-clear-registry)))
+      (mevedel-workspace-clear-registry)
+      (when (get-buffer "*mevedel worktree setup*")
+        (kill-buffer "*mevedel worktree setup*"))))
   :doc "forks an existing linked worktree into a sibling at its current HEAD"
   (let ((root (file-name-as-directory
                (make-temp-file "mevedel-worktree-fork-sibling-" t))))
@@ -1733,10 +1743,243 @@
 ;;
 ;;; Create
 
+(mevedel-deftest mevedel-worktree-bootstrap-probe
+  (:doc "checks manifest minimums before reporting dependency readiness")
+  (with-temp-buffer
+    (should
+     (eq 0 (call-process
+            "python3" nil t nil "-c"
+            "import runpy,sys;sys.stdout.write(runpy.run_path(sys.argv[1])['PROBE'])"
+            (file-name-concat mevedel-test--worktree-root
+                              "scripts/bootstrap-worktree.py"))))
+    (let* ((probe (read (buffer-string)))
+           (eask-depends-on '(("acp" "99999999")))
+           (eask-depends-on-dev nil)
+           (standard-output (current-buffer))
+           (err (should-error (eval probe t))))
+      (should (string-match-p "Missing or outdated test dependency: acp >=99999999"
+                              (error-message-string err)))
+      (erase-buffer)
+      (setq eask-depends-on '(("acp" "0.15.2")))
+      (eval probe t)
+      (should (string-match-p "gptel-request: version=.*sha256=" (buffer-string)))
+      (should (string-match-p "Worktree bootstrap: ready" (buffer-string))))))
+
+(mevedel-deftest mevedel-worktree-bootstrap-branch-dependencies
+  (:doc "rejects new runtime and development dependencies absent from shared Eask")
+  (dolist (development '(nil t))
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-branch-dependency-" t)))
+           (destination (file-name-concat root "linked"))
+           (script (file-name-concat mevedel-test--worktree-root
+                                     "scripts/bootstrap-worktree.py")))
+      (unwind-protect
+          (progn
+            (mevedel-worktree-test--init-repo root)
+            (with-temp-file (file-name-concat root "Eask")
+              (insert ";; -*- mode: eask; lexical-binding: t -*-\n"
+                      "(package \"bootstrap-fixture\" \"1.0.0\" \"Fixture\")\n"
+                      "(package-file \"fixture.el\")\n"
+                      "(depends-on \"gptel\")\n"))
+            (with-temp-file (file-name-concat root "fixture.el")
+              (insert ";;; fixture.el --- Fixture -*- lexical-binding: t -*-\n"
+                      "(provide 'fixture)\n"))
+            (with-temp-file (file-name-concat root ".gitignore")
+              (insert ".eask\nlinked/\n"))
+            (mevedel-worktree-test--git-ok root "add" "Eask" "fixture.el" ".gitignore")
+            (mevedel-worktree-test--git-ok root "commit" "-m" "Eask fixture")
+            (make-symbolic-link
+             (file-truename (file-name-concat mevedel-test--worktree-root ".eask"))
+             (file-name-concat root ".eask"))
+            (mevedel-worktree-test--git-ok root "worktree" "add" "--detach" destination)
+            (with-temp-buffer
+              (let ((default-directory (file-name-as-directory destination)))
+                (should (eq 0 (process-file "python3" nil (list t t) nil script)))
+                (should (string-match-p "Worktree bootstrap: ready" (buffer-string)))
+                (erase-buffer)
+                (with-temp-buffer
+                  (insert "(depends-on \"mevedel-bootstrap-absent-dependency\" \"1.0\")")
+                  (when development
+                    (goto-char (point-min))
+                    (insert "(development ")
+                    (goto-char (point-max))
+                    (insert ")"))
+                  (write-region (concat "\n" (buffer-string) "\n") nil
+                                (file-name-concat destination "Eask") t 'silent))
+                (should-not (eq 0 (process-file "python3" nil (list t t) nil script)))
+                (should (string-match-p
+                         "Missing or outdated test dependency: mevedel-bootstrap-absent-dependency >=1.0"
+                         (buffer-string)))
+                (should (string-match-p "install-deps --dev" (buffer-string)))
+                (should (string-match-p "In the failing worktree, run" (buffer-string)))
+                (should (string-match-p "get approval to change shared dependencies"
+                                        (buffer-string)))
+                (should-not (string-match-p "Worktree bootstrap: ready" (buffer-string))))))
+        (delete-directory root t)))))
+
+(mevedel-deftest mevedel-worktree-setup-mode
+  (:doc "limits repository setup locals to dedicated setup lookup buffers")
+  (let* ((root (make-temp-file "mevedel-setup-locals-scope-" t))
+         (file (file-name-concat root "ordinary.el"))
+         (command '("python3" "scripts/bootstrap-worktree.py"))
+         (enable-local-variables :safe)
+         (safe-local-variable-values
+          `((mevedel-worktree-setup-enabled . t)
+            (mevedel-worktree-setup-command . ,command)))
+         ordinary)
+    (unwind-protect
+        (progn
+          (copy-file (file-name-concat mevedel-test--worktree-root ".dir-locals.el")
+                     (file-name-concat root ".dir-locals.el"))
+          (with-temp-file file
+            (insert ";;; ordinary.el --- Fixture -*- lexical-binding: t -*-\n"))
+          (setq ordinary (find-file-noselect file))
+          (with-current-buffer ordinary
+            (should (eq major-mode 'emacs-lisp-mode))
+            (dolist (variable '(mevedel-worktree-setup-enabled
+                                mevedel-worktree-setup-command))
+              (should-not (local-variable-p variable))
+              (should-not (assq variable dir-local-variables-alist))))
+          (with-temp-buffer
+            (mevedel-worktree-setup-mode)
+            (should (eq major-mode 'mevedel-worktree-setup-mode))
+            (should-not (local-variable-p 'mevedel-worktree-setup-enabled))
+            (setq default-directory (file-name-as-directory root))
+            (hack-dir-local-variables-non-file-buffer)
+            (should (local-variable-p 'mevedel-worktree-setup-enabled))
+            (should mevedel-worktree-setup-enabled)
+            (should (equal command mevedel-worktree-setup-command))))
+      (when (buffer-live-p ordinary)
+        (kill-buffer ordinary))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-worktree--setup
+  (:quiet t :after-each (when (get-buffer "*mevedel worktree setup*")
+                         (kill-buffer "*mevedel worktree setup*")))
+  ,test
+  (test)
+
+  :doc "does not trust a project's setup settings or script presence"
+  (let* ((root (make-temp-file "mevedel-untrusted-setup-" t))
+         (enable-local-variables :safe)
+         (safe-local-variable-values nil))
+    (unwind-protect
+        (progn
+          (with-temp-file (file-name-concat root ".dir-locals.el")
+            (prin1 '((mevedel-worktree-setup-mode
+                      . ((mevedel-worktree-setup-enabled . t)
+                         (mevedel-worktree-setup-command
+                          . ("sh" "-c" "touch unsafe")))))
+                   (current-buffer)))
+          (mevedel-worktree--setup root root)
+          (should-not (file-exists-p (file-name-concat root "unsafe")))
+          (should-not (safe-local-variable-p
+                       'mevedel-worktree-setup-enabled t))
+          (should-not (safe-local-variable-p
+                       'mevedel-worktree-setup-command '("sh" "-c" "touch unsafe"))))
+      (delete-directory root t)))
+  :doc "runs approved source directory locals in the destination and retains output"
+  (let* ((root (make-temp-file "mevedel-approved-setup-" t))
+         (source (file-name-concat root "source"))
+         (destination (file-name-concat root "destination"))
+         (command '("sh" "-c" "printf provenance; touch ready"))
+         (enable-local-variables :safe)
+         (safe-local-variable-values
+          `((mevedel-worktree-setup-enabled . t)
+            (mevedel-worktree-setup-command . ,command))))
+    (unwind-protect
+        (progn
+          (make-directory source)
+          (make-directory destination)
+          (with-temp-file (file-name-concat source ".dir-locals.el")
+            (prin1 `((mevedel-worktree-setup-mode
+                      . ((mevedel-worktree-setup-enabled . t)
+                         (mevedel-worktree-setup-command . ,command))))
+                   (current-buffer)))
+          (mevedel-worktree--setup source destination)
+          (should (file-exists-p (file-name-concat destination "ready")))
+          (should-not (file-exists-p (file-name-concat source "ready")))
+          (with-current-buffer "*mevedel worktree setup*"
+            (should buffer-read-only)
+            (should (string-match-p "provenance" (buffer-string)))))
+      (delete-directory root t)))
+  :doc "keeps exact nonzero diagnostics and a retained worktree retry path"
+  (let* ((root (make-temp-file "mevedel-failed-setup-" t))
+         (mevedel-worktree-setup-enabled t)
+         (mevedel-worktree-setup-command '("sh" "-c" "printf missing-gptel; exit 17")))
+    (unwind-protect
+        (let ((err (should-error (mevedel-worktree--setup root root)
+                                 :type 'user-error)))
+          (should (string-match-p "setup failed (17)" (error-message-string err)))
+          (should (string-match-p "rerun" (error-message-string err)))
+          (should (file-directory-p root))
+          (with-current-buffer "*mevedel worktree setup*"
+            (should (string-match-p "missing-gptel" (buffer-string)))))
+      (delete-directory root t)))
+  :doc "runs enabled setup on the remote worktree target"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-remote-setup-" t)))
+         (remote-root (format "/mevedelmock:setup:%s" root))
+         (mevedel-worktree-setup-enabled t)
+         (mevedel-worktree-setup-command '("sh" "-c" "printf remote; touch ready")))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("setup")
+          (mevedel-worktree--setup remote-root remote-root)
+          (should (file-exists-p (file-name-concat remote-root "ready")))
+          (with-current-buffer "*mevedel worktree setup*"
+            (should (string-match-p "remote" (buffer-string)))))
+      (delete-directory root t)))
+  :doc "requires a nonempty argv when enabled and diagnoses a missing program"
+  (let ((root (make-temp-file "mevedel-invalid-setup-" t))
+        (mevedel-worktree-setup-enabled t)
+        (mevedel-worktree-setup-command nil))
+    (unwind-protect
+        (progn
+          (should-error (mevedel-worktree--setup root root) :type 'user-error)
+          (setq mevedel-worktree-setup-command '("mevedel-no-such-setup-program"))
+          (let ((err (should-error (mevedel-worktree--setup root root)
+                                   :type 'user-error)))
+            (should (string-match-p "setup failed (127)" (error-message-string err)))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-worktree-create-session ()
   ,test
   (test)
 
+  :doc "setup completes before opening a session and failure retains the worktree"
+  (dolist (status '(0 19))
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-session-setup-" t)))
+           (mevedel-worktree-setup-enabled t)
+           (mevedel-worktree-setup-command
+            (list "sh" "-c" (format "touch setup-ready; exit %d" status)))
+           (new-buffer (generate-new-buffer " *mevedel-setup-session*"))
+           opened)
+      (unwind-protect
+          (progn
+            (mevedel-worktree-test--init-repo root)
+            (mevedel-worktree-test--with-session root
+              (cl-letf (((symbol-function 'mevedel-worktree--open-session)
+                         (lambda (_workspace directory)
+                           (should (file-exists-p
+                                    (file-name-concat directory "setup-ready")))
+                           (setq opened t)
+                           new-buffer)))
+                (if (zerop status)
+                    (mevedel-test--with-captured-messages nil
+                      (mevedel-worktree-create-session "worktree/setup" nil t))
+                  (let ((err (should-error
+                              (mevedel-worktree-create-session "worktree/setup" nil t)
+                              :type 'user-error)))
+                    (should (string-match-p "setup failed (19)"
+                                            (error-message-string err)))))
+                (should (eq (zerop status) opened))
+                (should (file-directory-p (file-name-concat root ".worktrees/setup"))))))
+        (kill-buffer new-buffer)
+        (when (get-buffer "*mevedel worktree setup*")
+          (kill-buffer "*mevedel worktree setup*"))
+        (delete-directory root t)
+        (mevedel-workspace-clear-registry))))
   :doc "fails Git preflight before creating worktree state"
   (let ((root (file-name-as-directory
                (make-temp-file "mevedel-plan-worktree-no-git-" t)))

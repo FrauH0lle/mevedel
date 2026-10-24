@@ -33,6 +33,19 @@ limits while mevedel retains its client-side guards. Preflight must exercise the
 configured backend type through the native request path; matching an expected
 payload from a substituted type does not establish configuration equivalence.
 
+## Worktree bootstrap
+
+Run `python3 scripts/bootstrap-worktree.py [WORKTREE]` from a checkout root
+before tests. It reuses the primary checkout's `.eask`, validates this worktree's
+dependency versions and loading through Eask, and reports Emacs/Eask versions, paths and
+source hashes. It runs offline without installing or upgrading dependencies;
+failure prints recovery instructions. `.eask` is ignored as directory or symlink.
+This repo's `.dir-locals.el` configures creation-time setup, requiring Emacs
+approval. The separate `mevedel-worktree-setup-enabled` flag defaults off;
+`mevedel-worktree-setup-command` holds argv. Both creation paths and the skill
+honor that authorization; see [the worktree ADR](adr/0001-worktree-command-and-skill.md).
+Setup output stays in `*mevedel worktree setup*`; failure retains the checkout.
+
 ## Dependency maintenance
 
 `.github/dependabot.yml` schedules weekly update PRs for the exact npm pins
