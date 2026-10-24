@@ -83,14 +83,16 @@ jobs:
         eask emacs --batch --eval \
           "(kill-emacs (if (treesit-language-available-p 'bash) 0 1))"
 
-    - name: Check test runner
-      run: python3 test/test_run_tests.py
+    - name: Check test infrastructure
+      run: |
+        python3 test/test_run_tests.py
+        python3 -m unittest test/test_check.py
 
     - name: Check execution spool worker
       run: python3 -m unittest test/test_execution_spool.py
 
-    - name: Run tests
-      run: eask run script test
+    - name: Check compilation and tests
+      run: eask run script check
 
     - name: Upload test reports
       if: always()
@@ -99,9 +101,6 @@ jobs:
         name: ert-reports-${{ matrix.os }}-${{ matrix.emacs-version }}
         path: .scratch/test-suite-performance/
         include-hidden-files: true
-
-    - name: Compile
-      run: eask compile
 
     - name: Build package
       run: eask package

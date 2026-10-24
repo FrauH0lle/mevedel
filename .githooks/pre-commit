@@ -1,0 +1,11 @@
+#!/bin/sh
+# Opt in with: git config --local core.hooksPath .githooks
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+# Tests create their own repositories; do not pass this commit's index or Git
+# directory into them. Git documents this list for hooks invoking other repos.
+git_variables=$(git rev-parse --local-env-vars)
+for variable in $git_variables; do
+    unset "$variable"
+done
+exec npx @emacs-eask/cli run script check

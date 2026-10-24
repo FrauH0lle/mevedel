@@ -33,6 +33,7 @@
        '("docs/tools" "docs/tools/*.md")
        '("prompts/tools" "prompts/tools/*.md"))
 
+(script "check" "sh scripts/check.sh")
 (script "test" "python3 test/run_tests.py")
 (script "bench-gate" "eask emacs --batch -L . -L benchmark -l benchmark/mevedel-bench-runner.el -- gate")
 (script "bench-twin" "eask emacs --batch -L . -L benchmark -l benchmark/mevedel-bench-runner.el -- twin")

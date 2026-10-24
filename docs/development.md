@@ -99,6 +99,59 @@ git -C .scratch/upstream/gptel pull --ff-only
 
 ## Development Commands
 
+### Checks before committing
+
+After installing the Eask development dependencies, run the same fail-fast
+check as GitHub CI:
+
+```bash
+npx @emacs-eask/cli run script check
+# With Eask on PATH:
+eask run script check
+# Limit test concurrency on smaller machines:
+npx @emacs-eask/cli run script check -- --jobs 4
+```
+
+The check cleans stale bytecode, compiles the package with `--strict` (warnings
+fail the command), then runs the complete isolated ERT suite through the existing
+`test` script. The test runner cleans bytecode again before loading sources, so
+compiled files cannot shadow edits. Each failed step stops the check and returns
+a nonzero status. Dependency installation remains a separate setup step.
+
+#### Opt-in pre-commit hook
+
+To run that check automatically before local commits, from the repository root:
+
+```bash
+git config --local core.hooksPath .githooks
+```
+
+This replaces the repository's configured hooks path; inspect
+`git config --get core.hooksPath` first if you already use hooks. Installation is
+optional and is never performed by Eask or CI. To undo it, use
+`git config --local --unset core.hooksPath` (or restore your previous value).
+The hook requires Node/npx, Python 3, Emacs and installed Eask development
+dependencies, and runs the full check, not a focused subset. It checks the
+working tree, not a temporary copy of the index: when partially staging files,
+ensure the staged change passes independently too. CI runs the check even when
+the hook is not installed or is bypassed; required branch checks are a separate
+GitHub repository setting.
+
+#### Checkdoc
+
+Checkdoc is an advisory tool, not part of `check` or CI:
+
+```bash
+npx @emacs-eask/cli lint checkdoc '*.el'
+```
+
+The 2026-10-24 baseline on Emacs 31.1/Eask 0.12.9 reports 528 diagnostics across
+146 of 261 root Lisp files, mostly undocumented arguments and sentence spacing.
+Enabling it as a gate would require a separate tree-wide documentation cleanup.
+Keep the code-style rules below when editing; they are not a claim of automated
+checkdoc enforcement. Use `--strict` with the advisory command when a nonzero
+exit status on findings is needed.
+
 ### Testing
 Clear stale bytecode with the command below before tests so it never shadows
 edited source. Use Eask cleanup, not `find -delete`: Eask also clears related
@@ -118,8 +171,8 @@ npx @emacs-eask/cli test ert test/test-*.el
 npx @emacs-eask/cli test ert test/test-mevedel-compact.el
 ```
 
-For a faster complete ERT run, use the measured parallel runner through the
-same Eask script as GitHub CI after installing the Eask dependencies:
+For a faster complete ERT-only run, use the measured parallel runner after
+installing the Eask dependencies (the `check` script above also runs it):
 
 ```bash
 eask run script test
@@ -189,7 +242,7 @@ real home.  Both caches are removed when their owning test process exits.
 
 ### Byte compilation
 ```bash
-npx @emacs-eask/cli compile
+npx @emacs-eask/cli compile --strict
 
 # Afterwards, use the Eask cleanup command in Testing above.
 ```
@@ -331,9 +384,9 @@ with `(interpreted-function-p (symbol-function 'mevedel-transcript-segments))`.
   holds, not where it was designed.
 - **`error` strings**: capitalized, no package prefix —
   `(error "Unknown tool: %s" name)`. The backtrace identifies the
-  source. checkdoc enforces capitalization. When the first word is a
-  literal binary, option, or parameter name that must stay lowercase,
-  quote it instead of changing its spelling: `(error "'pdftoppm' not
+  source. Checkdoc can flag capitalization, but is not enforced by CI. When the
+  first word is a literal binary, option, or parameter name that must stay
+  lowercase, quote it instead of changing its spelling: `(error "'pdftoppm' not
   installed")`.
 - **`message` strings**: lowercase `"mevedel: ..."` prefix is fine —
   `(message "mevedel: stale request found, replacing")`. Output goes
