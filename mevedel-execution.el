@@ -204,6 +204,7 @@
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
+(defvar mevedel--session)
 
 ;; `mevedel-system'
 (defvar mevedel-memory-dirs)
@@ -873,12 +874,19 @@ depend on the printer state of the context that takes it."
   "Prepare COMMAND under owned, cancellable discovery for SESSION and OWNER.
 CALLBACK receives preparation facts.  ROOTS, ADDITIONAL, PERMISSIONS and
 TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
-  (let ((buffer (current-buffer))
-        (request mevedel--current-request)
-        (invocation (and (boundp 'mevedel--agent-invocation)
-                         mevedel--agent-invocation))
-        (target (and session (mevedel-session-execution-target session)))
-        snapshot abandoned)
+  (let* ((buffer (current-buffer))
+         (request mevedel--current-request)
+         (invocation (and (boundp 'mevedel--agent-invocation)
+                          mevedel--agent-invocation))
+         ;; A local snapshot can omit the execution SESSION while retaining
+         ;; its caller's live policy.  Capture identity, not policy values.
+         (policy-session (or session
+                             (and request (mevedel-request-session request))
+                             (and invocation
+                                  (mevedel-agent-invocation-parent-session invocation))
+                             mevedel--session))
+         (target (and session (mevedel-session-execution-target session)))
+         snapshot abandoned)
     (cl-labels
         ((valid-p ()
            (condition-case nil
@@ -892,7 +900,7 @@ TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
                     (equal snapshot
                            (with-current-buffer buffer
                              (mevedel-execution--preparation-authority
-                              session (cons workdir roots) request invocation))))
+                              policy-session (cons workdir roots) request invocation))))
              (error nil))))
       (mevedel-sandbox-prepare-start
        (lambda (preparation)
@@ -907,7 +915,7 @@ TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
        (lambda (argv receive)
          (unless snapshot
            (setq snapshot (mevedel-execution--preparation-authority
-                           session (cons workdir roots) request invocation)))
+                           policy-session (cons workdir roots) request invocation)))
          (let ((child (mevedel-execution--start-process
                        (lambda (result)
                          (if (valid-p)
@@ -923,11 +931,8 @@ TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
              (when child (mevedel-execution-process-stop child 'aborted)))))
        command workdir roots additional permissions
        (mevedel-sandbox-mode-effective
-        ;; Local snapshot helpers omit SESSION to keep their target local, not
-        ;; to replace the requesting session's confinement preference.
-        (or session (and request (mevedel-request-session request))
-            (and invocation (mevedel-agent-invocation-parent-session invocation)))
-        (mevedel-permission-mode-effective session nil nil request invocation))
+        policy-session
+        (mevedel-permission-mode-effective policy-session nil nil request invocation))
        temporary-root))))
 
 

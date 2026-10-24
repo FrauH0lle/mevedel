@@ -331,7 +331,12 @@ output truncation and Read offset/limit behavior. They project the current
 conversation representation, without traversing pre-compaction archives.
 Grep accepts either concrete address and searches exactly that Read projection,
 including unsaved content, with matching line references. Bare `history://`
-is a Read-only discovery listing. A directive or shared-item conversation can
+is a Read-only discovery listing. Virtual-document searches (live history,
+published journal entries and shared-item text views) run over authorized
+client-local snapshots. Selecting that local helper target preserves the
+caller's permission context throughout asynchronous preparation; it does not
+substitute the global permission mode for the session's mode. Actual authority
+changes during preparation still refuse launch. A directive or shared-item conversation can
 retrieve relevant parent decisions this way without including the entire room
 in every request. The resource catalog advertises availability; the model
 chooses a search or read when the task needs it. Addresses grant neither new

@@ -120,6 +120,17 @@ All revisions below refine ADR 0104's closed resolver decision.
   and exact per-line retries replace that dead end without a new tool, resource
   syntax, shell escape hatch, or larger output budget.
 
+- **Local snapshot authority (2026-10-24).** Clearing the ambient session to
+  select a local search helper also replaced session policy with global policy
+  during initial preparation. The asynchronous authority recheck recovered the
+  caller's session and correctly refused the inconsistent snapshots. Virtual
+  document dispatch now selects the local helper target separately, without
+  clearing the caller's policy context. Execution preparation captures the
+  policy-session identity independently of the execution target and rereads its
+  live mode, confinement preference, rules and grants for authority snapshots.
+  This also preserves session-required confinement when the global preference
+  is off; neither fix relaxes the authority-change guard.
+
 - **Logical execution storage (2026-10).** Retained output dominated the
   non-publication disk footprint and compressed well, but a filename fallback
   alone changed directory search semantics. One operation-owned logical-view

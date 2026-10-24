@@ -81,6 +81,9 @@
 (defvar mevedel-tool-fs-search--teardown nil
   "Optional cleanup for copied virtual documents if the helper is torn down.")
 
+(defvar mevedel-tool-fs-search--local-snapshot nil
+  "Non-nil when the helper searches an authorized client-local copy.")
+
 (defun mevedel-tool-fs-search--documents (callback args descriptor operation)
   "Search validated virtual documents from DESCRIPTOR with OPERATION.
 Reuse ordinary search options in ARGS and send the normal result to CALLBACK.
@@ -92,7 +95,7 @@ remote media conversion, this processes an already transferred copy locally."
          (cleanup (lambda () (ignore-errors (delete-directory directory t)))))
     (condition-case err
         (let ((default-directory (file-name-as-directory directory))
-              (mevedel--session nil)
+              (mevedel-tool-fs-search--local-snapshot t)
               (mevedel-tool-fs-search--resource-dispatching t)
               (mevedel-tool-fs-search--resource-address address)
               (mevedel-tool-fs-search--teardown cleanup)
@@ -689,7 +692,9 @@ downstream callback errors."
       (condition-case err
           (mevedel-execution-start-helper
            (if address #'finish callback) name command read-paths nil
-           :session session :owner (mevedel-current-origin)
+           ;; A local copy changes the helper target, not the caller's policy.
+           :session (unless mevedel-tool-fs-search--local-snapshot session)
+           :owner (mevedel-current-origin)
            :teardown-callback mevedel-tool-fs-search--teardown
            :timeout mevedel-tool-fs-search-timeout)
         (error
