@@ -1449,13 +1449,13 @@ without NEXT returns the complete turns."
                         (eq seg-render-kind 'user-display)
                         (stringp (plist-get seg-render-data :text)))
                    inline-skill-render-p))
-          (let ((turn (car turns)))
+          (let ((turn (copy-sequence (car turns))))
             (setq turn
                   (plist-put turn :segments
                              (append (plist-get turn :segments)
                                      (list seg))))
             (setq turn (plist-put turn :end (caddr seg)))
-            (setcar turns turn)))
+            (setq turns (cons turn (cdr turns)))))
          (render-data-only-p
           nil)
          (leading-assistant-residue-p
@@ -1463,7 +1463,7 @@ without NEXT returns the complete turns."
          ((eq type 'task-background)
           (when current-segs
             (push (list :role current-role
-                        :segments (nreverse current-segs)
+                        :segments (reverse current-segs)
                         :start turn-start
                         :end (caddr (car current-segs)))
                   turns))
@@ -1496,7 +1496,7 @@ without NEXT returns the complete turns."
             ;; Flush any accumulated assistant turn
             (when current-segs
               (push (list :role current-role
-                          :segments (nreverse current-segs)
+                          :segments (reverse current-segs)
                           :start turn-start
                           :end (caddr (car current-segs)))
                     turns))
@@ -1534,11 +1534,11 @@ without NEXT returns the complete turns."
       ;; the segments reversed so adding to the current turn remains cheap.
       (when current-segs
         (push (list :role current-role
-                    :segments (nreverse current-segs)
+                    :segments (reverse current-segs)
                     :start turn-start
                     :end (caddr (car current-segs)))
               turns))
-      (nreverse turns))))
+      (reverse turns))))
 
 (defun mevedel-view--directive-boundary-segment-p (segment data-buf)
   "Return non-nil when SEGMENT is directive boundary audit data."
@@ -8582,13 +8582,14 @@ bounded persistent response cache as well as JOB's publication table."
       (when (mevedel-view--markdown-fontify-job-step fontify 2048)
         (let ((key (plist-get job :fontify-key))
               (output (mevedel-view--markdown-fontify-job-result fontify)))
-          (when (hash-table-p mevedel-view--response-fontify-cache)
-            (mevedel-view--cache-put mevedel-view--response-fontify-cache key output
-                                    'mevedel-view--response-cache-entries))
-          (puthash key output (plist-get job :fontified)))
-        (mevedel-view--markdown-fontify-job-cancel fontify)
-        (setf (plist-get job :fontify) nil
-              (plist-get job :fontify-key) nil))
+          (let ((inhibit-quit t))
+            (when (hash-table-p mevedel-view--response-fontify-cache)
+              (mevedel-view--cache-put mevedel-view--response-fontify-cache key output
+                                      'mevedel-view--response-cache-entries))
+            (puthash key output (plist-get job :fontified))
+            (mevedel-view--markdown-fontify-job-cancel fontify)
+            (setf (plist-get job :fontify) nil
+                  (plist-get job :fontify-key) nil))))
     (let ((turns (plist-get job :fontify-turns))
           (segments (plist-get job :fontify-segments))
           (count 0))
@@ -8612,21 +8613,26 @@ bounded persistent response cache as well as JOB's publication table."
             (unless (or (gethash key (plist-get job :fontified))
                         (and (hash-table-p mevedel-view--response-fontify-cache)
                              (gethash key mevedel-view--response-fontify-cache)))
-              (setf (plist-get job :fontify-key) key
-                    (plist-get job :fontify)
-                    (mevedel-view--markdown-fontify-job-start text)))))
+              ;; Mode setup and private-buffer ownership transfer are atomic;
+              ;; subsequent fontification is interruptible, including long lines.
+              (let ((inhibit-quit t))
+                (setf (plist-get job :fontify-key) key
+                      (plist-get job :fontify)
+                      (mevedel-view--markdown-fontify-job-start text))))))
+        (let ((inhibit-quit t))
+          (setf (plist-get job :fontify-turns) turns
+                (plist-get job :fontify-segments) segments))
         (setq count (1+ count)))
-      (setf (plist-get job :fontify-turns) turns
-            (plist-get job :fontify-segments) segments)
       (unless (or turns segments (plist-get job :fontify))
-        (setf (plist-get job :tools-turns) (plist-get job :turns)
-              ;; Preparation reads remembered fold choices, not reader/composer
-              ;; anchors.  Any intervening view mutation invalidates its entries;
-              ;; publication still captures the reader's current state below.
-              (plist-get job :tool-state-tick) (buffer-modified-tick)
-              (plist-get job :tool-states)
-              (mevedel-view-disclosure-state-snapshot)
-              (plist-get job :prepare-stage) 'tools)))))
+        (let ((states (mevedel-view-disclosure-state-snapshot)))
+          (let ((inhibit-quit t))
+            (setf (plist-get job :tools-turns) (plist-get job :turns)
+                  ;; Preparation reads remembered fold choices, not reader/composer
+                  ;; anchors.  Any intervening view mutation invalidates its entries;
+                  ;; publication still captures the reader's current state below.
+                  (plist-get job :tool-state-tick) (buffer-modified-tick)
+                  (plist-get job :tool-states) states
+                  (plist-get job :prepare-stage) 'tools)))))))
 
 (defun mevedel-view-render--plan-tool-step (job)
   "Prepare a few settled tool entries in JOB without mutating the view.
@@ -8650,8 +8656,9 @@ the reader's disclosure state are checked again before publication."
                    (mevedel-view--merge-tool-hook-audit-segments
                     (plist-get (car turns) :segments) data))))
               turns (cdr turns))
-        (setf (plist-get job :tools-turns) turns
-              (plist-get job :tools-segments) segments))
+        (let ((inhibit-quit t))
+          (setf (plist-get job :tools-turns) turns
+                (plist-get job :tools-segments) segments)))
       (when-let* ((segment (car segments)))
         (with-current-buffer data
           (save-restriction
@@ -8661,7 +8668,8 @@ the reader's disclosure state are checked again before publication."
         ;; Commit each normalized entry independently.  An interrupted callback
         ;; may repeat the current entry, never the earlier entries in its group.
         (setq segments (cdr segments))
-        (setf (plist-get job :tools-segments) segments))
+        (let ((inhibit-quit t))
+          (setf (plist-get job :tools-segments) segments)))
       (setq count (1+ count)))
     (unless (or turns segments)
       (setf (plist-get job :prepare-stage) 'finish))))
@@ -8681,27 +8689,31 @@ remains intact; no unclassified placeholder can acquire a wrong prompt."
          (setf (plist-get job :tick) (buffer-modified-tick)))
        (setf (plist-get job :prepare-stage) 'bounds))
       ('bounds
-       (let ((plan (mevedel-view-render--plan-bounds data view)))
-         (setf (plist-get job :plan) plan
-               (plist-get job :prepare-stage) 'scan
-               (plist-get job :scan)
-               (with-current-buffer data
-                 (save-restriction
-                   (narrow-to-region (plist-get plan :start) (plist-get plan :end))
-                   (mevedel-transcript-scan-start (point-min) (point-max)))))))
+       (let* ((plan (mevedel-view-render--plan-bounds data view))
+              (scan (with-current-buffer data
+                      (save-restriction
+                        (narrow-to-region (plist-get plan :start) (plist-get plan :end))
+                        (mevedel-transcript-scan-start (point-min) (point-max))))))
+         (let ((inhibit-quit t))
+           (setf (plist-get job :plan) plan
+                 (plist-get job :scan) scan
+                 (plist-get job :prepare-stage) 'scan))))
       ('scan
        (when (with-current-buffer data
                (save-restriction
                  (narrow-to-region (plist-get (plist-get job :plan) :start)
                                    (plist-get (plist-get job :plan) :end))
                  (mevedel-transcript-scan-step (plist-get job :scan))))
-         (setf (plist-get job :remaining)
-               (mevedel-transcript-scan-result (plist-get job :scan))
-               (plist-get job :scan) nil
-               (plist-get job :prepare-stage) 'directive)))
+         (let ((inhibit-quit t))
+           (setf (plist-get job :remaining)
+                 (mevedel-transcript-scan-result (plist-get job :scan))
+                 (plist-get job :scan) nil
+                 (plist-get job :prepare-stage) 'directive))))
       ('directive
-       (setf (plist-get job :ranges) (mevedel-view--directive-ranges data)
-             (plist-get job :prepare-stage) 'filter))
+       (let ((ranges (mevedel-view--directive-ranges data)))
+         (let ((inhibit-quit t))
+           (setf (plist-get job :ranges) ranges
+                 (plist-get job :prepare-stage) 'filter))))
       ('filter
        (let ((rest (plist-get job :remaining))
              (filtered (plist-get job :filtered-rev))
@@ -8710,53 +8722,60 @@ remains intact; no unclassified placeholder can acquire a wrong prompt."
            (unless (mevedel-view--directive-boundary-segment-p (car rest) data)
              (push (car rest) filtered))
            (setq rest (cdr rest) count (1+ count)))
-         (setf (plist-get job :remaining) rest
-               (plist-get job :filtered-rev) filtered)
-         (unless rest
-           (setf (plist-get job :remaining) (nreverse filtered)
-                 (plist-get job :filtered-rev) nil
-                 (plist-get job :prepare-stage) 'group))))
+         (let ((remaining (if rest rest (reverse filtered))))
+           (let ((inhibit-quit t))
+             (setf (plist-get job :remaining) remaining
+                   (plist-get job :filtered-rev) (and rest filtered))
+             (unless rest
+               (setf (plist-get job :prepare-stage) 'group))))))
       ('group
        (let* ((rest (plist-get job :remaining))
               (chunk (cl-loop for seg in rest repeat 24 while seg collect seg))
               (remaining (nthcdr (length chunk) rest))
               (result (mevedel-view--group-into-turns
                        chunk data (plist-get job :group-state) (car remaining))))
-         (setf (plist-get job :remaining) remaining)
-         (if remaining
-             (setf (plist-get job :group-state) result)
-           (setf (plist-get job :turns) result
-                 (plist-get job :annotate-rest) result
-                 (plist-get job :group-state) nil
-                 (plist-get job :prepare-stage) 'annotate))))
+         (let ((inhibit-quit t))
+           (setf (plist-get job :remaining) remaining)
+           (if remaining
+               (setf (plist-get job :group-state) result)
+             (setf (plist-get job :turns) result
+                   (plist-get job :annotate-rest) result
+                   (plist-get job :group-state) nil
+                   (plist-get job :prepare-stage) 'annotate)))))
       ('annotate
        (let ((rest (plist-get job :annotate-rest))
              (count 0))
          (while (and rest (< count 16))
-           (mevedel-view-render--annotate-directive-turn
-            (car rest) (plist-get job :ranges))
-           (setq rest (cdr rest) count (1+ count)))
-         (setf (plist-get job :annotate-rest) rest)
+           ;; Annotation only assigns already computed range metadata.  Keep
+           ;; both fields and the per-turn cursor at the same commit point.
+           (let ((inhibit-quit t))
+             (mevedel-view-render--annotate-directive-turn
+              (car rest) (plist-get job :ranges))
+             (setq rest (cdr rest))
+             (setf (plist-get job :annotate-rest) rest))
+           (setq count (1+ count)))
          (unless rest
-           (setf (plist-get job :fontify-turns) (plist-get job :turns)
-                 (plist-get job :prepare-stage) 'fontify))))
+           (let ((inhibit-quit t))
+             (setf (plist-get job :fontify-turns) (plist-get job :turns)
+                   (plist-get job :prepare-stage) 'fontify)))))
       ('fontify
        (mevedel-view-render--plan-fontify-step job))
       ('tools
        (mevedel-view-render--plan-tool-step job))
       ('finish
-       (setf (plist-get job :plan)
-             (mevedel-view-render--plan-finish
-              (plist-get job :plan) (plist-get job :turns) data
-              (plist-get job :live-data) (plist-get job :agent))
-             (plist-get job :turns) nil
-             (plist-get job :fontify-turns) nil
-             (plist-get job :fontify-segments) nil
-             (plist-get job :tools-turns) nil
-             (plist-get job :tools-segments) nil
-             (plist-get job :ranges) nil
-             (plist-get job :remaining) nil
-             (plist-get job :prepare-stage) 'done)))
+       (let ((plan (mevedel-view-render--plan-finish
+                    (plist-get job :plan) (plist-get job :turns) data
+                    (plist-get job :live-data) (plist-get job :agent))))
+         (let ((inhibit-quit t))
+           (setf (plist-get job :plan) plan
+                 (plist-get job :turns) nil
+                 (plist-get job :fontify-turns) nil
+                 (plist-get job :fontify-segments) nil
+                 (plist-get job :tools-turns) nil
+                 (plist-get job :tools-segments) nil
+                 (plist-get job :ranges) nil
+                 (plist-get job :remaining) nil
+                 (plist-get job :prepare-stage) 'done)))))
     (eq (plist-get job :prepare-stage) 'done)))
 
 (defun mevedel-view--full-rerender-project
@@ -9092,9 +9111,25 @@ to DATA's tail, schedule a full projection instead."
                               (plist-get job :index))
                              (mevedel-transcript-audit--decode-cache
                               (plist-get job :audits)))
-                         (if (mevedel-view-render--plan-step job)
-                             (mevedel-view-render--install-batch job)
-                           (mevedel-view-render-resume-batch)))
+                         (pcase
+                             (let ((mevedel-view--tool-cache-used
+                                    (plist-get job :prepared-cache-used)))
+                               ;; Tag normal completion: `while-no-input' returns
+                               ;; t on input abort; ordinary quit returns nil or
+                               ;; propagates when the caller permits quitting.
+                               ;; Only one pure preparation unit is cancellable.
+                               (if (eq (plist-get job :prepare-stage) 'restore)
+                                   (if (mevedel-view-render--plan-step job)
+                                       'ready 'pending)
+                                 (while-no-input
+                                   (if (mevedel-view-render--plan-step job)
+                                       'ready 'pending))))
+                           ('ready (mevedel-view-render--install-batch job))
+                           ('nil (mevedel-view-render-cancel-batch))
+                           (_ (mevedel-view-render-resume-batch))))
+                     (quit
+                      (mevedel-view-render-cancel-batch)
+                      (signal 'quit nil))
                      (error
                       (mevedel-view-render-cancel-batch)
                       (mevedel-view--debug-log 'batch-prepare-recovery :error err)
@@ -9152,6 +9187,7 @@ In-flight streaming retains synchronous reconciliation of view-only live text."
                       :tools-turns nil :tools-segments nil :tool-state-tick nil
                       :tool-states nil
                       :tool-cache (make-hash-table :test #'equal)
+                      :prepared-cache-used (make-hash-table :test #'equal)
                       :cache-used (make-hash-table :test #'equal)
                       :plan nil :states nil :pending nil :timer nil
                       :settled-until nil
@@ -9198,11 +9234,15 @@ Until the complete plan is ready, keep the previous view in place."
           (when (eq (plist-get turn :role) 'user)
             (push turn immediate))))
       (setf (plist-get job :states) states)
-      (unless (and (eql (buffer-modified-tick) (plist-get job :tool-state-tick))
+      (if (and (eql (buffer-modified-tick) (plist-get job :tool-state-tick))
                    ;; The fresh capture above can itself remember choices that
                    ;; preparation had not seen, without modifying view text.
                    (equal (mevedel-view-disclosure-state-snapshot)
                           (plist-get job :tool-states)))
+          ;; Normalized entry hits bypass the rendering cache lookup.  Accept
+          ;; their dependency keys only at publication, never on an input abort.
+          (maphash (lambda (key _) (puthash key t (plist-get job :cache-used)))
+                   (plist-get job :prepared-cache-used))
         (clrhash (plist-get job :tool-cache)))
       (unwind-protect
           (progn

@@ -667,3 +667,134 @@ Fresh post-discard validation of the retained `04ab1a4b` implementation:
 
 Conditional transport/environment skips remain unverified. No cache-specific
 candidate test is presented as a current runtime guarantee after its removal.
+
+## Input-interruptible preparation (2026-10-24)
+
+Baseline `b1a31347a1461ce95ed67b1f42ea821204734e0e` versus the restart-safe
+`while-no-input` boundary around one pure batch plan step. Source-property
+restoration, installation and publication are excluded. Input aborts retain the
+job and retry uncommitted work, rather than invoking synchronous error recovery.
+No new persistent turn cache is involved.
+
+### Ordinary full-projection drain
+
+Reuse the unchanged `full-projection` scenario above, its synthetic forty-exchange
+history and restored `/tmp/mevedel-projection-fixture-xk2PCJ/session` copy. Seven
+alternating baseline/change pairs per fixture, 28 fresh batch Emacs processes,
+compiled package/harness with identical installed dependency manifests,
+installed `markdown-ts-mode` and both frozen grammars, Emacs 31.1, private
+HOME/XDG/native caches, 80×25 frame, default GC (800000/0.1). Each process retains
+the scenario's two warmups and seven
+uninstrumented samples per path; the table reports medians of seven process
+medians, not pooled samples or initial session-load timings. Synchronous control
+precedes drained batch as in the existing scenario. The shared advisory benchmark
+lock excludes competing project measurements; other test/compile/gate runs finish
+before this timing window. The existing output/composer checks pass, and every
+variant/path has the same history hash for its fixture.
+
+| Fixture / path | Baseline (ms) | Interruptible (ms) | Median change | Faster / slower pairs |
+| --- | ---: | ---: | ---: | ---: |
+| Synthetic batch | 279.446 | 279.936 | +0.176% | 2 / 5 |
+| Restored batch | 641.037 | 645.748 | +0.735% | 3 / 4 |
+| Synthetic sync control | 241.643 | 242.538 | +0.370% | 4 / 3 |
+| Restored sync control | 559.854 | 558.703 | −0.206% | 5 / 2 |
+
+Synthetic batch process medians range 266.113–279.897 ms before and
+270.565–285.181 ms after; paired changes range −3.178% to +4.241%, with paired
+median +1.677%. Restored ranges are 638.351–649.720 / 632.465–658.297 ms;
+paired changes −2.615% to +3.125%, paired median +0.563%. The small positive
+batch changes and mixed pair signs do not demonstrate a material total-drain
+regression, but do not establish zero cost or a speedup either.
+
+### Huge response: yield latency and uninterrupted work
+
+Separate cold-response-cache diagnostic through actual batch callbacks: one
+approximately 256 KiB single-line response, three uninterrupted preparations and
+three entry-injected preparations per variant. Timing stops before finish and
+publication in this population. Inject an unread command at the real
+`font-lock-ensure` entry, before its original unchanged full-region call. When
+`while-no-input` is active, set `quit-flag` to its dynamic `throw-on-input` tag
+and reach an evaluator checkpoint; otherwise the baseline performs the original
+fontification. Pending unread events alone do not simulate asynchronous keyboard
+arrival during executing Lisp in batch Emacs. This is an entry-abort diagnostic,
+not interruption halfway through a non-quitting C primitive.
+
+| Observation (ms) | Baseline | Interruptible |
+| --- | ---: | ---: |
+| Pending entry → callback return, median of three | 9.59778 | 0.00882 |
+| Pending entry → callback return, range | 9.58323–10.67066 | 0.00858–0.00930 |
+| Worst uninterrupted preparation callback | 26.014 | 26.266 |
+
+Baseline real font-lock work **after** injection takes 9.548 / 9.561 / 10.596 ms:
+the experiment has not consumed the expensive region in a nominal prefix that
+font-lock silently extends to the whole line. All twelve preparations produce
+the complete source response with the same SHA-256, retain old history and the
+multiline `>` composer, and complete without synchronous fallback. Interrupted
+jobs resume; completed/cancelled jobs release their private buffers. The
+uninterrupted maximum is still fontification: input interruptibility does not
+shorten that work when input never arrives.
+
+### Huge response: complete callback population and limits
+
+Attempt a full drain for the same single-line fixture, one fresh process per
+variant, with a native 30-second deadline. **Both time out (exit 124)** inside
+publication callback 2, after finish callback 1 returns. The active callback has
+not returned approximately 29.4 seconds after entry at process termination.
+There is no completed single-line history comparison or exact overall maximum;
+do not substitute the preparation-only maximum for this missing result.
+
+A distinct full-drain control uses one response containing 8192 lines of 128
+plain characters plus newlines and a short Markdown prefix (1,056,852 source
+buffer characters). Both variants complete, preserve the composer, and publish
+byte-identical history: 1,056,882 bytes, SHA-256
+`ab1cdba7b44b60bf8bd316b0e639542702e055bc486588dd0dc0e4b827b38f3f`.
+
+| Observed maximum (ms), one full drain per variant | Baseline | Interruptible |
+| --- | ---: | ---: |
+| Preparation callback | 63.618 | 63.556 |
+| Any callback, publication callback 2 | 2191.378 | 2177.218 |
+
+These are different populations, not interchangeable or guaranteed bounds.
+Atomic individual-turn publication remains a severe pathological limit. Source
+restoration, Markdown mode setup/private-buffer handoff, short state/cache
+commits, non-quitting C copies/decodes and GC also remain outside the cooperative
+input guarantee. Synchronous/live rendering is unchanged. Batch injection proves
+control flow and measured callback return, not real keyboard/OS delivery,
+graphical redisplay or end-to-end input latency. Earlier stopped 1 MiB single-line
+attempts are not successful timing samples.
+
+### Correctness and provenance
+
+- New real-batch interruption suite: 13/13 focused results, including all scanner
+  phases, grouping with retained state, a long single-line fontification chunk,
+  output extraction, normalized tools, repeated pending input, source edits,
+  ordinary quit and unrelated nonlocal exits, and deferred-tool ownership.
+  Completed history is property-equivalent after the same real jit-lock pass;
+  snapshots normalize regenerated identities, not semantic properties. Tests
+  check draft text/point/window start, no partial publication or abort visits,
+  no fallback/private-buffer leaks, and mutation-owner release.
+- Final isolated Eask full suite: **12,535/12,535 results, zero unexpected,
+  38 conditional skips**, eight workers exit 0, 215.19 s. Report:
+  `.scratch/test-suite-performance/20261024-030914/`. Required Eask bytecode
+  cleanup ran before tests and after warning-free compilation (261 files).
+  A final artifact audit found two source-less bytecode leftovers from the
+  rejected turn-cache experiment that Eask cleanup had not removed. They were
+  moved out of the load path before this complete rerun, compile and gate; no
+  root package bytecode remains. The private benchmarks excluded both modules
+  and the original worktree from their frozen runtime load paths independently.
+- `bench-gate` passes unchanged budgets: stream **867/964**, composer **50/150**,
+  zone **1732/1832** net conses; zero GCs. `git diff --check` passes.
+- Private measurement builds compile the package/harness warning-free and contain
+  417 files: 262 bytecode files plus 155 runtime assets. Installed dependencies
+  are frozen and checked separately. Final guards check all 56 ordinary metric
+  files and source, compiled code, dependencies, assets, fixture, grammar and
+  separate warm/diagnostic automation manifests. Only the four intended product
+  modules differ from baseline.
+  Local evidence: `.scratch/interrupt-measurements/final/summary.json`,
+  `huge-256k/`, `huge-publication/`, `huge-publication-multiline/`,
+  `diagnostic-results.json` and `post-run-provenance.json` under the same root;
+  post-run provenance file SHA-256
+  `137865e60f22cb54e3d960d65120d69ff4ed613cbbc13fda67c908715af90504`.
+
+Conditional environment/transport checks and real graphical/keyboard latency
+remain unverified. No worktree code was loaded into the running editor.

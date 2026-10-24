@@ -128,7 +128,19 @@ instead of rescanning the transcript. Variant listing and activation remain
 late-bound to the live session context. Tool preparation uses publication's
 canonical merged tool/audit spans and advances its cursor after each normalized
 entry. Completed batch Markdown output is promoted through the existing bounded
-response-cache owner; partial output is never retained there. Source identity and its full modification
+response-cache owner; partial output is never retained there. One pure plan step
+per callback runs under `while-no-input`; pending or arriving input retains and
+reschedules the same job rather than invoking synchronous error recovery. Scanner
+lists and phase/cursors commit together, and grouping does not destructively
+reverse retained state. Interrupted Markdown keeps its whole-response private
+buffer and retries the uncommitted region, including a long line; cancellation
+and failures still release private buffers. Explicit quit cancels the batch
+instead of rescheduling a cancelled fontifier into synchronous error recovery.
+Prepared tool dependency keys become
+projection visits only when publication accepts their disclosure snapshot.
+Neither input abort nor cancellation sweeps the completed-projection caches.
+Source-property restoration and all publication remain outside the interruptible
+boundary, under the same per-view mutation owner. Source identity and its full modification
 tick are checked before
 publishing the complete plan. On publication, reader-visible turns and all chat
 prompt turns render first, then remaining response turns fill one per callback.
@@ -145,9 +157,11 @@ that read rendered positions, and other writers' correctness fallbacks remain
 synchronous. Saving a settled turn appends its fork-point record after the
 newest response and changes nothing else in the transcript, so the save
 re-renders only that newest assistant turn, regrouped through the new end, and
-falls back to the scheduler when the tail no longer matches it. A large
-individual line, final scanner repair, prompt-first publication, grouped tool
-insertion, and GC can still make a callback exceed its cooperative target. Large
+falls back to the scheduler when the tail no longer matches it. Non-quitting C
+primitives (including large copies and decodes), source-property restoration,
+Markdown mode setup and private-buffer handoff, state/cache commits, prompt-first
+publication, grouped tool insertion, and GC can still make a callback exceed its
+cooperative target. Interruptibility does not cover synchronous rendering. Large
 collapsed tool parsing also has its separate staged preparation lifecycle.
 Transcript writers also share per-view mutation ownership: nested projection,
 terminal, disclosure, and agent-refresh work coalesces rather than mutating
@@ -416,6 +430,37 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### October 24, 2026: interrupt pure preparation, not publication
+
+The cooperative chunk sizes did not protect input during a single long Markdown
+line or another expensive preparation unit. Run one pure plan step under
+`while-no-input`, retain its job on input abort, and retry its uncommitted region
+or entry. Scanner and plan cursor commits are restart-safe; Markdown distinguishes
+the exact input throw from failure and ordinary quit. Keep restoration and
+publication outside this boundary and preserve per-view mutation ownership.
+
+Seven alternating compiled pairs against `b1a31347`, installed grammars and
+default GC, put synthetic batch drain at 279.446 → 279.936 ms (+0.176%) and the
+restored fixture at 641.037 → 645.748 ms (+0.735%). Pair directions are mixed
+(2/7 and 3/7 faster), with overlapping ranges. This run demonstrates neither a
+material total-drain regression nor zero overhead; this is an input-yield change,
+not a throughput optimization.
+
+Three deterministic entry injections into real fontification of a 256 KiB
+single-line response reduce median pending-input-to-callback-return from
+9.598 to 0.00882 ms. Actual baseline font-lock work remains after injection;
+no artificial prefix consumes it first. Uninterrupted preparation maxima remain
+26.014 → 26.266 ms. A separate full 1 MiB multiline response has identical
+published history but still spends its worst callback in publication:
+2191.378 → 2177.218 ms. Both single-line full-publication probes hit a 30-second
+process deadline inside publication, so their complete maxima remain unknown.
+
+Retain the restart-safe interruption boundary, without claiming bounded callbacks
+or hardware/graphical keyboard latency. Non-quitting C primitives, setup and
+handoff, short state/cache commits, source restoration, publication and GC remain
+limits. The [benchmark ledger](../../benchmark/profiler-optimization-results.md#input-interruptible-preparation-2026-10-24)
+records the populations, raw-evidence locations and correctness checks.
 
 ### October 24, 2026: reject turn preparation plans after measuring reuse
 

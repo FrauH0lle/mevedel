@@ -222,44 +222,74 @@ It is safe to cancel a completed or already cancelled job."
         (mevedel-view--markdown-fontify-job-output job) nil
         (mevedel-view--markdown-fontify-job-cancelled job) t))
 
+(defmacro mevedel-view--with-markdown-job-input-retry (job &rest body)
+  "Run BODY, preserving JOB only on a `while-no-input' interruption.
+Other nonlocal exits cancel JOB.  Catch the input tag before cleanup: Emacs
+clears `quit-flag' before unwinding, so that flag cannot identify the exit."
+  (declare (indent 1) (debug (form body)))
+  (let ((owned (make-symbol "job"))
+        (tag (make-symbol "input-tag"))
+        (saved-inhibit (make-symbol "inhibit-quit"))
+        (returned (make-symbol "returned"))
+        (interrupted (make-symbol "interrupted"))
+        (value (make-symbol "value"))
+        (input-value (make-symbol "input-value")))
+    `(let ((,owned ,job)
+           (,tag (or throw-on-input (make-symbol "no-input")))
+           (,saved-inhibit inhibit-quit)
+           ;; Classification and rethrow must not themselves be interrupted.
+           (inhibit-quit t)
+           ,returned ,interrupted ,value)
+       (unwind-protect
+           (let ((,input-value
+                  (catch ,tag
+                    (setq ,value (let ((inhibit-quit ,saved-inhibit)) ,@body))
+                    (setq ,returned t))))
+             (if ,returned ,value
+               (setq ,interrupted t)
+               (throw ,tag ,input-value)))
+         (unless (or ,returned ,interrupted)
+           (mevedel-view--markdown-fontify-job-cancel ,owned))))))
+
 (defun mevedel-view--markdown-fontify-job-step (job chunk-size)
   "Fontify at most CHUNK-SIZE characters plus one line in JOB.
-Return non-nil when the complete response is ready.  A single long line
-remains indivisible.  Syntax parsing always sees the complete response;
-only the font-lock region is divided.  On font-lock failure return the
+Return non-nil when the complete response is ready.  Input can interrupt
+even a long line at an Emacs quit checkpoint.  Syntax parsing sees the
+complete response; only the font-lock region is divided.  On failure return the
 original text, as `mevedel-view--fontify-as' does.  JOB must not be cancelled."
   (when (mevedel-view--markdown-fontify-job-cancelled job)
     (error "Markdown fontification job was cancelled"))
   (unless (and (integerp chunk-size) (> chunk-size 0))
     (error "Invalid Markdown fontification chunk size: %S" chunk-size))
   (unless (mevedel-view--markdown-fontify-job-done job)
-    (let ((buffer (mevedel-view--markdown-fontify-job-buffer job))
-          returned)
-      (unwind-protect
-          (progn
-            (condition-case nil
-                (with-current-buffer buffer
-                  (let* ((start (mevedel-view--markdown-fontify-job-next job))
-                         ;; Align to the end of the line containing the target,
-                         ;; including its newline when present.
-                         (end (save-excursion
-                                (goto-char (min (point-max) (+ start chunk-size)))
-                                (min (point-max) (1+ (line-end-position))))))
-                    (font-lock-ensure start end)
-                    (setf (mevedel-view--markdown-fontify-job-next job) end)
-                    (when (= end (point-max))
-                      (setf (mevedel-view--markdown-fontify-job-done job) t))))
-              (error
-               (setf (mevedel-view--markdown-fontify-job-output job)
-                     (mevedel-view--markdown-fontify-job-text job)
-                     (mevedel-view--markdown-fontify-job-done job) t)))
-            (when (mevedel-view--markdown-fontify-job-output job)
-              (when (buffer-live-p buffer) (kill-buffer buffer))
-              (setf (mevedel-view--markdown-fontify-job-buffer job) nil
-                    (mevedel-view--markdown-fontify-job-text job) nil))
-            (setq returned t))
-        (unless returned
-          (mevedel-view--markdown-fontify-job-cancel job)))))
+    (mevedel-view--with-markdown-job-input-retry job
+      (let ((buffer (mevedel-view--markdown-fontify-job-buffer job)))
+        (condition-case nil
+            (with-current-buffer buffer
+              (let* ((start (mevedel-view--markdown-fontify-job-next job))
+                     ;; Align to the end of the line containing the target,
+                     ;; including its newline when present.
+                     (end (save-excursion
+                            (goto-char (min (point-max) (+ start chunk-size)))
+                            (min (point-max) (1+ (line-end-position))))))
+                ;; A prior input abort may have marked only part of this
+                ;; region fontified.  Retry it, preserving whole-buffer syntax.
+                (font-lock-flush start end)
+                (font-lock-ensure start end)
+                (let ((inhibit-quit t))
+                  (setf (mevedel-view--markdown-fontify-job-next job) end)
+                  (when (= end (point-max))
+                    (setf (mevedel-view--markdown-fontify-job-done job) t)))))
+          (error
+           (let ((inhibit-quit t))
+             (setf (mevedel-view--markdown-fontify-job-output job)
+                   (mevedel-view--markdown-fontify-job-text job)
+                   (mevedel-view--markdown-fontify-job-done job) t))))
+        (let ((inhibit-quit t))
+          (when (mevedel-view--markdown-fontify-job-output job)
+            (when (buffer-live-p buffer) (kill-buffer buffer))
+            (setf (mevedel-view--markdown-fontify-job-buffer job) nil
+                  (mevedel-view--markdown-fontify-job-text job) nil))))))
   (mevedel-view--markdown-fontify-job-done job))
 
 (defun mevedel-view--markdown-fontify-job-result (job)
@@ -269,18 +299,22 @@ the bounded fontification step.  The result remains available until
 `mevedel-view--markdown-fontify-job-cancel'."
   (when (mevedel-view--markdown-fontify-job-done job)
     (when-let* ((buffer (mevedel-view--markdown-fontify-job-buffer job)))
-      (unwind-protect
-          (setf (mevedel-view--markdown-fontify-job-output job)
-                (condition-case nil
-                    (if (buffer-live-p buffer)
-                        (mevedel-view--promote-face-to-font-lock-face
-                         (with-current-buffer buffer
-                           (buffer-substring (point-min) (1- (point-max)))))
-                      (mevedel-view--markdown-fontify-job-text job))
-                  (error (mevedel-view--markdown-fontify-job-text job))))
-        (when (buffer-live-p buffer) (kill-buffer buffer))
-        (setf (mevedel-view--markdown-fontify-job-buffer job) nil
-              (mevedel-view--markdown-fontify-job-text job) nil)))
+      (mevedel-view--with-markdown-job-input-retry job
+        (let ((output
+               (condition-case nil
+                   (if (buffer-live-p buffer)
+                       (mevedel-view--promote-face-to-font-lock-face
+                        (with-current-buffer buffer
+                          (buffer-substring (point-min) (1- (point-max)))))
+                     (mevedel-view--markdown-fontify-job-text job))
+                 (error (mevedel-view--markdown-fontify-job-text job)))))
+          ;; Extraction can itself be interrupted.  Do not destroy its input
+          ;; until the complete promoted string has been committed.
+          (let ((inhibit-quit t))
+            (setf (mevedel-view--markdown-fontify-job-output job) output)
+            (when (buffer-live-p buffer) (kill-buffer buffer))
+            (setf (mevedel-view--markdown-fontify-job-buffer job) nil
+                  (mevedel-view--markdown-fontify-job-text job) nil)))))
     (mevedel-view--markdown-fontify-job-output job)))
 
 

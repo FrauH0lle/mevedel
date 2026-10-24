@@ -57,14 +57,15 @@ Explicit synchronous projections and expansion leave this nil.")
 
 (defun mevedel-view-prepare--retire (job)
   "Release JOB's source hook and stop any unfinished parsing."
-  (setq mevedel-view-prepare--jobs (delq job mevedel-view-prepare--jobs))
-  (when (buffer-live-p (mevedel-view-prepare--job-source job))
-    (with-current-buffer (mevedel-view-prepare--job-source job)
-      (remove-hook 'kill-buffer-hook (mevedel-view-prepare--job-kill-hook job) t)))
-  (when-let* ((thread (mevedel-view-prepare--job-thread job))
-              ((thread-live-p thread)))
-    (thread-signal thread 'quit nil))
-  (setf (mevedel-view-prepare--job-result job) nil))
+  (let ((inhibit-quit t))
+    (setq mevedel-view-prepare--jobs (delq job mevedel-view-prepare--jobs))
+    (when (buffer-live-p (mevedel-view-prepare--job-source job))
+      (with-current-buffer (mevedel-view-prepare--job-source job)
+        (remove-hook 'kill-buffer-hook (mevedel-view-prepare--job-kill-hook job) t)))
+    (when-let* ((thread (mevedel-view-prepare--job-thread job))
+                ((thread-live-p thread)))
+      (thread-signal thread 'quit nil))
+    (setf (mevedel-view-prepare--job-result job) nil)))
 
 (defun mevedel-view-prepare-cancel ()
   "Cancel this view's source jobs and release their source-buffer hooks."
@@ -110,14 +111,16 @@ Explicit synchronous projections and expansion leave this nil.")
   (when (and mevedel-view-prepare--jobs
              (not mevedel-view-prepare--timer)
              (not (mevedel-view--unattended-p)))
-    (setq mevedel-view-prepare--timer
-          (run-at-time
+    (let ((delay
            (if (mevedel-transport-busy-p
                 (buffer-local-value 'default-directory
                                     (mevedel-view-prepare--job-source
                                      (car mevedel-view-prepare--jobs))))
-               0.1 0.001)
-           nil #'mevedel-view-prepare--advance (current-buffer)))))
+               0.1 0.001)))
+      (let ((inhibit-quit t))
+        (setq mevedel-view-prepare--timer
+              (run-at-time delay nil #'mevedel-view-prepare--advance
+                           (current-buffer)))))))
 
 (defun mevedel-view-prepare--checkpoint (job)
   "Validate JOB and return interpreter time to the main thread."
@@ -189,10 +192,13 @@ when ordinary synchronous preparation should handle it.  Call in the view."
                                   (when (buffer-live-p view)
                                     (with-current-buffer view
                                       (mevedel-view-prepare-cancel))))))
-          (with-current-buffer source
-            (add-hook 'kill-buffer-hook (mevedel-view-prepare--job-kill-hook job) nil t))
-          (setq mevedel-view-prepare--jobs
-                (nconc mevedel-view-prepare--jobs (list job)))))
+          ;; Input may abandon the caller's pure projection step, but never
+          ;; split ownership of a source hook from its discoverable queue entry.
+          (let ((inhibit-quit t))
+            (with-current-buffer source
+              (add-hook 'kill-buffer-hook (mevedel-view-prepare--job-kill-hook job) nil t))
+            (setq mevedel-view-prepare--jobs
+                  (nconc mevedel-view-prepare--jobs (list job))))))
       (if-let* ((thread (mevedel-view-prepare--job-thread job))
                 ((not (thread-live-p thread)))
                 (result (mevedel-view-prepare--job-result job)))

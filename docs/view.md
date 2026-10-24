@@ -335,8 +335,16 @@ tick before publication; changing the source cancels and restarts the job.
 Each projection resolves Markdown mode and grammar availability once; a batch
 retains that snapshot through preparation and publication. A later projection
 checks again, so installing missing grammars does not require restarting Emacs.
-Markdown fontification sees each whole response but yields between line-aligned
-regions. Tool entries are prepared in small groups; the job owns and releases
+Each callback runs one pure preparation step under `while-no-input`. Pending
+input postpones that step; input arriving during it unwinds at an Emacs quit
+checkpoint, retains the same job, and reschedules without synchronous fallback.
+An explicit quit cancels the job instead of retrying a cancelled fontifier.
+The old projection stays displayed. Source-property restoration and all
+publication stay outside this boundary and retain per-view mutation ownership.
+Markdown fontification sees each whole response and normally yields between
+line-aligned regions. An input abort keeps its private buffer and retries the
+interrupted region, including a very long line; only complete output is promoted.
+Tool entries are prepared in small groups; the job owns and releases
 their private buffers and caches. Preparation uses the same merged tool/audit
 source spans as publication and commits its cursor after each normalized entry.
 Completed batch Markdown enters the bounded per-view response cache, so a later
@@ -365,8 +373,13 @@ before resolving its own source positions; failed batch insertion rolls back
 and falls back to synchronous projection. Explicit zero-delay refreshes, direct
 full-render calls, and in-flight streaming reconciliation retain synchronous
 projection. Scheduled projection can defer large tool parsing as described below.
-Source segmentation and an individual turn remain indivisible work units;
-batching does not impose a maximum input delay on a very large single turn.
+Scanner lists and phase/cursor updates commit together, and normalized tools
+commit per entry, so interrupted preparation restarts without partial publication
+or a completed-projection cache sweep. This is cooperative, not a maximum input
+delay guarantee: source-property restoration, Markdown mode setup and buffer
+handoff, publication of an individual turn, non-quitting C primitives (including
+large copies or decodes), short state/cache commits, and GC remain atomic.
+Synchronous rendering and in-flight reconciliation are not input-interruptible.
 
 Transcript mutations additionally share per-view ownership. Full, incremental,
 and terminal projection, agent-handle refreshes, and disclosure actions cannot

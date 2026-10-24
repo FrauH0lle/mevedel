@@ -50,16 +50,6 @@ change then leaves the characters in place (Ebox `ebox--rewrite-span`,
 `4785ad7`). Measure the redisplay cost of a status tick, and check whether some
 of the logical-state capture and restore becomes unnecessary.
 
-### Interrupt large single-turn preparation on input
-
-Scheduled projection treats one turn as indivisible, so a very large turn
-delays input for its whole preparation ([Render flow](view.md#render-flow)).
-ETAF runs idle preparation under `while-no-input`, puts the pending work back
-and reschedules when input arrives (etaf `c60063f`). A projection plan is
-built off-buffer and checked against the source tick before publication, so
-its preparation could be abandoned the same way. Wrap only pure preparation,
-never buffer writes.
-
 ### Allocation budgets for hot paths
 
 The [profiler ledger](../benchmark/profiler-optimization-results.md) measures

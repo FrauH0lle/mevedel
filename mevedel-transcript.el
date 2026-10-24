@@ -1002,39 +1002,45 @@ after any source text or property change."
 (defun mevedel-transcript--scan-properties-step (job)
   "Advance JOB by at most 128 complete gptel property runs."
   (let ((pos (mevedel-transcript--scan-pos job))
+        (type (mevedel-transcript--scan-type job))
+        (properties (mevedel-transcript--scan-properties job))
         (to (or (next-single-property-change
                  (mevedel-transcript--scan-end job) 'gptel nil (point-max))
                 (point-max)))
         (count 0))
     (while (and (< pos to) (< count 128))
       (let ((next (next-single-property-change pos 'gptel nil to)))
-        (push (list (mevedel-transcript--scan-type job) pos next)
-              (mevedel-transcript--scan-properties job))
+        (push (list type pos next) properties)
         (setq pos next)
         (when (< pos to)
-          (setf (mevedel-transcript--scan-type job)
+          (setq type
                 (mevedel-transcript--classify-gptel-prop
                  (get-text-property pos 'gptel))))
         (cl-incf count)))
-    (setf (mevedel-transcript--scan-pos job) pos)
-    (when (>= pos to)
-      (setf (mevedel-transcript--scan-properties job)
-            (nreverse (mevedel-transcript--scan-properties job))
-            (mevedel-transcript--scan-start job)
-            (if (mevedel-transcript--scan-properties job)
-                (cadr (car (mevedel-transcript--scan-properties job)))
-              (mevedel-transcript--scan-start job))
-            (mevedel-transcript--scan-end job)
-            (if (mevedel-transcript--scan-properties job) to
-              (mevedel-transcript--scan-end job))
-            (mevedel-transcript--scan-pos job) (point-min)
-            (mevedel-transcript--scan-phase job) 'controls))))
+    (when (>= pos to) (setq properties (reverse properties)))
+    ;; Commit the lists and their cursors together.  An input abort before this
+    ;; point can repeat the unit without duplicating runs or reversing old state.
+    (let ((inhibit-quit t))
+      (setf (mevedel-transcript--scan-pos job) pos
+            (mevedel-transcript--scan-type job) type
+            (mevedel-transcript--scan-properties job) properties)
+      (when (>= pos to)
+        (setf (mevedel-transcript--scan-start job)
+              (if properties
+                  (cadr (car properties))
+                (mevedel-transcript--scan-start job))
+              (mevedel-transcript--scan-end job)
+              (if properties to
+                (mevedel-transcript--scan-end job))
+              (mevedel-transcript--scan-pos job) (point-min)
+              (mevedel-transcript--scan-phase job) 'controls)))))
 
 (defun mevedel-transcript--scan-controls-step (job)
   "Index a bounded source span and at most 128 control prefixes for JOB."
   (save-excursion
     (goto-char (mevedel-transcript--scan-pos job))
     (let* ((count 0)
+           (controls (mevedel-transcript--scan-controls job))
            (limit (min (point-max) (+ (point) 16384)))
            (finished nil))
       (while (and (< count 128)
@@ -1042,7 +1048,7 @@ after any source text or property change."
                   (re-search-forward mevedel-transcript--control-line-regexp
                                      limit t))
         (let ((start (match-beginning 0)))
-          (push start (mevedel-transcript--scan-controls job))
+          (push start controls)
           (when-let* ((block (mevedel-transcript--render-data-block-at start)))
             (goto-char (cadr block))))
         (cl-incf count))
@@ -1050,26 +1056,29 @@ after any source text or property change."
       ;; the final 64 characters on the next step, without repeating matches
       ;; already found in this one.  Every indexed match ends before LIMIT.
       (setq finished (and (< count 128) (= limit (point-max))))
-      (setf (mevedel-transcript--scan-pos job)
-            (if (= count 128) (point)
-              (max (point) (min limit
-                                (max (mevedel-transcript--scan-pos job)
-                                     (- limit 64))))))
-      (when finished
-        (setf (mevedel-transcript--scan-control-lines job)
-              (vconcat (nreverse (mevedel-transcript--scan-controls job)))
-              (mevedel-transcript--scan-controls job) nil
-              (mevedel-transcript--scan-pos job)
-              (mevedel-transcript--scan-start job)
-              (mevedel-transcript--scan-raw-pos job)
-              (mevedel-transcript--scan-start job)
-              (mevedel-transcript--scan-phase job) 'raw)))))
+      (let ((pos (if (= count 128) (point)
+                   (max (point) (min limit
+                                     (max (mevedel-transcript--scan-pos job)
+                                          (- limit 64))))))
+            (lines (when finished (vconcat (reverse controls)))))
+        (let ((inhibit-quit t))
+          (setf (mevedel-transcript--scan-pos job) pos
+                (mevedel-transcript--scan-controls job) controls)
+          (when finished
+            (setf (mevedel-transcript--scan-control-lines job) lines
+                  (mevedel-transcript--scan-controls job) nil
+                  (mevedel-transcript--scan-pos job)
+                  (mevedel-transcript--scan-start job)
+                  (mevedel-transcript--scan-raw-pos job)
+                  (mevedel-transcript--scan-start job)
+                  (mevedel-transcript--scan-phase job) 'raw)))))))
 
 (defun mevedel-transcript--scan-raw-step (job)
   "Collect at most 32 complete control candidates for JOB."
   (let* ((spec (nth (or (mevedel-transcript--scan-raw-index job) 0)
                     mevedel-transcript--range-scans))
          (pos (mevedel-transcript--scan-raw-pos job))
+         (ranges (mevedel-transcript--scan-raw-ranges job))
          (count 0)
          next)
     (if (null spec)
@@ -1079,20 +1088,22 @@ after any source text or property change."
                               spec pos (mevedel-transcript--scan-end job))))
         (setq pos (car next))
         (when (cdr next)
-          (push (cdr next) (mevedel-transcript--scan-raw-ranges job)))
+          (push (cdr next) ranges))
         (cl-incf count))
-      (setf (mevedel-transcript--scan-raw-pos job) pos)
-      (unless next
-        (setf (mevedel-transcript--scan-raw-index job)
-              (1+ (or (mevedel-transcript--scan-raw-index job) 0))
-              (mevedel-transcript--scan-raw-pos job)
-              (mevedel-transcript--scan-start job))))))
+      (let ((inhibit-quit t))
+        (setf (mevedel-transcript--scan-raw-pos job) pos
+              (mevedel-transcript--scan-raw-ranges job) ranges)
+        (unless next
+          (setf (mevedel-transcript--scan-raw-index job)
+                (1+ (or (mevedel-transcript--scan-raw-index job) 0))
+                (mevedel-transcript--scan-raw-pos job)
+                (mevedel-transcript--scan-start job)))))))
 
 (defun mevedel-transcript-scan-step (job)
   "Advance JOB by one cooperative unit; return non-nil when complete.
 All steps run in JOB's original source buffer and effective narrowing.
-Tool-block recovery, trust validation, and final neighbor repairs are
-currently atomic stages; a single exceptionally large block can exceed
+Input may abandon a step before its state commit; retrying it is safe.
+Individual decodes and other non-quitting primitives can still exceed
 the caller's timer budget."
   (pcase (mevedel-transcript--scan-phase job)
     ('done t)
@@ -1123,18 +1134,19 @@ the caller's timer budget."
                          (end (mevedel-transcript--scan-end job))
                          (ranges (mevedel-transcript--structural-ranges
                                   start end segments
-                                  (cons t (nreverse
+                                  (cons t (reverse
                                            (mevedel-transcript--scan-raw-ranges
                                             job)))))
                          (result (mevedel-transcript--finish-segments
                                   segments ranges start end)))
-                    (setf (mevedel-transcript--scan-result job) result
-                          (mevedel-transcript--scan-phase job) 'done
-                          (mevedel-transcript--scan-properties job) nil
-                          (mevedel-transcript--scan-controls job) nil
-                          (mevedel-transcript--scan-raw-ranges job) nil
-                          (mevedel-transcript--scan-render-data-blocks job) nil
-                          (mevedel-transcript--scan-control-lines job) nil))))))))
+                    (let ((inhibit-quit t))
+                      (setf (mevedel-transcript--scan-result job) result
+                            (mevedel-transcript--scan-phase job) 'done
+                            (mevedel-transcript--scan-properties job) nil
+                            (mevedel-transcript--scan-controls job) nil
+                            (mevedel-transcript--scan-raw-ranges job) nil
+                            (mevedel-transcript--scan-render-data-blocks job) nil
+                            (mevedel-transcript--scan-control-lines job) nil)))))))))
        (eq (mevedel-transcript--scan-phase job) 'done)))))
 
 (defun mevedel-transcript-segments (start end)
