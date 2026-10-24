@@ -474,7 +474,8 @@ buffer; the pass remains registered while its result is being published.
 that buffer, retires only this client's attempt. Failure and expired callbacks
 cannot publish fresh results or change a successor's claim or pins. Success
 returns the immutable public review, usage, and remaining frozen backlog count;
-arrivals after selection remain eligible. There is no recursive backlog drain.
+arrivals after selection remain eligible. A single pass never recursively drains
+the backlog; explicit drain coordinates successive separately owned passes.
 Explicit callers may allow an empty batch for current-memory review. The proposal
 cockpit and `/remember [focus]` command are available. Workspace telemetry records
 pass starts and terminal outcomes, usage received so far, published proposal and
@@ -516,6 +517,21 @@ ownership and recovers accepted publications before rechecking the gate, so
 another client's completion cannot be missed merely because the initial
 observation was stale. Journaling can be disabled while existing digests remain
 eligible for consolidation. Exit cancels queued and active review work.
+
+In **auto** mode, a successful general review with ready notes or digests
+remaining makes the next idle/maintenance opportunity a catch-up batch, bypassing
+the ordinary time and digest-count thresholds. It does not start another review
+inside the completion callback. `mevedel-memory-consolidation-max-batches-per-day`
+defaults to **8** successful general batches per rolling 24 hours. Admission
+counts published and retired general reviews on the target clock, including
+explicit reviews, under the existing workspace claim. Focused reviews do not
+count. Zero disables automatic review in auto mode. Propose retains the ordinary
+interval. A failed catch-up review ends the catch-up chain; later offers must
+pass the ordinary successful-review clock again. The cap bounds successful
+batch admissions, not tokens or billing: catch-up can
+cost up to eight normal-sized review requests per day rather than one, each
+retaining its existing evidence, deadline and output limits. Failed attempts
+still may incur provider charges. Explicit review and drain bypass the cap.
 
 Auto applies proposals sequentially with fresh workspace and original-root
 ownership for each application. Unrelated index edits are preserved across
@@ -723,6 +739,20 @@ and `j` opens pending journal jobs with their inspection/retry/discard actions.
 Shared-note rows show their disposition as the action and `note`, `attachment`
 or `directory` as the type; a disposal whose extraction is undecided shows
 `awaits extraction`. Attachment diffs show size and hash.
+`D` starts a **backlog drain**; `k` stops it, including between requests or while
+waiting for an active turn. `/remember drain` and `M-x mevedel-remember-drain`
+start the same operation. The header shows batch number, status and the last
+observed notes-remaining count; completion messages report each batch's notes
+and digest backlog. Drain runs successive general reviews, each with the same
+16-note / 96-KiB capture and ordinary digest/request limits, until a fresh
+selection finds no ready shared notes, housekeeping or uncovered digests. It
+does not request an empty current-memory review. Pending, kept and blocked
+notes are not ready; propose/manual drain leaves decisions for approval rather
+than deleting their files. Active workspace turns wait with a 60-second retry,
+so drain neither captures their notes nor spins on empty reviews. Closing its
+originating buffer or exiting stops it; a failed review stops without retry.
+The explicit command is not subject to the automatic daily cap.
+
 `m` runs another consolidation; a prefix argument asks for focus. The first-class
 `/remember [focus]` command and `M-x mevedel-remember` use the same bounded
 sessionless pass, allow explicit current-memory review without eligible digests,

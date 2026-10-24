@@ -170,7 +170,12 @@
       "memory" (mevedel-workspace-root workspace)
       (format "%d pending | %d recovery | history %d days%s"
               (or (plist-get observation :pending) 0) (or (plist-get observation :recovery) 0)
-              mevedel-memory-history-max-age-days (if (mevedel-memory-pass-running workspace) " | running" ""))))))
+              mevedel-memory-history-max-age-days
+              (if-let* ((drain (mevedel-memory-pass-drain-status workspace)))
+                  (format " | drain batch %d (%s), %s notes remain"
+                          (1+ (plist-get drain :batch)) (plist-get drain :status)
+                          (or (plist-get drain :notes-remaining) "?"))
+                (if (mevedel-memory-pass-running workspace) " | running" "")))))))
 
 (defun mevedel-memory-list--retention (workspace accepted)
   "Describe ACCEPTED history's expiry or retaining dependency in WORKSPACE."
@@ -430,6 +435,8 @@ Check original root authority before disclosing private topic contents."
                     (length (plist-get entry :digests)) (length (plist-get entry :proposals))
                     (or (plist-get result :remaining) 0) notes))))
       ('aborted (message "mevedel: memory review cancelled"))
+      ('waiting (message "mevedel: memory drain waiting for the workspace turn to finish (k stops)"))
+      ('restart-required (message "mevedel: %s" (plist-get result :error)))
       (_ (message "mevedel: memory review failed: %s" (or (plist-get result :error) "Unavailable"))))))
 
 ;;;###autoload
@@ -442,6 +449,35 @@ a focus. An explicit review may inspect current memory without eligible digests.
   (let* ((workspace (mevedel-cockpit-context-workspace context))
          (state (mevedel-memory-pass-start workspace (lambda (result) (mevedel-memory-list--finished workspace result))
                                            :focus (or focus "") :memory-only t)))
+    (mevedel-memory-list-open context)
+    state))
+
+;;;###autoload
+(defun mevedel-remember-drain (&optional context)
+  "Review ready workspace notes and digests in successive bounded batches.
+Use cockpit CONTEXT, or the current workspace.  Stop with `k' in the memory
+cockpit, or `mevedel-memory-pass-cancel'.  Active turns wait rather than
+capturing shared notes; failures stop the drain.  Automatic cost caps do not
+limit this explicit command.  Proposals still follow the configured mode."
+  (interactive)
+  (setq context (or context (mevedel-cockpit-current-context)))
+  (let* ((workspace (mevedel-cockpit-context-workspace context))
+         (state
+          (mevedel-memory-pass-drain
+           workspace
+           (lambda (result)
+             (unless (eq (plist-get result :outcome) 'empty)
+               (mevedel-memory-list--finished workspace result))
+             (pcase (plist-get result :outcome)
+               ('success
+                (if (plist-get result :stopped)
+                    (message "mevedel: memory drain stopped after batch %d; remaining decisions held"
+                             (plist-get result :batch))
+                  (message "mevedel: drain batch %d complete; %d notes and %d digests remain (k stops)"
+                           (plist-get result :batch) (plist-get result :notes-remaining)
+                           (plist-get result :remaining))))
+               ('empty (message "mevedel: memory drain complete after %d batches; no ready notes or digests remain"
+                                (plist-get result :batch))))))))
     (mevedel-memory-list-open context)
     state))
 
@@ -466,6 +502,7 @@ a focus. An explicit review may inspect current memory without eligible digests.
            ("v" "Inspect running consolidation" mevedel-memory-list-running)
            ("k" "Kill running consolidation" mevedel-memory-list-kill)
            ("m" "Run consolidation (prefix: focus)" mevedel-remember)
+           ("D" "Drain ready notes and digests (k stops)" mevedel-remember-drain)
            ("j" "Inspect pending journal jobs" mevedel-memory-list-jobs)
            ("s" "Inspect shared-note backlog" mevedel-memory-list-notes)))
   "Shared cockpit surface for candidates, stored memories, and history.")

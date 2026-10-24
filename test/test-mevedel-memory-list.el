@@ -412,7 +412,31 @@
       (should (eq 'unavailable (plist-get (mevedel-cockpit-surface-selected) :status)))
 		     (should-error (mevedel-report-test-text (mevedel-memory-list--details (mevedel-cockpit-surface-selected) context)))
       (should-error (mevedel-memory-list-accept))
-      (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md")))))))
+      (should (equal "Original topic.\n" (mevedel-session-control-fs-read-file (file-name-concat memory "topic.md"))))))
+  :doc "slash drain, M-x and the cockpit key reach the same cancellable owner without changing the draft"
+  (let ((draft "> retained draft\nsecond line") state)
+    (unwind-protect
+        (mevedel-test--with-captured-diagnostics nil
+          (with-current-buffer view
+            (mevedel-view-test--insert-composer-draft draft 4)
+            (save-window-excursion (mevedel-cmd--remember "drain")))
+          (setq state (mevedel-memory-pass-drain-status workspace))
+          (should state)
+          (with-current-buffer (get-buffer "*mevedel memory*")
+            (should (eq (key-binding "D") #'mevedel-remember-drain))
+            (should (string-search "drain batch 1" (mevedel-memory-list--header nil context)))
+            (mevedel-memory-list-kill))
+          (should-not (mevedel-memory-pass-drain-status workspace))
+          (should (eq 'cancelled (plist-get state :status)))
+          (with-current-buffer view
+            (save-window-excursion (mevedel-remember-drain context)))
+          (with-timeout (15 (ert-fail "Empty drain did not settle"))
+            (while (mevedel-memory-pass-drain-status workspace) (accept-process-output nil .01)))
+          (should-not (mevedel-memory-pass-running workspace))
+          (with-current-buffer view
+            (should (equal draft (mevedel-view--input-text)))
+            (should (= (point) (+ (mevedel-view--input-start) 4)))))
+      (mevedel-test--with-captured-diagnostics nil (mevedel-memory-pass-cancel workspace)))))
 
 (provide 'test-mevedel-memory-list)
 ;;; test-mevedel-memory-list.el ends here

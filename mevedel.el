@@ -103,6 +103,7 @@
 (autoload 'mevedel-refresh-session "mevedel-view-control-transfer" nil t)
 (autoload 'mevedel-release-control "mevedel-view-control-transfer" nil t)
 (autoload 'mevedel-remember "mevedel-memory-list" nil t)
+(autoload 'mevedel-remember-drain "mevedel-memory-list" nil t)
 (autoload 'mevedel-rename-session "mevedel-session-naming" nil t)
 (autoload 'mevedel-retry-session-naming "mevedel-session-naming" nil t)
 (autoload 'mevedel-retry-plan-implementation "mevedel-plan-handoff" nil t)

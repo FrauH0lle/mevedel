@@ -88,6 +88,17 @@ fenced claims and retained evidence, rather than inferring completion.
 The main session menu only renders cached memory observations, explicitly marking missing
 or old counts. Opening or refreshing the Memory table collects current evidence.
 
+Explicit backlog drain coordinates successive bounded general reviews through
+the same claim and settlement owner; it yields between batches and waits while
+a workspace turn is active. Auto mode offers a remaining ready backlog at the
+next idle opportunity instead of waiting another day, subject to a rolling
+24-hour cap (eight successful general reviews by default, including explicit
+ones). Published and retired timestamps enforce admission under ownership;
+explicit drain bypasses the automatic cap. This replaces one-batch-per-interval
+catch-up: a roughly 250-note ready backlog otherwise took weeks at sixteen
+notes per daily review. Request bounds stay unchanged rather than making one
+oversized request. The cap limits admissions, not provider billing.
+
 Application holds both workspace and original target-root claims. It persists
 complete private intent and a hash-only target marker before mutations. Curated
 writes, rollback, claim settlement, and marker retirement share a target-side

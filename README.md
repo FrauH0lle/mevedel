@@ -1347,6 +1347,13 @@ memory roots are `.mevedel/memory/`,
 frontmatter that classifies them as user, feedback, project, or reference
 memories. The native `/remember [focus]` command reviews journal evidence and
 memory, then presents proposals for cleanup or promotion in the memory cockpit.
+Use `/remember drain`, `M-x mevedel-remember-drain`, or `D` in that cockpit to
+review a backlog in successive bounded batches; `k` stops it. Auto mode catches
+up at later idle opportunities, capped by
+`mevedel-memory-consolidation-max-batches-per-day` (default 8 general batches per
+rolling 24 hours). Each batch is a separate normal-sized request, so catch-up
+can cost up to eight such requests per day instead of one; explicit drain is
+uncapped.
 Memory roots are independent of session sidecars. See the [memory guide](docs/memory.md)
 for automatic review modes, proposal decisions, and journal recovery.
 

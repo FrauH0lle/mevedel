@@ -149,7 +149,9 @@
 
 ;; `mevedel-memory-list'
 (declare-function mevedel-remember "mevedel-memory-list" (&optional focus context))
+(declare-function mevedel-remember-drain "mevedel-memory-list" (&optional context))
 (autoload 'mevedel-remember "mevedel-memory-list")
+(autoload 'mevedel-remember-drain "mevedel-memory-list")
 
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-ranges
@@ -350,7 +352,7 @@
     ("tokens" . " [command] no args; estimate tokens")
     ("model" . " [command] model name")
     ("compact" . " [command] optional summary guidance")
-    ("remember" . " [command] optional focus; review workspace memory")
+    ("remember" . " [command] optional focus or drain; review workspace memory")
     ("goal" . " [command] objective | budget N|none | edit OBJECTIVE | pause | resume [steering] | clear")
     ("plan" . " [command] optional prompt; enter Plan mode")
     ("prompt" . " [command] no args; inspect the effective prompt and tools")
@@ -415,8 +417,10 @@ current buffer belongs to a live session pair."
   (mevedel-compact nil args))
 
 (defun mevedel-cmd--remember (args)
-  "Run workspace memory consolidation with optional focus ARGS."
-  (mevedel-remember args)
+  "Run workspace memory consolidation with optional focus or drain ARGS."
+  (if (equal (string-trim (or args "")) "drain")
+      (mevedel-remember-drain)
+    (mevedel-remember args))
   nil)
 
 (defun mevedel-cmd--mode (args)
