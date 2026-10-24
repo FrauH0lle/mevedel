@@ -17,6 +17,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-skills-prompt)
 (require 'mevedel-structs)
+(require 'mevedel-tool-exec-permission)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-repair)
 (require 'mevedel-tool-render-data)

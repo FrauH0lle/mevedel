@@ -8,11 +8,12 @@
 
 ;;; Code:
 
-(require 'test-mevedel-plan-handoff-owner
+(require 'mevedel-plan-handoff-test-support
          (file-name-concat
           (file-name-directory (or load-file-name buffer-file-name))
-          "test-mevedel-plan-handoff-owner"))
+          "mevedel-plan-handoff-test-support"))
 (require 'mevedel-claude-code-session)
+(require 'mevedel-skills-invoke)
 
 (mevedel-deftest mevedel--implement-plan/staged-owner (:quiet t)
   ,test
