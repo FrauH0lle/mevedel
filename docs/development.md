@@ -129,8 +129,9 @@ eask run script check
 npx @emacs-eask/cli run script check -- --jobs 4
 ```
 
-The check cleans stale bytecode, compiles the package with `--strict` (warnings
-fail the command), then runs the complete isolated ERT suite through the existing
+The check first runs the deterministic standards checks below, cleans stale
+bytecode, compiles the package with `--strict` (warnings fail the command), then
+runs the complete isolated ERT suite through the existing
 `test` script. The test runner cleans bytecode again before loading sources, so
 compiled files cannot shadow edits. Each failed step stops the check and returns
 a nonzero status. Dependency installation remains a separate setup step.
@@ -154,9 +155,53 @@ ensure the staged change passes independently too. CI runs the check even when
 the hook is not installed or is bypassed; required branch checks are a separate
 GitHub repository setting.
 
-#### Checkdoc
+#### Deterministic standards and checkdoc ratchet
 
-Checkdoc is an advisory tool, not part of `check` or CI:
+`scripts/check-standards.py` runs first in `check` and CI. Run it independently
+without Eask or dependencies (Python 3, Git and Emacs are sufficient):
+
+```bash
+python3 scripts/check-standards.py
+python3 scripts/check-standards.py --base origin/master
+CHECK_BASE=BASE npx @emacs-eask/cli run script check
+```
+
+The default base is `master`, overridden by `CHECK_BASE` or `--base`. The script
+resolves `git merge-base BASE HEAD`; it checks the working tree, including
+committed changes, unstaged edits, and non-ignored new files, not just the index.
+An unavailable base fails with recovery-visible Git errors; fetch the base and
+enough history first. CI fetches full history and uses the PR base SHA, the
+push's previous SHA, or the default remote branch on a new branch/manual run.
+
+Enforced invariants:
+
+- First-line `lexical-binding: t` and a matching final `;;; FILENAME.el ends
+  here` footer (optional final period) in root Lisp libraries and immediate
+  `test/`, `benchmark/`, and `scripts/` Lisp files. Dotfiles, data, and nested
+  executable fixtures are not libraries and are outside this layout check.
+- Local inline/image and explicit reference Markdown links in `docs/` resolve
+  to files/directories and, for Markdown fragments, heading or explicit HTML
+  anchors. Fenced and inline code examples are ignored. This is not a full
+  Markdown renderer: shortcut reference links, setext headings and arbitrary HTML
+  links are outside the check; external URLs are not fetched.
+- ADR index IDs are unique, base IDs remain present, every current ADR has its
+  own index destination, and consolidated IDs point to a valid decision-history
+  anchor. Both the original-ID table and additional-record list are checked.
+- Checkdoc runs **only on changed `.el` files**, in clean batch Emacs without
+  evaluating sources or file locals. Git-detected renames retain their base
+  diagnostics; deleted files need no check. New diagnostics fail the command.
+  The ratchet compares message counts per top-level definition, ignoring line
+  shifts; fixing one definition cannot buy warnings in another. Existing
+  diagnostics in changed files are summarized as advisory, not repeated.
+
+The checker regression suite exercises real temporary Git repos and Emacs,
+including injected violations and checkdoc negative controls:
+
+```bash
+python3 -m unittest test/test_check_standards.py test/test_check.py
+```
+
+Full-tree checkdoc remains available as an advisory inventory:
 
 ```bash
 npx @emacs-eask/cli lint checkdoc '*.el'
@@ -164,10 +209,9 @@ npx @emacs-eask/cli lint checkdoc '*.el'
 
 The 2026-10-24 baseline on Emacs 31.1/Eask 0.12.9 reports 528 diagnostics across
 146 of 261 root Lisp files, mostly undocumented arguments and sentence spacing.
-Enabling it as a gate would require a separate tree-wide documentation cleanup.
-Keep the code-style rules below when editing; they are not a claim of automated
-checkdoc enforcement. Use `--strict` with the advisory command when a nonzero
-exit status on findings is needed.
+Those existing diagnostics do not block the ratchet. Both sides are measured
+with the same installed Emacs, not a frozen warning count. Use `--strict` with
+the advisory command when a nonzero exit status on all findings is needed.
 
 ### Testing
 Clear stale bytecode with the command below before tests so it never shadows
@@ -377,6 +421,8 @@ with `(interpreted-function-p (symbol-function 'mevedel-transcript-segments))`.
 ## Code style
 
 - **Lexical binding**: `;;; file.el -- Description -*- lexical-binding: t -*-`
+  (first-line binding and final filename footer enforced by `check-standards.py`
+  in the library/test scope above).
 - **Headers**: standard `;;; Commentary:` / `;;; Code:` sections
 - **Section headers**: two blank lines above. Major: `;;` + blank + `;;;`.
   Subsections add more semicolons: `;;;;`, `;;;;;`, ...
@@ -401,7 +447,7 @@ with `(interpreted-function-p (symbol-function 'mevedel-transcript-segments))`.
   holds, not where it was designed.
 - **`error` strings**: capitalized, no package prefix —
   `(error "Unknown tool: %s" name)`. The backtrace identifies the
-  source. Checkdoc can flag capitalization, but is not enforced by CI. When the
+  source. The checkdoc ratchet gates new capitalization diagnostics. When the
   first word is a literal binary, option, or parameter name that must stay
   lowercase, quote it instead of changing its spelling: `(error "'pdftoppm' not
   installed")`.

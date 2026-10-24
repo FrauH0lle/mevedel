@@ -126,9 +126,6 @@
                              (narrow-to-region beg (point-max))
                              (should-not (mevedel-transcript--tool-block-bounds-for-run beg end)))))))))
 
-(provide 'test-mevedel-transcript-cache)
-;;; test-mevedel-transcript-cache.el ends here
-
 (mevedel-deftest mevedel-transcript--control-line-positions
   (:doc "indexes candidate control lines within the accessible buffer")
   (with-temp-buffer
@@ -161,3 +158,6 @@
                              (mevedel-transcript--search-control-line regexp limit)))
               (should (= expected-point (point)))
               (when expected (should (equal expected-match (match-data)))))))))))
+
+(provide 'test-mevedel-transcript-cache)
+;;; test-mevedel-transcript-cache.el ends here

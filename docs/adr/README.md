@@ -19,6 +19,9 @@ honestly. When consolidating records, update the index and all in-repository
 references before removing redundant files. New decisions receive new IDs;
 existing records keep theirs.
 
+`scripts/check-standards.py`, run by the repository check, validates unique and
+preserved IDs, current-record coverage, and current/history link destinations.
+
 ## Decision index
 
 Every original ID has a destination below. A historical destination preserves

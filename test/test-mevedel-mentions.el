@@ -2613,9 +2613,6 @@ injector would once the payload exists."
         (when (and file (file-exists-p file))
           (delete-file file))))))
 
-(provide 'test-mevedel-mentions)
-;;; test-mevedel-mentions.el ends here
-
 ;; Steering wraps one injected message, never the chat buffer's context.
 (mevedel-deftest mevedel-mentions-wrap-prompt-media
   (:vars ((gptel--known-backends (copy-tree gptel--known-backends)))
@@ -2710,3 +2707,6 @@ injector would once the payload exists."
                (mevedel-mentions--add-media-context "/tmp/board.png" "image/png")
                (unless (and gptel-context (fboundp 'gptel-context--wrap))
                  (kill-emacs 4)))))))))))
+
+(provide 'test-mevedel-mentions)
+;;; test-mevedel-mentions.el ends here

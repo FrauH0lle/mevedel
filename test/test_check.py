@@ -13,11 +13,12 @@ ROOT = Path(__file__).resolve().parent.parent
 class CheckTests(unittest.TestCase):
     def test_check_sequence_and_failures(self):
         for fail_at, expected in (
-            ('', ['clean elc', 'compile --strict', 'run script test -- --jobs 2']),
-            ('clean elc', ['clean elc']),
-            ('compile --strict', ['clean elc', 'compile --strict']),
+            ('', ['standards', 'clean elc', 'compile --strict', 'run script test -- --jobs 2']),
+            ('standards', ['standards']),
+            ('clean elc', ['standards', 'clean elc']),
+            ('compile --strict', ['standards', 'clean elc', 'compile --strict']),
             ('run script test -- --jobs 2',
-             ['clean elc', 'compile --strict', 'run script test -- --jobs 2']),
+             ['standards', 'clean elc', 'compile --strict', 'run script test -- --jobs 2']),
         ):
             with self.subTest(fail_at=fail_at), tempfile.TemporaryDirectory() as tmp:
                 directory = Path(tmp)
@@ -28,6 +29,12 @@ class CheckTests(unittest.TestCase):
                     'printf "%s\\n" "$*" >> "$COMMAND_LOG"\n'
                     '[ "$*" != "$FAIL_AT" ] || exit 23\n')
                 fake.chmod(0o755)
+                python = directory / 'python3'
+                python.write_text('#!/bin/sh\n'
+                                  '[ "$*" = "scripts/check-standards.py" ] || exit 99\n'
+                                  'echo standards >> "$COMMAND_LOG"\n'
+                                  '[ "$FAIL_AT" != standards ] || exit 23\n')
+                python.chmod(0o755)
                 log = directory / 'commands'
                 result = subprocess.run(
                     ['sh', str(ROOT / 'scripts/check.sh'), '--jobs', '2'],

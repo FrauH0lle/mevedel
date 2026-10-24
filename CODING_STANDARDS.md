@@ -31,6 +31,11 @@ Before reviewing `relay/` or `shared-editing/`, also read
 scoped contracts and checks. Apply area-specific contracts from the
 [documentation map](docs/index.md#documentation-map) to the changed area.
 
+The [deterministic standards check](docs/development.md#deterministic-standards-and-checkdoc-ratchet)
+enforces Lisp binding headers/final footers, local `docs/` link targets, ADR
+index integrity, and the changed-file checkdoc ratchet. Use its result instead
+of manually rechecking those invariants; the guide states their exact scope.
+
 ## DEEP HARNESS
 
 Design mevedel as a **deep module**: substantial useful behavior behind a small,
@@ -112,7 +117,8 @@ boundary on later work. When evidence changes the trade, change the ADR.
   current explanation; when a choice is reversed, retain the previous choice,
   replacement, and reason in a clearly marked decision-history section.
   Consolidated records preserve original ADR IDs and their destinations in
-  `docs/adr/README.md`. Keep independent decisions separate.
+  `docs/adr/README.md` (ID/destination integrity is enforced by
+  `scripts/check-standards.py`). Keep independent decisions separate.
 - State what moved the decision — a measurement, a failure, a constraint that
   turned out not to hold. "We changed our minds" is not a reason; "the profile
   put this at 21% and the check was redundant with the target-side proof" is.

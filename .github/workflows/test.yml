@@ -31,6 +31,19 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+
+    - name: Select standards comparison base
+      env:
+        EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        if [ -n "$EVENT_BASE" ] && ! echo "$EVENT_BASE" | grep -Eq '^0+$'; then
+          echo "CHECK_BASE=$EVENT_BASE" >> "$GITHUB_ENV"
+        else
+          echo "CHECK_BASE=origin/$DEFAULT_BRANCH" >> "$GITHUB_ENV"
+        fi
 
     - uses: jcs090218/setup-emacs@master
       with:
@@ -87,6 +100,7 @@ jobs:
       run: |
         python3 test/test_run_tests.py
         python3 -m unittest test/test_check.py
+        python3 -m unittest test/test_check_standards.py
 
     - name: Check execution spool worker
       run: python3 -m unittest test/test_execution_spool.py
