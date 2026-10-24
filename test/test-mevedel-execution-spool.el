@@ -106,6 +106,18 @@
               (setf (mevedel-session-save-path session) remote-root
                     (mevedel-session-authority-mode session) 'pid-lock
                     (mevedel-session-sandbox-mode session) 'off)
+              (let (done selected)
+                (mevedel-execution-spool-with-path
+                 (concat (file-remote-p remote-root) path) 'read
+                 (lambda (_result) (setq done t))
+                 (lambda (view callback)
+                   (setq selected view)
+                   (funcall callback '(:result "owned view"))))
+                (test-mevedel-spool--wait (lambda () done))
+                (should selected)
+                (should (equal (file-remote-p remote-root) (file-remote-p selected)))
+                (should (string-prefix-p (file-name-as-directory temporary-file-directory)
+                                         (file-local-name selected))))
               (let ((result (test-mevedel-spool--tool
                              session 'read "artifact://executions/execution.log"
                              :offset 2 :limit 1)))

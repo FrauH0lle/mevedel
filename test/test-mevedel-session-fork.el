@@ -830,7 +830,8 @@
       (mevedel-workspace-clear-registry))))
 
 
-(mevedel-deftest mevedel-session-fork--publish-fork ()
+(mevedel-deftest mevedel-session-fork--publish-fork
+  (:after-each (tramp-cleanup-all-connections))
   ,test
   (test)
   :doc "moves one owned remote lease from staging into the restored child"

@@ -15,7 +15,8 @@
 (require 'tramp-container)
 (require 'tramp-sh)
 
-(mevedel-deftest mevedel-claude-code/remote (:quiet t)
+(mevedel-deftest mevedel-claude-code/remote
+  (:quiet t :after-each ((tramp-cleanup-all-connections)))
   (pcase-dolist (`(,variable ,method) '(("MEVEDEL_TEST_SSH_ROOT" ssh)
                                        ("MEVEDEL_TEST_PODMAN_ROOT" podman)))
     (let* ((tramp-use-connection-share tramp-use-connection-share)
@@ -64,6 +65,7 @@
                                                      (args . ((patch . "*** Begin Patch\n*** Update File: input.txt\n@@\n-target evidence\n+reviewed target evidence\n*** End Patch"))))]
                                                    [((name . "Bash") (id . "remote-bash")
                                                      (args . ((command . "cat input.txt > output.txt; cat output.txt")
+                                                              (description . "Verify native target changes")
                                                               (yield_time_ms . 1000))))]])))))))
               (mevedel--insert-user-turn "Read and update the target file, then verify it with Bash")
               (mevedel--send-request)

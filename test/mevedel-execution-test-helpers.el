@@ -14,6 +14,9 @@
 (require 'mevedel-structs)
 (require 'subr-x)
 
+;; `helpers'
+(defvar mevedel-test--write-roots)
+
 (defun test-mevedel-execution--workspace (root)
   "Return an execution workspace rooted at ROOT.
 
@@ -126,6 +129,9 @@ The root must already exist, be writable, and be reachable through normal
             (format "-F %s" (shell-quote-argument config))))
     (when (string-empty-p value)
       (ert-fail (format "%s is set but empty" variable)))
+    ;; Normalization can discard the hop spelling, so inspect the raw root.
+    (when (file-remote-p value 'hop 'never)
+      (ert-fail (format "%s must name one target, without hops" variable)))
     (let ((root (file-name-as-directory value)))
       (unless (file-remote-p root)
         (ert-fail (format "%s must be a TRAMP directory" variable)))
@@ -133,8 +139,6 @@ The root must already exist, be writable, and be reachable through normal
                      (file-remote-p root 'method 'never))
         (ert-fail
          (format "%s must use the %s TRAMP method" variable method)))
-      (when (file-remote-p root 'hop 'never)
-        (ert-fail (format "%s must name one target, without hops" variable)))
       (unless (file-remote-p root 'host 'never)
         (ert-fail (format "%s must name a target host" variable)))
       (condition-case err
@@ -157,14 +161,41 @@ The directory is created in the target's temporary directory, which is
 where a disposable journey belongs.  PERSISTENT places it inside ROOT
 instead: ROOT is the project volume that outlives the target, and a journey
 that replaces the target must find its durable state again afterwards."
-  (let ((default-directory root))
-    (if persistent
-        (let ((directory
-               (file-name-as-directory
-                (file-name-concat root (make-temp-name stem)))))
-          (make-directory directory t)
-          directory)
-      (file-name-as-directory (make-nearby-temp-file stem t)))))
+  (let* ((default-directory root)
+         (directory
+          (let ((mevedel-test--write-roots
+                 (cons (if persistent root (temporary-file-directory))
+                       mevedel-test--write-roots)))
+            ;; Only this allocator can write in the shared parent.  The rest
+            ;; of the journey owns the exact returned directory, not /tmp.
+            (file-name-as-directory
+             (make-nearby-temp-file
+              (if persistent (file-name-concat root stem) stem) t)))))
+    (push directory mevedel-test--write-roots)
+    directory))
+
+(defmacro test-mevedel-execution-remote--with-temporary-directory
+    (directory &rest body)
+  "Run BODY with target temporary files contained in owned DIRECTORY.
+Other connections keep their normal temporary directories."
+  (declare (indent 1) (debug (form body)))
+  `(let* ((owned-directory ,directory)
+          (owned-remote (file-remote-p owned-directory))
+          (original-temporary-directory
+           (symbol-function 'temporary-file-directory))
+          (original-remote-tmpdir (symbol-function 'tramp-get-remote-tmpdir)))
+     (cl-letf (((symbol-function 'temporary-file-directory)
+                (lambda ()
+                  (if (equal owned-remote (file-remote-p default-directory))
+                      owned-directory
+                    (funcall original-temporary-directory))))
+               ((symbol-function 'tramp-get-remote-tmpdir)
+                (lambda (vec)
+                  (if (equal owned-remote
+                             (file-remote-p (tramp-make-tramp-file-name vec "/")))
+                      owned-directory
+                    (funcall original-remote-tmpdir vec)))))
+       ,@body)))
 
 (defun test-mevedel-execution-remote--accept-storage (session)
   "Accept SESSION's target-side durable storage for an opt-in test."

@@ -500,19 +500,32 @@ dispatched), and `:pauses'."
     (should (> (plist-get run :pauses) 0)))
 
   :doc "guest nesting does not consume the host evaluation stack"
-  (let ((script "1")
-        (result nil))
-    (dotimes (_ 50)
-      (setq script (concat "(+ 1 " script ")")))
-    (let ((state (mevedel-ptc-start script nil)))
-      (unwind-protect
-          (let ((max-lisp-eval-depth 80))
-            (while (not result)
-              (let ((step (mevedel-ptc-step state)))
-                (when (memq (car step) '(:done :error))
-                  (setq result step)))))
-        (mevedel-ptc-close state)))
-    (should (equal '(:done 51) result)))
+  ;; Keep the absolute host-stack budget independent of ERT/guard call depth.
+  ;; The child uses the same low limit and guest depth as the original case.
+  (with-temp-buffer
+    (let ((status
+           (call-process
+            (expand-file-name invocation-name invocation-directory)
+            nil (current-buffer) nil "--batch" "-Q"
+            "--eval" (format "(setq load-path '%S)" load-path)
+            "--eval"
+            (prin1-to-string
+             '(progn
+                (require 'mevedel-ptc-interpreter)
+                (let ((script "1") result)
+                  (dotimes (_ 50) (setq script (concat "(+ 1 " script ")")))
+                  (let ((state (mevedel-ptc-start script nil)))
+                    (unwind-protect
+                        (let ((max-lisp-eval-depth 80))
+                          (while (not result)
+                            (let ((step (mevedel-ptc-step state)))
+                              (when (memq (car step) '(:done :error))
+                                (setq result step)))))
+                      (mevedel-ptc-close state)))
+                  (unless (equal '(:done 51) result)
+                    (error "Guest nesting consumed the host stack: %S" result))))))))
+      (unless (eql status 0)
+        (ert-fail (list :status status :output (buffer-string))))))
 
   :doc "bounds one uninterrupted slice by wall clock, not only by steps"
   ;; Emacs is single threaded, so a slice blocks everything until it yields.

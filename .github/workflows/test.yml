@@ -17,6 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        test-lane: [partitioned, fresh-files]
         # mevedel is Linux-only: portable session storage needs procfs, GNU
         # stat, and bash, and refuses every other host outright. A macOS or
         # Windows job measures nothing the product claims to support.
@@ -106,20 +107,27 @@ jobs:
       run: python3 -m unittest test/test_execution_spool.py
 
     - name: Check compilation and tests
+      if: matrix.test-lane == 'partitioned'
       run: eask run script check
+
+    - name: Check fresh-file test isolation
+      if: matrix.test-lane == 'fresh-files'
+      run: eask run script test -- --fresh-files
 
     - name: Upload test reports
       if: always()
       uses: actions/upload-artifact@v7
       with:
-        name: ert-reports-${{ matrix.os }}-${{ matrix.emacs-version }}
+        name: ert-reports-${{ matrix.os }}-${{ matrix.emacs-version }}-${{ matrix.test-lane }}
         path: .scratch/test-suite-performance/
         include-hidden-files: true
 
     - name: Build package
+      if: matrix.test-lane == 'partitioned'
       run: eask package
 
     - name: Install package
+      if: matrix.test-lane == 'partitioned'
       run: eask install
 
   remote-transport:

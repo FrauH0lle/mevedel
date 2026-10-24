@@ -681,8 +681,9 @@
 
   :doc "does not impose remote readiness probing on a local request"
   (with-temp-buffer
-    (let* ((workspace (mevedel-workspace-get-or-create
-                       'project "/tmp/p1/" "/tmp/p1/" "p1"))
+    (let* ((root (mevedel-test--placeholder-root))
+           (workspace (mevedel-workspace-get-or-create
+                       'project root root "p1"))
            (session (mevedel-session-create "main" workspace)))
       (setq-local mevedel--session session)
       (cl-letf (((symbol-function 'mevedel-execution-target-probe)

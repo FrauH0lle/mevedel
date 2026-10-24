@@ -16,6 +16,155 @@ import run_tests
 
 
 class RunnerTests(unittest.TestCase):
+    def test_public_cli_preserves_native_worker_exit_and_bounds_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            executable = path / 'eask'
+            executable.write_text(f'''#!{sys.executable}
+import json, os, pathlib, sys
+if sys.argv[1] == 'clean':
+    sys.exit(0)
+names = ['failing-' + str(i) for i in range(30)]
+output = pathlib.Path(os.environ['MEVEDEL_TEST_RESULTS'])
+if 'MEVEDEL_TEST_PARTITION' not in os.environ:
+    output.write_text(json.dumps(names))
+else:
+    request = json.loads(pathlib.Path(os.environ['MEVEDEL_TEST_PARTITION']).read_text())
+    output.write_text(json.dumps(dict(ert_seconds=1, tests=[dict(
+        test=name, seconds=0.01, status='ert-test-failed', expected=False)
+        for name in request['tests']])))
+    print('native failure diagnostics')
+    sys.exit(7)
+''')
+            executable.chmod(0o755)
+            output = path / 'reports'
+            result = subprocess.run(
+                [sys.executable, str(run_tests.ROOT / 'test/run_tests.py'),
+                 'test/test-mevedel-test-runner.el', '--jobs', '1', '--output', str(output)],
+                env={**os.environ, 'PATH': str(path)}, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 7, result.stderr)
+            self.assertEqual(result.stdout.count('FAIL: '), 20)
+            self.assertIn('10 more', result.stdout)
+            self.assertLess(len(result.stdout.splitlines()), 30)
+            self.assertIn('native failure diagnostics', (output / '0.log').read_text())
+            self.assertEqual(json.loads((output / 'summary.json').read_text())['unexpected'], 30)
+
+    def test_file_selection_expands_deduplicates_and_rejects_typos(self):
+        expected = ['test/test-mevedel-test-runner.el']
+        self.assertEqual(run_tests.select_files(['test/test-mevedel-test-runne?.el',
+                                                expected[0]]), expected)
+        self.assertEqual(run_tests.select_files([str(run_tests.ROOT / expected[0])]), expected)
+        for pattern in ('test/not-present*.el', 'README.md', '/etc/passwd'):
+            with self.subTest(pattern=pattern), self.assertRaises(ValueError):
+                run_tests.select_files([pattern])
+
+    def test_replay_keeps_order_and_validates_saved_roster(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'partition.json'
+            request = dict(files=['test/test-mevedel-test-runner.el'],
+                           inventory=['a', 'b'], tests=['b', 'a'])
+            path.write_text(json.dumps(request))
+            self.assertEqual(run_tests.read_replay(path), request)
+            for change in (dict(tests=['a', 'a']), dict(tests=['missing']),
+                           dict(files=['test/missing.el']), dict(inventory=[])):
+                path.write_text(json.dumps({**request, **change}))
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    run_tests.read_replay(path)
+
+    def test_focused_fresh_and_replay_lanes_preserve_failures_and_history(self):
+        for lane in ('focused', 'fresh', 'replay'):
+            with self.subTest(lane=lane), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                output = path / 'reports'
+                history = path / 'latest-durations.csv'
+                history.write_text('previous timings\n')
+                files = ['test/test-mevedel-test-runner.el']
+                request = dict(files=files, inventory=['a', 'b'], tests=['b', 'a'])
+                saved = path / 'saved.json'
+                saved.write_text(json.dumps(request))
+                arguments = ['--replay', str(saved)] if lane == 'replay' else files
+                if lane == 'fresh':
+                    arguments = ['--fresh-files', *files]
+                commands = []
+
+                def run(command, log, env=None):
+                    commands.append(command)
+                    log.write_text('native log\n')
+                    if log.name == 'inventory.log':
+                        Path(env['MEVEDEL_TEST_RESULTS']).write_text('["a", "b"]')
+                    elif log.name == '0.log':
+                        if lane == 'fresh':
+                            self.assertEqual(env['MEVEDEL_TEST_FRESH_FILE'], '1')
+                            names = ['a', 'b']
+                        else:
+                            assignment = json.loads(Path(env['MEVEDEL_TEST_PARTITION']).read_text())
+                            self.assertEqual(assignment['files'], files)
+                            names = assignment['tests']
+                            if lane == 'replay':
+                                self.assertEqual(assignment, request)
+                        Path(env['MEVEDEL_TEST_RESULTS']).write_text(json.dumps(dict(
+                            inventory=['a', 'b'], ert_seconds=1,
+                            tests=[dict(test=name, seconds=0.5, status='ert-test-failed',
+                                        expected=False) for name in names])))
+                        return 7, 1
+                    return 0, 1
+
+                console = io.StringIO()
+                with patch.object(sys, 'argv', ['run_tests.py', '--jobs', '1',
+                                               '--output', str(output), '--durations',
+                                               str(path / 'absent.csv'), *arguments]), \
+                     patch.object(run_tests, 'REPORTS', path), \
+                     patch.object(run_tests, 'run_logged', side_effect=run), \
+                     contextlib.redirect_stdout(console):
+                    self.assertEqual(run_tests.main(), 7)
+                self.assertEqual(history.read_text(), 'previous timings\n')
+                self.assertIn('FAIL: b', console.getvalue())
+                self.assertEqual(commands[0], run_tests.EASK + ['clean', 'elc'])
+                self.assertEqual(commands[-1][-1:], files)
+                self.assertEqual(json.loads((output / '0-partition.json').read_text())['files'], files)
+                self.assertEqual(json.loads((output / 'summary.json').read_text())['count'], 2)
+
+    def test_fresh_lane_rejects_cross_file_duplicate_names_in_summary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'reports'
+
+            def run(command, log, env=None):
+                log.write_text('native log\n')
+                if log.name != 'clean.log':
+                    Path(env['MEVEDEL_TEST_RESULTS']).write_text(json.dumps(dict(
+                        inventory=['duplicate'], ert_seconds=1,
+                        tests=[dict(test='duplicate', seconds=1,
+                                    status='ert-test-passed', expected=True)])))
+                return 0, 1
+
+            with patch.object(sys, 'argv', ['run_tests.py', '--fresh-files', '--output',
+                                           str(output), 'test/test-mevedel-test-runner.el',
+                                           'test/test-mevedel-test-helpers.el']), \
+                 patch.object(run_tests, 'run_logged', side_effect=run), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(run_tests.main(), 1)
+            summary = json.loads((output / 'summary.json').read_text())
+            self.assertTrue(summary['failed'])
+            self.assertIn('exactly once', summary['error'])
+
+    def test_crashed_fresh_file_does_not_claim_complete_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'reports'
+
+            def run(command, log, env=None):
+                log.write_text('load failed\n')
+                return (3 if log.name == '0.log' else 0), 1
+
+            with patch.object(sys, 'argv', ['run_tests.py', '--fresh-files', '--output',
+                                           str(output), 'test/test-mevedel-test-runner.el']), \
+                 patch.object(run_tests, 'run_logged', side_effect=run), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(run_tests.main(), 3)
+            summary = json.loads((output / 'summary.json').read_text())
+            self.assertTrue(summary['failed'])
+            self.assertIsNone(summary['expected_count'])
+            self.assertEqual(summary['workers'][0]['files'], ['test/test-mevedel-test-runner.el'])
+
     def test_default_concurrency_respects_cpu_affinity(self):
         original = os.sched_getaffinity(0)
         try:

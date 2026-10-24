@@ -1334,7 +1334,7 @@ hooks:
     (should (eq 'injection-failed (plist-get outcome :reason))))
 
   :doc "model inline origin installs additive context but ignores policy"
-  (let* ((session (mevedel-skills-test--make-session nil "/tmp/t"))
+  (let* ((session (mevedel-skills-test--make-session))
          (request (mevedel-request--create :session session))
          (skill (mevedel-skill--create
                  :name "demo"

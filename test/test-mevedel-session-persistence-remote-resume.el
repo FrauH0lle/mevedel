@@ -34,6 +34,10 @@
           (file-name-as-directory
            (make-temp-file "mevedel-rebuilt-container-" t)))
          (remote-root (format "/docker:%s:%s" host local-root))
+         ;; This Docker-shaped fixture executes on the local filesystem.
+         (mevedel-test--write-roots
+          (cons (format "/docker:%s:%s" host temporary-file-directory)
+                mevedel-test--write-roots))
          (grant-path (file-name-concat remote-root "granted.el"))
          (incarnation-a (secure-hash 'sha256 "incarnation-a"))
          (client-a (make-string 64 ?a))
@@ -50,10 +54,11 @@
     ;; Exercise the supported container path without provisioning a real
     ;; container: this Docker method executes through a local POSIX shell.
     (setf (alist-get "docker" tramp-methods nil nil #'equal)
-          '((tramp-login-program "sh")
+          `((tramp-login-program "sh")
             (tramp-login-args (("-i")))
             (tramp-remote-shell "/bin/sh")
             (tramp-remote-shell-args ("-c"))
+            (tramp-tmpdir ,temporary-file-directory)
             (tramp-connection-timeout 10)))
     (unwind-protect
         (let* ((workspace-a

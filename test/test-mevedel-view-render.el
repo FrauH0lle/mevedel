@@ -721,14 +721,17 @@
   (test)
   :doc "opens the sole alternative, preserves drafts, and lands at the shared point"
   (mevedel-view-test--with-buffers
-    (let* ((target-data (generate-new-buffer " *test-target-data*"))
+    (let* ((root (mevedel-test--placeholder-root))
+           (source-path (file-name-concat root "source/"))
+           (target-path (file-name-concat root "child/"))
+           (target-data (generate-new-buffer " *test-target-data*"))
            (target-view (generate-new-buffer " *test-target-view*"))
            (source-session
             (mevedel-session--create
              :authority-mode 'pid-lock
              :name "source"
              :session-id "source-id"
-             :save-path "/tmp/mevedel-view-sessions/source/"
+             :save-path source-path
              :working-directory "/source/"
              :current-segment 1))
            (target-session
@@ -736,7 +739,7 @@
              :authority-mode 'pid-lock
              :name "fork"
              :session-id "child-id"
-             :save-path "/tmp/mevedel-view-sessions/child/"
+             :save-path target-path
              :working-directory "/worktree/"
              :forked-from-session-id "source-id"
              :forked-from-fork-point-id "fork-point-1"
@@ -746,10 +749,10 @@
              '((1 . ((:fork-point-id "fork-point-1"
                       :cum-turn 1 :preview "shared"))))))
            (variants
-            '((:save-path "/tmp/mevedel-view-sessions/source/"
+            `((:save-path ,source-path
                :variant-origin source
                :summary (:session-id "source-id"))
-              (:save-path "/tmp/mevedel-view-sessions/child/"
+              (:save-path ,target-path
                :variant-origin worktree
                :summary (:session-id "child-id"))))
            displayed

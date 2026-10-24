@@ -1089,7 +1089,7 @@
   (:doc "captures local and remote commit and dirty-content identity")
   ,test
   (test)
-  (let ((snapshot (mevedel-telemetry--git-snapshot default-directory)))
+  (let ((snapshot (mevedel-telemetry--git-snapshot mevedel-test--worktree-root)))
     (should (stringp (plist-get snapshot :git-head)))
     (should (numberp (plist-get snapshot :dirty-file-count)))
     (should (= 64 (length (plist-get snapshot :dirty-content-hash)))))

@@ -224,8 +224,8 @@ MAX-LINES bounds prefix inflation for a ranged Read.  Return a canceller."
             (funcall run path)
           (setq directory
                 (if (file-remote-p path)
-                    (make-temp-file
-                     (concat (file-remote-p path) "/tmp/.mevedel-spool-view-") t)
+                    (let ((default-directory (file-name-directory path)))
+                      (make-nearby-temp-file ".mevedel-spool-view-" t))
                   (make-temp-file "mevedel-spool-view-" t)))
           (let* ((is-directory (file-directory-p path))
                  (destination

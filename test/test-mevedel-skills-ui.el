@@ -1061,7 +1061,7 @@ spanning lines")))
           (with-current-buffer buffer
             (should (equal (mevedel-skills-list--workspace-label
                             (mevedel-cockpit-surface-context))
-                           "/tmp/t"))))
+                           (mevedel-test--placeholder-root)))))
       (mevedel-skills-test--cleanup-list view-buffer data-buffer))))
 
 (mevedel-deftest mevedel-skills-list--header-line ()
@@ -1102,8 +1102,9 @@ spanning lines")))
     (unwind-protect
         (progn
           (setf (mevedel-session-skills session) (list skill))
-          (should (string-match-p
-                   "mevedel skills for workspace /tmp/t"
+          (should (string-prefix-p
+                   (format "mevedel skills for workspace %s\n"
+                           (mevedel-test--placeholder-root))
                    (mevedel-skills--list-message-text session)))
           (should (string-match-p
                    "visible \\[enabled\\] source:project - Visible description"

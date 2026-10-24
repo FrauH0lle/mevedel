@@ -64,10 +64,7 @@
   ,test
   (test)
   :doc "every column-zero deftest in every test file is a top-level form"
-  (let* ((directory (file-name-directory
-                     (or (bound-and-true-p buffer-file-name)
-                         load-file-name
-                         (expand-file-name "test/" default-directory))))
+  (let* ((directory (file-name-concat mevedel-test--worktree-root "test"))
          (files (directory-files directory t "\\`test-.*\\.el\\'"))
          swallowed)
     (should files)

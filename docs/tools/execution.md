@@ -205,8 +205,9 @@ while previously compressed output remains consumable through TRAMP.
 
 Artifact addresses and the Full output action remain unchanged. The shared
 execution-storage layer provides disposable logical views for reading and
-searching; neither compressed size nor suffix changes pagination, Glob
-matching, or the retained-output completeness warning. Compression does not
+searching. Remote views use TRAMP's configured target temporary directory,
+rather than assuming `/tmp`. Neither compressed size nor suffix changes
+pagination, Glob matching, or the retained-output completeness warning. Compression does not
 recover bytes beyond an output-limit stop.
 
 Successful empty-input WriteStdin observations are still returned to the model,

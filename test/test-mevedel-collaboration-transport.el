@@ -381,7 +381,10 @@ relay's room plist."
               (should-not (plist-get transport :ws))
               (should-not (plist-get transport :reconnect-timer))
               (should-not (plist-get transport :connect-timer))
-              (should-not (plist-get transport :keepalive-timer))))
+              (should-not (plist-get transport :keepalive-timer))
+              ;; Resolving sockets retire at their sentinel, not before open.
+              (mevedel-test--await 5 "Cancelled transport socket remained live"
+                (not (process-live-p (websocket-conn ws))))))
         (when transport
           (mevedel-collaboration--transport-stop transport)))))
 
@@ -434,7 +437,7 @@ relay's room plist."
            (original (symbol-function 'make-network-process))
            (gnutls-verify-error t)
            (open (symbol-function 'websocket-open))
-           options transport open-error)
+           options transport open-error connection)
       (unwind-protect
           (progn
             (cl-letf (((symbol-function 'websocket-open)
@@ -449,7 +452,8 @@ relay's room plist."
               (setq transport
                     (mevedel-collaboration--transport-open
                      (format "wss://127.0.0.1:%d/r/async?role=host" port)
-                     (make-string 32 5))))
+                     (make-string 32 5)))
+              (setq connection (websocket-conn (plist-get transport :ws))))
             (should-not open-error)
             ;; This listener deliberately has no TLS responder.  No handshake
             ;; can have completed when dialing returns to the caller.
@@ -460,7 +464,10 @@ relay's room plist."
                                      :verify-error)))
             (should gnutls-verify-error))
         (when transport (mevedel-collaboration--transport-stop transport))
-        (delete-process server)))))
+        (delete-process server)
+        (when connection
+          (mevedel-test--await 5 "Cancelled TLS socket remained live"
+            (not (process-live-p connection))))))))
 
 (mevedel-deftest mevedel-collaboration--transport-connect-timeout
   ()

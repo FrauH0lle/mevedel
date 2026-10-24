@@ -1929,7 +1929,7 @@ streams over stdin."
                  (format
                   "(progn (load %S nil t) (let ((mevedel-session-control-fs--test-pause-file %S)) (prin1 (mevedel-session-control-fs-tree-sizes (list %S)))))"
                   (expand-file-name "mevedel-session-control-fs.el"
-                                    default-directory)
+                                    mevedel-test--worktree-root)
                   pause tree)))
           (while (and (process-live-p worker)
                       (not (file-exists-p (file-name-concat root pause))))
@@ -1982,7 +1982,7 @@ streams over stdin."
                  (format
                   "(progn (load %S nil t) (let ((mevedel-session-control-fs--test-pause-file %S)) (mevedel-session-control-fs-run-program (list (list :op 'write :path %S :content \"pinned\")))))"
                   (expand-file-name "mevedel-session-control-fs.el"
-                                    default-directory)
+                                    mevedel-test--worktree-root)
                   pause path)))
           (while (and (process-live-p worker)
                       (not (file-exists-p (file-name-concat root pause))))
@@ -2034,7 +2034,7 @@ streams over stdin."
                  (format
                   "(progn (load %S nil t) (let ((mevedel-session-control-fs--test-pause-file %S)) (mevedel-session-control-fs-read-file %S 'no-conversion)))"
                   (expand-file-name "mevedel-session-control-fs.el"
-                                    default-directory)
+                                    mevedel-test--worktree-root)
                   pause path)))
           (while (and (process-live-p worker)
                       (not (file-exists-p (file-name-concat root pause))))
@@ -2156,7 +2156,7 @@ streams over stdin."
                  (format
                   "(progn (load %S nil t) (let ((mevedel-session-control-fs--test-pause-file %S)) (mevedel-session-control-fs-write-file %S \"pinned\")))"
                   (expand-file-name "mevedel-session-control-fs.el"
-                                    default-directory)
+                                    mevedel-test--worktree-root)
                   pause path)))
           (while (and (process-live-p worker)
                       (not (file-exists-p (file-name-concat root pause))))

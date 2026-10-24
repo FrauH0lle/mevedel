@@ -218,10 +218,12 @@
   :doc "opt-in real SSH separates stderr on both the sh and direct-async adapters"
   ;; The shared helper skips without a target and applies the runner's SSH
   ;; configuration, as the other real-SSH journeys do.
-  (let ((root (test-mevedel-execution-remote--real-root
-               "MEVEDEL_TEST_SSH_ROOT" 'ssh)))
+  (let* ((base (test-mevedel-execution-remote--real-root
+                "MEVEDEL_TEST_SSH_ROOT" 'ssh))
+         (root (test-mevedel-execution-remote--real-temp-directory
+                base "mevedel-stderr-")))
     (unwind-protect
-        (progn
+        (test-mevedel-execution-remote--with-temporary-directory root
           (let ((mevedel-transport-remote-direct-async t))
             (should
              (test-mevedel-process-stderr--run
@@ -253,7 +255,9 @@
                   (should (equal '("err" . nil) (mevedel-execution-process-collect-stderr child)))
                   (should-not (file-exists-p remote-path)))
               (when child (mevedel-execution-process-release child)))))
-      (tramp-cleanup-all-connections)))
+      (unwind-protect
+          (delete-directory root t)
+        (tramp-cleanup-all-connections))))
   :doc "ordinary Bash output remains merged when separation is not requested"
   (let (result stdout stderr child)
     (unwind-protect

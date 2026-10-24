@@ -69,6 +69,90 @@
     (apply #'message (concat "mevedel: remote diagnostic: " format-string)
            args)))
 
+(mevedel-deftest test-mevedel-execution-remote--real-root ()
+  ,test
+  (test)
+  :doc "rejects raw multi-hop roots before any target filesystem probe"
+  (let ((process-environment (copy-sequence process-environment))
+        probes)
+    (setenv "MEVEDEL_TEST_SSH_CONFIG" nil)
+    (cl-letf (((symbol-function 'file-directory-p)
+               (lambda (root) (push (list 'directory root) probes) t))
+              ((symbol-function 'file-writable-p)
+               (lambda (root) (push (list 'writable root) probes) t)))
+      (dolist (method '(ssh podman docker))
+        (let ((root (format "/%s:fixture:/workspace/" method)))
+          ;; Establish that both fake probes are reached for a valid root.
+          (setq probes nil)
+          (setenv "MEVEDEL_TEST_NO_HOP_ROOT" root)
+          (should (equal root (test-mevedel-execution-remote--real-root
+                               "MEVEDEL_TEST_NO_HOP_ROOT" method)))
+          (should (equal probes `((writable ,root) (directory ,root))))
+          (setq probes nil)
+          (setenv "MEVEDEL_TEST_NO_HOP_ROOT"
+                  (format "/ssh:hop|%s:fixture:/workspace/" method))
+          (should-error (test-mevedel-execution-remote--real-root
+                         "MEVEDEL_TEST_NO_HOP_ROOT" method)
+                        :type 'ert-test-failed)
+          (should-not probes))))))
+
+(mevedel-deftest test-mevedel-execution-remote--real-temp-directory ()
+  (dolist (persistent '(nil t))
+    (let* ((base "/ssh:fixture:/workspace/")
+           (parent (if persistent base "/ssh:fixture:/tmp/"))
+           (allocated (file-name-concat parent "owned-123/"))
+           (mevedel-test--write-roots (list default-directory)))
+      (cl-letf (((symbol-function 'temporary-file-directory)
+                 (lambda () "/ssh:fixture:/tmp/"))
+                ((symbol-function 'make-nearby-temp-file)
+                 (lambda (prefix directory-p)
+                   (should directory-p)
+                   (should (equal (if persistent
+                                      (file-name-concat base "owned-")
+                                    "owned-") prefix))
+                   (should (member parent mevedel-test--write-roots))
+                   allocated)))
+        (should (equal allocated
+                       (test-mevedel-execution-remote--real-temp-directory
+                        base "owned-" persistent))))
+      (should (member allocated mevedel-test--write-roots))
+      (should-not (member parent mevedel-test--write-roots))
+      (should-not (mevedel-test--check-write
+                   'write-region (file-name-concat allocated "result")))
+      (let ((mevedel-test--write-violations nil))
+        (should-error (mevedel-test--check-write
+                       'write-region (file-name-concat parent "sibling")))))))
+
+(mevedel-deftest test-mevedel-execution-remote--with-temporary-directory ()
+  (cl-letf (((symbol-function 'temporary-file-directory)
+             (lambda () "/native-temporary/"))
+            ((symbol-function 'tramp-get-remote-tmpdir)
+             (lambda (_vec) "/native-remote-temporary/")))
+    (let ((default-directory "/ssh:fixture:/workspace/"))
+      (test-mevedel-execution-remote--with-temporary-directory
+          "/ssh:fixture:/owned/"
+        (should (equal "/ssh:fixture:/owned/" (temporary-file-directory)))
+        (should (equal "/ssh:fixture:/owned/"
+                       (tramp-get-remote-tmpdir
+                        (tramp-dissect-file-name default-directory))))
+        (test-mevedel-execution-remote--with-temporary-directory
+            "/ssh:other:/owned/"
+          (should (equal "/ssh:fixture:/owned/" (temporary-file-directory)))
+          (should (equal "/ssh:fixture:/owned/"
+                         (tramp-get-remote-tmpdir
+                          (tramp-dissect-file-name default-directory))))
+          (let ((default-directory "/ssh:other:/workspace/"))
+            (should (equal "/ssh:other:/owned/" (temporary-file-directory)))
+            (should (equal "/ssh:other:/owned/"
+                           (tramp-get-remote-tmpdir
+                            (tramp-dissect-file-name default-directory))))))
+        (let ((default-directory "/ssh:other:/workspace/"))
+          (should (equal "/native-temporary/" (temporary-file-directory)))
+          (should (equal "/native-remote-temporary/"
+                         (tramp-get-remote-tmpdir
+                          (tramp-dissect-file-name default-directory))))))
+      (should (equal "/native-temporary/" (temporary-file-directory))))))
+
 (defun test-mevedel-execution-remote-run-selector ()
   "Run the exact generated ERT journey named by the environment.
 
@@ -216,7 +300,8 @@ before returning."
     (let ((bash-result
            (test-mevedel-execution-remote--run-tool
             session "Bash"
-            (list :command
+            (list :description "Verify remote target file"
+                  :command
                   (format "printf 'bash target\\n' > %s; cat %s"
                           (shell-quote-argument (file-local-name bash-file))
                           (shell-quote-argument
@@ -239,7 +324,8 @@ before returning."
                      "41" "failure" nil)))
       (let ((result
              (test-mevedel-execution-remote--run-tool
-              session "Bash" (list :command (car case)))))
+              session "Bash" (list :command (car case)
+                                   :description "Check remote pipeline status"))))
         (should (string-search (format "exit_code=\"%s\"" (nth 1 case)) result))
         (should (string-search (format "outcome=\"%s\"" (nth 2 case)) result))
         (when (nth 3 case)
@@ -349,60 +435,60 @@ connection charges for, so the program path is proved here too."
           (let ((user-emacs-directory user-dir))
             (eval
              `(mevedel-define-agent ,agent-name
-                :description "remote acceptance hook provenance"
-                :hooks ((PreToolUse
-                         ((:matcher "Bash"
-                           :hooks ((:type command :command ,script)))))))))
-            (setq agent (mevedel-agent-get agent-name)
-                  invocation (mevedel-agent-invocation-create agent))
-            (setf (mevedel-agent-invocation-path invocation)
-                  "/root/remote-acceptance"
-                  (mevedel-agent-invocation-parent-session invocation)
-                  session
-                  (mevedel-agent-invocation-transcript-status invocation)
-                  'running)
-            (let* ((payload
-                    (mevedel-hooks-event-plist
-                     'PreToolUse session workspace
-                     :tool-name "Bash"
-                     :tool-input '(:command "printf hook")))
-                   (handler
-                    (car
-                     (mevedel-hooks--matching-handlers
-                      'PreToolUse payload
-                      (mevedel-hooks-effective-rules
-                       session workspace nil invocation)))))
-              (should handler)
-              (should (eq 'user (plist-get handler :source)))
-              (should (equal user-dir (plist-get handler :source-root)))
-              (let ((process-environment (copy-sequence process-environment)))
-                (setenv "MEVEDEL_REMOTE_HOOK_MARKER" marker)
-                (setenv "MEVEDEL_REMOTE_HOOK_INPUT" input)
-                (with-temp-buffer
-                  (mevedel-hooks-run-event
-                   'PreToolUse payload
-                   (lambda (value)
-                     (setq decision value done t))
-                   session workspace nil invocation)
-                  (test-mevedel-execution-remote--wait
-                   (lambda () done) "Agent hook did not settle")))))
-          (should-not (plist-get decision :permission-decision))
-          (should (file-exists-p marker))
-          (should (file-exists-p input))
-          (with-temp-buffer
-            (insert-file-contents input)
-            (should (string-match-p
-                     (regexp-quote
-                      (mevedel-execution-target-native-path
-                       (mevedel-session-execution-target session) root))
-                     (buffer-string))))
-          t)
-      (when agent
-        (setq mevedel-agent--registry
-              (assoc-delete-all
-               (mevedel-agent-name agent) mevedel-agent--registry)))
-      (when (file-directory-p user-dir)
-        (delete-directory user-dir t))))
+                                    :description "remote acceptance hook provenance"
+                                    :hooks ((PreToolUse
+                                             ((:matcher "Bash"
+                                                        :hooks ((:type command :command ,script)))))))))
+          (setq agent (mevedel-agent-get agent-name)
+                invocation (mevedel-agent-invocation-create agent))
+          (setf (mevedel-agent-invocation-path invocation)
+                "/root/remote-acceptance"
+                (mevedel-agent-invocation-parent-session invocation)
+                session
+                (mevedel-agent-invocation-transcript-status invocation)
+                'running)
+          (let* ((payload
+                  (mevedel-hooks-event-plist
+                   'PreToolUse session workspace
+                   :tool-name "Bash"
+                   :tool-input '(:command "printf hook")))
+                 (handler
+                  (car
+                   (mevedel-hooks--matching-handlers
+                    'PreToolUse payload
+                    (mevedel-hooks-effective-rules
+                     session workspace nil invocation)))))
+            (should handler)
+            (should (eq 'user (plist-get handler :source)))
+            (should (equal user-dir (plist-get handler :source-root)))
+            (let ((process-environment (copy-sequence process-environment)))
+              (setenv "MEVEDEL_REMOTE_HOOK_MARKER" marker)
+              (setenv "MEVEDEL_REMOTE_HOOK_INPUT" input)
+              (with-temp-buffer
+                (mevedel-hooks-run-event
+                 'PreToolUse payload
+                 (lambda (value)
+                   (setq decision value done t))
+                 session workspace nil invocation)
+                (test-mevedel-execution-remote--wait
+                 (lambda () done) "Agent hook did not settle")))))
+      (should-not (plist-get decision :permission-decision))
+      (should (file-exists-p marker))
+      (should (file-exists-p input))
+      (with-temp-buffer
+        (insert-file-contents input)
+        (should (string-match-p
+                 (regexp-quote
+                  (mevedel-execution-target-native-path
+                   (mevedel-session-execution-target session) root))
+                 (buffer-string))))
+      t)
+    (when agent
+      (setq mevedel-agent--registry
+            (assoc-delete-all
+             (mevedel-agent-name agent) mevedel-agent--registry)))
+    (when (file-directory-p user-dir)
+      (delete-directory user-dir t))))
 
 (defun test-mevedel-execution-remote--exercise-publication-recovery
     (session buffer)
@@ -462,17 +548,17 @@ connection charges for, so the program path is proved here too."
          (mevedel-sandbox-mode 'off))
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (let ((result
-                 (mevedel-execution-run-one-shot
-                  :name "mevedel-test-remote-dispatch"
-                  :command '("sh" "-c" "printf '%s' \"$PWD\"")
-                  :workdir remote-root
-                  :writable-roots (list remote-root))))
-            (should-not (plist-get result :error))
-            (should (= 0 (plist-get result :exit-code)))
-            (should-not (plist-get result :termination))
-            (should (equal (directory-file-name root)
-                           (plist-get result :output)))))
+                                              (let ((result
+                                                     (mevedel-execution-run-one-shot
+                                                      :name "mevedel-test-remote-dispatch"
+                                                      :command '("sh" "-c" "printf '%s' \"$PWD\"")
+                                                      :workdir remote-root
+                                                      :writable-roots (list remote-root))))
+                                                (should-not (plist-get result :error))
+                                                (should (= 0 (plist-get result :exit-code)))
+                                                (should-not (plist-get result :termination))
+                                                (should (equal (directory-file-name root)
+                                                               (plist-get result :output)))))
       (delete-directory root t)))
   :doc "preserves target environment without forwarding client variables"
   (let* ((root (make-temp-file "mevedel-remote-environment-" t))
@@ -481,21 +567,21 @@ connection charges for, so the program path is proved here too."
          (mevedel-sandbox-mode 'off))
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          ;; Establish the target shell before adding the client-only value.
-          (should (file-directory-p remote-root))
-          (let ((process-environment
-                 (cons "MEVEDEL_CLIENT_SECRET=do-not-forward"
-                       process-environment)))
-            (let ((result
-                   (mevedel-execution-run-one-shot
-                    :name "mevedel-test-remote-environment"
-                    :command
-                    '("sh" "-c"
-                      "test -n \"$PATH\" && test \"$MEVEDEL_EXECUTION\" = 1 && test -z \"${MEVEDEL_CLIENT_SECRET+x}\"")
-                    :workdir remote-root
-                    :writable-roots (list remote-root))))
-              (should-not (plist-get result :error))
-              (should (= 0 (plist-get result :exit-code))))))
+                                              ;; Establish the target shell before adding the client-only value.
+                                              (should (file-directory-p remote-root))
+                                              (let ((process-environment
+                                                     (cons "MEVEDEL_CLIENT_SECRET=do-not-forward"
+                                                           process-environment)))
+                                                (let ((result
+                                                       (mevedel-execution-run-one-shot
+                                                        :name "mevedel-test-remote-environment"
+                                                        :command
+                                                        '("sh" "-c"
+                                                          "test -n \"$PATH\" && test \"$MEVEDEL_EXECUTION\" = 1 && test -z \"${MEVEDEL_CLIENT_SECRET+x}\"")
+                                                        :workdir remote-root
+                                                        :writable-roots (list remote-root))))
+                                                  (should-not (plist-get result :error))
+                                                  (should (= 0 (plist-get result :exit-code))))))
       (delete-directory root t)))
   :doc "localizes qualified command arguments in the target path domain"
   (let* ((root (make-temp-file "mevedel-remote-argv-" t))
@@ -508,18 +594,18 @@ connection charges for, so the program path is proved here too."
         (progn
           (write-region "input" nil file nil 'silent)
           (mevedel-test--with-local-shell-tramp nil
-            (let ((result
-                   (mevedel-execution-run-one-shot
-                    :name "mevedel-test-remote-argv"
-                    :command
-                    (list "sh" "-c"
-                          "test -f \"$1\" && printf localized"
-                          "sh" remote-file)
-                    :workdir remote-root
-                    :writable-roots (list remote-root))))
-              (should-not (plist-get result :error))
-              (should (= 0 (plist-get result :exit-code)))
-              (should (equal "localized" (plist-get result :output))))))
+                                                (let ((result
+                                                       (mevedel-execution-run-one-shot
+                                                        :name "mevedel-test-remote-argv"
+                                                        :command
+                                                        (list "sh" "-c"
+                                                              "test -f \"$1\" && printf localized"
+                                                              "sh" remote-file)
+                                                        :workdir remote-root
+                                                        :writable-roots (list remote-root))))
+                                                  (should-not (plist-get result :error))
+                                                  (should (= 0 (plist-get result :exit-code)))
+                                                  (should (equal "localized" (plist-get result :output))))))
       (delete-directory root t)))
   :doc "signals the captured target process group and removes descendants"
   (let* ((root (make-temp-file "mevedel-remote-group-" t))
@@ -532,34 +618,34 @@ connection charges for, so the program path is proved here too."
          calls child-pid)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (cl-letf (((symbol-function 'signal-process)
-                     (lambda (&rest args)
-                       (push args calls)
-                       (apply original-signal-process args))))
-            (let ((result
-                   (mevedel-execution-run-one-shot
-                    :name "mevedel-test-remote-group"
-                    :command
-                    '("sh" "-c"
-                      "trap '' TERM; sleep 30 & child=$!; printf '%s' \"$child\" > child.pid; wait")
-                    :workdir remote-root
-                    :writable-roots (list remote-root)
-                    :timeout 0.1)))
-              (should (plist-get result :timed-out-p))
-              (should (eq 'timed-out (plist-get result :termination)))
-              (setq child-pid
-                    (test-mevedel-execution--read-pid pid-file))
-              (should (> child-pid 0))
-              (should
-               (cl-some
-                (lambda (args)
-                  (and (integerp (car args))
-                       (< (car args) 0)
-                       (memq (cadr args) '(TERM KILL))
-                       (equal remote-root (nth 2 args))))
-                calls))
-              (should-not (zerop (funcall original-signal-process
-                                           child-pid 0))))))
+                                              (cl-letf (((symbol-function 'signal-process)
+                                                         (lambda (&rest args)
+                                                           (push args calls)
+                                                           (apply original-signal-process args))))
+                                                (let ((result
+                                                       (mevedel-execution-run-one-shot
+                                                        :name "mevedel-test-remote-group"
+                                                        :command
+                                                        '("sh" "-c"
+                                                          "trap '' TERM; sleep 30 & child=$!; printf '%s' \"$child\" > child.pid; wait")
+                                                        :workdir remote-root
+                                                        :writable-roots (list remote-root)
+                                                        :timeout 0.1)))
+                                                  (should (plist-get result :timed-out-p))
+                                                  (should (eq 'timed-out (plist-get result :termination)))
+                                                  (setq child-pid
+                                                        (test-mevedel-execution--read-pid pid-file))
+                                                  (should (> child-pid 0))
+                                                  (should
+                                                   (cl-some
+                                                    (lambda (args)
+                                                      (and (integerp (car args))
+                                                           (< (car args) 0)
+                                                           (memq (cadr args) '(TERM KILL))
+                                                           (equal remote-root (nth 2 args))))
+                                                    calls))
+                                                  (should-not (zerop (funcall original-signal-process
+                                                                              child-pid 0))))))
       (when (and child-pid
                  (eq 0 (ignore-errors
                          (funcall original-signal-process child-pid 0))))
@@ -576,133 +662,134 @@ connection charges for, so the program path is proved here too."
          group-id session)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (setq session (test-mevedel-execution--session remote-root))
-          (cl-letf (((symbol-function 'signal-process)
-                     (lambda (&rest args)
-                       (if (and (integerp (car args))
-                                (< (car args) 0)
-                                (memq (cadr args) '(TERM KILL))
-                                (equal remote-root (nth 2 args)))
-                           (error "Transport lost")
-                         (apply original-signal-process args)))))
-            (let ((result
-                   (mevedel-execution-run-one-shot
-                    :name "mevedel-test-remote-unknown"
-                    :command
-                    '("sh" "-c"
-                      "ps -o pgid= -p $$ | tr -d ' ' > group.pid; trap '' TERM; sleep 30 & wait")
-                    :workdir remote-root
-                    :writable-roots (list remote-root)
-                    :timeout 0.05
-                    :session session)))
-              (setq group-id
-                    (test-mevedel-execution--read-pid pid-file))
-              (should (eq 'unknown (plist-get result :termination)))
-              (should (mevedel-execution-mutation-blocked-p session))))
-      (when session
-        (mevedel-execution-teardown-session session))
-      (when (and group-id (> group-id 0))
-        (ignore-errors
-          (funcall original-signal-process (- group-id) 'KILL)))
-      (delete-directory root t)))
-  :doc "runs the Bubblewrap and FD grant wrappers in the target path domain"
-  (let* ((root (make-temp-file "mevedel-remote-bwrap-" t))
-         (external-root (make-temp-file "mevedel-remote-grant-" t))
-         (client-only (make-temp-file "mevedel-client-protected-" t))
-         (external-target (expand-file-name "secret.txt" external-root))
-         (external (expand-file-name "secret-link" external-root))
-         (bin (expand-file-name "bin" root))
-         (bwrap (expand-file-name "bwrap" bin))
-         (args-file (expand-file-name "bwrap.args" root))
-         (target-protected-name
-          (make-temp-name ".mevedel-test-credentials-"))
-         (remote-root
-          (format "/mevedelmock:%s:%s/" (system-name) root))
-         (remote-external-root
-          (format "/mevedelmock:%s:%s/" (system-name) external-root))
-         (remote-external
-          (format "/mevedelmock:%s:%s" (system-name) external))
-         (tramp-remote-path (cons bin tramp-remote-path))
-         (mevedel-protected-paths
-          `((,(concat client-only "/**") . inaccessible)
-            (,(concat "~/" target-protected-name "/**") . inaccessible)
-            (,(concat remote-external-root "**") . inaccessible)))
-         (mevedel-sandbox--probe-cache nil)
-         (mevedel-sandbox-mode 'required))
-    (unwind-protect
-        (progn
-          (make-directory bin t)
-          (write-region "secret" nil external-target nil 'silent)
-          (make-symbolic-link external-target external)
-          (with-temp-file bwrap
-            (insert "#!/bin/sh\n"
-                    "printf '%s\\n' \"$@\" > "
-                    (shell-quote-argument args-file)
-                    "\n"
-                    "while [ \"$#\" -gt 0 ]; do\n"
-                    "  if [ \"$1\" = -- ]; then shift; exec \"$@\"; fi\n"
-                    "  shift\n"
-                    "done\n"
-                    "exit 2\n"))
-          (set-file-modes bwrap #o700)
-          (mevedel-test--with-local-shell-tramp nil
-            ;; This case extends `tramp-remote-path' so the target finds its
-            ;; stand-in Bubblewrap.  A connection opened by an earlier test
-            ;; already cached the old path, so drop it before probing.
-            (tramp-cleanup-connection
-             (tramp-dissect-file-name remote-root) nil t)
-            (let* ((target-home
-                    (file-truename (concat (file-remote-p remote-root) "~/")))
-                   (target-protected
-                    (file-name-concat target-home target-protected-name)))
-              (unwind-protect
-                  (progn
-                    (make-directory target-protected t)
-                    (let ((result
-                           (mevedel-execution-run-one-shot
-                            :name "mevedel-test-remote-bwrap"
-                            :command
-                            (list "sh" "-c" "cat \"$1\""
-                                  "sh" remote-external)
-                            :workdir remote-root
-                            :writable-roots (list remote-root)
-                            :additional-permissions
-                            (list :file-system
-                                  (list (list :path remote-external
-                                              :access 'read))))))
-                      (should-not (plist-get result :error))
-                      (should (= 0 (plist-get result :exit-code)))
-                      (should (equal "secret" (plist-get result :output)))
-                      (should (eq 'bubblewrap
-                                  (plist-get
-                                   (plist-get result :sandbox-facts)
-                                   :sandbox)))
-                      (let ((arguments
-                             (with-temp-buffer
-                               (insert-file-contents args-file)
-                               (buffer-string))))
-                        (should-not
-                         (string-match-p "mevedelmock" arguments))
-                        (should-not
-                         (string-match-p
-                          (regexp-quote client-only) arguments))
-                        (should
-                         (string-match-p
-                          (regexp-quote
-                           (file-local-name target-protected))
-                          arguments))
-                        (should (string-match-p
-                                 (regexp-quote external) arguments))
-                        (should (string-match-p
-                                 (regexp-quote external-target)
-                                 arguments)))))
-                (when (file-exists-p target-protected)
-                  (delete-directory target-protected t))))))
-      (delete-directory client-only t)
-      (delete-directory external-root t)
-      (delete-directory root t)))))
+                                              (setq session (test-mevedel-execution--session remote-root))
+                                              (cl-letf (((symbol-function 'signal-process)
+                                                         (lambda (&rest args)
+                                                           (if (and (integerp (car args))
+                                                                    (< (car args) 0)
+                                                                    (memq (cadr args) '(TERM KILL))
+                                                                    (equal remote-root (nth 2 args)))
+                                                               (error "Transport lost")
+                                                             (apply original-signal-process args)))))
+                                                (let ((result
+                                                       (mevedel-execution-run-one-shot
+                                                        :name "mevedel-test-remote-unknown"
+                                                        :command
+                                                        '("sh" "-c"
+                                                          "ps -o pgid= -p $$ | tr -d ' ' > group.pid; trap '' TERM; sleep 30 & wait")
+                                                        :workdir remote-root
+                                                        :writable-roots (list remote-root)
+                                                        :timeout 0.05
+                                                        :session session)))
+                                                  (setq group-id
+                                                        (test-mevedel-execution--read-pid pid-file))
+                                                  (should (eq 'unknown (plist-get result :termination)))
+                                                  (should (mevedel-execution-mutation-blocked-p session))))
+                                              (when session
+                                                (mevedel-execution-teardown-session session))
+                                              (when (and group-id (> group-id 0))
+                                                (ignore-errors
+                                                  (funcall original-signal-process (- group-id) 'KILL)))
+                                              (delete-directory root t)))
+    :doc "runs the Bubblewrap and FD grant wrappers in the target path domain"
+    (let* ((root (make-temp-file "mevedel-remote-bwrap-" t))
+           (external-root (make-temp-file "mevedel-remote-grant-" t))
+           (client-only (make-temp-file "mevedel-client-protected-" t))
+           (external-target (expand-file-name "secret.txt" external-root))
+           (external (expand-file-name "secret-link" external-root))
+           (bin (expand-file-name "bin" root))
+           (bwrap (expand-file-name "bwrap" bin))
+           (args-file (expand-file-name "bwrap.args" root))
+           (target-protected-name
+            (make-temp-name ".mevedel-test-credentials-"))
+           (remote-root
+            (format "/mevedelmock:%s:%s/" (system-name) root))
+           (remote-external-root
+            (format "/mevedelmock:%s:%s/" (system-name) external-root))
+           (remote-external
+            (format "/mevedelmock:%s:%s" (system-name) external))
+           (tramp-remote-path (cons bin tramp-remote-path))
+           (mevedel-protected-paths
+            `((,(concat client-only "/**") . inaccessible)
+              (,(concat "~/" target-protected-name "/**") . inaccessible)
+              (,(concat remote-external-root "**") . inaccessible)))
+           (mevedel-sandbox--probe-cache nil)
+           (mevedel-sandbox-mode 'required))
+      (unwind-protect
+          (progn
+            (make-directory bin t)
+            (write-region "secret" nil external-target nil 'silent)
+            (make-symbolic-link external-target external)
+            (with-temp-file bwrap
+              (insert "#!/bin/sh\n"
+                      "printf '%s\\n' \"$@\" > "
+                      (shell-quote-argument args-file)
+                      "\n"
+                      "while [ \"$#\" -gt 0 ]; do\n"
+                      "  if [ \"$1\" = -- ]; then shift; exec \"$@\"; fi\n"
+                      "  shift\n"
+                      "done\n"
+                      "exit 2\n"))
+            (set-file-modes bwrap #o700)
+            (mevedel-test--with-local-shell-tramp nil
+                                                  ;; This case extends `tramp-remote-path' so the target finds its
+                                                  ;; stand-in Bubblewrap.  A connection opened by an earlier test
+                                                  ;; already cached the old path, so drop it before probing.
+                                                  (tramp-cleanup-connection
+                                                   (tramp-dissect-file-name remote-root) nil t)
+                                                  (let* ((target-home
+                                                          (file-truename (concat (file-remote-p remote-root) "~/")))
+                                                         (target-protected
+                                                          (file-name-concat target-home target-protected-name)))
+                                                    (unwind-protect
+                                                        (progn
+                                                          (make-directory target-protected t)
+                                                          (let ((result
+                                                                 (mevedel-execution-run-one-shot
+                                                                  :name "mevedel-test-remote-bwrap"
+                                                                  :command
+                                                                  (list "sh" "-c" "cat \"$1\""
+                                                                        "sh" remote-external)
+                                                                  :workdir remote-root
+                                                                  :writable-roots (list remote-root)
+                                                                  :additional-permissions
+                                                                  (list :file-system
+                                                                        (list (list :path remote-external
+                                                                                    :access 'read))))))
+                                                            (should-not (plist-get result :error))
+                                                            (should (= 0 (plist-get result :exit-code)))
+                                                            (should (equal "secret" (plist-get result :output)))
+                                                            (should (eq 'bubblewrap
+                                                                        (plist-get
+                                                                         (plist-get result :sandbox-facts)
+                                                                         :sandbox)))
+                                                            (let ((arguments
+                                                                   (with-temp-buffer
+                                                                     (insert-file-contents args-file)
+                                                                     (buffer-string))))
+                                                              (should-not
+                                                               (string-match-p "mevedelmock" arguments))
+                                                              (should-not
+                                                               (string-match-p
+                                                                (regexp-quote client-only) arguments))
+                                                              (should
+                                                               (string-match-p
+                                                                (regexp-quote
+                                                                 (file-local-name target-protected))
+                                                                arguments))
+                                                              (should (string-match-p
+                                                                       (regexp-quote external) arguments))
+                                                              (should (string-match-p
+                                                                       (regexp-quote external-target)
+                                                                       arguments)))))
+                                                      (when (file-exists-p target-protected)
+                                                        (delete-directory target-protected t))))))
+        (delete-directory client-only t)
+        (delete-directory external-root t)
+        (delete-directory root t)))))
 
-(mevedel-deftest mevedel-execution-start-bash/remote (:quiet t)
+(mevedel-deftest mevedel-execution-start-bash/remote
+  (:quiet t :after-each ((tramp-cleanup-all-connections)))
   ,test
   (test)
   :doc "a Monitor through TRAMP's shell adapter keeps stderr out of events"
@@ -725,33 +812,33 @@ connection charges for, so the program path is proved here too."
                          (push path stderr-paths))
                        path))))
           (mevedel-test--with-local-shell-tramp nil
-           (setq session (test-mevedel-execution--session remote-root))
-           (let ((mevedel-execution-mailbox-delivery-function
-                  (lambda (event _ ack) (push event events) (funcall ack t nil) t)))
-             (mevedel-execution-start-bash
-              #'ignore
-              :kind 'monitor :description "remote" :session session
-              :owner "/root" :owner-context session
-              :command '("sh" "-c" "printf 'warn\\n' >&2; printf 'event\\n'")
-              :workdir remote-root :writable-roots (list remote-root))
-             (test-mevedel-execution--wait
-              (lambda ()
-                (cl-find 'terminal events :key (lambda (e) (plist-get e :type))))
-              15))
-           (let* ((terminal (cl-find 'terminal events
-                                     :key (lambda (e) (plist-get e :type))))
-                  (bodies (concat
-                           (mapconcat (lambda (e) (or (plist-get e :body) ""))
-                                      events "")
-                           (mapconcat #'identity
-                                      (plist-get terminal :monitor-lines) "\n"))))
-             (should (string-match-p "event" bodies))
-             (should-not (string-match-p "warn" bodies))
-             ;; The output file still carries stderr.
-             (should (string-match-p "warn" (plist-get terminal :whole-output)))
-             (should (string-match-p "event" (plist-get terminal :whole-output))))
-           (should (= 1 (length stderr-paths)))
-           (should-not (seq-some #'file-exists-p stderr-paths))))
+                                                (setq session (test-mevedel-execution--session remote-root))
+                                                (let ((mevedel-execution-mailbox-delivery-function
+                                                       (lambda (event _ ack) (push event events) (funcall ack t nil) t)))
+                                                  (mevedel-execution-start-bash
+                                                   #'ignore
+                                                   :kind 'monitor :description "remote" :session session
+                                                   :owner "/root" :owner-context session
+                                                   :command '("sh" "-c" "printf 'warn\\n' >&2; printf 'event\\n'")
+                                                   :workdir remote-root :writable-roots (list remote-root))
+                                                  (test-mevedel-execution--wait
+                                                   (lambda ()
+                                                     (cl-find 'terminal events :key (lambda (e) (plist-get e :type))))
+                                                   15))
+                                                (let* ((terminal (cl-find 'terminal events
+                                                                          :key (lambda (e) (plist-get e :type))))
+                                                       (bodies (concat
+                                                                (mapconcat (lambda (e) (or (plist-get e :body) ""))
+                                                                           events "")
+                                                                (mapconcat #'identity
+                                                                           (plist-get terminal :monitor-lines) "\n"))))
+                                                  (should (string-match-p "event" bodies))
+                                                  (should-not (string-match-p "warn" bodies))
+                                                  ;; The output file still carries stderr.
+                                                  (should (string-match-p "warn" (plist-get terminal :whole-output)))
+                                                  (should (string-match-p "event" (plist-get terminal :whole-output))))
+                                                (should (= 1 (length stderr-paths)))
+                                                (should-not (seq-some #'file-exists-p stderr-paths))))
       (when session
         (mevedel-execution-teardown-session session))
       (delete-directory root t)
@@ -765,22 +852,22 @@ connection charges for, so the program path is proved here too."
          session initial execution-id spool)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (setq session (test-mevedel-execution--session remote-root)
-                initial
-                (test-mevedel-execution--start-managed
-                 session remote-root
-                 '("sh" "-c" "printf ready; sleep 30")
-                 :yield-time-ms 10))
-          (let ((facts (plist-get initial :facts)))
-            (setq execution-id (plist-get facts :execution-id))
-            (should (stringp execution-id))
-            (should-not (plist-get facts :output-path)))
-          (setq spool
-                (plist-get (car (mevedel-execution-list-user session))
-                           :artifact-path))
-          (should (stringp spool))
-          (should-not (file-remote-p spool))
-          (should (file-exists-p spool)))
+                                              (setq session (test-mevedel-execution--session remote-root)
+                                                    initial
+                                                    (test-mevedel-execution--start-managed
+                                                     session remote-root
+                                                     '("sh" "-c" "printf ready; sleep 30")
+                                                     :yield-time-ms 10))
+                                              (let ((facts (plist-get initial :facts)))
+                                                (setq execution-id (plist-get facts :execution-id))
+                                                (should (stringp execution-id))
+                                                (should-not (plist-get facts :output-path)))
+                                              (setq spool
+                                                    (plist-get (car (mevedel-execution-list-user session))
+                                                               :artifact-path))
+                                              (should (stringp spool))
+                                              (should-not (file-remote-p spool))
+                                              (should (file-exists-p spool)))
       (when session
         (mevedel-execution-teardown-session session))
       (when spool
@@ -796,28 +883,28 @@ connection charges for, so the program path is proved here too."
          session result)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (setq session (test-mevedel-execution--session remote-root))
-          ;; This case classifies transport exit, not target fencing: the
-          ;; mock method runs a local shell whose environment depends on
-          ;; which caller opens it first, so keep the fence out of it.
-          (let ((mevedel-session-artifacts--checking-incarnation t))
-            (cl-letf
-                (((symbol-function 'make-process)
-                  (lambda (&rest args)
-                    (if (equal "mevedel-bash" (plist-get args :name))
-                        (let ((default-directory temporary-file-directory))
-                          (apply original-make-process
-                                 (plist-put
-                                  (plist-put args :file-handler nil)
-                                  :command '("sh" "-c" "exit 0"))))
-                      (apply original-make-process args)))))
-              (setq result
-                    (test-mevedel-execution--start-managed
-                     session remote-root '("sh" "-c" "true")
-                     :yield-time-ms nil))))
-          (should (eq 'unknown
-                      (plist-get (plist-get result :facts) :termination)))
-          (should (mevedel-execution-mutation-blocked-p session)))
+                                              (setq session (test-mevedel-execution--session remote-root))
+                                              ;; This case classifies transport exit, not target fencing: the
+                                              ;; mock method runs a local shell whose environment depends on
+                                              ;; which caller opens it first, so keep the fence out of it.
+                                              (let ((mevedel-session-artifacts--checking-incarnation t))
+                                                (cl-letf
+                                                    (((symbol-function 'make-process)
+                                                      (lambda (&rest args)
+                                                        (if (equal "mevedel-bash" (plist-get args :name))
+                                                            (let ((default-directory temporary-file-directory))
+                                                              (apply original-make-process
+                                                                     (plist-put
+                                                                      (plist-put args :file-handler nil)
+                                                                      :command '("sh" "-c" "exit 0"))))
+                                                          (apply original-make-process args)))))
+                                                  (setq result
+                                                        (test-mevedel-execution--start-managed
+                                                         session remote-root '("sh" "-c" "true")
+                                                         :yield-time-ms nil))))
+                                              (should (eq 'unknown
+                                                          (plist-get (plist-get result :facts) :termination)))
+                                              (should (mevedel-execution-mutation-blocked-p session)))
       (when session
         (mevedel-execution-teardown-session session))
       (delete-directory root t)))
@@ -831,40 +918,40 @@ connection charges for, so the program path is proved here too."
          session result)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (setq session (test-mevedel-execution--session remote-root))
-          (cl-letf
-              (((symbol-function 'write-region)
-                (lambda (start end filename &rest args)
-                  (if (and (stringp filename)
-                           (string-match-p
-                            "/\\.mevedel-pending-executions/execution-"
-                            filename)
-                           (car args))
-                      (signal 'file-error '("Injected spool failure"))
-                    (apply original-write-region
-                           start end filename args)))))
-            (setq result
-                  (test-mevedel-execution--start-managed
-                   session remote-root '("sh" "-c" "printf output")
-                   :yield-time-ms nil)))
-          ;; A proven local write failure only stays proven while the
-          ;; target's process-group identity was received and nothing in
-          ;; the escalation replaced the cause.  Assert all three in one
-          ;; form, so a settlement that went unknown names what it settled
-          ;; on instead of only disagreeing about the termination.
-          (let ((facts (plist-get result :facts)))
-            (should
-             (equal (list 'output-write-failed t "Injected spool failure")
-                    (list (plist-get facts :termination)
-                          (integerp (plist-get facts :group-id))
-                          (error-message-string
-                           (plist-get result :error))))))
-          ;; The decision-point predicate, not the pollable one: a
-          ;; settlement a busy connection refused is owed, and this is
-          ;; where it is written.
-          (should-not (mevedel-execution-mutation-refused-p session))
-          (should-not
-           (mevedel-session-durability-unsettled-mutation-p session)))
+                                              (setq session (test-mevedel-execution--session remote-root))
+                                              (cl-letf
+                                                  (((symbol-function 'write-region)
+                                                    (lambda (start end filename &rest args)
+                                                      (if (and (stringp filename)
+                                                               (string-match-p
+                                                                "/\\.mevedel-pending-executions/execution-"
+                                                                filename)
+                                                               (car args))
+                                                          (signal 'file-error '("Injected spool failure"))
+                                                        (apply original-write-region
+                                                               start end filename args)))))
+                                                (setq result
+                                                      (test-mevedel-execution--start-managed
+                                                       session remote-root '("sh" "-c" "printf output")
+                                                       :yield-time-ms nil)))
+                                              ;; A proven local write failure only stays proven while the
+                                              ;; target's process-group identity was received and nothing in
+                                              ;; the escalation replaced the cause.  Assert all three in one
+                                              ;; form, so a settlement that went unknown names what it settled
+                                              ;; on instead of only disagreeing about the termination.
+                                              (let ((facts (plist-get result :facts)))
+                                                (should
+                                                 (equal (list 'output-write-failed t "Injected spool failure")
+                                                        (list (plist-get facts :termination)
+                                                              (integerp (plist-get facts :group-id))
+                                                              (error-message-string
+                                                               (plist-get result :error))))))
+                                              ;; The decision-point predicate, not the pollable one: a
+                                              ;; settlement a busy connection refused is owed, and this is
+                                              ;; where it is written.
+                                              (should-not (mevedel-execution-mutation-refused-p session))
+                                              (should-not
+                                               (mevedel-session-durability-unsettled-mutation-p session)))
       (when session
         (mevedel-execution-teardown-session session))
       (delete-directory root t)))
@@ -877,23 +964,23 @@ connection charges for, so the program path is proved here too."
          session result)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (setq session (test-mevedel-execution--session remote-root))
-          (cl-letf
-              (((symbol-function 'make-process)
-                (lambda (&rest _)
-                  (error "Injected post-attempt launch failure"))))
-            (setq result
-                  (test-mevedel-execution--start-managed
-                   session remote-root '("sh" "-c" "true")
-                   :yield-time-ms nil)))
-          (should (eq 'unknown
-                      (plist-get (plist-get result :facts) :termination)))
-          (should (mevedel-execution-mutation-blocked-p session))
-          (should
-           (mevedel-session-durability-unsettled-mutation-p session))
-          (mevedel-execution-acknowledge-unknown session)
-          (should-not
-           (mevedel-session-durability-unsettled-mutation-p session)))
+                                              (setq session (test-mevedel-execution--session remote-root))
+                                              (cl-letf
+                                                  (((symbol-function 'make-process)
+                                                    (lambda (&rest _)
+                                                      (error "Injected post-attempt launch failure"))))
+                                                (setq result
+                                                      (test-mevedel-execution--start-managed
+                                                       session remote-root '("sh" "-c" "true")
+                                                       :yield-time-ms nil)))
+                                              (should (eq 'unknown
+                                                          (plist-get (plist-get result :facts) :termination)))
+                                              (should (mevedel-execution-mutation-blocked-p session))
+                                              (should
+                                               (mevedel-session-durability-unsettled-mutation-p session))
+                                              (mevedel-execution-acknowledge-unknown session)
+                                              (should-not
+                                               (mevedel-session-durability-unsettled-mutation-p session)))
       (when session
         (mevedel-execution-teardown-session session))
       (delete-directory root t)))
@@ -906,32 +993,32 @@ connection charges for, so the program path is proved here too."
          session result published-path published-content published-coding)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (setq session (test-mevedel-execution--session remote-root))
-          (cl-letf
-              (((symbol-function
-                 'mevedel-session-artifacts-publish-text)
-                (lambda (_session path content &optional coding)
-                  (setq published-path path
-                        published-content content
-                        published-coding coding)
-                  'published)))
-            (setq result
-                  (test-mevedel-execution--start-managed
-                   session remote-root
-                   '("sh" "-c" "printf '%03000d' 0")
-                   :yield-time-ms nil)))
-          (should (stringp published-path))
-          (should (file-remote-p published-path))
-          (should (= 3000 (length published-content)))
-          (should (eq 'utf-8-unix published-coding))
-          (let ((output-path
-                 (plist-get (plist-get result :facts) :output-path)))
-            (should (stringp output-path))
-            (should-not (file-remote-p output-path))
-            (should-not (string-match-p "mevedelmock" output-path))
-            (should (string-match-p
-                     "/tool-results/executions/exec-[[:alnum:]]+-000001\\.log\\'"
-                     output-path))))
+                                              (setq session (test-mevedel-execution--session remote-root))
+                                              (cl-letf
+                                                  (((symbol-function
+                                                     'mevedel-session-artifacts-publish-text)
+                                                    (lambda (_session path content &optional coding)
+                                                      (setq published-path path
+                                                            published-content content
+                                                            published-coding coding)
+                                                      'published)))
+                                                (setq result
+                                                      (test-mevedel-execution--start-managed
+                                                       session remote-root
+                                                       '("sh" "-c" "printf '%03000d' 0")
+                                                       :yield-time-ms nil)))
+                                              (should (stringp published-path))
+                                              (should (file-remote-p published-path))
+                                              (should (= 3000 (length published-content)))
+                                              (should (eq 'utf-8-unix published-coding))
+                                              (let ((output-path
+                                                     (plist-get (plist-get result :facts) :output-path)))
+                                                (should (stringp output-path))
+                                                (should-not (file-remote-p output-path))
+                                                (should-not (string-match-p "mevedelmock" output-path))
+                                                (should (string-match-p
+                                                         "/tool-results/executions/exec-[[:alnum:]]+-000001\\.log\\'"
+                                                         output-path))))
       (when session
         (mevedel-execution-teardown-session session))
       (delete-directory root t)))
@@ -944,20 +1031,20 @@ connection charges for, so the program path is proved here too."
          session result diagnostics)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (setq session (test-mevedel-execution--session remote-root))
-          (cl-letf
-              (((symbol-function
-                 'mevedel-session-artifacts-publish-text)
-                (lambda (&rest _)
-                  (error "Publication failed"))))
-            (mevedel-test--with-captured-diagnostics diagnostics
-              (setq result
-                    (test-mevedel-execution--start-managed
-                     session remote-root
-                     '("sh" "-c" "printf '%03000d' 0")
-                     :yield-time-ms nil))))
-          (should (string-match-p "Publication failed" diagnostics))
-          (should-not (plist-get (plist-get result :facts) :output-path)))
+                                              (setq session (test-mevedel-execution--session remote-root))
+                                              (cl-letf
+                                                  (((symbol-function
+                                                     'mevedel-session-artifacts-publish-text)
+                                                    (lambda (&rest _)
+                                                      (error "Publication failed"))))
+                                                (mevedel-test--with-captured-diagnostics diagnostics
+                                                                                         (setq result
+                                                                                               (test-mevedel-execution--start-managed
+                                                                                                session remote-root
+                                                                                                '("sh" "-c" "printf '%03000d' 0")
+                                                                                                :yield-time-ms nil))))
+                                              (should (string-match-p "Publication failed" diagnostics))
+                                              (should-not (plist-get (plist-get result :facts) :output-path)))
       (when session
         (mevedel-execution-teardown-session session))
       (delete-directory root t)))
@@ -973,57 +1060,57 @@ connection charges for, so the program path is proved here too."
          first second first-done second-done)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (let ((workspace (test-mevedel-execution--workspace remote-root)))
-            (setq parent (mevedel-session-create "main" workspace remote-root)
-                  side (mevedel-session-create "side" workspace remote-root)
-                  root-buffer (generate-new-buffer " *remote-root-authority*")
-                  side-buffer (generate-new-buffer " *remote-side-writer*"))
-            (setf (mevedel-session-audit-session side) parent
-                  (mevedel-session-sandbox-mode parent) 'off
-                  (mevedel-session-sandbox-mode side) 'off)
-            (with-current-buffer root-buffer
-              (setq-local mevedel--workspace workspace
-                          mevedel--session parent)
-              (setq default-directory remote-root))
-            ;; A live view registers the parent's root data buffer; the side
-            ;; conversation's durable authority resolves through it.
-            (mevedel-session-control-transfer-register-root-buffer
-             parent root-buffer)
-            (with-current-buffer side-buffer
-              (setq-local mevedel--workspace workspace
-                          mevedel--session side)
-              (setq default-directory remote-root)))
-          (puthash
-           (mevedel-execution-target-identity
-            (mevedel-session-execution-target parent))
-           t mevedel-session-durability--disclosed-targets)
-          (setq first
-                (test-mevedel-execution--start-managed
-                 side remote-root
-                 '("sh" "-c" "printf first-ready; sleep 30")
-                 :data-buffer side-buffer
-                 :yield-time-ms 10)
-                second
-                (test-mevedel-execution--start-managed
-                 parent remote-root
-                 '("sh" "-c" "printf second-ready; sleep 30")
-                 :data-buffer root-buffer
-                 :yield-time-ms 10))
-          (should (mevedel-session-save-path parent))
-          (should (buffer-local-value 'buffer-file-name root-buffer))
-          (should-not (buffer-local-value 'buffer-file-name side-buffer))
-          (should (mevedel-session-durability-unsettled-mutation-p parent))
-          (mevedel-execution-stop
-           side "main" (plist-get (plist-get first :facts) :execution-id)
-           (lambda (value) (setq first-done value)))
-          (test-mevedel-execution--wait (lambda () first-done))
-          (should (mevedel-session-durability-unsettled-mutation-p parent))
-          (mevedel-execution-stop
-           parent "main" (plist-get (plist-get second :facts) :execution-id)
-           (lambda (value) (setq second-done value)))
-          (test-mevedel-execution--wait (lambda () second-done))
-          (should-not
-           (mevedel-session-durability-unsettled-mutation-p parent)))
+                                              (let ((workspace (test-mevedel-execution--workspace remote-root)))
+                                                (setq parent (mevedel-session-create "main" workspace remote-root)
+                                                      side (mevedel-session-create "side" workspace remote-root)
+                                                      root-buffer (generate-new-buffer " *remote-root-authority*")
+                                                      side-buffer (generate-new-buffer " *remote-side-writer*"))
+                                                (setf (mevedel-session-audit-session side) parent
+                                                      (mevedel-session-sandbox-mode parent) 'off
+                                                      (mevedel-session-sandbox-mode side) 'off)
+                                                (with-current-buffer root-buffer
+                                                  (setq-local mevedel--workspace workspace
+                                                              mevedel--session parent)
+                                                  (setq default-directory remote-root))
+                                                ;; A live view registers the parent's root data buffer; the side
+                                                ;; conversation's durable authority resolves through it.
+                                                (mevedel-session-control-transfer-register-root-buffer
+                                                 parent root-buffer)
+                                                (with-current-buffer side-buffer
+                                                  (setq-local mevedel--workspace workspace
+                                                              mevedel--session side)
+                                                  (setq default-directory remote-root)))
+                                              (puthash
+                                               (mevedel-execution-target-identity
+                                                (mevedel-session-execution-target parent))
+                                               t mevedel-session-durability--disclosed-targets)
+                                              (setq first
+                                                    (test-mevedel-execution--start-managed
+                                                     side remote-root
+                                                     '("sh" "-c" "printf first-ready; sleep 30")
+                                                     :data-buffer side-buffer
+                                                     :yield-time-ms 10)
+                                                    second
+                                                    (test-mevedel-execution--start-managed
+                                                     parent remote-root
+                                                     '("sh" "-c" "printf second-ready; sleep 30")
+                                                     :data-buffer root-buffer
+                                                     :yield-time-ms 10))
+                                              (should (mevedel-session-save-path parent))
+                                              (should (buffer-local-value 'buffer-file-name root-buffer))
+                                              (should-not (buffer-local-value 'buffer-file-name side-buffer))
+                                              (should (mevedel-session-durability-unsettled-mutation-p parent))
+                                              (mevedel-execution-stop
+                                               side "main" (plist-get (plist-get first :facts) :execution-id)
+                                               (lambda (value) (setq first-done value)))
+                                              (test-mevedel-execution--wait (lambda () first-done))
+                                              (should (mevedel-session-durability-unsettled-mutation-p parent))
+                                              (mevedel-execution-stop
+                                               parent "main" (plist-get (plist-get second :facts) :execution-id)
+                                               (lambda (value) (setq second-done value)))
+                                              (test-mevedel-execution--wait (lambda () second-done))
+                                              (should-not
+                                               (mevedel-session-durability-unsettled-mutation-p parent)))
       (dolist (session (list side parent))
         (when session
           (mevedel-execution-teardown-session session)))
@@ -1045,23 +1132,23 @@ connection charges for, so the program path is proved here too."
          session result)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (setq session (test-mevedel-execution--session remote-root))
-          (cl-letf
-              (((symbol-function
-                 'mevedel-session-artifacts-publish-text)
-                (lambda (&rest _) 'queued)))
-            (setq result
-                  (test-mevedel-execution--start-managed
-                   session remote-root
-                   '("sh" "-c" "printf '%03000d' 0")
-                   :yield-time-ms nil)))
-          (let ((output-path
-                 (plist-get (plist-get result :facts) :output-path)))
-            (should (stringp output-path))
-            (should-not (file-remote-p output-path))
-            (should (string-match-p
-                     "/tool-results/executions/exec-[[:alnum:]]+-000001\\.log\\'"
-                     output-path))))
+                                              (setq session (test-mevedel-execution--session remote-root))
+                                              (cl-letf
+                                                  (((symbol-function
+                                                     'mevedel-session-artifacts-publish-text)
+                                                    (lambda (&rest _) 'queued)))
+                                                (setq result
+                                                      (test-mevedel-execution--start-managed
+                                                       session remote-root
+                                                       '("sh" "-c" "printf '%03000d' 0")
+                                                       :yield-time-ms nil)))
+                                              (let ((output-path
+                                                     (plist-get (plist-get result :facts) :output-path)))
+                                                (should (stringp output-path))
+                                                (should-not (file-remote-p output-path))
+                                                (should (string-match-p
+                                                         "/tool-results/executions/exec-[[:alnum:]]+-000001\\.log\\'"
+                                                         output-path))))
       (when session
         (mevedel-execution-teardown-session session))
       (delete-directory root t)))
@@ -1079,48 +1166,48 @@ connection charges for, so the program path is proved here too."
          session result group-id holder-pid stopped)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (setq session (test-mevedel-execution--session remote-root))
-          ;; The inner holder forks a short-lived child inside the managed
-          ;; group, then leaves the group via setsid while keeping the
-          ;; child unreaped: a held zombie whose pgrp stays the managed
-          ;; group for as long as the holder lives.
-          (cl-letf (((symbol-function
-                      'mevedel-session-artifacts-publish-text)
-                     (lambda (&rest _) 'queued)))
-            (setq result
-                  (test-mevedel-execution--start-managed
-                   session remote-root
-                   (list "sh" "-c"
-                         (concat "sh -c 'sleep 0.05 & echo $$ > holder.pid; "
-                                 "exec setsid sleep 300' & "
-                                 "printf ready; exec sleep 300"))
-                   :yield-time-ms 10))
-            (setq group-id (plist-get (plist-get result :facts) :group-id))
-            (test-mevedel-execution--wait
-             (lambda () (file-exists-p holder-file)))
-            (setq holder-pid
-                  (test-mevedel-execution--read-pid holder-file))
-            ;; Let the short-lived child become the held zombie.
-            (let ((deadline (+ (float-time) 0.3)))
-              (while (< (float-time) deadline)
-                (accept-process-output nil 0.02)))
-            (let ((start (float-time)))
-              (mevedel-execution-stop
-               session "main"
-               (plist-get (plist-get result :facts) :execution-id)
-               (lambda (value) (setq stopped value)))
-              (test-mevedel-execution--wait (lambda () stopped))
-              ;; Riding the grace takes at least the kill delay.  A fixed
-              ;; 1 s bound also measured mock TRAMP round trips, which took
-              ;; 1.06 s under a full parallel suite.
-              (should (< (- (float-time) start)
-                         mevedel-execution-process--child-kill-delay))))
-          ;; The zombie still answers the raw group probe: only
-          ;; zombie-awareness settled this stop early.
-          (should (integerp group-id))
-          (should (> group-id 0))
-          (should (zerop (funcall original-signal-process (- group-id) 0)))
-          (should-not (mevedel-execution-unsettled-mutation-p session)))
+                                              (setq session (test-mevedel-execution--session remote-root))
+                                              ;; The inner holder forks a short-lived child inside the managed
+                                              ;; group, then leaves the group via setsid while keeping the
+                                              ;; child unreaped: a held zombie whose pgrp stays the managed
+                                              ;; group for as long as the holder lives.
+                                              (cl-letf (((symbol-function
+                                                          'mevedel-session-artifacts-publish-text)
+                                                         (lambda (&rest _) 'queued)))
+                                                (setq result
+                                                      (test-mevedel-execution--start-managed
+                                                       session remote-root
+                                                       (list "sh" "-c"
+                                                             (concat "sh -c 'sleep 0.05 & echo $$ > holder.pid; "
+                                                                     "exec setsid sleep 300' & "
+                                                                     "printf ready; exec sleep 300"))
+                                                       :yield-time-ms 10))
+                                                (setq group-id (plist-get (plist-get result :facts) :group-id))
+                                                (test-mevedel-execution--wait
+                                                 (lambda () (file-exists-p holder-file)))
+                                                (setq holder-pid
+                                                      (test-mevedel-execution--read-pid holder-file))
+                                                ;; Let the short-lived child become the held zombie.
+                                                (let ((deadline (+ (float-time) 0.3)))
+                                                  (while (< (float-time) deadline)
+                                                    (accept-process-output nil 0.02)))
+                                                (let ((start (float-time)))
+                                                  (mevedel-execution-stop
+                                                   session "main"
+                                                   (plist-get (plist-get result :facts) :execution-id)
+                                                   (lambda (value) (setq stopped value)))
+                                                  (test-mevedel-execution--wait (lambda () stopped))
+                                                  ;; Riding the grace takes at least the kill delay.  A fixed
+                                                  ;; 1 s bound also measured mock TRAMP round trips, which took
+                                                  ;; 1.06 s under a full parallel suite.
+                                                  (should (< (- (float-time) start)
+                                                             mevedel-execution-process--child-kill-delay))))
+                                              ;; The zombie still answers the raw group probe: only
+                                              ;; zombie-awareness settled this stop early.
+                                              (should (integerp group-id))
+                                              (should (> group-id 0))
+                                              (should (zerop (funcall original-signal-process (- group-id) 0)))
+                                              (should-not (mevedel-execution-unsettled-mutation-p session)))
       (when (and (integerp holder-pid) (> holder-pid 0))
         (ignore-errors (funcall original-signal-process holder-pid 'KILL)))
       (when session
@@ -1129,7 +1216,8 @@ connection charges for, so the program path is proved here too."
 
 
 
-(mevedel-deftest mevedel-execution-unsettled-mutation-p (:quiet t)
+(mevedel-deftest mevedel-execution-unsettled-mutation-p
+  (:quiet t :after-each ((tramp-cleanup-all-connections)))
   ,test
   (test)
   :doc "reports a durable latch even when no transient process record exists"
@@ -1139,15 +1227,15 @@ connection charges for, so the program path is proved here too."
          (session nil))
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (setq session (test-mevedel-execution--session remote-root))
-          (mevedel-session-artifacts-assert-mutation-authority session)
-          (should
-           (mevedel-session-durability-set-unsettled-mutation session t))
-          (should (mevedel-execution-unsettled-mutation-p session))
-          (should (mevedel-execution-mutation-blocked-p session))
-          (should
-           (mevedel-session-durability-set-unsettled-mutation session nil))
-          (should-not (mevedel-execution-unsettled-mutation-p session)))
+                                              (setq session (test-mevedel-execution--session remote-root))
+                                              (mevedel-session-artifacts-assert-mutation-authority session)
+                                              (should
+                                               (mevedel-session-durability-set-unsettled-mutation session t))
+                                              (should (mevedel-execution-unsettled-mutation-p session))
+                                              (should (mevedel-execution-mutation-blocked-p session))
+                                              (should
+                                               (mevedel-session-durability-set-unsettled-mutation session nil))
+                                              (should-not (mevedel-execution-unsettled-mutation-p session)))
       (when (and session (mevedel-session-save-path session))
         (mevedel-session-durability-lease-release
          (mevedel-session-save-path session) session))
@@ -1170,51 +1258,51 @@ connection charges for, so the program path is proved here too."
          parent side result)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (setq parent (test-mevedel-execution--session remote-root)
-                side (mevedel-session-create
-                      "side" (mevedel-session-workspace parent) remote-root))
-          (setf (mevedel-session-audit-session side) parent
-                (mevedel-session-sandbox-mode side) 'off)
-          (cl-letf
-              (((symbol-function
-                 'mevedel-session-durability-set-unsettled-mutation)
-                (lambda (authority value)
-                  ;; Only the settling write meets a busy connection, and
-                  ;; only until the operation in flight completes.
-                  (if (and (null value) (zerop refusals))
-                      (progn
-                        (setq refusals (1+ refusals))
-                        (signal 'mevedel-session-control-fs-busy
-                                (list "/target/.lease")))
-                    (funcall original-set-unsettled authority value))))
-               ((symbol-function 'write-region)
-                (lambda (start end filename &rest args)
-                  (if (and (stringp filename)
-                           (string-match-p
-                            "/\\.mevedel-pending-executions/execution-"
-                            filename)
-                           (car args))
-                      (signal 'file-error '("Injected spool failure"))
-                    (apply original-write-region
-                           start end filename args)))))
-            (setq result
-                  (test-mevedel-execution--start-managed
-                   side remote-root '("sh" "-c" "printf output")
-                   :yield-time-ms nil))
-            (should (= 1 refusals))
-            (should
-             (eq 'output-write-failed
-                 (plist-get (plist-get result :facts) :termination)))
-            ;; The write is owed, not lost, and the target latch says so
-            ;; until it lands.
-            (should
-             (mevedel-session-durability-unsettled-mutation-p parent))
-            (should (mevedel-execution-mutation-blocked-p parent))
-            ;; The parent decision point owns the shared mutation authority
-            ;; and writes the side conversation's settlement debt.
-            (should-not (mevedel-execution-mutation-refused-p parent))
-            (should-not
-             (mevedel-session-durability-unsettled-mutation-p parent))))
+                                              (setq parent (test-mevedel-execution--session remote-root)
+                                                    side (mevedel-session-create
+                                                          "side" (mevedel-session-workspace parent) remote-root))
+                                              (setf (mevedel-session-audit-session side) parent
+                                                    (mevedel-session-sandbox-mode side) 'off)
+                                              (cl-letf
+                                                  (((symbol-function
+                                                     'mevedel-session-durability-set-unsettled-mutation)
+                                                    (lambda (authority value)
+                                                      ;; Only the settling write meets a busy connection, and
+                                                      ;; only until the operation in flight completes.
+                                                      (if (and (null value) (zerop refusals))
+                                                          (progn
+                                                            (setq refusals (1+ refusals))
+                                                            (signal 'mevedel-session-control-fs-busy
+                                                                    (list "/target/.lease")))
+                                                        (funcall original-set-unsettled authority value))))
+                                                   ((symbol-function 'write-region)
+                                                    (lambda (start end filename &rest args)
+                                                      (if (and (stringp filename)
+                                                               (string-match-p
+                                                                "/\\.mevedel-pending-executions/execution-"
+                                                                filename)
+                                                               (car args))
+                                                          (signal 'file-error '("Injected spool failure"))
+                                                        (apply original-write-region
+                                                               start end filename args)))))
+                                                (setq result
+                                                      (test-mevedel-execution--start-managed
+                                                       side remote-root '("sh" "-c" "printf output")
+                                                       :yield-time-ms nil))
+                                                (should (= 1 refusals))
+                                                (should
+                                                 (eq 'output-write-failed
+                                                     (plist-get (plist-get result :facts) :termination)))
+                                                ;; The write is owed, not lost, and the target latch says so
+                                                ;; until it lands.
+                                                (should
+                                                 (mevedel-session-durability-unsettled-mutation-p parent))
+                                                (should (mevedel-execution-mutation-blocked-p parent))
+                                                ;; The parent decision point owns the shared mutation authority
+                                                ;; and writes the side conversation's settlement debt.
+                                                (should-not (mevedel-execution-mutation-refused-p parent))
+                                                (should-not
+                                                 (mevedel-session-durability-unsettled-mutation-p parent))))
       (dolist (session (list side parent))
         (when session
           (mevedel-execution-teardown-session session)))
@@ -1289,7 +1377,7 @@ connection charges for, so the program path is proved here too."
            (test-mevedel-execution-remote--run-tool
             session "Grep"
             '(:pattern "acceptance needle" :path "."
-              :output_mode "content"))))
+                       :output_mode "content"))))
       (should (string-match-p "acceptance needle" grep))
       (should (string-match-p (regexp-quote native-file) grep)))
     (let ((result
@@ -1443,15 +1531,15 @@ connection charges for, so the program path is proved here too."
     ;; here so this acceptance remains independent of provider transcript text.
     (setf (mevedel-session-prompt-index session)
           '((1 . ((:turn 1 :file-turn 1 :cum-turn 1
-                  :fork-point-id "real-remote-fork"
-                  :pos 1 :transcript-cutoff 1)))))
+                         :fork-point-id "real-remote-fork"
+                         :pos 1 :transcript-cutoff 1)))))
     (with-current-buffer buffer
       (goto-char (point-max))
       (insert
        (mevedel--format-hook-audit-record
         '(:type fork-point :fork-point-id "real-remote-fork"
-          :segment 1 :turn 1 :file-turn 1 :cum-turn 1
-          :captured-file-turn 1)))
+                :segment 1 :turn 1 :file-turn 1 :cum-turn 1
+                :captured-file-turn 1)))
       (mevedel-session-artifacts-save session buffer))
     (setq reservation (mevedel-worktree-fork-reservation session))
     (setq target (plist-put target :worktree-reservation reservation))
@@ -1484,7 +1572,7 @@ connection charges for, so the program path is proved here too."
       (kill-buffer child)
       (let ((default-directory root))
         (should
-          (zerop
+         (zerop
           (process-file "git" nil nil nil "worktree" "remove" "--force"
                         child-native-directory)))
         (should-not (file-directory-p child-directory)))))
@@ -1582,6 +1670,8 @@ connection charges for, so the program path is proved here too."
             (file-name-as-directory
              (file-name-concat
               root-b directory-name)))
+           (mevedel-test--write-roots
+            (append (list dir-a dir-b) mevedel-test--write-roots))
            (workspace-a (test-mevedel-execution--workspace dir-a))
            (workspace-b
             (mevedel-workspace-get-or-create
@@ -1590,149 +1680,151 @@ connection charges for, so the program path is proved here too."
            (parent-id nil)
            (child-id nil)
            (buffer (generate-new-buffer " *remote-alias-save-as*")))
-      (unwind-protect
-          (progn
-            (test-mevedel-execution-remote--stage "make directory")
-            (make-directory dir-a t)
-            (should (equal
-                     (mevedel-workspace-identity-read dir-a)
-                     (mevedel-workspace-identity-read dir-b)))
-            (test-mevedel-execution-remote--stage "identity read complete")
-            (setq session (mevedel-session-create "alias" workspace-a dir-a))
-            (test-mevedel-execution-remote--stage "probe alias A")
-            (let ((target (mevedel-session-execution-target session)))
-              (should
-               (eq 'ready
-                   (plist-get
-                    (mevedel-execution-target-probe target t 'off)
-                    :status)))
-              (puthash (mevedel-execution-target-identity target) t
-                       mevedel-session-durability--disclosed-targets))
-            (test-mevedel-execution-remote--stage "probe alias A complete")
-            (with-current-buffer buffer
-              (org-mode)
-              (setq-local mevedel--workspace workspace-a
-                          mevedel--session session)
-              (insert "Alias transcript\n")
-              (mevedel-session-artifacts-save session buffer)
-              (set-buffer-modified-p nil))
-            (test-mevedel-execution-remote--stage "save alias A complete")
-            (mevedel-session-durability-lease-release
-             (mevedel-session-save-path session) session)
-            (test-mevedel-execution-remote--stage "release alias A complete")
-            (mevedel-workspace-clear-registry)
-            (setq workspace-b
-                  (mevedel-workspace-get-or-create
-                   'project dir-b dir-b "alias-b"))
-            (let* ((remote-file-name-inhibit-cache t)
-                   (_ (test-mevedel-execution-remote--stage
-                       "list alias B start"))
-                   (listed
-                    (mevedel-session-persistence-list-sessions workspace-b)))
-              (test-mevedel-execution-remote--stage "list alias B complete: %S"
-                                                     listed)
-              (unless
-                  (cl-find (mevedel-session-session-id session) listed
-                           :key (lambda (item)
-                                  (plist-get (plist-get item :summary)
-                                             :session-id))
-                           :test #'equal)
-                (let* ((sessions-dir
-                        (mevedel-session-artifacts-sessions-dir
-                         workspace-b))
-                       (entries
-                        (directory-files
-                         sessions-dir t
-                         "\\`\\(?:[^.]\\|\\.mevedel-save-as-\\)"))
-                       (diagnostics
-                        (mapcar
-                         (lambda (entry)
-                           (condition-case err
-                               (let* ((publication
-                                       (mevedel-session-publication-read
-                                        entry))
-                                      (sidecar
-                                       (plist-get publication :sidecar))
-                                      (summary
-                                       (and sidecar
-                                            (mevedel-session-persistence--read-summary
-                                             sidecar))))
-                                 (list entry publication sidecar summary))
-                             (error
-                              (list entry :error
-                                    (error-message-string err)))))
-                         entries)))
-                  (ert-fail
-                   (format "Alias-B listing empty: sessions-dir=%S entries=%S diagnostics=%S"
-                           sessions-dir entries diagnostics)))))
-            (let ((mevedel-session-durability--disclosed-targets
-                   mevedel-session-durability--disclosed-targets))
-              (test-mevedel-execution-remote--stage
-               "disclose alias B target start")
-              (puthash
-               (mevedel-execution-target-identity
-                (mevedel-execution-target-create dir-b)) t
-               mevedel-session-durability--disclosed-targets))
-            (test-mevedel-execution-remote--stage
-             "disclose alias B target complete")
-            (with-current-buffer buffer
-              (setq-local mevedel--workspace workspace-a)
-              (cl-letf (((symbol-function 'read-string)
-                         (lambda (&rest _) "alias-child")))
-                (test-mevedel-execution-remote--stage "save-as start")
-                (setq parent-id (mevedel-session-session-id session))
-                (mevedel-save-session t)))
-            (setq child-id (mevedel-session-session-id session))
-            (should (not (equal parent-id child-id)))
-            (test-mevedel-execution-remote--stage "save-as complete")
-            (let ((remote-file-name-inhibit-cache t))
-              (test-mevedel-execution-remote--stage "list children start")
-              (should (= 2 (length
-                            (mevedel-session-persistence-list-sessions
-                             workspace-b)))))
-            (test-mevedel-execution-remote--stage "list children complete")
-            ;; Reopen the Save As child through the other SSH alias.  Killing
-            ;; the current child first ensures this is a cold, independent
-            ;; restore rather than a live-buffer lookup.
-            (mevedel-session-durability-lease-release
-             (mevedel-session-save-path session) session)
-            (with-current-buffer buffer (set-buffer-modified-p nil))
-            (kill-buffer buffer)
-            (setq buffer nil)
-            (mevedel-workspace-clear-registry)
-            (let* ((workspace-b
-                    (mevedel-workspace-get-or-create
-                     'project dir-b dir-b "alias-b"))
-                   (resumed
-                    (mevedel-session-persistence-resume-id
-                     workspace-b child-id)))
-              (should (buffer-live-p resumed))
-              (with-current-buffer resumed
-                (should (equal child-id
-                               (mevedel-session-session-id mevedel--session)))
-                (should (file-remote-p default-directory))
-                (should
-                 (equal
-                  (mevedel-execution-target-identity
-                   (mevedel-session-execution-target mevedel--session))
-                  (mevedel-execution-target-identity
-                   (mevedel-execution-target-create dir-b)))))
-              (let ((resumed-session
-                     (buffer-local-value 'mevedel--session resumed)))
-                (mevedel-session-durability-lease-release
-                 (mevedel-session-save-path resumed-session) resumed-session))
-              (with-current-buffer resumed (set-buffer-modified-p nil))
-              (kill-buffer resumed)))
-        (when (and session (mevedel-session-save-path session))
-          (ignore-errors
-            (mevedel-session-durability-lease-release
-             (mevedel-session-save-path session) session)))
-        (when (buffer-live-p buffer)
-          (with-current-buffer buffer (set-buffer-modified-p nil))
-          (kill-buffer buffer))
-        (ignore-errors
-          (when (file-directory-p dir-a)
-            (delete-directory dir-a t)))))))
+      (test-mevedel-execution-remote--with-temporary-directory dir-a
+	(test-mevedel-execution-remote--with-temporary-directory dir-b
+	  (unwind-protect
+	      (progn
+		(test-mevedel-execution-remote--stage "make directory")
+		(make-directory dir-a t)
+		(should (equal
+			 (mevedel-workspace-identity-read dir-a)
+			 (mevedel-workspace-identity-read dir-b)))
+		(test-mevedel-execution-remote--stage "identity read complete")
+		(setq session (mevedel-session-create "alias" workspace-a dir-a))
+		(test-mevedel-execution-remote--stage "probe alias A")
+		(let ((target (mevedel-session-execution-target session)))
+		  (should
+		   (eq 'ready
+		       (plist-get
+			(mevedel-execution-target-probe target t 'off)
+			:status)))
+		  (puthash (mevedel-execution-target-identity target) t
+			   mevedel-session-durability--disclosed-targets))
+		(test-mevedel-execution-remote--stage "probe alias A complete")
+		(with-current-buffer buffer
+		  (org-mode)
+		  (setq-local mevedel--workspace workspace-a
+			      mevedel--session session)
+		  (insert "Alias transcript\n")
+		  (mevedel-session-artifacts-save session buffer)
+		  (set-buffer-modified-p nil))
+		(test-mevedel-execution-remote--stage "save alias A complete")
+		(mevedel-session-durability-lease-release
+		 (mevedel-session-save-path session) session)
+		(test-mevedel-execution-remote--stage "release alias A complete")
+		(mevedel-workspace-clear-registry)
+		(setq workspace-b
+		      (mevedel-workspace-get-or-create
+		       'project dir-b dir-b "alias-b"))
+		(let* ((remote-file-name-inhibit-cache t)
+		       (_ (test-mevedel-execution-remote--stage
+			   "list alias B start"))
+		       (listed
+			(mevedel-session-persistence-list-sessions workspace-b)))
+		  (test-mevedel-execution-remote--stage "list alias B complete: %S"
+							listed)
+		  (unless
+		      (cl-find (mevedel-session-session-id session) listed
+			       :key (lambda (item)
+				      (plist-get (plist-get item :summary)
+						 :session-id))
+			       :test #'equal)
+		    (let* ((sessions-dir
+			    (mevedel-session-artifacts-sessions-dir
+			     workspace-b))
+			   (entries
+			    (directory-files
+			     sessions-dir t
+			     "\\`\\(?:[^.]\\|\\.mevedel-save-as-\\)"))
+			   (diagnostics
+			    (mapcar
+			     (lambda (entry)
+			       (condition-case err
+				   (let* ((publication
+					   (mevedel-session-publication-read
+					    entry))
+					  (sidecar
+					   (plist-get publication :sidecar))
+					  (summary
+					   (and sidecar
+						(mevedel-session-persistence--read-summary
+						 sidecar))))
+				     (list entry publication sidecar summary))
+				 (error
+				  (list entry :error
+					(error-message-string err)))))
+			     entries)))
+		      (ert-fail
+		       (format "Alias-B listing empty: sessions-dir=%S entries=%S diagnostics=%S"
+			       sessions-dir entries diagnostics)))))
+		(let ((mevedel-session-durability--disclosed-targets
+		       mevedel-session-durability--disclosed-targets))
+		  (test-mevedel-execution-remote--stage
+		   "disclose alias B target start")
+		  (puthash
+		   (mevedel-execution-target-identity
+		    (mevedel-execution-target-create dir-b)) t
+		   mevedel-session-durability--disclosed-targets))
+		(test-mevedel-execution-remote--stage
+		 "disclose alias B target complete")
+		(with-current-buffer buffer
+		  (setq-local mevedel--workspace workspace-a)
+		  (cl-letf (((symbol-function 'read-string)
+			     (lambda (&rest _) "alias-child")))
+		    (test-mevedel-execution-remote--stage "save-as start")
+		    (setq parent-id (mevedel-session-session-id session))
+		    (mevedel-save-session t)))
+		(setq child-id (mevedel-session-session-id session))
+		(should (not (equal parent-id child-id)))
+		(test-mevedel-execution-remote--stage "save-as complete")
+		(let ((remote-file-name-inhibit-cache t))
+		  (test-mevedel-execution-remote--stage "list children start")
+		  (should (= 2 (length
+				(mevedel-session-persistence-list-sessions
+				 workspace-b)))))
+		(test-mevedel-execution-remote--stage "list children complete")
+		;; Reopen the Save As child through the other SSH alias.  Killing
+		;; the current child first ensures this is a cold, independent
+		;; restore rather than a live-buffer lookup.
+		(mevedel-session-durability-lease-release
+		 (mevedel-session-save-path session) session)
+		(with-current-buffer buffer (set-buffer-modified-p nil))
+		(kill-buffer buffer)
+		(setq buffer nil)
+		(mevedel-workspace-clear-registry)
+		(let* ((workspace-b
+			(mevedel-workspace-get-or-create
+			 'project dir-b dir-b "alias-b"))
+		       (resumed
+			(mevedel-session-persistence-resume-id
+			 workspace-b child-id)))
+		  (should (buffer-live-p resumed))
+		  (with-current-buffer resumed
+		    (should (equal child-id
+				   (mevedel-session-session-id mevedel--session)))
+		    (should (file-remote-p default-directory))
+		    (should
+		     (equal
+		      (mevedel-execution-target-identity
+		       (mevedel-session-execution-target mevedel--session))
+		      (mevedel-execution-target-identity
+		       (mevedel-execution-target-create dir-b)))))
+		  (let ((resumed-session
+			 (buffer-local-value 'mevedel--session resumed)))
+		    (mevedel-session-durability-lease-release
+		     (mevedel-session-save-path resumed-session) resumed-session))
+		  (with-current-buffer resumed (set-buffer-modified-p nil))
+		  (kill-buffer resumed)))
+	    (when (and session (mevedel-session-save-path session))
+	      (ignore-errors
+		(mevedel-session-durability-lease-release
+		 (mevedel-session-save-path session) session)))
+	    (when (buffer-live-p buffer)
+	      (with-current-buffer buffer (set-buffer-modified-p nil))
+	      (kill-buffer buffer))
+	    (ignore-errors
+	      (when (file-directory-p dir-a)
+		(delete-directory dir-a t)))))))))
 
 (defun test-mevedel-execution-remote--reclaim-lease (session &optional timeout)
   "Take SESSION's portable lease back after its transfer clients exit.
@@ -1809,7 +1901,12 @@ SCENARIO is `transfer', `crash-long', or `recovery'."
               (format "%s exited before stage %s\n%s"
                       description stage (logs)))))
          (start-client (role id name buffer)
-           (let ((process-environment (copy-sequence process-environment)))
+           (let ((default-directory
+                  (file-name-directory
+                   (directory-file-name test-mevedel-execution-remote--directory)))
+                 (process-environment (copy-sequence process-environment)))
+             ;; Eask must discover this checkout, not the case's private cwd.
+             (setenv "PKG_EXECPATH" nil)
              (setenv "MEVEDEL_REMOTE_CLIENT_ROLE" role)
              (setenv "MEVEDEL_REMOTE_CLIENT_ID" id)
              (setenv "MEVEDEL_REMOTE_CLIENT_ROOT" root)
@@ -1940,16 +2037,18 @@ SCENARIO is `transfer', `crash-long', or `recovery'."
         (delete-directory root t)))))
 
 (mevedel-deftest mevedel-real-remote-alias-only
-  (:quiet t :tags (external remote aliases))
+  (:quiet t :tags (external remote aliases)
+          :after-each ((tramp-cleanup-all-connections)))
   ,test
   (test)
   :doc "runs only the two-alias publication and Save As acceptance"
   (if (getenv "MEVEDEL_TEST_REMOTE_ALIASES_ONLY")
-    (test-mevedel-execution-remote--exercise-ssh-aliases)
+      (test-mevedel-execution-remote--exercise-ssh-aliases)
     (ert-skip "Alias-only acceptance is not enabled")))
 
 (mevedel-deftest mevedel-real-remote-transfer-only
-  (:quiet t :tags (external remote control-transfer))
+  (:quiet t :tags (external remote control-transfer)
+          :after-each ((tramp-cleanup-all-connections)))
   ,test
   (test)
   :doc "runs only the independent SSH control-transfer acceptance"
@@ -1957,7 +2056,8 @@ SCENARIO is `transfer', `crash-long', or `recovery'."
    "MEVEDEL_TEST_SSH_ROOT" 'ssh))
 
 (mevedel-deftest mevedel-real-remote-client-recovery-only
-  (:quiet t :tags (external remote control-transfer recovery))
+  (:quiet t :tags (external remote control-transfer recovery)
+          :after-each ((tramp-cleanup-all-connections)))
   ,test
   (test)
   :doc "runs crashed-client takeover and second-client recovery on SSH"
@@ -1974,7 +2074,7 @@ SCENARIO is `transfer', `crash-long', or `recovery'."
          (image (getenv (if (eq method 'podman)
                             "MEVEDEL_TEST_PODMAN_IMAGE"
                           "MEVEDEL_TEST_DOCKER_IMAGE")))
-        (container (file-remote-p root 'host 'never)))
+         (container (file-remote-p root 'host 'never)))
     (unless (and volume image container)
       (ert-skip
        (format "%s persistent-volume fixture is not configured" method)))
@@ -2188,12 +2288,12 @@ work in flight genuinely unprovable rather than merely finished."
           (should (> child-pid 0))
           (should (> child-start-time 0))
           (test-mevedel-execution-remote--with-lost-connection root
-            (mevedel-execution-stop
-             session "/root" execution-id
-             (lambda (value) (setq result value)))
-            (test-mevedel-execution-remote--wait
-             (lambda () result)
-             "Connection-loss execution did not settle" 30))
+                                                               (mevedel-execution-stop
+                                                                session "/root" execution-id
+                                                                (lambda (value) (setq result value)))
+                                                               (test-mevedel-execution-remote--wait
+                                                                (lambda () result)
+                                                                "Connection-loss execution did not settle" 30))
           (should
            (eq 'unknown
                (plist-get (plist-get result :facts) :termination)))
@@ -2443,122 +2543,123 @@ work in flight genuinely unprovable rather than merely finished."
           (test-mevedel-execution-remote--real-temp-directory
            base (format "mevedel-%s-acceptance-" method) t))
          session root-buffer)
-    (unwind-protect
-        (let* ((mevedel-sandbox-mode 'off)
-               (workspace (test-mevedel-execution--workspace root))
-               (_ (setq session (mevedel-session-create "main" workspace root)))
-               (target (mevedel-session-execution-target session)))
-          (setq root-buffer (generate-new-buffer " *remote-acceptance*"))
-          (with-current-buffer root-buffer
-            ;; A session's root data buffer is a prepared transcript, not a
-            ;; bare Org buffer: hidden audit provenance only survives a save
-            ;; through the bounds `gptel-mode' persists.
-            (mevedel-chat-prepare-transcript-buffer)
-            (setq-local mevedel--workspace workspace
-                        mevedel--session session)
-            (setq default-directory root))
-          ;; Portable mutation admission needs the session's registered
-          ;; root data buffer before anything can materialize it.
-          (mevedel-session-set-root-buffer session root-buffer)
-          (test-mevedel-execution-remote--accept-storage session)
-          (setf (mevedel-session-permission-mode session) 'full-auto
-                (mevedel-session-sandbox-mode session) 'off)
-          (should (eq method (mevedel-execution-target-method target)))
-          (should (eq method
-                      (plist-get (mevedel-execution-target-identity target)
-                                 :method)))
-          (should (mevedel-execution-target-supported-p target))
-          (let ((readiness
-                 (mevedel-execution-target-probe target t 'off)))
-            (should (eq 'ready (plist-get readiness :status)))
-            (should (equal "Linux"
-                           (plist-get readiness :operating-system)))
-            (should (assoc "HOME"
-                           (mevedel-execution-target-environment target)))
-            (dolist (capability '(rg bash setsid))
-              (should
-               (stringp
-                (mevedel-execution-target-capability target capability)))))
-          (when (eq method 'ssh)
-            (message "mevedel: real remote SSH ordinary entry")
-            (test-mevedel-execution-remote--exercise-ordinary-entry
-             root workspace))
-          (test-mevedel-execution-remote--exercise-reconnect target)
-          (message "mevedel: real remote %s file tools" method)
-          (let ((file
-                 (test-mevedel-execution-remote--exercise-file-tools
-                  session target root)))
-            (message "mevedel: real remote %s Bash/Eval/resources/skills" method)
-            (test-mevedel-execution-remote--exercise-tools-and-resources
-             session root root-buffer)
-            (test-mevedel-execution-remote--exercise-project-hook
-             session root)
-            (message "mevedel: real remote %s hook provenance" method)
-            (test-mevedel-execution-remote--exercise-hook-provenance
-             session workspace root)
-            (message "mevedel: real remote %s control filesystem" method)
-          (test-mevedel-execution-remote--exercise-control-filesystem root)
-          (message "mevedel: real remote %s publication/media" method)
-            (test-mevedel-execution-remote--exercise-publication-media
-             session root-buffer)
-            (message "mevedel: real remote %s publication/recovery" method)
-            (test-mevedel-execution-remote--exercise-publication-recovery
-             session root-buffer)
-            (when (memq method '(ssh docker podman))
-              (message "mevedel: real remote %s worktree fork" method)
-              (test-mevedel-execution-remote--exercise-worktree-fork
-               session root-buffer root)
-              (when (eq method 'ssh)
-                (message "mevedel: real remote SSH Plan Worktree/Git gap")
-                (test-mevedel-execution-remote--exercise-plan-worktree-entry
-                 session root)))
-            (message "mevedel: real remote %s process/pty/concurrency" method)
-            (test-mevedel-execution-remote--exercise-term-kill root)
-            (test-mevedel-execution-remote--exercise-pty session root)
-            (test-mevedel-execution-remote--exercise-concurrency
-             session root file)
-            (when (eq method 'ssh)
-              (message "mevedel: real remote SSH aliases" )
-              (test-mevedel-execution-remote--exercise-ssh-aliases))
-            (when (memq method '(ssh docker podman))
-              (message "mevedel: real remote %s transfer clients" method)
-              (mevedel-session-durability-lease-release
-               (mevedel-session-save-path session) session)
-              (test-mevedel-execution-remote--run-transfer-clients
-               root (mevedel-session-session-id session))
-              (test-mevedel-execution-remote--reclaim-lease session))
-            (when (memq method '(docker podman))
-              (message "mevedel: real remote %s volume replacement" method)
-                (pcase-let ((`(,new-buffer . ,new-session)
-                           (test-mevedel-execution-remote--exercise-volume-replacement
-                            root session root-buffer workspace method)))
-                (setq root-buffer new-buffer
-                      session new-session)))
-            (setq root-buffer
-                  (progn
-                    (message "mevedel: real remote %s cold entry" method)
-                    (test-mevedel-execution-remote--exercise-cold-entry
-                     session root-buffer workspace)))))
-      ;; Replacement and cold entry rebind the buffer to fresh session
-      ;; objects.  Each holds its own lease and renewal timer, so the live
-      ;; one must be released here or its timer keeps running target I/O
-      ;; into every later journey in this Emacs process.
-      (let ((live-session
-             (and (buffer-live-p root-buffer)
-                  (buffer-local-value 'mevedel--session root-buffer))))
-        (dolist (entry (delete-dups (delq nil (list session live-session))))
-          (mevedel-execution-teardown-session entry)
-          (ignore-errors
-            (when (and (mevedel-session-save-path entry)
-                       (mevedel-session-durability-lease-owned-p entry))
-              (mevedel-session-durability-lease-release
-               (mevedel-session-save-path entry) entry)))))
-      (when (buffer-live-p root-buffer)
-        (with-current-buffer root-buffer
-          (set-buffer-modified-p nil))
-        (kill-buffer root-buffer))
-      (when (file-exists-p root)
-        (delete-directory root t)))))
+    (test-mevedel-execution-remote--with-temporary-directory root
+      (unwind-protect
+	  (let* ((mevedel-sandbox-mode 'off)
+		 (workspace (test-mevedel-execution--workspace root))
+		 (_ (setq session (mevedel-session-create "main" workspace root)))
+		 (target (mevedel-session-execution-target session)))
+	    (setq root-buffer (generate-new-buffer " *remote-acceptance*"))
+	    (with-current-buffer root-buffer
+	      ;; A session's root data buffer is a prepared transcript, not a
+	      ;; bare Org buffer: hidden audit provenance only survives a save
+	      ;; through the bounds `gptel-mode' persists.
+	      (mevedel-chat-prepare-transcript-buffer)
+	      (setq-local mevedel--workspace workspace
+			  mevedel--session session)
+	      (setq default-directory root))
+	    ;; Portable mutation admission needs the session's registered
+	    ;; root data buffer before anything can materialize it.
+	    (mevedel-session-set-root-buffer session root-buffer)
+	    (test-mevedel-execution-remote--accept-storage session)
+	    (setf (mevedel-session-permission-mode session) 'full-auto
+		  (mevedel-session-sandbox-mode session) 'off)
+	    (should (eq method (mevedel-execution-target-method target)))
+	    (should (eq method
+			(plist-get (mevedel-execution-target-identity target)
+				   :method)))
+	    (should (mevedel-execution-target-supported-p target))
+	    (let ((readiness
+		   (mevedel-execution-target-probe target t 'off)))
+	      (should (eq 'ready (plist-get readiness :status)))
+	      (should (equal "Linux"
+			     (plist-get readiness :operating-system)))
+	      (should (assoc "HOME"
+			     (mevedel-execution-target-environment target)))
+	      (dolist (capability '(rg bash setsid))
+		(should
+		 (stringp
+		  (mevedel-execution-target-capability target capability)))))
+	    (when (eq method 'ssh)
+	      (message "mevedel: real remote SSH ordinary entry")
+	      (test-mevedel-execution-remote--exercise-ordinary-entry
+	       root workspace))
+	    (test-mevedel-execution-remote--exercise-reconnect target)
+	    (message "mevedel: real remote %s file tools" method)
+	    (let ((file
+		   (test-mevedel-execution-remote--exercise-file-tools
+		    session target root)))
+	      (message "mevedel: real remote %s Bash/Eval/resources/skills" method)
+	      (test-mevedel-execution-remote--exercise-tools-and-resources
+	       session root root-buffer)
+	      (test-mevedel-execution-remote--exercise-project-hook
+	       session root)
+	      (message "mevedel: real remote %s hook provenance" method)
+	      (test-mevedel-execution-remote--exercise-hook-provenance
+	       session workspace root)
+	      (message "mevedel: real remote %s control filesystem" method)
+	      (test-mevedel-execution-remote--exercise-control-filesystem root)
+	      (message "mevedel: real remote %s publication/media" method)
+	      (test-mevedel-execution-remote--exercise-publication-media
+	       session root-buffer)
+	      (message "mevedel: real remote %s publication/recovery" method)
+	      (test-mevedel-execution-remote--exercise-publication-recovery
+	       session root-buffer)
+	      (when (memq method '(ssh docker podman))
+		(message "mevedel: real remote %s worktree fork" method)
+		(test-mevedel-execution-remote--exercise-worktree-fork
+		 session root-buffer root)
+		(when (eq method 'ssh)
+		  (message "mevedel: real remote SSH Plan Worktree/Git gap")
+		  (test-mevedel-execution-remote--exercise-plan-worktree-entry
+		   session root)))
+	      (message "mevedel: real remote %s process/pty/concurrency" method)
+	      (test-mevedel-execution-remote--exercise-term-kill root)
+	      (test-mevedel-execution-remote--exercise-pty session root)
+	      (test-mevedel-execution-remote--exercise-concurrency
+	       session root file)
+	      (when (eq method 'ssh)
+		(message "mevedel: real remote SSH aliases" )
+		(test-mevedel-execution-remote--exercise-ssh-aliases))
+	      (when (memq method '(ssh docker podman))
+		(message "mevedel: real remote %s transfer clients" method)
+		(mevedel-session-durability-lease-release
+		 (mevedel-session-save-path session) session)
+		(test-mevedel-execution-remote--run-transfer-clients
+		 root (mevedel-session-session-id session))
+		(test-mevedel-execution-remote--reclaim-lease session))
+	      (when (memq method '(docker podman))
+		(message "mevedel: real remote %s volume replacement" method)
+		(pcase-let ((`(,new-buffer . ,new-session)
+			     (test-mevedel-execution-remote--exercise-volume-replacement
+			      root session root-buffer workspace method)))
+		  (setq root-buffer new-buffer
+			session new-session)))
+	      (setq root-buffer
+		    (progn
+		      (message "mevedel: real remote %s cold entry" method)
+		      (test-mevedel-execution-remote--exercise-cold-entry
+		       session root-buffer workspace)))))
+	;; Replacement and cold entry rebind the buffer to fresh session
+	;; objects.  Each holds its own lease and renewal timer, so the live
+	;; one must be released here or its timer keeps running target I/O
+	;; into every later journey in this Emacs process.
+	(let ((live-session
+	       (and (buffer-live-p root-buffer)
+		    (buffer-local-value 'mevedel--session root-buffer))))
+	  (dolist (entry (delete-dups (delq nil (list session live-session))))
+	    (mevedel-execution-teardown-session entry)
+	    (ignore-errors
+	      (when (and (mevedel-session-save-path entry)
+			 (mevedel-session-durability-lease-owned-p entry))
+		(mevedel-session-durability-lease-release
+		 (mevedel-session-save-path entry) entry)))))
+	(when (buffer-live-p root-buffer)
+	  (with-current-buffer root-buffer
+	    (set-buffer-modified-p nil))
+	  (kill-buffer root-buffer))
+	(when (file-exists-p root)
+	  (delete-directory root t))))))
 
 (defun test-mevedel-execution-remote--exercise-bwrap (variable method)
   "Exercise an exact target Bubblewrap grant for VARIABLE and METHOD."
@@ -2641,7 +2742,8 @@ work in flight genuinely unprovable rather than merely finished."
         (delete-directory root t)))))
 
 (mevedel-deftest mevedel-real-remote-global-permissions
-  (:quiet t :tags (external remote))
+  (:quiet t :tags (external remote)
+          :after-each ((tramp-cleanup-all-connections)))
   (let* ((base (test-mevedel-execution-remote--real-root ,variable ,method))
          (root (test-mevedel-execution-remote--real-temp-directory
                 base "mevedel-global-permissions-" t))
@@ -2663,7 +2765,8 @@ work in flight genuinely unprovable rather than merely finished."
           (when (file-exists-p global-file)
             (ert-skip "Global permission journey requires an empty target store"))
           (setq global-dir-created (not (file-directory-p
-                                        (file-name-directory global-file))))
+                                         (file-name-directory global-file))))
+          (push (file-name-directory global-file) mevedel-test--write-roots)
           (make-directory (file-name-directory global-file) t)
           (should (mevedel-session-durability-lease-acquire
                    (mevedel-session-save-path session) "main" session))
@@ -2718,7 +2821,8 @@ work in flight genuinely unprovable rather than merely finished."
   "MEVEDEL_TEST_PODMAN_ROOT" 'podman)
 
 (mevedel-deftest mevedel-real-remote-acceptance
-  (:quiet t :tags (external remote))
+  (:quiet t :tags (external remote)
+          :after-each ((tramp-cleanup-all-connections)))
   ,test
   (test)
   :doc "exercises the core opt-in real SSH transport matrix"
@@ -2732,7 +2836,8 @@ work in flight genuinely unprovable rather than merely finished."
    "MEVEDEL_TEST_PODMAN_ROOT" 'podman))
 
 (mevedel-deftest mevedel-real-remote-loss
-  (:quiet t :tags (external remote connection-loss))
+  (:quiet t :tags (external remote connection-loss)
+          :after-each ((tramp-cleanup-all-connections)))
   ,test
   (test)
   :doc "classifies unprovable real SSH loss and cleans its descendant"
@@ -2746,7 +2851,8 @@ work in flight genuinely unprovable rather than merely finished."
    "MEVEDEL_TEST_PODMAN_ROOT" 'podman))
 
 (mevedel-deftest mevedel-real-remote-bwrap
-  (:quiet t :tags (external remote sandbox))
+  (:quiet t :tags (external remote sandbox)
+          :after-each ((tramp-cleanup-all-connections)))
   ,test
   (test)
   :doc "confines an exact symlink grant through real SSH Bubblewrap"

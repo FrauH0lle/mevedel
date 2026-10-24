@@ -3679,7 +3679,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   :doc "unknown dollar-prefixed input sends as normal prompt text"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'file :id "vd" :root "/tmp/vd" :name "vd"
+                :type 'file :id "vd"
+                :root (mevedel-test--placeholder-root) :name "vd"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -3706,7 +3707,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   ;; existed.
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'file :id "vq" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq"
+                :root (mevedel-test--placeholder-root) :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -5406,7 +5408,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "attaches pending SessionStart hook context to the submitted prompt"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'file :id "vf-session-hook" :root "/tmp/vf"
+                :type 'file :id "vf-session-hook"
+                :root (mevedel-test--placeholder-root)
                 :name "vf"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
@@ -5936,7 +5939,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "plain input during WaitAgent is injected before its resumed sample"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'file :id "vq" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq"
+                :root (mevedel-test--placeholder-root) :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -6512,7 +6516,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (let ((mevedel-permission-mode 'ask))
     (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'file :id "vq-incremental" :root "/tmp/vq"
+                :type 'file :id "vq-incremental"
+                :root (mevedel-test--placeholder-root)
                 :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
@@ -6560,7 +6565,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (let ((mevedel-permission-mode 'ask))
     (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'file :id "vq-full-rerender" :root "/tmp/vq"
+                :type 'file :id "vq-full-rerender"
+                :root (mevedel-test--placeholder-root)
                 :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
@@ -6600,7 +6606,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "pending-input UI names queue management, its pause effect and key hint"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'file :id "vq-hint" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq-hint"
+                :root (mevedel-test--placeholder-root) :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -6685,7 +6692,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "fallback drain preserves queued entries while plan approval is pending"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'file :id "vq-fallback-plan" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq-fallback-plan"
+                :root (mevedel-test--placeholder-root) :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -6712,7 +6720,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "directive planning drains its revision before earlier ordinary input"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'file :id "vq-directive-plan" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq-directive-plan"
+                :root (mevedel-test--placeholder-root) :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -6756,7 +6765,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'file :id "vq-hook-late-schedule"
-                :root "/tmp/vq" :name "vq"
+                :root (mevedel-test--placeholder-root) :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -6779,7 +6788,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "interaction rebuild preserves composer point while drafting"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'file :id "vq-point" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq-point"
+                :root (mevedel-test--placeholder-root) :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -6833,7 +6843,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "slash input during an active request is rejected"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'file :id "vq-slash" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq-slash"
+                :root (mevedel-test--placeholder-root) :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -6852,7 +6863,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "fallback drain submits one exact FIFO entry per turn"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'file :id "vq-fifo" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq-fifo"
+                :root (mevedel-test--placeholder-root) :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -6886,7 +6898,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "queued follow-ups do not drain while the request is still active"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'file :id "vq-active" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq-active"
+                :root (mevedel-test--placeholder-root) :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -6907,7 +6920,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "clearing prepared follow-ups restores their reserved context"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'file :id "vq-clear" :root "/tmp/vq" :name "vq"))
+                :type 'file :id "vq-clear"
+                :root (mevedel-test--placeholder-root) :name "vq"))
            (session (mevedel-session-create "main" ws))
            (context-entries '((:event SessionStart :body "clear context")))
            (submission

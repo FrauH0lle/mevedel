@@ -8,6 +8,7 @@
 (setq mevedel-claude-code-auto-update nil)
 
 (require 'cl-lib)
+(require 'ert)
 (require 'gptel-request)
 
 ;; The shared fixture macros below let-bind these product variables, and a
@@ -51,6 +52,9 @@
 (defvar gptel-backend)
 (defvar gptel-model)
 
+;; `jka-compr'
+(defvar jka-compr-temp-name-template)
+
 ;; `mevedel-execution-process'
 (defvar mevedel-execution-process--child-kill-delay)
 
@@ -69,13 +73,18 @@
 (defvar mevedel--hook-audit-close)
 (defvar mevedel--hook-audit-open)
 
+;; `org-persist'
+(defvar org-persist-directory)
+
 ;; `tabulated-list'
 (defvar tabulated-list-entries)
 
 ;; `tramp'
+(defvar tramp-compat-temporary-file-directory)
 (defvar tramp-histfile-override)
 (defvar tramp-local-host-regexp)
 (defvar tramp-methods)
+(defvar tramp-temp-name-prefix)
 
 ;; Compare resolved names: `file-in-directory-p' stats the shared temporary
 ;; directory twice, and parallel workers changing it make those stats differ.
@@ -90,6 +99,14 @@
                        '("XDG_CACHE_HOME" "XDG_CONFIG_HOME"
                          "XDG_DATA_HOME" "XDG_STATE_HOME"))))
   (error "Tests require HOME and XDG roots under temporary-file-directory"))
+
+;; Org can otherwise select Eask's shared dependency directory as its cache.
+;; Keep its process-wide registry and files together in the worker-owned HOME.
+(defconst mevedel-test--worker-home (expand-file-name "~")
+  "Eask's isolated HOME, also used for caches retained across cases.")
+(with-eval-after-load 'org-persist
+  (setq org-persist-directory
+        (file-name-concat mevedel-test--worker-home "org-persist")))
 
 ;; gptel ships no default backend, and a session cannot be saved without one.
 ;; Tests that create chat buffers would otherwise warn on every teardown save
@@ -480,6 +497,209 @@ state might belong to another process, not the test that first notices it."
            (when-let* ((test (ert-running-test))) (ert-test-name test))
            leaked)))
 
+(defconst mevedel-test--shared-temporary-directory temporary-file-directory
+  "Shared temp root checked for contamination, never a write allowance.")
+
+(defvar mevedel-test--write-roots nil
+  "Test-owned directories where Lisp file mutations are allowed.
+Remote acceptance fixtures may dynamically add their provisioned remote root.
+This is an assertion boundary, not a sandbox for external subprocesses.")
+
+(defvar mevedel-test--write-violations nil
+  "Rejected file mutations in the current case, even if caught by its body.")
+
+(defconst mevedel-test--file-truename (symbol-function 'file-truename)
+  "Real path resolver for guard bookkeeping, unaffected by product test stubs.")
+
+(defun mevedel-test--truename (path)
+  "Resolve PATH without entering a product test's path-resolution stub.
+The native resolver calls `file-truename' recursively for missing ancestors."
+  (cl-letf (((symbol-function 'file-truename) mevedel-test--file-truename))
+    (file-truename path)))
+
+(defun mevedel-test--check-write (operation path)
+  "Reject OPERATION on PATH outside the current test's owned roots.
+Resolve local symlinks, including existing ancestors of a new file.  Mock
+TRAMP paths address the local filesystem; other remote paths require an
+explicit allowance on that same remote connection.  Avoid remote I/O merely
+to decide whether a path is allowed.  Remote symlinks and subprocess writes
+are outside this Lisp-level assertion's boundary."
+  (when (and mevedel-test--write-roots (stringp path))
+    (let* ((expanded (expand-file-name path))
+           (remote (file-remote-p expanded))
+           (mock (equal (file-remote-p expanded 'method) "mevedelmock"))
+           (local (if mock (file-remote-p expanded 'localname) expanded))
+           (resolved
+            (cond
+             ((and remote (not mock)) expanded)
+             ;; These operations replace/remove the directory entry itself,
+             ;; not the file named by a final symlink (possibly a broken one).
+             ((memq operation '(delete-file delete-directory rename-file
+                                make-symbolic-link add-name-to-file))
+              (file-name-concat
+               (mevedel-test--truename
+                (file-name-directory (directory-file-name local)))
+               (file-name-nondirectory (directory-file-name local))))
+             (t (mevedel-test--truename local)))))
+      (unless
+          (cl-some
+           (lambda (root)
+             (let* ((root (expand-file-name root))
+                    (root-remote (file-remote-p root)))
+               (when (equal (and remote (not mock) remote) root-remote)
+                 ;; Roots are canonicalized at case entry, before a body can
+                 ;; replace an owned directory with a symlink to elsewhere.
+                 (let ((root (directory-file-name root)))
+                   (or (equal resolved root)
+                       (string-prefix-p (file-name-as-directory root) resolved))))))
+           mevedel-test--write-roots)
+        (let ((violation (list operation expanded)))
+          (push violation mevedel-test--write-violations)
+          (error "Test attempted file mutation outside owned roots: %S" violation))))))
+
+(defun mevedel-test--guard-file-mutation (operation positions &rest args)
+  "Check OPERATION's file arguments at POSITIONS in ARGS.
+Rename, copy and link destinations ending in a slash name a child of that
+directory, not the directory entry itself.  Check that actual child so its
+parent symlinks are resolved, while a non-directory final symlink can still
+be safely replaced by an entry-changing operation."
+  (dolist (position positions)
+    (let ((path (nth position args)))
+      (when (and (= position 1)
+                 (memq operation '(rename-file copy-file add-name-to-file
+                                    make-symbolic-link))
+                 (stringp path)
+                 (directory-name-p path)
+                 (stringp (car args)))
+        (setq path (file-name-concat
+                    path (file-name-nondirectory
+                          (directory-file-name (car args))))))
+      (mevedel-test--check-write operation path))))
+
+(defun mevedel-test--guard-temp-file (prefix &rest _args)
+  "Check the location in which `make-temp-file' will create PREFIX."
+  (mevedel-test--check-write
+   'make-temp-file (expand-file-name prefix temporary-file-directory)))
+
+;; Guard entry points rather than only write-region: mkdir, rename, delete,
+;; links and metadata changes can contaminate another test without writing text.
+;; Advice remains inert while no case is running.
+(dolist (entry '((write-region 2 5) (make-directory 0) (delete-directory 0)
+                 (delete-file 0) (rename-file 0 1) (copy-file 1)
+                 (add-name-to-file 0 1) (make-symbolic-link 1)
+                 (set-file-modes 0) (set-file-times 0)))
+  (advice-add (car entry) :before
+              (apply-partially #'mevedel-test--guard-file-mutation
+                               (car entry) (cdr entry))))
+(advice-add 'make-temp-file :before #'mevedel-test--guard-temp-file)
+
+(defun mevedel-test--live-connections ()
+  "Return live network processes and TRAMP connection processes."
+  (delete-dups
+   (append
+    (seq-filter (lambda (process)
+                  (and (process-live-p process)
+                       (memq (process-type process) '(network server))))
+                (process-list))
+    (delq nil
+          (mapcar (lambda (connection)
+                    (let ((process (tramp-get-connection-process connection)))
+                      (and (process-live-p process) process)))
+                  (tramp-list-connections))))))
+
+(defun mevedel-test--call-with-isolation (body)
+  "Call BODY in a private temp root and assert its leak boundaries.
+The private cwd and TMPDIR also contain accidental relative subprocess
+writes, but do not restrict a subprocess using an absolute pathname.
+Always restore unread events and close only connections created by BODY."
+  (let* ((root (file-name-as-directory (make-temp-file "mc-" t)))
+         (temporary-file-directory root)
+         (default-directory root)
+         (process-environment (copy-sequence process-environment))
+         (tramp-compat-temporary-file-directory root)
+         ;; TRAMP expands this under the target's own remote-tmpdir too, so an
+         ;; absolute client pathname would escape a remote fixture's root.
+         (tramp-temp-name-prefix "tramp.")
+         (jka-compr-temp-name-template (file-name-concat root "jka-com"))
+         (tramp-methods (cl-remove "mevedelmock" tramp-methods
+                                   :key #'car :test #'equal))
+         (native-comp-eln-load-path
+          (cons (file-name-concat root "eln-cache/") native-comp-eln-load-path))
+         (mevedel-test--placeholder-root nil)
+         (mevedel-test--write-roots
+          (mapcar
+           (lambda (directory)
+             (if (file-remote-p directory) directory
+               (mevedel-test--truename directory)))
+           (append (list root mevedel-test--worker-home (expand-file-name "~"))
+                   (mapcar #'getenv '("XDG_CACHE_HOME" "XDG_CONFIG_HOME"
+                                     "XDG_DATA_HOME" "XDG_STATE_HOME"))
+                   mevedel-test--write-roots)))
+         (mevedel-test--write-violations nil)
+         (events-before
+          (mapcar (lambda (variable) (cons variable (copy-tree (symbol-value variable))))
+                  '(unread-command-events unread-input-method-events
+                    unread-post-input-method-events)))
+         (connections-before (mevedel-test--live-connections)))
+    (dolist (name '("TMPDIR" "TMP" "TEMP")) (setenv name root))
+    ;; A child Emacs inherits TMPDIR too.  Its HOME/XDG roots must remain below
+    ;; that directory to satisfy the same safe-startup assertion as this worker.
+    (dolist (entry '(("HOME" . "mevedel-test-home-case")
+                     ("XDG_CACHE_HOME" . "mevedel-test-home-case/.cache")
+                     ("XDG_CONFIG_HOME" . "mevedel-test-home-case/.config")
+                     ("XDG_DATA_HOME" . "mevedel-test-home-case/.local/share")
+                     ("XDG_STATE_HOME" . "mevedel-test-home-case/.local/state")
+                     ;; Unix socket pathnames have a small platform limit.
+                     ("XDG_RUNTIME_DIR" . "r")))
+      (let ((directory (file-name-concat root (cdr entry))))
+        (make-directory directory t)
+        (setenv (car entry) directory)))
+    (set-file-modes (getenv "XDG_RUNTIME_DIR") #o700)
+    ;; Emacs caches both the home regexp and the environment that produced it.
+    ;; Invalidate rather than let-bind just one half of that paired cache.
+    (setq abbreviated-home-dir nil)
+    (mevedel-test--ensure-mock-tramp-method)
+    (unwind-protect
+        (funcall body)
+      (let* ((connections (cl-set-difference (mevedel-test--live-connections)
+                                            connections-before))
+             (events
+              (cl-loop for (variable . before) in events-before
+                       unless (equal before (symbol-value variable))
+                       append (list variable (symbol-value variable))))
+             (violations mevedel-test--write-violations))
+        (dolist (entry events-before) (set (car entry) (cdr entry)))
+        (setq abbreviated-home-dir nil)
+        (dolist (connection (tramp-list-connections))
+          (when (memq (tramp-get-connection-process connection) connections)
+            (tramp-cleanup-connection connection)))
+        (dolist (process connections)
+          (when (process-live-p process) (delete-process process)))
+        (delete-directory root t)
+        (let ((temporary-file-directory mevedel-test--shared-temporary-directory))
+          (mevedel-test--assert-no-temporary-root-state))
+        (when (or events connections violations)
+          (error "Test %S leaked state: %S"
+                 (when-let* ((test (ert-running-test))) (ert-test-name test))
+                 (append (when events (list :unread-events events))
+                         (when connections
+                           (list :connections (mapcar #'process-name connections)))
+                         (when violations (list :file-mutations violations)))))))))
+
+(defun mevedel-test--isolate-ert-case (original test &rest arguments)
+  "Run TEST through ORIGINAL with leak assertions inside ERT's failure handler.
+ARGUMENTS are passed through unchanged.  Cover direct `ert-deftest' cases as
+well as `mevedel-deftest', and restore TEST's body even if the runner aborts."
+  (let ((body (ert-test-body test)))
+    (unwind-protect
+        (progn
+          (setf (ert-test-body test)
+                (lambda () (mevedel-test--call-with-isolation body)))
+          (apply original test arguments))
+      (setf (ert-test-body test) body))))
+
+(advice-add 'ert-run-test :around #'mevedel-test--isolate-ert-case)
+
 
 ;;
 ;;; TRAMP test helper
@@ -498,6 +718,9 @@ having registered it."
        ;; environment was sanitized.  Use Eask's isolated home for this target.
        (tramp-login-program "env")
        (tramp-login-args ((,(concat "HOME=" (getenv "HOME")) "sh" "-i")))
+       ;; Target-side `make-nearby-temp-file' must use this case's owned root
+       ;; too; the method's default /tmp is shared by every local mock target.
+       (tramp-tmpdir ,temporary-file-directory)
        (tramp-remote-shell "/bin/sh")
        (tramp-remote-shell-args ("-c"))
        (tramp-connection-timeout 10)))))
@@ -552,7 +775,8 @@ settles at the sentinel instead of riding the grace timers."
   (let ((ws (mevedel-workspace--create
              ;; A real workspace category: durable authority resolution
              ;; refuses to guess one for a synthetic type.
-             :type 'file :id (or root "t") :root (or root "/tmp/t")
+             :type 'file :id (or root "t")
+             :root (or root (mevedel-test--placeholder-root))
              :name (or name "t")
              :file-cache (mevedel-file-cache--create
                           :table (make-hash-table :test #'equal)
@@ -1097,8 +1321,7 @@ See also:
                             (mevedel-test--release-leaked-state))
                           (mevedel-test--delete-staged-publications)
                           (mevedel-test--assert-worktree-controls-unchanged
-                           worktree-controls-before)
-                          (mevedel-test--assert-no-temporary-root-state)))))
+                           worktree-controls-before)))))
               `(ert-deftest
                    ,(intern (concat
                              (format "%s/test" object)

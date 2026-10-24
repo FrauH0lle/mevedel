@@ -421,7 +421,8 @@
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
          (ws (mevedel-workspace--create
-              :type 'file :id "p" :root "/tmp/p" :name "p"
+              :type 'file :id "p"
+              :root (mevedel-test--placeholder-root) :name "p"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))

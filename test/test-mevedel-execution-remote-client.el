@@ -3,8 +3,8 @@
 ;;; Commentary:
 
 ;; This file is invoked by the real transport acceptance test as two separate
-;; Eask/Emacs processes.  It intentionally has no default test case: without
-;; MEVEDEL_REMOTE_CLIENT_ROLE it is skipped by the normal test discovery.
+;; Eask/Emacs processes.  Without MEVEDEL_REMOTE_CLIENT_ROLE its real client
+;; scenarios are skipped; fixture isolation checks still run normally.
 
 ;;; Code:
 
@@ -29,15 +29,52 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-execution-test-helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-execution-test-helpers"))
 
-(defvar tramp-ssh-controlmaster-options)
-(defvar tramp-use-connection-share)
+;; `gptel'
 (defvar gptel-backend)
 (defvar gptel-model)
 
 ;; `gptel-request'
 (declare-function gptel--make-backend "ext:gptel-request" (&rest slots))
 (declare-function gptel-get-backend "ext:gptel-request" (name))
+
+;; `tramp-sh'
+(defvar tramp-ssh-controlmaster-options)
+(defvar tramp-use-connection-share)
+
+(defun test-mevedel-execution-remote-client--root ()
+  "Validate and return this client's exact disposable target directory."
+  (let* ((value (getenv "MEVEDEL_REMOTE_CLIENT_ROOT"))
+         (method (and value (file-remote-p value 'method 'never)))
+         (variable (pcase method
+                     ("ssh" "MEVEDEL_TEST_SSH_ROOT")
+                     ("podman" "MEVEDEL_TEST_PODMAN_ROOT")
+                     ("docker" "MEVEDEL_TEST_DOCKER_ROOT"))))
+    (unless variable
+      (ert-fail "Remote client root must use SSH, Podman, or Docker"))
+    (let* ((base (test-mevedel-execution-remote--real-root
+                  variable (intern method)))
+           (root (file-name-as-directory value)))
+      (unless (and (equal (file-remote-p base) (file-remote-p root))
+                   (not (file-remote-p value 'hop 'never))
+                   (not (equal base root))
+                   (not (equal "/" (file-remote-p root 'localname))))
+        (ert-fail "Remote client root must own a directory on the provisioned target"))
+      (test-mevedel-execution-remote--real-root
+       "MEVEDEL_REMOTE_CLIENT_ROOT" (intern method)))))
+
+(defmacro test-mevedel-execution-remote-client--with-root (&rest body)
+  "Run BODY with only the validated remote client root writable."
+  (declare (indent 0) (debug (body)))
+  `(let* ((root (test-mevedel-execution-remote-client--root))
+          (mevedel-test--write-roots (cons root mevedel-test--write-roots)))
+     (test-mevedel-execution-remote--with-temporary-directory root
+       ,@body)))
 
 (defun test-mevedel-execution-remote-client--stage (format-string &rest args)
   "Write a local observable stage line for the parent acceptance process."
@@ -237,7 +274,8 @@
         (cons buffer (buffer-local-value 'mevedel--session buffer))))))
 
 (mevedel-deftest mevedel-real-remote-transfer-client
-  (:tags (external remote control-transfer))
+  (:tags (external remote control-transfer)
+         :after-each ((tramp-cleanup-all-connections)))
   ,test
   (test)
   :doc "drives one independent real transport transfer client"
@@ -247,182 +285,183 @@
     (if (or (not (member role '("owner" "requester")))
             (not (equal scenario "transfer")))
         (ert-skip "Not the cooperative-transfer client scenario")
-      (let* ((root (getenv "MEVEDEL_REMOTE_CLIENT_ROOT"))
-             (session-id (getenv "MEVEDEL_REMOTE_SESSION_ID"))
-             (client-id (getenv "MEVEDEL_REMOTE_CLIENT_ID")))
-        (unless (and root session-id client-id)
-          (ert-fail "Remote transfer client environment is incomplete"))
-      (let* ((mevedel-session-transfer-prompt-timeout 1)
-             ;; TRAMP setup and marker writes can occupy the child well past
-             ;; the normal short interactive lease window.
-             (mevedel-session-lease-seconds 600)
-             (_ (test-mevedel-execution-remote-client--stage
-                 "%s-session-start" role))
-             (pair (test-mevedel-execution-remote-client--session
-                    root session-id client-id))
-             (buffer (car pair))
-             (session (cdr pair))
-             (target (mevedel-session-execution-target session)))
-        (test-mevedel-execution-remote-client--stage "%s-session-restored" role)
-        (puthash (mevedel-execution-target-identity target) t
-                 mevedel-session-durability--disclosed-targets)
-        (unwind-protect
-            (let ((mevedel-session-durability--client-id client-id))
-              (if (equal role "owner")
-                  (progn
-                    (test-mevedel-execution-remote-client--stage
-                     "owner-lease-start")
-                    (should
-                     (mevedel-session-durability-lease-acquire
-                      (mevedel-session-save-path session) "accept-owner"
-                      session))
-                    (test-mevedel-execution-remote-client--stage
-                     "owner-lease-acquired")
-                    (test-mevedel-execution-remote-client--mark
-                     root "a-owner")
-                    (test-mevedel-execution-remote-client--stage
-                     "owner-marker-a-owner")
-                    (let ((execution-id
-                           (test-mevedel-execution-remote-client--start-long-mutation
-                            session buffer root)))
-                      (test-mevedel-execution-remote-client--mark
-                       root "a-long-running")
+      (test-mevedel-execution-remote-client--with-root
+        (let* ((session-id (getenv "MEVEDEL_REMOTE_SESSION_ID"))
+               (client-id (getenv "MEVEDEL_REMOTE_CLIENT_ID")))
+          (unless (and root session-id client-id)
+            (ert-fail "Remote transfer client environment is incomplete"))
+          (let* ((mevedel-session-transfer-prompt-timeout 1)
+                 ;; TRAMP setup and marker writes can occupy the child well past
+                 ;; the normal short interactive lease window.
+                 (mevedel-session-lease-seconds 600)
+                 (_ (test-mevedel-execution-remote-client--stage
+                     "%s-session-start" role))
+                 (pair (test-mevedel-execution-remote-client--session
+                        root session-id client-id))
+                 (buffer (car pair))
+                 (session (cdr pair))
+                 (target (mevedel-session-execution-target session)))
+            (test-mevedel-execution-remote-client--stage "%s-session-restored" role)
+            (puthash (mevedel-execution-target-identity target) t
+                     mevedel-session-durability--disclosed-targets)
+            (unwind-protect
+                (let ((mevedel-session-durability--client-id client-id))
+                  (if (equal role "owner")
+                      (progn
+                        (test-mevedel-execution-remote-client--stage
+                         "owner-lease-start")
+                        (should
+                         (mevedel-session-durability-lease-acquire
+                          (mevedel-session-save-path session) "accept-owner"
+                          session))
+                        (test-mevedel-execution-remote-client--stage
+                         "owner-lease-acquired")
+                        (test-mevedel-execution-remote-client--mark
+                         root "a-owner")
+                        (test-mevedel-execution-remote-client--stage
+                         "owner-marker-a-owner")
+                        (let ((execution-id
+                               (test-mevedel-execution-remote-client--start-long-mutation
+                                session buffer root)))
+                          (test-mevedel-execution-remote-client--mark
+                           root "a-long-running")
+                          (test-mevedel-execution-remote-client--stage
+                           "owner-marker-a-long-running")
+                          (test-mevedel-execution-remote-client--wait
+                           root "b-request-1")
+                          (should
+                           (mevedel-session-control-transfer-decide
+                            session 'reject))
+                          (test-mevedel-execution-remote-client--mark
+                           root "a-rejected")
+                          (test-mevedel-execution-remote-client--stage
+                           "owner-marker-a-rejected")
+                          (test-mevedel-execution-remote-client--wait
+                           root "b-request-2")
+                          ;; The unanswered request is granted once its
+                          ;; whole-second target deadline passes, so poll until
+                          ;; the owner observes it instead of assuming one
+                          ;; round trip is enough.
+                          (let ((state nil))
+                            (with-timeout
+                                (30 (ert-fail
+                                     (format
+                                      "Owner never began quiescing: %s"
+                                      (test-mevedel-execution-remote-client--transfer-facts
+                                       session))))
+                              (while (not (eq state 'quiescing))
+                                (accept-process-output nil 0.5)
+                                (setq state
+                                      (plist-get
+                                       (mevedel-session-control-transfer-poll
+                                        session buffer nil)
+                                       :state))
+                                (test-mevedel-execution-remote-client--stage
+                                 "owner-poll state=%S %s" state
+                                 (test-mevedel-execution-remote-client--transfer-facts
+                                  session))))
+                            (should (eq 'quiescing state)))
+                          (test-mevedel-execution-remote-client--mark
+                           root "a-still-running")
+                          (test-mevedel-execution-remote-client--stage
+                           "owner-marker-a-still-running")
+                          ;; The live mutation is what holds the granted
+                          ;; transfer back.  Once it stops, a transfer poll timer
+                          ;; can save, release, and replace BUFFER inside any
+                          ;; wait, so the owner's last words go in first.
+                          (with-current-buffer buffer
+                            (goto-char (point-max))
+                            (insert "Owner settled before transfer.\n"))
+                          (test-mevedel-execution-remote-client--stop-long-mutation
+                           session execution-id))
+                        (let ((state nil))
+                          (with-timeout
+                              (30 (ert-fail "Owner never released control"))
+                            (while (not (eq state 'released))
+                              (setq state
+                                    (plist-get
+                                     (mevedel-session-control-transfer-poll
+                                      session buffer nil)
+                                     :state))
+                              (unless (eq state 'released)
+                                (accept-process-output nil 0.5))))
+                          (should (eq 'released state)))
+                        (test-mevedel-execution-remote-client--mark
+                         root "a-released")
+                        (test-mevedel-execution-remote-client--stage
+                         "owner-marker-a-released")
+                        (test-mevedel-execution-remote-client--wait
+                         root "b-acquired"))
+                    (progn
                       (test-mevedel-execution-remote-client--stage
-                       "owner-marker-a-long-running")
-                      (test-mevedel-execution-remote-client--wait
-                       root "b-request-1")
+                       "requester-lease-check")
+                      (should-not
+                       (mevedel-session-durability-lease-acquire
+                        (mevedel-session-save-path session) "accept-requester"
+                        session))
+                      (test-mevedel-execution-remote-client--mark
+                       root "b-read-only")
+                      (test-mevedel-execution-remote-client--stage
+                       "requester-marker-b-read-only")
                       (should
-                       (mevedel-session-control-transfer-decide
-                        session 'reject))
+                       (mevedel-session-control-transfer-request
+                        session))
                       (test-mevedel-execution-remote-client--mark
-                       root "a-rejected")
+                       root "b-request-1")
                       (test-mevedel-execution-remote-client--stage
-                       "owner-marker-a-rejected")
+                       "requester-marker-b-request-1")
                       (test-mevedel-execution-remote-client--wait
-                       root "b-request-2")
-                      ;; The unanswered request is granted once its
-                      ;; whole-second target deadline passes, so poll until
-                      ;; the owner observes it instead of assuming one
-                      ;; round trip is enough.
-                      (let ((state nil))
-                        (with-timeout
-                            (30 (ert-fail
-                                 (format
-                                  "Owner never began quiescing: %s"
-                                  (test-mevedel-execution-remote-client--transfer-facts
-                                   session))))
-                          (while (not (eq state 'quiescing))
-                            (accept-process-output nil 0.5)
-                            (setq state
-                                  (plist-get
-                                   (mevedel-session-control-transfer-poll
-                                    session buffer nil)
-                                   :state))
-                            (test-mevedel-execution-remote-client--stage
-                             "owner-poll state=%S %s" state
-                             (test-mevedel-execution-remote-client--transfer-facts
-                              session))))
-                        (should (eq 'quiescing state)))
+                       root "a-rejected")
+                      (should
+                       (mevedel-session-control-transfer-request
+                        session))
                       (test-mevedel-execution-remote-client--mark
-                       root "a-still-running")
+                       root "b-request-2")
                       (test-mevedel-execution-remote-client--stage
-                       "owner-marker-a-still-running")
-                      ;; The live mutation is what holds the granted
-                      ;; transfer back.  Once it stops, a transfer poll timer
-                      ;; can save, release, and replace BUFFER inside any
-                      ;; wait, so the owner's last words go in first.
-                      (with-current-buffer buffer
-                        (goto-char (point-max))
-                        (insert "Owner settled before transfer.\n"))
-                      (test-mevedel-execution-remote-client--stop-long-mutation
-                       session execution-id))
-                    (let ((state nil))
-                      (with-timeout
-                          (30 (ert-fail "Owner never released control"))
-                        (while (not (eq state 'released))
-                          (setq state
-                                (plist-get
-                                 (mevedel-session-control-transfer-poll
-                                  session buffer nil)
-                                 :state))
-                          (unless (eq state 'released)
-                            (accept-process-output nil 0.5))))
-                      (should (eq 'released state)))
-                    (test-mevedel-execution-remote-client--mark
-                     root "a-released")
-                    (test-mevedel-execution-remote-client--stage
-                     "owner-marker-a-released")
-                    (test-mevedel-execution-remote-client--wait
-                     root "b-acquired"))
-                (progn
-                  (test-mevedel-execution-remote-client--stage
-                   "requester-lease-check")
-                  (should-not
-                   (mevedel-session-durability-lease-acquire
-                    (mevedel-session-save-path session) "accept-requester"
-                    session))
-                  (test-mevedel-execution-remote-client--mark
-                   root "b-read-only")
-                  (test-mevedel-execution-remote-client--stage
-                   "requester-marker-b-read-only")
-                  (should
-                     (mevedel-session-control-transfer-request
-                      session))
-                  (test-mevedel-execution-remote-client--mark
-                   root "b-request-1")
-                  (test-mevedel-execution-remote-client--stage
-                   "requester-marker-b-request-1")
-                  (test-mevedel-execution-remote-client--wait
-                   root "a-rejected")
-                  (should
-                   (mevedel-session-control-transfer-request
-                    session))
-                  (test-mevedel-execution-remote-client--mark
-                   root "b-request-2")
-                  (test-mevedel-execution-remote-client--stage
-                   "requester-marker-b-request-2")
-                  (let (acquired)
-                    (with-timeout (30 (ert-fail "Requester did not acquire"))
-                      (while (not acquired)
-                        (setq acquired
-                              (mevedel-session-control-transfer-poll
-                               session buffer t))
-                        (unless acquired
-                          (accept-process-output nil 0.05))))
-                    ;; Acquisition proves the owner released: the fence is
-                    ;; the only way in.  Its marker is a separate target
-                    ;; write that the protocol does not order before the
-                    ;; claim, so waiting is the only way to observe it
-                    ;; without racing.  Failing here instead left the owner
-                    ;; waiting on a `b-acquired' marker this client would
-                    ;; never write, and the run hung rather than failed.
-                    (test-mevedel-execution-remote-client--wait
-                     root "a-released")
-                    (with-current-buffer buffer
-                      (should (string-match-p
-                               (regexp-quote
-                                "Owner settled before transfer.")
-                               (buffer-string))))
-                    (test-mevedel-execution-remote-client--mark
-                     root "b-acquired")
-                    (test-mevedel-execution-remote-client--stage
-                     "requester-marker-b-acquired")))))
-          (when (buffer-live-p buffer)
-            (with-current-buffer buffer
-              (set-buffer-modified-p nil))
-            (kill-buffer buffer))
-          (let ((mevedel-session-durability--client-id client-id))
-            ;; Release checks the target's head itself.  One failed
-            ;; renewal binds this session `lost' while its record stays
-            ;; live there; skipping the release on that belief leaves the
-            ;; journey waiting out a 600-second lease.
-            (when (mevedel-session-save-path session)
-              (ignore-errors
-                (mevedel-session-durability-lease-release
-                 (mevedel-session-save-path session) session))))))))))
+                       "requester-marker-b-request-2")
+                      (let (acquired)
+                        (with-timeout (30 (ert-fail "Requester did not acquire"))
+                          (while (not acquired)
+                            (setq acquired
+                                  (mevedel-session-control-transfer-poll
+                                   session buffer t))
+                            (unless acquired
+                              (accept-process-output nil 0.05))))
+                        ;; Acquisition proves the owner released: the fence is
+                        ;; the only way in.  Its marker is a separate target
+                        ;; write that the protocol does not order before the
+                        ;; claim, so waiting is the only way to observe it
+                        ;; without racing.  Failing here instead left the owner
+                        ;; waiting on a `b-acquired' marker this client would
+                        ;; never write, and the run hung rather than failed.
+                        (test-mevedel-execution-remote-client--wait
+                         root "a-released")
+                        (with-current-buffer buffer
+                          (should (string-match-p
+                                   (regexp-quote
+                                    "Owner settled before transfer.")
+                                   (buffer-string))))
+                        (test-mevedel-execution-remote-client--mark
+                         root "b-acquired")
+                        (test-mevedel-execution-remote-client--stage
+                         "requester-marker-b-acquired")))))
+              (when (buffer-live-p buffer)
+                (with-current-buffer buffer
+                  (set-buffer-modified-p nil))
+                (kill-buffer buffer))
+              (let ((mevedel-session-durability--client-id client-id))
+                ;; Release checks the target's head itself.  One failed
+                ;; renewal binds this session `lost' while its record stays
+                ;; live there; skipping the release on that belief leaves the
+                ;; journey waiting out a 600-second lease.
+                (when (mevedel-session-save-path session)
+                  (ignore-errors
+                    (mevedel-session-durability-lease-release
+                     (mevedel-session-save-path session) session)))))))))))
 
 (mevedel-deftest mevedel-real-remote-crash-recovery-client
-  (:tags (external remote control-transfer recovery))
+  (:tags (external remote control-transfer recovery)
+         :after-each ((tramp-cleanup-all-connections)))
   ,test
   (test)
   :doc "takes over a crashed owner and recovers target-side incomplete state"
@@ -431,28 +470,52 @@
     (if (or (not (member role '("owner" "requester")))
             (not (member scenario '("crash-long" "recovery"))))
         (ert-skip "Not a crashed-client recovery scenario")
-      (let* ((root (getenv "MEVEDEL_REMOTE_CLIENT_ROOT"))
-             (session-id (getenv "MEVEDEL_REMOTE_SESSION_ID"))
-             (client-id (getenv "MEVEDEL_REMOTE_CLIENT_ID"))
-             ;; Short enough that the crashed owner's lease expires while
-             ;; the requester waits, long enough that acquiring it survives
-             ;; a real target round trip.
-             (mevedel-session-lease-seconds 5)
-             (pair (test-mevedel-execution-remote-client--session
-                    root session-id client-id))
-             (buffer (car pair))
-             (session (cdr pair))
-             (crashed-p nil))
-        (unless (and root session-id client-id)
-          (ert-fail "Remote recovery client environment is incomplete"))
-        (test-mevedel-execution-remote-client--stage
-         "%s-session-start" role)
-        (test-mevedel-execution-remote-client--stage
-         "%s-session-restored" role)
-        (unwind-protect
-            (let ((mevedel-session-durability--client-id client-id))
-              (if (equal role "owner")
-                  (if (equal scenario "crash-long")
+      (test-mevedel-execution-remote-client--with-root
+        (let* ((session-id (getenv "MEVEDEL_REMOTE_SESSION_ID"))
+               (client-id (getenv "MEVEDEL_REMOTE_CLIENT_ID"))
+               (_ (unless (and session-id client-id)
+                    (ert-fail "Remote recovery client environment is incomplete")))
+               ;; Short enough that the crashed owner's lease expires while
+               ;; the requester waits, long enough that acquiring it survives
+               ;; a real target round trip.
+               (mevedel-session-lease-seconds 5)
+               (pair (test-mevedel-execution-remote-client--session
+                      root session-id client-id))
+               (buffer (car pair))
+               (session (cdr pair))
+               (crashed-p nil))
+          (unless (and root session-id client-id)
+            (ert-fail "Remote recovery client environment is incomplete"))
+          (test-mevedel-execution-remote-client--stage
+           "%s-session-start" role)
+          (test-mevedel-execution-remote-client--stage
+           "%s-session-restored" role)
+          (unwind-protect
+              (let ((mevedel-session-durability--client-id client-id))
+                (if (equal role "owner")
+                    (if (equal scenario "crash-long")
+                        (progn
+                          (should
+                           (mevedel-session-durability-lease-acquire
+                            (mevedel-session-save-path session) "accept-owner"
+                            session))
+                          (test-mevedel-execution-remote-client--mark
+                           root "a-owner")
+                          (test-mevedel-execution-remote-client--stage
+                           "owner-marker-a-owner")
+                          (test-mevedel-execution-remote-client--start-long-mutation
+                           session buffer root)
+                          (test-mevedel-execution-remote-client--mark
+                           root "a-long-running")
+                          (test-mevedel-execution-remote-client--stage
+                           "owner-marker-a-long-running")
+                          (accept-process-output nil 1.2)
+                          (test-mevedel-execution-remote-client--mark
+                           root "a-crashed")
+                          (test-mevedel-execution-remote-client--stage
+                           "owner-marker-a-crashed")
+                          (setq crashed-p t)
+                          (error "Intentional lost-owner crash"))
                       (progn
                         (should
                          (mevedel-session-durability-lease-acquire
@@ -462,114 +525,150 @@
                          root "a-owner")
                         (test-mevedel-execution-remote-client--stage
                          "owner-marker-a-owner")
-                        (test-mevedel-execution-remote-client--start-long-mutation
-                         session buffer root)
+                        (let ((recovery-dir
+                               (make-temp-file
+                                "mevedel-remote-client-recovery-" t)))
+                          (unwind-protect
+                              (progn
+                                (write-region
+                                 "client crash recovery evidence\n" nil
+                                 (file-name-concat recovery-dir "evidence.txt")
+                                 nil 'silent)
+                                (mevedel-session-recovery-record-failure
+                                 session "independent client incomplete rollback"
+                                 recovery-dir))
+                            (when (file-directory-p recovery-dir)
+                              (delete-directory recovery-dir t))))
                         (test-mevedel-execution-remote-client--mark
-                         root "a-long-running")
+                         root "a-recovery-installed")
                         (test-mevedel-execution-remote-client--stage
-                         "owner-marker-a-long-running")
+                         "owner-marker-a-recovery-installed")
                         (accept-process-output nil 1.2)
-                        (test-mevedel-execution-remote-client--mark
+                        (setq crashed-p t)
+                        (error "Intentional recovery-owner crash")))
+                  (if (equal scenario "crash-long")
+                      (progn
+                        (test-mevedel-execution-remote-client--wait
                          root "a-crashed")
                         (test-mevedel-execution-remote-client--stage
-                         "owner-marker-a-crashed")
-                        (setq crashed-p t)
-                        (error "Intentional lost-owner crash"))
-                    (progn
-                      (should
-                       (mevedel-session-durability-lease-acquire
-                        (mevedel-session-save-path session) "accept-owner"
-                        session))
-                      (test-mevedel-execution-remote-client--mark
-                       root "a-owner")
-                      (test-mevedel-execution-remote-client--stage
-                       "owner-marker-a-owner")
-                      (let ((recovery-dir
-                             (make-temp-file
-                              "mevedel-remote-client-recovery-" t)))
-                        (unwind-protect
-                            (progn
-                              (write-region
-                               "client crash recovery evidence\n" nil
-                               (file-name-concat recovery-dir "evidence.txt")
-                               nil 'silent)
-                              (mevedel-session-recovery-record-failure
-                               session "independent client incomplete rollback"
-                               recovery-dir))
-                          (when (file-directory-p recovery-dir)
-                            (delete-directory recovery-dir t))))
-                      (test-mevedel-execution-remote-client--mark
-                       root "a-recovery-installed")
-                      (test-mevedel-execution-remote-client--stage
-                       "owner-marker-a-recovery-installed")
-                      (accept-process-output nil 1.2)
-                      (setq crashed-p t)
-                      (error "Intentional recovery-owner crash")))
-                (if (equal scenario "crash-long")
-                    (progn
-                      (test-mevedel-execution-remote-client--wait
-                       root "a-crashed")
-                      (test-mevedel-execution-remote-client--stage
-                       "requester-taking-over-expired-owner")
-                      (test-mevedel-execution-remote-client--acquire-after-expiry
-                       session "accept-takeover")
-                      (let ((pid-file
-                             (file-name-concat root ".mevedel"
-                                               "accept-long.pid")))
-                        (should (file-exists-p pid-file))
-                        (let ((pid
-                               (with-temp-buffer
-                                 (insert-file-contents pid-file)
-                                 (string-to-number
-                                  (string-trim (buffer-string))))))
-                          (should (> pid 0))
-                          (let ((default-directory root)
-                                (process-environment nil))
-                            (process-file "kill" nil nil nil
-                                          "-KILL" (number-to-string pid)))
-                          (test-mevedel-execution-remote-client--wait-until
-                           (lambda ()
-                             (not
-                              (test-mevedel-execution-remote-client--target-process-live-p
-                               root pid)))
-                           "Lost-owner mutation survived takeover")))
-                      (test-mevedel-execution-remote-client--mark
-                       root "b-takeover")
-                      (test-mevedel-execution-remote-client--stage
-                       "requester-marker-b-takeover"))
-                  (test-mevedel-execution-remote-client--wait
-                   root "a-recovery-installed")
-                  (test-mevedel-execution-remote-client--stage
-                   "requester-taking-over-recovery")
-                  (test-mevedel-execution-remote-client--acquire-after-expiry
-                   session "accept-recovery")
-                  (should (mevedel-session-recovery-refresh session))
-                  (should
-                   (plist-get
-                    (mevedel-session-pending-publication session)
-                    :manual-recovery-marker))
-                  (let ((mevedel-session-lease-seconds 600))
-                    (should (mevedel-session-durability-lease-renew session))
-                    (cl-letf (((symbol-function 'yes-or-no-p)
-                               (lambda (_prompt) t)))
-                      (should
-                       (mevedel-session-publication-abandon session))))
-                  (should-not (mevedel-session-recovery-read
-                               (mevedel-session-save-path session)))
-                  (test-mevedel-execution-remote-client--mark
-                   root "b-recovery-recovered")
-                  (test-mevedel-execution-remote-client--stage
-                   "requester-marker-b-recovery-recovered"))))
-          (when (buffer-live-p buffer)
-            (with-current-buffer buffer
-              (set-buffer-modified-p nil))
-            (kill-buffer buffer))
-          (let ((mevedel-session-durability--client-id client-id))
-            (when (and (not crashed-p)
-                       (mevedel-session-save-path session))
-              (ignore-errors
-                (mevedel-session-durability-lease-release
-                 (mevedel-session-save-path session) session)))))))))
+                         "requester-taking-over-expired-owner")
+                        (test-mevedel-execution-remote-client--acquire-after-expiry
+                         session "accept-takeover")
+                        (let ((pid-file
+                               (file-name-concat root ".mevedel"
+                                                 "accept-long.pid")))
+                          (should (file-exists-p pid-file))
+                          (let ((pid
+                                 (with-temp-buffer
+                                   (insert-file-contents pid-file)
+                                   (string-to-number
+                                    (string-trim (buffer-string))))))
+                            (should (> pid 0))
+                            (let ((default-directory root)
+                                  (process-environment nil))
+                              (process-file "kill" nil nil nil
+                                            "-KILL" (number-to-string pid)))
+                            (test-mevedel-execution-remote-client--wait-until
+                             (lambda ()
+                               (not
+                                (test-mevedel-execution-remote-client--target-process-live-p
+                                 root pid)))
+                             "Lost-owner mutation survived takeover")))
+                        (test-mevedel-execution-remote-client--mark
+                         root "b-takeover")
+                        (test-mevedel-execution-remote-client--stage
+                         "requester-marker-b-takeover"))
+                    (test-mevedel-execution-remote-client--wait
+                     root "a-recovery-installed")
+                    (test-mevedel-execution-remote-client--stage
+                     "requester-taking-over-recovery")
+                    (test-mevedel-execution-remote-client--acquire-after-expiry
+                     session "accept-recovery")
+                    (should (mevedel-session-recovery-refresh session))
+                    (should
+                     (plist-get
+                      (mevedel-session-pending-publication session)
+                      :manual-recovery-marker))
+                    (let ((mevedel-session-lease-seconds 600))
+                      (should (mevedel-session-durability-lease-renew session))
+                      (cl-letf (((symbol-function 'yes-or-no-p)
+                                 (lambda (_prompt) t)))
+                        (should
+                         (mevedel-session-publication-abandon session))))
+                    (should-not (mevedel-session-recovery-read
+                                 (mevedel-session-save-path session)))
+                    (test-mevedel-execution-remote-client--mark
+                     root "b-recovery-recovered")
+                    (test-mevedel-execution-remote-client--stage
+                     "requester-marker-b-recovery-recovered"))))
+            (when (buffer-live-p buffer)
+              (with-current-buffer buffer
+                (set-buffer-modified-p nil))
+              (kill-buffer buffer))
+            (let ((mevedel-session-durability--client-id client-id))
+              (when (and (not crashed-p)
+                         (mevedel-session-save-path session))
+                (ignore-errors
+                  (mevedel-session-durability-lease-release
+                   (mevedel-session-save-path session) session))))))))))
+
+(mevedel-deftest test-mevedel-execution-remote-client--root ()
+  ,test
+  (test)
+  :doc "validates the exact client directory before opening its connection"
+  (let ((process-environment (copy-sequence process-environment))
+        checked)
+    (cl-letf (((symbol-function 'test-mevedel-execution-remote--real-root)
+               (lambda (variable method)
+                 (push (list variable method) checked)
+                 (if (equal variable "MEVEDEL_TEST_SSH_ROOT")
+                     "/ssh:client-fixture:/workspace/"
+                   (file-name-as-directory (getenv variable))))))
+      (setenv "MEVEDEL_REMOTE_CLIENT_ROOT" "/ssh:client-fixture:/tmp/owned")
+      (should (equal (test-mevedel-execution-remote-client--root)
+                     "/ssh:client-fixture:/tmp/owned/"))
+      (should (equal checked '(("MEVEDEL_REMOTE_CLIENT_ROOT" ssh)
+                               ("MEVEDEL_TEST_SSH_ROOT" ssh))))
+      (dolist (root '("/ssh:another-target:/tmp/owned/"
+                      "/ssh:client-fixture:/workspace/"
+                      "/ssh:client-fixture:/"
+                      "/ssh:jump|ssh:client-fixture:/tmp/owned/"
+                      "/tmp/not-remote/"))
+        (setq checked nil)
+        (setenv "MEVEDEL_REMOTE_CLIENT_ROOT" root)
+        (ert-info ((format "Rejected client root: %S, environment: %S"
+                           root (getenv "MEVEDEL_REMOTE_CLIENT_ROOT")))
+          (should-error (test-mevedel-execution-remote-client--root)
+                        :type 'ert-test-failed))
+        (should-not (assoc "MEVEDEL_REMOTE_CLIENT_ROOT" checked))))))
+
+(mevedel-deftest test-mevedel-execution-remote-client--with-root ()
+  ,test
+  (test)
+  :doc "writes client markers only inside the exact validated directory"
+  (let* ((owned (file-name-as-directory (make-temp-file "client-owned-" t)))
+         (outside (make-temp-file "client-sibling-" t))
+         (original-roots mevedel-test--write-roots))
+    (unwind-protect
+        (cl-letf (((symbol-function 'test-mevedel-execution-remote-client--root)
+                   (lambda () owned)))
+          (let ((mevedel-test--write-roots nil)
+                (mevedel-test--write-violations nil))
+            (test-mevedel-execution-remote-client--with-root
+              (should (equal mevedel-test--write-roots (list owned)))
+              (should (equal (temporary-file-directory) owned))
+              (let ((marker (test-mevedel-execution-remote-client--mark
+                             root "fixture-marker")))
+                (should (equal marker (file-name-concat
+                                       owned ".mevedel" "accept-transfer"
+                                       "fixture-marker")))
+                (should (file-exists-p marker)))
+              (should-error (test-mevedel-execution-remote-client--mark
+                             outside "not-owned")))
+            (should-not mevedel-test--write-roots)))
+      (should (equal original-roots mevedel-test--write-roots))
+      (delete-directory owned t)
+      (delete-directory outside t))))
 
 (provide 'test-mevedel-execution-remote-client)
 

@@ -214,22 +214,21 @@ with the same installed Emacs, not a frozen warning count. Use `--strict` with
 the advisory command when a nonzero exit status on all findings is needed.
 
 ### Testing
-Clear stale bytecode with the command below before tests so it never shadows
-edited source. Use Eask cleanup, not `find -delete`: Eask also clears related
-build caches.
+Use the runner for targeted runs by default. It accepts test files and quoted
+glob patterns, cleans stale bytecode through Eask itself, retains native logs,
+and returns a nonzero status when cleanup, loading, or a test fails. No output
+pipeline is needed: the console prints a bounded summary and up to 20 failing
+test names; reports retain every failure.
 
 ```bash
-# Clear stale bytecode first
-npx @emacs-eask/cli clean elc
-
-# With Eask installed
-eask test ert test/test-*.el
-
-# Via npx
-npx @emacs-eask/cli test ert test/test-*.el
-
 # Single file
-npx @emacs-eask/cli test ert test/test-mevedel-compact.el
+npx @emacs-eask/cli run script test -- test/test-mevedel-compact.el
+# Related files; quote patterns so the runner diagnoses unmatched patterns
+python3 test/run_tests.py 'test/test-mevedel-compact*.el'
+# A cold-loading check: only one test file is loaded per Emacs
+python3 test/run_tests.py --fresh-files 'test/test-mevedel-compact*.el'
+# Replay exactly one worker's saved file roster and test sequence
+python3 test/run_tests.py --replay .scratch/test-suite-performance/RUN/0-partition.json
 ```
 
 For a faster complete ERT-only run, use the measured parallel runner after
@@ -246,13 +245,33 @@ npx @emacs-eask/cli run script test -- --jobs 4
 This command performs the required Eask bytecode cleanup itself, discovers every
 case in `test/test-*.el`, and runs each exactly once across independent Eask/Emacs
 processes. Each worker gets Eask's temporary HOME and XDG roots and loads the
-complete file roster. The default uses the CPUs available to the process
+selected file roster (the complete roster when no files are supplied).
+The default uses the CPUs available to the process
 (respecting Linux CPU affinity), capped at eight workers and the number of
 discovered tests. `--jobs` overrides the CPU-based limit. The runner prints the
 available CPU count and selected worker count. Tests must be
 independent of execution order; setup belongs inside the case or `:before-each`,
 not in a separate template form. Shared fixtures isolate tool registries and
 their lookup cache as well as cleaning up runtime state.
+
+`--fresh-files` instead starts a separate Emacs for every selected file, with
+`--jobs` limiting concurrent files. It discovers and runs each file's cases in
+that same process; unrelated files cannot supply missing imports or initialize
+fixtures for it. CI enforces this as a separate parallel matrix job, alongside
+the ordinary strict compilation/partitioned-suite job.
+
+Local validation on 2026-10-24 covered 440 files and 12,618 cases: the fresh-file
+lane took 426.83 seconds, versus 251.35 seconds for the partitioned suite (eight
+workers each, 32 CPUs available; both ran alongside provisioned remote checks).
+The extra process startup cost belongs in its own parallel job, not serially
+after the ordinary check; enforcing it catches dependencies the warm suite hides.
+
+Every worker saves `N-partition.json` containing its loaded file roster, complete
+inventory, and assigned test sequence. `--replay PATH` loads that exact roster
+and runs the assigned cases in their saved order in one worker; it does not
+rebalance or sort them. Inventory changes fail explicitly rather than silently
+changing the reproduction. Native logs and result reports remain available in
+the new run directory.
 
 Reports go under `.scratch/test-suite-performance/` in a new timestamped
 directory (`--output DIRECTORY` chooses another new directory). Native worker
@@ -264,7 +283,8 @@ additive. Startup, loading, and shutdown are included in wall time; the differen
 between worker wall and ERT time measures their combined overhead. Fixture setup
 and teardown are included in individual case durations.
 
-A successful run updates `latest-durations.csv`, used to balance later runs.
+A successful complete partitioned run updates `latest-durations.csv`, used to
+balance later runs. Focused, fresh-file, and replay runs never replace it.
 `--durations CSV` supplies another report; without timing history, all discovered
 cases are distributed evenly. No test is omitted because a timing is missing.
 Provisioned SSH, Podman, or Docker acceptance environments force serial execution
@@ -285,8 +305,7 @@ The runner's own checks are:
 
 ```bash
 python3 test/test_run_tests.py
-npx @emacs-eask/cli clean elc
-npx @emacs-eask/cli test ert test/test-mevedel-test-helpers.el test/test-mevedel-test-runner.el
+python3 test/run_tests.py test/test-mevedel-test-helpers.el test/test-mevedel-test-runner.el
 ```
 
 Test files mirror modules: `test/test-mevedel-MODULE.el`. Shared helpers
@@ -294,6 +313,17 @@ Test files mirror modules: `test/test-mevedel-MODULE.el`. Shared helpers
 use real temp files/directories rather than mocking. Eask gives ERT a temporary
 `HOME` and XDG roots; the shared helper rejects unsafe test invocations that
 could reach real user state.
+
+Shared-helper cases use a private temporary working directory, so an accidental
+relative subprocess write such as `git init .` cannot create `/tmp/.git` or
+modify the checkout. The helpers assert that cases leave no unread keyboard
+events or newly live network/TRAMP connections, and reject Emacs file mutations
+outside test-owned temporary roots. They clean leaked events and connections
+after reporting them, so later cases do not inherit the leak. Provisioned remote
+fixtures must explicitly allow their own remote root. This is a Lisp assertion
+boundary, not an OS sandbox: an external subprocess using an arbitrary absolute
+path is not intercepted. Shared temporary-root Git/workspace contamination is
+still an error and is preserved rather than deleting potentially foreign state.
 
 The Eask startup hook also redirects the native compilation cache into that
 temporary HOME before loading test files or their dependencies.  ERT's own

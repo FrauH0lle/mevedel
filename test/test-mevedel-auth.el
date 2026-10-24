@@ -19,6 +19,7 @@
           (mevedel-auth--operations (make-hash-table :test #'equal))
           (mevedel-auth-changed-hook nil)
           (backend (gptel-make-openai-oauth "Test Codex"))
+          (connections-before (mevedel-test--live-connections))
           (server (make-process :name "mevedel-auth-fixture" :noquery t
 				:command (list (executable-find "python3")
                                                (file-name-concat mevedel-auth-test--fixtures "provider-auth.py")
@@ -33,6 +34,11 @@
              ,@body))
        (mevedel-auth-stop-all)
        (delete-process server)
+       ;; Cancellation can precede the asynchronous socket's open callback.
+       ;; Let EOF from this fixture's stopped server retire that connection.
+       (mevedel-test--await 5 "Authentication fixture left a connection"
+         (not (cl-set-difference (mevedel-test--live-connections)
+                                 connections-before)))
        (delete-directory directory t))))
 
 (mevedel-deftest mevedel-auth-supported-p

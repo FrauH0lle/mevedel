@@ -27,6 +27,7 @@
         (progn
           (setenv "MEVEDEL_TEST_PARTITION" nil)
           (setenv "MEVEDEL_TEST_RESULTS" output)
+          (setenv "MEVEDEL_TEST_FRESH_FILE" nil)
           (should
            (eq 'no-tests
                (mevedel-test-runner-dispatch
@@ -92,6 +93,38 @@
                       mevedel-test-runner--failing-fixture))
         (when (ert-test-boundp name) (ert-delete-test name)))
       (delete-directory directory t))))
+
+(mevedel-deftest mevedel-test-runner-fresh-file ()
+  (let* ((process-environment (copy-sequence process-environment))
+         (output (make-temp-file "mevedel-test-fresh-file-")))
+    (unwind-protect
+        (progn
+          (setenv "MEVEDEL_TEST_PARTITION" nil)
+          (setenv "MEVEDEL_TEST_RESULTS" output)
+          (setenv "MEVEDEL_TEST_FRESH_FILE" "1")
+          (ert-deftest mevedel-test-runner--cold-fixture () (should t))
+          ;; Restrict the synthetic inventory, not the production dispatcher:
+          ;; running every test here would recurse into this very case.
+          (let ((select (symbol-function 'ert-select-tests)))
+            (cl-letf (((symbol-function 'ert-select-tests)
+                       (lambda (selector universe)
+                         (funcall select
+                                  (if (eq selector t)
+                                      '(member mevedel-test-runner--cold-fixture)
+                                    selector)
+                                  universe))))
+              (let ((stats (mevedel-test-runner-dispatch
+                            (lambda (selector) (ert-run-tests selector #'ignore)))))
+                (should (= 1 (length (ert--stats-tests stats)))))))
+          (let ((data (with-temp-buffer
+                        (insert-file-contents output)
+                        (json-parse-buffer :object-type 'plist :array-type 'list))))
+            (should (equal '("mevedel-test-runner--cold-fixture")
+                           (plist-get data :inventory)))
+            (should (eq t (plist-get (car (plist-get data :tests)) :expected)))))
+      (when (ert-test-boundp 'mevedel-test-runner--cold-fixture)
+        (ert-delete-test 'mevedel-test-runner--cold-fixture))
+      (delete-file output))))
 
 (provide 'test-mevedel-test-runner)
 ;;; test-mevedel-test-runner.el ends here
