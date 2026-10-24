@@ -1709,6 +1709,29 @@ this collapses both shapes to the delivered text."
     (setf (mevedel-session-turn-count session) 100)
     (should-not (funcall (mevedel-reminder-trigger r) session)))
 
+  :doc "labels idle-child work and throttles repeated delivered stale reminders"
+  (let* ((session (mevedel-session--create
+                   :name "main" :turn-count 8 :last-task-write-turn 5
+                   :tasks (list (mevedel-task--create
+                                 :id 1 :subject "Unfinished child work"
+                                 :status 'pending :owner "/root/child"))))
+         (r (mevedel-reminders-make-task-nudge 3))
+         (batch (mevedel-reminders--collect-from (list r) 8 session)))
+    (should (= 1 (length (plist-get batch :entries))))
+    (let ((body (plist-get (car (plist-get batch :entries)) :body)))
+      (should (string-match-p "belong to retained child agents, not you" body))
+      (should (string-match-p "owner=/root/child" body))
+      (should (string-match-p "failed or interrupted turns leave them open" body)))
+    ;; Collection alone does not consume an undelivered reminder.
+    (should (plist-get (mevedel-reminders--collect-from (list r) 8 session) :entries))
+    (mapc #'funcall (plist-get batch :commits))
+    (dotimes (offset 3)
+      (setf (mevedel-session-turn-count session) (+ 8 offset))
+      (should-not (plist-get (mevedel-reminders--collect-from
+                             (list r) (+ 8 offset) session) :entries)))
+    (setf (mevedel-session-turn-count session) 11)
+    (should (plist-get (mevedel-reminders--collect-from (list r) 11 session) :entries)))
+
   :doc "does not fire when all tasks are completed"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/tn/" "/tmp/tn/" "tn"))
          (session (mevedel-session-create "main" ws))

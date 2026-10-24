@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Task CRUD tools (TaskCreate, TaskUpdate, TaskList, TaskGet), TaskNote,
-;; and the session task status fragment.  Tasks live on `mevedel-session'
+;; TaskWrite, TaskList, and the session task status fragment.
+;; Tasks live on `mevedel-session'
 ;; with IDs, status, optional owner, and dependency information.
 
 ;;; Code:
@@ -196,6 +196,18 @@ An explicitly empty string targets the main session owner."
       (unless (string-empty-p trimmed)
         trimmed)))))
 
+(defun mevedel-tool-task--check-owner (session owner)
+  "Check the caller may change OWNER's tasks or notes in SESSION.
+Root may manage all owners.  Retained agents may manage their own and
+descendants' tasks, but not another retained agent's.  Main and non-path
+buckets remain shared labels, not retained agent identities."
+  (when-let* ((caller (mevedel-tool-task--current-agent-owner session)))
+    (when (and (mevedel-agent-path-p owner)
+               (not (equal caller owner))
+               (not (string-prefix-p (concat caller "/") owner)))
+      (error "Tasks owned by %s cannot be changed by %s; omit id to create your own task or ask the owner or its parent to update it"
+             owner caller))))
+
 (defun mevedel-tool-task--normalize-subject (value)
   "Return VALUE as the single non-blank line a task subject must be."
   (let ((subject (and (stringp value) (string-clean-whitespace value))))
@@ -315,6 +327,7 @@ error if ID is unknown or a field is invalid."
         (p (mevedel-tool-task--object-to-plist updates)))
     (unless task
       (error "No task with id %s" id))
+    (mevedel-tool-task--check-owner session (mevedel-task-owner task))
     (let (subject subject-p
           description description-p
           new-status status-p
@@ -942,8 +955,10 @@ OWNER-KEYS names the optional owner argument aliases.  Returns nil when
 an unresolvable owner signals before any task has been mutated; NOTE is
 nil when the note clears the owner's entry."
   (when (mevedel-tool-task--argument-value-present-p args :note)
-    (cons (mevedel-tool-task--owner-from-args session args owner-keys)
-          (mevedel-tool-task--normalize-note (plist-get args :note)))))
+    (let ((owner (mevedel-tool-task--owner-from-args session args owner-keys)))
+      (mevedel-tool-task--check-owner session owner)
+      (cons owner
+            (mevedel-tool-task--normalize-note (plist-get args :note))))))
 
 (defun mevedel-tool-task--apply-note-arg (session prepared)
   "Store PREPARED, a `mevedel-tool-task--prepare-note-arg' result, in SESSION.

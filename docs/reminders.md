@@ -219,6 +219,14 @@ or restore. If all selected sections are absent, all are delivered again. Explic
 
 ### Runtime status and event reminders
 
+- **Task nudge:** when open session work has not been written for the stale
+  interval (eight turns by default), the root receives TaskList-shaped rows
+  with full owner paths. The reminder distinguishes retained children's tasks
+  from root's own work and asks root to reconcile their RESULT or follow up
+  before changing status. It fires at most once per stale interval, including
+  when multiple requests collect reminders at the same turn count. Successful
+  child settlement closes that child's open work; failed/interrupted turns
+  leave it open for recovery.
 - **Goal budget:** every Goal charge (root settlement or agent progress)
   reports each newly crossed 50%, 80%, or 100% threshold once, as a turn
   event for a still-running root turn or a pending reminder otherwise;

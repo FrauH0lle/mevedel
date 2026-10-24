@@ -183,6 +183,10 @@ are `TaskWrite` and `TaskList`. `TaskWrite` takes a batch in which an entry with
 an `id` updates that task and one without creates a task, rather than replacing
 the whole list, because several agents edit one session list by ID; the batch
 validates before mutating so it applies atomically.
+IDs are session-wide, not write authority: canonical agent owners are checked
+before mutation, permitting self/descendant management and root supervision,
+not silent sibling updates. See the [agent identity decision](0034-address-agents-by-canonical-task-path.md)
+for the ownership correction prompted by reused IDs after a sibling settled.
 
 The original root-only restriction protected two host seams, not the evaluator.
 Agents lacked effective-roster handling, and their session resolution could write

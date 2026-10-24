@@ -1445,7 +1445,8 @@ workspace file cache refuses those paths (see
   "Create the task-nudge reminder.
 
 Fires when the session has non-completed tasks and task status has not
-been written for INTERVAL turns.  INTERVAL defaults to 8 turns."
+been written for INTERVAL turns, at most once per INTERVAL turns.
+INTERVAL defaults to 8 turns.  Child-owned work is labelled as such."
   (mevedel-reminder-create
    :type 'task-nudge
    :recipe (list 'task-nudge interval)
@@ -1464,12 +1465,12 @@ been written for INTERVAL turns.  INTERVAL defaults to 8 turns."
                                 stale-after))))))
    :content (lambda (session)
               (format
-               "You have active tasks that have not been updated recently. Review and update task status as you make progress (set to in_progress when starting, completed when done). Use TaskWrite to keep task status current.\n\n%s"
+               "The session has open tasks that have not been updated recently. Review your own work with TaskWrite (in_progress when starting, completed when done). Tasks with owner=/root/... belong to retained child agents, not you; reconcile their RESULT or follow up with the owner before changing their status. Successful agent completion closes that agent's open tasks automatically; failed or interrupted turns leave them open for recovery.\n\n%s"
                ;; The panel rendering is a display concern; the model
                ;; reads the same shape TaskList returns, with canonical
                ;; owner paths and unabbreviated subjects.
                (mevedel-tool-task-format-active-for-llm session)))
-   :interval nil))
+   :interval (or interval 8)))
 
 (defun mevedel-reminders-make-verification-suggestion ()
   "Suggest verification after a recent file modification.

@@ -19,10 +19,19 @@ owner's visible status note.
   updates that task: omitted fields stay unchanged, and supplied `blockedBy` and
   `metadata` replace those fields rather than merging them. The whole batch
   applies or, if any object fails, none of it does.
+- IDs are session-wide, not caller-local. Never guess IDs for new work: omit
+  `id` and use the returned ID. An agent cannot update another agent's tasks
+  or status note; root and ancestor agents may manage their descendants' work.
+  Main and non-path owner buckets remain shared labels. Explicit creation for
+  another owner and transfer of a task you may update remain allowed, but do
+  not start an agent turn. Supplying another owner's ID is not a way to create
+  or take over work.
 - Status defaults to `pending` for new tasks; use `in_progress` for work underway
   and `completed` for finished work. Concurrent work can have several active
   items. Completing a task removes its ID from dependents' `blockedBy` lists.
   Track actual work state; a status does not itself prove verification.
+  Successful agent completion also closes that agent's remaining open tasks
+  and clears its note. Failed or interrupted turns leave tasks open for recovery.
 - Omitted owner on a new task means the caller. An agent owner is its actual
   retained path, such as `/root/worker_1`; deliberate user-defined buckets are
   also supported. Workstream names belong in subjects/descriptions. On an

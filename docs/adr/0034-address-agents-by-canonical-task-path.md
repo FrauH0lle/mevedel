@@ -22,6 +22,17 @@ Targets accept canonical `/root/...` paths or relative descendants beneath the
 caller. Ancestors and peers use canonical paths. Empty segments, dot/dot-dot,
 malformed names, unknown paths, and opaque invocation IDs are rejected.
 
+Session tasks use these same canonical paths as owners. IDs are allocated
+session-wide and never imply ownership: an agent may update its own or its
+descendants' tasks and notes, while root may manage the whole tree. Main and
+non-path buckets remain shared labels. Explicit creation for another owner and
+transfer by an authorized writer remain attribution changes, not dispatch.
+TaskWrite validates existing ownership before applying any part of a batch.
+Successful terminal settlement closes the owner's open
+tasks even though the conversation is retained idle; failed turns leave work
+open for recovery. The root task reminder identifies child-owned work and is
+throttled to its stale interval.
+
 ## Rationale and consequences
 
 One address vocabulary exposes topology without requiring storage identities
@@ -31,6 +42,13 @@ remain internal persistence identities. Control-specific restrictions still
 apply, such as InterruptAgent refusing the root and caller.
 
 ## Decision history
+
+**Task IDs no longer authorize cross-agent updates.** A later workstream reused
+IDs #1-3 belonging to a completed sibling, changing their content and reopening
+them without changing their owner. Completion cleanup had already run, leaving
+root with repeated stale-task nudges. Keep the existing allocator and successful
+settlement cleanup; reject foreign-agent writes atomically and make root's
+supervisory reminder explicit and sparse instead of adding prompt bookkeeping.
 
 **Free-form task names replace caller-authored path segments.** Models kept
 passing display labels such as `Review code-block copy` despite the explicit

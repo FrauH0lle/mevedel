@@ -347,6 +347,119 @@
 ;;
 ;;; Task update
 
+(mevedel-deftest mevedel-tool-task--check-owner
+  (:doc "canonical owners protect agent tasks without isolating shared buckets")
+  (test-mevedel-tool-task--with-session session
+    (dolist (path '("/root/worker" "/root/worker/child" "/root/worker-other"))
+      (test-mevedel-tool-task--register-agent session path))
+    (let ((mevedel--agent-invocation
+           (mevedel-agent-invocation--create :path "/root/worker")))
+      (dolist (owner '(nil "shared bucket" "/root/worker" "/root/worker/child"))
+        (should-not (mevedel-tool-task--check-owner session owner)))
+      (should-error
+       (mevedel-tool-task--check-owner session "/root/worker-other")))
+    (let ((mevedel--agent-invocation nil))
+      (should-not (mevedel-tool-task--check-owner session "/root/worker-other")))))
+
+(mevedel-deftest mevedel-tool-task--handle-write/ownership
+  ()
+  ,test
+  (test)
+  :doc "a later agent cannot reopen a completed sibling's IDs or mutate a batch"
+  (test-mevedel-tool-task--with-session session
+    (dolist (path '("/root/first" "/root/second"))
+      (test-mevedel-tool-task--register-agent session path))
+    (let ((mevedel--agent-invocation
+           (mevedel-agent-invocation--create :path "/root/first")))
+      (mevedel-tool-task--handle-write
+       '(:tasks [(:subject "First investigation")
+                 (:subject "First implementation")
+                 (:subject "First verification")]
+         :note "Checking")))
+    (mevedel-tool-task-finalize-owner session "/root/first" 'completed)
+    (let* ((before (copy-tree (mapcar #'copy-mevedel-task
+                                    (mevedel-session-tasks session))))
+           (last-write (mevedel-session-last-task-write-turn session))
+           (mevedel--agent-invocation
+            (mevedel-agent-invocation--create :path "/root/second")))
+      (should-error
+       (mevedel-tool-task--handle-write
+        '(:tasks [(:id 1 :subject "Second investigation" :status "in_progress")])))
+      (let ((err (should-error
+                  (mevedel-tool-task--handle-write
+                   '(:tasks [(:subject "Must not be created")
+                             (:id 1 :subject "Second investigation"
+                              :status "in_progress" :owner "/root/second")]
+                     :note "Must not be stored")))))
+        (should (string-match-p "owned by /root/first" (error-message-string err)))
+        (should (string-match-p "omit id" (error-message-string err))))
+      (should (equal before (mevedel-session-tasks session)))
+      (should-not (mevedel-session-task-status-notes session))
+      (should (= last-write (mevedel-session-last-task-write-turn session)))
+      (mevedel-tool-task--handle-write '(:tasks [(:subject "Second investigation")]))
+      (let ((task (car (last (mevedel-session-tasks session)))))
+        (should (= 4 (mevedel-task-id task)))
+        (should (equal "/root/second" (mevedel-task-owner task))))))
+
+  :doc "a sibling cannot overwrite another agent's status note"
+  (test-mevedel-tool-task--with-session session
+    (dolist (path '("/root/first" "/root/second"))
+      (test-mevedel-tool-task--register-agent session path))
+    (mevedel-tool-task--handle-write
+     '(:tasks [(:subject "First work" :owner "/root/first")]
+       :note "Original note" :noteOwner "/root/first"))
+    (let ((mevedel--agent-invocation
+           (mevedel-agent-invocation--create :path "/root/second")))
+      (should-error
+       (mevedel-tool-task--handle-write
+        '(:tasks [(:subject "Must not be created")]
+          :note "Hijacked" :noteOwner "/root/first")))
+      (should-error
+       (mevedel-tool-task--handle-write '(:note "" :noteOwner "/root/first"))))
+    (should (= 1 (length (mevedel-session-tasks session))))
+    (should (equal "Original note"
+                   (mevedel-tool-task--status-note session "/root/first"))))
+
+  :doc "explicit assignment and transfer stay allowed but protect the new owner"
+  (test-mevedel-tool-task--with-session session
+    (dolist (path '("/root/first" "/root/second"))
+      (test-mevedel-tool-task--register-agent session path))
+    (let ((mevedel--agent-invocation
+           (mevedel-agent-invocation--create :path "/root/first")))
+      (mevedel-tool-task--handle-write
+       '(:tasks [(:subject "For sibling" :owner "/root/second")
+                 (:subject "Own work")
+                 (:subject "Main work" :owner "")]))
+      (mevedel-tool-task--handle-write
+       '(:tasks [(:id 2 :owner "/root/second")
+                 (:id 3 :status "in_progress")]))
+      (dolist (id '(1 2))
+        (should-error
+         (mevedel-tool-task--handle-write
+          (list :tasks (vector (list :id id :status "completed")))))))
+    (should (equal '("/root/second" "/root/second" nil)
+                   (mapcar #'mevedel-task-owner (mevedel-session-tasks session)))))
+
+  :doc "root and ancestors can explicitly manage descendant tasks and notes"
+  (test-mevedel-tool-task--with-session session
+    (dolist (path '("/root/parent" "/root/parent/child"))
+      (test-mevedel-tool-task--register-agent session path))
+    (mevedel-tool-task--handle-write
+     '(:tasks [(:subject "Child work" :owner "/root/parent/child")]))
+    (let ((mevedel--agent-invocation
+           (mevedel-agent-invocation--create :path "/root/parent")))
+      (mevedel-tool-task--handle-write
+       '(:tasks [(:id 1 :status "in_progress")]
+         :note "Followed up" :noteOwner "/root/parent/child")))
+    (should (equal "Followed up"
+                   (mevedel-tool-task--status-note session "/root/parent/child")))
+    (mevedel-tool-task--handle-write '(:tasks [(:id 1 :owner "/root/parent")]))
+    (let ((mevedel--agent-invocation
+           (mevedel-agent-invocation--create :path "/root/parent")))
+      (mevedel-tool-task--handle-write '(:tasks [(:id 1 :status "completed")])))
+    (should (eq 'completed
+                (mevedel-task-status (car (mevedel-session-tasks session)))))))
+
 (mevedel-deftest mevedel-tool-task--handle-write/update
   (:doc "`mevedel-tool-task--handle-write' entries with an id modify stored tasks")
   ,test

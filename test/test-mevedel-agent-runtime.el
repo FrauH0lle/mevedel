@@ -1721,6 +1721,75 @@ ARTIFACT-P selects whether its sidecar counts as committed."
 (mevedel-deftest mevedel-agent-runtime--settle (:quiet t)
   ,test
   (test)
+  :doc "successful retained-idle settlement closes owned tasks before parent RESULT"
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         (record (mevedel-agent-record--create
+                  :path "/root/explore" :parent-path "/root"
+                  :activity 'running :invocation invocation)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/explore" record))
+          (mevedel-agent-invocation-parent-session invocation) session
+          (mevedel-agent-invocation-runtime-settle-callback invocation)
+          (lambda (inv response event &optional token)
+            (mevedel-agent-control--settle session record inv response event token)))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (let ((mevedel--agent-invocation invocation))
+        (mevedel-tool-task--handle-write
+         '(:tasks [(:subject "Investigation" :status "in_progress")
+                   (:subject "Verification")]
+           :note "Checking")))
+      (mevedel-tool-task--handle-write
+       '(:tasks [(:subject "Parent follow-up" :blockedBy [1 2])]))
+      ;; Exercise the real runtime and control settlement, not a direct call
+      ;; to task finalization.  Retained idle is the public completion state.
+      (should (equal "Done" (mevedel-agent-runtime--settle invocation "Done")))
+      (should (eq 'idle (mevedel-agent-record-activity record)))
+      (should-not (mevedel-agent-record-invocation record))
+      (should (mevedel-agent-invocation-runtime-settled-p invocation))
+      (should (equal '(completed completed pending)
+                     (mapcar #'mevedel-task-status (mevedel-session-tasks session))))
+      (should-not (mevedel-task-blocked-by (nth 2 (mevedel-session-tasks session))))
+      (should-not (mevedel-session-task-status-notes session))
+      (let ((message (car (mevedel-agent-control-context-mailbox session))))
+        (should (eq 'RESULT (plist-get message :type)))
+        (should (equal "/root/explore" (plist-get message :sender)))
+        (should (equal "Done" (plist-get message :payload))))))
+
+  :doc "failed or interrupted retained-idle settlement keeps owned work recoverable"
+  (dolist (status '(error aborted))
+    (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
+           (invocation (mevedel-agent-runtime-test--invocation))
+           (record (mevedel-agent-record--create
+                    :path "/root/explore" :parent-path "/root"
+                    :activity 'running :invocation invocation)))
+      (setf (mevedel-session-agent-registry session)
+            (list (cons "/root/explore" record))
+            (mevedel-agent-invocation-parent-session invocation) session
+            (mevedel-agent-invocation-runtime-settle-callback invocation)
+            (lambda (inv response event &optional token)
+              (mevedel-agent-control--settle session record inv response event token)))
+      (with-temp-buffer
+        (setq-local mevedel--session session)
+        (let ((mevedel--agent-invocation invocation))
+          (mevedel-tool-task--handle-write
+           '(:tasks [(:subject "Unfinished investigation" :status "in_progress")]
+             :note "Still checking")))
+        (mevedel-agent-runtime--settle
+         invocation nil (list :mevedel-agent-terminal-status status
+                              :error-details "Injected failure"))
+        (should (eq 'idle (mevedel-agent-record-activity record)))
+        (should (eq 'in-progress
+                    (mevedel-task-status (car (mevedel-session-tasks session)))))
+        (should (equal "Still checking"
+                       (mevedel-tool-task--status-note session "/root/explore")))
+        (let ((message (car (mevedel-agent-control-context-mailbox session))))
+          (should (eq 'RESULT (plist-get message :type)))
+          (should (equal "/root/explore" (plist-get message :sender)))
+          (should (eq (if (eq status 'error) 'errored 'interrupted)
+                      (plist-get message :outcome)))))))
+
   :doc "batches only materialized portable terminal state after registry update"
   (should
    (equal '((presence "session.meta.el")

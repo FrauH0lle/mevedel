@@ -752,6 +752,17 @@ assignment, grouping, rendering, and terminal finalization; opaque storage IDs
 never enter the task surface. Explicit canonical owners must name a retained
 agent in the session, while `/root` normalizes to the main owner. Explicit
 non-path owner strings remain available as user-defined task buckets.
+Task IDs are allocated across the entire session, including completed tasks,
+not separately per caller. Omit `id` to create work; an existing ID always means
+an update. An agent may update tasks and notes owned by itself or descendants,
+not another retained agent. Root may manage every owner; Main and non-path
+buckets stay shared labels. A foreign-agent update rejects the entire TaskWrite
+batch before any task or note changes. Explicit creation for another owner and
+reassignment by an authorized writer remain allowed attribution changes, not
+agent dispatch. Once transferred, a task is protected by its new owner.
+Successful agent settlement (including a turn returning to retained idle)
+completes that owner's open tasks, clears its note and unblocks dependents.
+Failed or interrupted turns leave tasks open for recovery, not falsely completed.
 Resume validates persisted task and status-note owners against the restored
 registry and drops entries carrying opaque IDs, malformed paths, or unknown
 canonical paths before they can reach model-visible task state. `blockedBy`
@@ -784,6 +795,9 @@ The task nudge reminder does not reuse this rendering. It sends the
 model the same shape `TaskList` returns, with canonical owner paths and
 unabbreviated subjects, so display decisions cannot alter what the model
 reads.
+It identifies canonical child owners as retained agents' work rather than the
+root caller's work, and fires at most once per stale interval (eight turns by
+default), not on every request after the first stale write.
 
 Each owner group can also carry a short status note through the top-level
 `note`/`noteOwner` arguments of `TaskWrite`, which may carry only a note.
