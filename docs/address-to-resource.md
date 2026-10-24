@@ -360,6 +360,9 @@ source identity and freshly read SHA-256; it is neither an authority cache nor
 a second permanent transcript store. Reuse cannot substitute for validation.
 Canonical filtering excludes hidden notes, reasoning and provider/bounds
 metadata while preserving ordinary user examples and useful tool evidence.
+Tool calls and results remain separate evidence items. The tool decoder accepts
+separator whitespace before an Org tool header as well as bare Lisp metadata;
+neither the separator nor the header is part of the call arguments or result.
 Discovery omits unavailable or incompatible session records and reports their
 count with the result. Failed verification of selected transcript bytes is an
 error rather than a successful empty search.

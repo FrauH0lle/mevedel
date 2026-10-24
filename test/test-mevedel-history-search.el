@@ -149,6 +149,73 @@ SEEN-SCRATCHES extended with this query's root."
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
 
+(mevedel-deftest mevedel-history-search-start/tool-round-trip (:quiet t)
+  ,test
+  (test)
+  :doc "round-trips saved Bash and quoted ToolCall metadata through history Read"
+  ;; The published 2026-10-19T16-39-e2fc4dd69926 segment contains these
+  ;; shapes: response, blank separator, Org header, Lisp call, result.  Its
+  ;; canonical tool spans include the separator before the header.  Keep
+  ;; escaped quotes and a quoted ToolCall expression, but use small results.
+  (let* ((root (make-temp-file "mevedel-history-tools-" t))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (mevedel-history-search--cache (make-hash-table :test #'equal))
+         (mevedel-history-search--cache-bytes 0)
+         (skill-body (concat "## Instructions\n" (make-string 200 ?x)
+                             "\nPreserve existing user edits."))
+         (source
+          (test-mevedel-history-search--source
+           workspace "tools"
+           (concat
+            "Inspect the workspace.\n\n"
+            (propertize "Inspecting the workspace." 'gptel 'response)
+            "\n\n#+begin_tool (Bash :command \"printf ... )\n"
+            (propertize
+             (concat "(:name \"Bash\" :args (:command \"printf \\\"ok\\\"\""
+                     " :description \"Inspect workspace\"))\n\n"
+                     "workspace-result\n")
+             'gptel '(tool . "toolu-bash"))
+            "#+end_tool\n\n"
+            (propertize "Loading the skill." 'gptel 'response)
+            "\n\n#+begin_tool (ToolCall :expression \"(Skill ... )\n"
+            (propertize
+             (concat "(:name \"ToolCall\" :args (:expression "
+                     "\"(Skill :name \\\"careful-edit\\\")\"))\n\n"
+                     skill-body "\n")
+             'gptel '(tool . "toolu-skill"))
+            "#+end_tool\n")))
+         (session (car source))
+         (buffer (cdr source)))
+    (unwind-protect
+        (progn
+          ;; Kill the producer: Read must use published bytes, restoration,
+          ;; canonical classification and evidence projection, not live state.
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)
+          (let* ((address (concat "history://saved/"
+                                  (mevedel-session-session-id session)
+                                  "/segment-0001.chat.org"))
+                 (result (test-mevedel-history-search--query
+                          workspace 'read
+                          (list :file_path address :offset 1 :limit 200)))
+                 (text (plist-get result :result)))
+            (should-not (plist-get result :error))
+            (should-not (string-search "unparseable tool-call metadata" text))
+            (should-not (string-search "#+begin_tool" text))
+            (should-not (string-search "#+end_tool" text))
+            (should (string-search
+                     "(:name \"Bash\" :args (:command \"printf \\\"ok\\\"\"" text))
+            (should (string-search "workspace-result" text))
+            (should (string-search
+                     "(:name \"ToolCall\" :args (:expression \"(Skill :name \\\"careful-edit\\\")\"))"
+                     text))
+            (dolist (line (split-string skill-body "\n"))
+              (should (string-search line text)))))
+      (test-mevedel-session-persistence--release-and-kill buffer session)
+      (mevedel-execution-teardown-all)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
 (mevedel-deftest mevedel-history-search-start/handler-context (:quiet t)
   ,test
   (test)

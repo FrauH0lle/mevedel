@@ -2353,15 +2353,15 @@ assistant turn."
 
 (defun mevedel-transcript--summary-tool-sexp-start (text)
   "Return the readable tool-call plist start in TEXT, or nil."
-  (if (string-prefix-p "#+begin_tool" text)
-      (when-let* ((header-end (string-match "\n" text)))
-        (let ((pos (1+ header-end)))
-          (while (and (< pos (length text))
-                      (memq (aref text pos) '(?\s ?\t ?\n)))
-            (setq pos (1+ pos)))
-          (when (and (string-match "(\\s-*:name\\_>" text pos)
-                     (= (match-beginning 0) pos))
-            pos)))
+  ;; Canonical tool spans can include the preceding response separator.
+  (if (string-match "\\`[ \t\r\n]*#\\+begin_tool\\b[^\n]*\n" text)
+      (let ((pos (match-end 0)))
+        (while (and (< pos (length text))
+                    (memq (aref text pos) '(?\s ?\t ?\r ?\n)))
+          (setq pos (1+ pos)))
+        (when (and (string-match "(\\s-*:name\\_>" text pos)
+                   (= (match-beginning 0) pos))
+          pos))
     (when (string-match "\\`[ \t\n]*(\\s-*:name\\_>" text)
       (match-beginning 0))))
 

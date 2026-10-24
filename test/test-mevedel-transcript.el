@@ -2100,7 +2100,21 @@ TOOL-PROP."
                 "(:name \"Read\")")))
   (should (integerp
            (mevedel-transcript--summary-tool-sexp-start
-            "#+begin_tool\n(:name \"Read\")\n#+end_tool\n"))))
+            "#+begin_tool\n(:name \"Read\")\n#+end_tool\n")))
+
+  :doc "accepts separator whitespace before the Org tool header"
+  (let* ((text (concat "\n\n#+begin_tool (Bash :command \"printf ... )\n"
+                       "(:name \"Bash\" :args (:command \"printf ok\"))\n\nok\n"
+                       "#+end_tool\n"))
+         (start (mevedel-transcript--summary-tool-sexp-start text)))
+    (should (integerp start))
+    (should (equal "Bash" (plist-get (car (read-from-string text start)) :name))))
+
+  :doc "does not search arbitrary result text for a tool header or plist"
+  (dolist (text '("Result\n#+begin_tool\n(:name \"Read\")\n"
+                  "#+begin_tool\nResult\n(:name \"Read\")\n"
+                  "Result\n(:name \"Read\")\n"))
+    (should-not (mevedel-transcript--summary-tool-sexp-start text))))
 
 (mevedel-deftest mevedel-transcript--summary-media-placeholder ()
   ,test
