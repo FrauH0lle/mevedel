@@ -6,7 +6,8 @@ Status: accepted. Incorporates ADR 0045.
 
 Agent accepts a free-form `task_name` and derives its lowercase ASCII path
 segment inside the reservation transaction. Characters outside `[a-z0-9_-]`
-become hyphens, boundary hyphens are trimmed, an empty result becomes `agent`,
+become hyphens, boundary hyphens are trimmed, and the base is capped at 40
+characters, preferring the last hyphen boundary. An empty result becomes `agent`,
 and the reserved `root` becomes `agent-root`. Joining it beneath the parent
 creates a canonical address such as `/root/review-code-block-copy`. Collisions
 with retained or preparing siblings get numeric suffixes starting at `-2`.

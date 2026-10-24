@@ -1191,12 +1191,19 @@ rewrite after the complete registry has been repaired."
   "Derive one canonical child path segment from free-form TASK-NAME.
 Lowercase the name, replace runs outside the ASCII path alphabet with a
 hyphen, and trim boundary hyphens.  Use agent for an empty result and
-agent-root for the reserved root name.  Uniqueness belongs to reservation."
+agent-root for the reserved root name.  Cap the base at 40 characters,
+preferring the last hyphen boundary.  Uniqueness belongs to reservation."
   (let* ((case-fold-search nil)
          (segment (string-trim
                    (replace-regexp-in-string
                     "[^a-z0-9_-]+" "-" (downcase task-name))
                    "-+" "-+")))
+    (when (> (length segment) 40)
+      (setq segment
+            (string-trim-right
+             (substring segment 0
+                        (or (cl-position ?- segment :from-end t :end 41) 40))
+             "-+")))
     (cond ((string-empty-p segment) "agent")
           ((equal segment "root") "agent-root")
           (t segment))))

@@ -569,7 +569,21 @@
     (let ((segment (mevedel-agent-control--task-segment (car pair))))
       (should (equal (cdr pair) segment))
       (should (mevedel-agent-path-p (concat "/root/" segment)))
-      (should-not (equal "root" segment)))))
+      (should-not (equal "root" segment))))
+  :doc "caps long bases at 40 characters, preferring hyphen boundaries"
+  (dolist (pair (list
+                (cons (make-string 41 ?a) (make-string 40 ?a))
+                (cons (make-string 40 ?a) (make-string 40 ?a))
+                (cons (concat (make-string 40 ?a) "-next") (make-string 40 ?a))
+                (cons (concat (make-string 38 ?a) "--next") (make-string 38 ?a))
+                (cons "Review code-block copy behavior across all rendered transcripts"
+                      "review-code-block-copy-behavior-across")
+                (cons (concat "root-" (make-string 50 ?a)) "agent-root")))
+    (let ((segment (mevedel-agent-control--task-segment (car pair))))
+      (should (equal (cdr pair) segment))
+      (should (<= (length segment) 40))
+      (should-not (string-suffix-p "-" segment))
+      (should (mevedel-agent-path-p (concat "/root/" segment))))))
 
 (mevedel-deftest mevedel-agent-control--reserve ()
   ,test

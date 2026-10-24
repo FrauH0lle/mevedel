@@ -15,7 +15,8 @@ agent with your effective instructions and capabilities.
 
 - `task_name` is a free-form task name, such as `Review code-block copy`.
   The harness derives a unique lowercase ASCII path segment: other character
-  runs become hyphens, boundary hyphens are trimmed, an empty result becomes
+  runs become hyphens, boundary hyphens are trimmed, and the base is capped at
+  40 characters, preferring the last hyphen boundary. An empty result becomes
   `agent`, and `root` becomes `agent-root`. Collisions with retained or preparing
   agents get numeric suffixes (`-2`, `-3`, ...).
   `message` is the complete assigned task, even when copying parent context.

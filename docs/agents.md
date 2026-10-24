@@ -14,7 +14,8 @@ accepts a free-form `task_name`, a complete `message`, and optional `role`,
 path after preparation and provider dispatch succeed.
 
 The harness lowercases the name, replaces runs outside `[a-z0-9_-]` with
-hyphens, and trims boundary hyphens. An empty result becomes `agent`; `root`
+hyphens, trims boundary hyphens, and caps the base at 40 characters, preferring
+the last hyphen boundary. An empty result becomes `agent`; `root`
 becomes `agent-root`. Reservation adds `-2`, `-3`, and so on until the path
 is unique among retained and preparing siblings. For example, `Review
 code-block copy` becomes `/root/review-code-block-copy` for a root child,
