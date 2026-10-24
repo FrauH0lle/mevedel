@@ -1184,31 +1184,62 @@ prompt, so their text cannot pose as the user.")
       (mevedel-session-pending-plan-approval session)
       (mevedel-view-interaction-pending-p view-buffer)))
 
+(defvar-local mevedel-pending-inputs--wake-refusal nil
+  "Reason the data buffer's last background wake was refused, or nil.
+Telemetry records a refusal only when this reason changes.")
+
+(defun mevedel-pending-inputs--event-wake-refusal (session data-buffer view-buffer)
+  "Return the gate refusing SESSION's background wake in DATA-BUFFER, or nil.
+VIEW-BUFFER is the live root view.  Gates are checked in admission order."
+  (cond
+   ((or (mevedel-turn-busy-p data-buffer)
+        (buffer-local-value 'mevedel-compact-run-in-flight data-buffer))
+    'busy)
+   ((mevedel-session-pending-follow-ups session) 'drain-blocked-queued)
+   ((with-current-buffer view-buffer
+      (or mevedel-view--prompt-hook-pending
+          mevedel-view--pending-skill-submission))
+    'prompt-hook)
+   ((mevedel-recovery-blocker session) 'recovery)
+   ;; Background mail is not user input: a failure latch that holds no
+   ;; queued input must not strand it.
+   ((with-current-buffer view-buffer
+      (mevedel-view--follow-up-auto-drain-blocked-p
+       session (null (mevedel-session-pending-steering session))))
+    (if (with-current-buffer view-buffer
+          (mevedel-view--follow-up-auto-drain-blocked-p session t))
+        'drain-blocked-queued
+      'drain-blocked-latch))
+   ((mevedel-pending-inputs--interaction-pending-p session view-buffer)
+    'interaction)
+   ((not (string-empty-p
+          (with-current-buffer view-buffer (mevedel-view--input-text))))
+    'composer-draft)))
+
+(defun mevedel-pending-inputs--note-wake-refusal (session data-buffer reason)
+  "Record REASON for SESSION's DATA-BUFFER when it differs from the last one."
+  (unless (eq reason (buffer-local-value 'mevedel-pending-inputs--wake-refusal
+                                         data-buffer))
+    (with-current-buffer data-buffer
+      (setq mevedel-pending-inputs--wake-refusal reason))
+    (when (and reason (fboundp 'mevedel-telemetry-record))
+      (mevedel-telemetry-record session 'event-wake-refused :reason reason))))
+
 (defun mevedel-pending-inputs--event-wake-view (data-buffer)
-  "Return DATA-BUFFER's live root view when no background wake hold remains."
+  "Return DATA-BUFFER's live root view when no background wake hold remains.
+A refused wake records its gate once per change of reason."
   (when (buffer-live-p data-buffer)
     (let ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer))
           (session (buffer-local-value 'mevedel--session data-buffer)))
       (when (and session
                  (buffer-live-p view-buffer)
-                 (not (mevedel-turn-busy-p data-buffer))
-                 (not (buffer-local-value 'mevedel-compact-run-in-flight
-                                          data-buffer))
-                 (not (mevedel-session-pending-follow-ups session))
+                 (not (buffer-local-value 'mevedel-view--agent-transcript-p
+                                          view-buffer))
                  (mevedel-agent-control-wake-pending-p session))
-        (with-current-buffer view-buffer
-          (when (and (not mevedel-view--agent-transcript-p)
-                     (not mevedel-view--prompt-hook-pending)
-                     (not mevedel-view--pending-skill-submission)
-                     ;; Background mail is not user input: a failure latch
-                     ;; that holds no queued input must not strand it.
-                     (not (mevedel-view--follow-up-auto-drain-blocked-p
-                           session
-                           (null (mevedel-session-pending-steering session))))
-                     (not (mevedel-pending-inputs--interaction-pending-p
-                           session view-buffer))
-                     (string-empty-p (mevedel-view--input-text)))
-            view-buffer))))))
+        (let ((reason (mevedel-pending-inputs--event-wake-refusal
+                       session data-buffer view-buffer)))
+          (mevedel-pending-inputs--note-wake-refusal session data-buffer reason)
+          (unless reason view-buffer))))))
 
 (defun mevedel-pending-inputs--wake-for-event (data-buffer)
   "Start one background-event turn in DATA-BUFFER when no hold remains.

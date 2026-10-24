@@ -20,6 +20,7 @@
 (require 'mevedel-prompt-submission)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
+(require 'mevedel-telemetry)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
@@ -2308,6 +2309,35 @@ BODY sees SUBMITTED, a list of (PROMPT DISPLAY ATTRIBUTION) per turn."
       (ert-info ((symbol-name category))
         (should-not submitted)
         (should (mevedel-agent-control-wake-pending-p session)))))
+  :doc "no live view means no wake"
+  (mevedel-pending-inputs-test--with-event
+    (let (recorded)
+      (cl-letf (((symbol-function 'mevedel-telemetry-record)
+                 (lambda (_session event &rest props)
+                   (push (cons event (plist-get props :reason)) recorded))))
+        (with-current-buffer view-buf
+          (mevedel-view-test--insert-composer-draft "draft"))
+        ;; Repeated offers under one reason record it once.
+        (mevedel-pending-inputs--run-event-wake data-buf)
+        (mevedel-pending-inputs--run-event-wake data-buf)
+        (mevedel-session-set-pending-inputs
+         session 'follow-up (list (list :input "first")))
+        (mevedel-pending-inputs--run-event-wake data-buf))
+      (should-not submitted)
+      (should (equal '((event-wake-refused . composer-draft)
+                       (event-wake-refused . drain-blocked-queued))
+                     (reverse recorded)))))
+  :doc "a stale failure latch with queued steering reports the latch"
+  (mevedel-pending-inputs-test--with-event
+    (let (reasons)
+      (mevedel-session-enqueue-pending-input
+       session 'steering '(:input "held" :request-id "live"))
+      (mevedel-session-set-pending-input-failure-paused session t)
+      (cl-letf (((symbol-function 'mevedel-telemetry-record)
+                 (lambda (_session _event &rest props)
+                   (push (plist-get props :reason) reasons))))
+        (mevedel-pending-inputs--run-event-wake data-buf))
+      (should (equal '(drain-blocked-latch) reasons))))
   :doc "no live view means no wake"
   (mevedel-pending-inputs-test--with-event
     (with-current-buffer data-buf

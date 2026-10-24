@@ -151,6 +151,12 @@ cancellation releases the fence and leaves the machine retryable.
   correlated with the owning turn and carrying only reply kind, request ID,
   and child agent path when applicable, never the reply payload;
 - queued user messages with enqueue/dequeue events and dwell time;
+- `event-wake-refused` when an idle root's background-event wake for waking
+  mail is held, with `:reason` naming the first refusing gate: `busy`,
+  `drain-blocked-queued` (queued follow-ups or another delivery hold),
+  `prompt-hook`, `recovery`, `drain-blocked-latch` (the failure pause while
+  steering is queued), `interaction`, or `composer-draft`. It is recorded
+  only when the reason changes; an admitted wake resets it;
 - `event-loop-lag` whenever the editor's event loop ran more than
   `mevedel-telemetry-lag-threshold` (0.5 s) late. Watching runs while a
   request runs and for two minutes after it settles, since journal,
