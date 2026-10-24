@@ -258,6 +258,15 @@ flowchart TD
 
 The transcript supplies history; session state and interaction descriptors
 supply the surrounding controls. Each redraw preserves the user-owned composer.
+
+While Emacs tracks a mouse selection gesture, projection writes coalesce until
+the release command finishes, even if release selects another buffer. Queued
+mouse events contain numeric character positions; rewriting text above them
+between press and release otherwise places point at the old offset. Semantic
+elapsed ticks use the same hold; decorative frames can still update without
+changing character positions. A two-second one-shot deadline drains held writes
+if release is lost outside Emacs, so a stale gesture cannot freeze the view.
+This adds no polling timer or permanent command hook.
 History-boundary recovery stops at the input prompt. Copying a rendered response
 and yanking it into a draft can retain transcript source/type properties, but
 those properties do not make composer text part of history.

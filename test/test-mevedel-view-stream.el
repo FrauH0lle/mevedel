@@ -11,8 +11,10 @@
           "helpers"))
 (require 'mevedel-view)
 (require 'mevedel-view-animation)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-native)
 (require 'mevedel-view-power)
+(require 'mevedel-view-render)
 (require 'mevedel-view-stream)
 (require 'mevedel-agent-control)
 (require 'mevedel-collaboration)
@@ -1336,6 +1338,15 @@ turn's later text, live and after reconstruction."
 (mevedel-deftest mevedel-view--spinner-tick ()
   ,test
   (test)
+  :doc "an owned elapsed callback cannot requeue itself during mouse tracking"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (setq mevedel-view--spinner-last-second nil)
+      (let ((mevedel-view-render--owner t)
+            (track-mouse 'drag-tracking))
+        (mevedel-view--spinner-tick))
+      (should (numberp mevedel-view--spinner-last-second))
+      (should-not mevedel-view-render--pending)))
   :doc "progress ticks preserve selection without reactivating mark hooks"
   (dolist (active '(nil t))
     (mevedel-view-stream-test--with-buffers

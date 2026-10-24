@@ -75,6 +75,7 @@
                   "mevedel-view-composer" (thunk &optional region))
 
 ;; `mevedel-view-render'
+(declare-function mevedel-view-render--mouse-held-p "mevedel-view-render" ())
 (declare-function mevedel-view-render-mutate
                   "mevedel-view-render" (key function &optional replacement cleanup))
 (defvar mevedel-view-render--owner)
@@ -798,7 +799,7 @@ the metadata is cut."
                         (set-marker (car target) start)
                         (set-marker (cdr target) (point))))
                     (cons start end)))))))))
-    (if mevedel-view-render--owner
+    (if (or mevedel-view-render--owner (mevedel-view-render--mouse-held-p))
         (mevedel-view-render-mutate 'background-elapsed refresh)
       (funcall refresh))))
 

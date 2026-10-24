@@ -417,7 +417,11 @@ lock, checks the assistant's native Markdown bold face after redisplay, and
 exports the frame. Fixture buffers have visible names: Emacs refuses to enable font
 lock for internal names beginning with a space. No face-copying workaround is
 needed. The existing graphical table and native viewport geometry ERT suites
-then run in that same graphical process. Unexpected results **or skipped
+and live mouse-event interleaving suites then run in that same graphical
+process. The mouse suite delivers press/release through `unread-command-events`
+and the command loop, with a tick or stream chunk between them; it checks queued
+and freshly resolved releases with and without explicit redisplay.
+Unexpected results **or skipped
 tests** fail the command, so missing fonts or image support cannot count as
 graphical coverage.
 
@@ -437,7 +441,7 @@ coalesced redraws. Timing work needs a warmed fixture, evidence of actual
 presentation and a display that stays active. Desktop locks or powered-down
 outputs can suppress presentation; for unattended timing, use an isolated
 compositor with locking disabled and verify its frame delivery separately.
-Pointer/hover automation remains outside this command. It is opt-in locally,
+OS pointer/hover automation remains outside this command. It is opt-in locally,
 not part of hosted CI or the ordinary `check` script.
 
 The batch-safe runner regression tests are included in the normal suite:

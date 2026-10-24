@@ -120,6 +120,7 @@
                   "mevedel-view-audit" (record before))
 
 ;; `mevedel-view-render'
+(declare-function mevedel-view-render--mouse-held-p "mevedel-view-render" ())
 (declare-function mevedel-view-render-mutate
                   "mevedel-view-render" (key function &optional replacement cleanup))
 (declare-function mevedel-view-render-terminal "mevedel-view-render" ())
@@ -1372,23 +1373,28 @@ animation or elapsed timer remains to notice the new colors."
 
 (defun mevedel-view--spinner-tick ()
   "Update display spans; reconcile semantic metadata at most once a second."
-  (let ((second (floor (float-time))))
-    (unless (eql second mevedel-view--spinner-last-second)
-      (setq mevedel-view--spinner-last-second second)
-      (mevedel-view-animation-check-colors)
-      (when (mevedel-view--background-metadata-visible-p)
-        (mevedel-view-execution-tick))
-      (when (and mevedel-view--spinner-status
-                 (or (mevedel-view--animation-target-visible-p
-                      mevedel-view--spinner-label-target
-                      'mevedel-view-spinner-frame)
-                     (mevedel-view--spinner-metadata-visible-p)))
-        (mevedel-view--call-preserving-user-view-state
-         (lambda () (mevedel-view--ensure-request-progress))
-         (mevedel-view--request-progress-mutation-region)))
-      ;; Theme/face changes can turn a color bank into a glyph fallback (or
-      ;; back).  Re-evaluate the actual cadence only on this semantic tick.
-      (mevedel-view--start-spinner-timer)))
+  ;; A queued release carries a raw position from before any text rewrite.
+  ;; Keep its second unconsumed, then catch up through the bounded mouse hold.
+  (if (and (not mevedel-view-render--owner)
+           (mevedel-view-render--mouse-held-p))
+      (mevedel-view-render-mutate 'elapsed-tick #'mevedel-view--spinner-tick)
+    (let ((second (floor (float-time))))
+      (unless (eql second mevedel-view--spinner-last-second)
+        (setq mevedel-view--spinner-last-second second)
+        (mevedel-view-animation-check-colors)
+        (when (mevedel-view--background-metadata-visible-p)
+          (mevedel-view-execution-tick))
+        (when (and mevedel-view--spinner-status
+                   (or (mevedel-view--animation-target-visible-p
+                        mevedel-view--spinner-label-target
+                        'mevedel-view-spinner-frame)
+                       (mevedel-view--spinner-metadata-visible-p)))
+          (mevedel-view--call-preserving-user-view-state
+           (lambda () (mevedel-view--ensure-request-progress))
+           (mevedel-view--request-progress-mutation-region)))
+        ;; Theme/face changes can turn a color bank into a glyph fallback (or
+        ;; back).  Re-evaluate the actual cadence only on this semantic tick.
+        (mevedel-view--start-spinner-timer))))
   (let ((seconds (mevedel-view--animation-seconds))
         (moving (not (mevedel-view--animation-frozen-p)))
         (was-modified (buffer-modified-p))

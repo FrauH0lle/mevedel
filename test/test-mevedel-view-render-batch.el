@@ -783,6 +783,20 @@ Turns below TEXT stay offscreen, so they remain pending placeholders."
           (should-not (string-search "Loading conversation turn" (buffer-string)))
           (should (string-search "Response 0" (buffer-string)))))))
     (should-not mevedel-view-render--batch))
+  :doc "mouse release of a held elapsed tick does not finish staged history"
+  (mevedel-batch-test--with-history
+    (mevedel-batch-test--start-projection view-buf)
+    (let* ((job mevedel-view-render--batch)
+           (pending (length (plist-get job :pending)))
+           ticked)
+      (let ((track-mouse 'drag-tracking))
+        (mevedel-view-render-mutate 'elapsed-tick (lambda () (setq ticked t)))
+        (should-not ticked))
+      (let ((track-mouse nil))
+        (mevedel-view-render--resume-after-mouse view-buf))
+      (should ticked)
+      (should (eq job mevedel-view-render--batch))
+      (should (= pending (length (plist-get job :pending))))))
   :doc "failure while installing priority turns releases work and restores the view"
   (mevedel-batch-test--with-history
     (let ((before (buffer-substring-no-properties (point-min) (point-max))) job)

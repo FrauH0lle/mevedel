@@ -14,6 +14,98 @@
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
 
+(mevedel-deftest mevedel-view-render--wait-for-mouse ()
+  ,test
+  (test)
+  :doc "mouse-held writes coalesce and release in another buffer drains them once"
+  (mevedel-view-test--with-buffers
+    (let (events hook)
+      (with-current-buffer view-buf
+        (let ((track-mouse 'drag-tracking))
+          (mevedel-view-render-mutate 'live (lambda () (push 'obsolete events)))
+          (setq hook mevedel-view-render--mouse-resume-hook)
+          (mevedel-view-render-mutate 'live (lambda () (push 'latest events)))
+          (should (eq hook mevedel-view-render--mouse-resume-hook))
+          (should (memq hook (default-value 'post-command-hook)))
+          (funcall hook)
+          (should-not events)))
+      (with-current-buffer data-buf
+        (let ((track-mouse nil)) (funcall hook)))
+      (should (equal '(latest) events))
+      (should-not (memq hook (default-value 'post-command-hook)))
+      (with-current-buffer view-buf
+        (should-not mevedel-view-render--mouse-resume-hook)
+        (should-not mevedel-view-render--pending)
+        (should-not mevedel-view-render--owner))))
+  :doc "view teardown removes the temporary global mouse-release hook"
+  (mevedel-view-test--with-buffers
+    (let (hook)
+      (with-current-buffer view-buf
+        (let ((track-mouse 'drag-tracking))
+          (mevedel-view-render-mutate 'live (lambda () (ert-fail "Killed view wrote")))
+          (setq hook mevedel-view-render--mouse-resume-hook)
+          (should (memq hook (default-value 'post-command-hook)))))
+      (kill-buffer view-buf)
+      (should-not (memq hook (default-value 'post-command-hook)))))
+  :doc "lost release drains by deadline and the same stale gesture cannot rearm"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((track-mouse 'drag-tracking)
+            events hook)
+        (mevedel-view-render-mutate 'live (lambda () (push 'deadline events)))
+        (setq hook mevedel-view-render--mouse-resume-hook)
+        (should (timerp mevedel-view-render--mouse-resume-timer))
+        (let ((timer mevedel-view-render--mouse-resume-timer)
+              (deadline (+ (float-time) 3)))
+          (while (and (not events) (< (float-time) deadline))
+            (accept-process-output nil 0.02))
+          (ert-info ((format "deadline=%S now=%S active=%S expired=%S hook=%S"
+                             (timer--time timer) (current-time)
+                             (memq timer timer-list)
+                             mevedel-view-render--expired-mouse-gesture
+                             (not (null mevedel-view-render--mouse-resume-hook))))
+            (should (equal '(deadline) events))))
+        (should-not (mevedel-view-render--mouse-held-p))
+        (should-not mevedel-view-render--mouse-resume-timer)
+        (should-not (memq hook (default-value 'post-command-hook)))
+        (mevedel-view-render-mutate 'live (lambda () (push 'continued events)))
+        (should (equal '(continued deadline) events))
+        (should-not mevedel-view-render--mouse-resume-hook))))
+  :doc "a deferred writer error still removes both wakeups and writer ownership"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let (hook)
+        (let ((track-mouse 'drag-tracking))
+          (mevedel-view-render-mutate 'live (lambda () (error "Deferred failure")))
+          (setq hook mevedel-view-render--mouse-resume-hook))
+        (let ((track-mouse nil))
+          (should-error (funcall hook) :type 'error))
+        (should-not (memq hook (default-value 'post-command-hook)))
+        (should-not mevedel-view-render--mouse-resume-timer)
+        (should-not mevedel-view-render--mouse-resume-hook)
+        (should-not mevedel-view-render--pending)
+        (should-not mevedel-view-render--owner))))
+  :doc "two held views own independent hooks and drain their own writers"
+  (mevedel-view-test--with-buffers
+    (let ((first view-buf)
+          first-hook second-hook events)
+      (mevedel-view-test--with-buffers
+        (let ((track-mouse 'drag-tracking))
+          (with-current-buffer first
+            (mevedel-view-render-mutate 'live (lambda () (push 'first events)))
+            (setq first-hook mevedel-view-render--mouse-resume-hook))
+          (with-current-buffer view-buf
+            (mevedel-view-render-mutate 'live (lambda () (push 'second events)))
+            (setq second-hook mevedel-view-render--mouse-resume-hook)))
+        (let ((track-mouse nil))
+          (funcall first-hook)
+          (should (equal '(first) events))
+          (should-not (memq first-hook (default-value 'post-command-hook)))
+          (should (memq second-hook (default-value 'post-command-hook)))
+          (funcall second-hook))
+        (should (equal '(second first) events))
+        (should-not (memq second-hook (default-value 'post-command-hook)))))))
+
 (mevedel-deftest mevedel-view-render-live-update/reentry ()
   ,test
   (test)

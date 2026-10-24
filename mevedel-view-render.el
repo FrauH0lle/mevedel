@@ -4573,6 +4573,55 @@ the render so user toggles survive streaming ticks."
 (defvar-local mevedel-view-render--terminal-turn nil
   "Data-turn marker belonging to the latest terminal presentation intent.")
 
+(defvar-local mevedel-view-render--mouse-resume-hook nil
+  "Temporary global command hook draining writes after mouse release.")
+
+(defvar-local mevedel-view-render--mouse-resume-timer nil
+  "One-shot deadline preventing a lost mouse release from freezing the view.")
+
+(defvar-local mevedel-view-render--expired-mouse-gesture nil
+  "Mouse drag identity whose hold already reached its deadline.")
+
+(defun mevedel-view-render--mouse-held-p ()
+  "Return non-nil while an unexpired mouse gesture needs stable positions."
+  (and (eq track-mouse 'drag-tracking)
+       (not (eq (or (terminal-parameter nil 'mouse-drag-start) t)
+                mevedel-view-render--expired-mouse-gesture))))
+
+(defun mevedel-view-render--cancel-mouse-resume ()
+  "Remove this view's temporary mouse-release hook, including on teardown."
+  (when (timerp mevedel-view-render--mouse-resume-timer)
+    (cancel-timer mevedel-view-render--mouse-resume-timer))
+  (setq mevedel-view-render--mouse-resume-timer nil)
+  (when mevedel-view-render--mouse-resume-hook
+    (remove-hook 'post-command-hook mevedel-view-render--mouse-resume-hook)
+    (setq mevedel-view-render--mouse-resume-hook nil)))
+
+(defun mevedel-view-render--resume-after-mouse (buffer &optional expired)
+  "Drain BUFFER's held writes after release, or when EXPIRED forces progress."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when expired
+        (setq mevedel-view-render--expired-mouse-gesture
+              (or (terminal-parameter nil 'mouse-drag-start) t)))
+      (unless (mevedel-view-render--mouse-held-p)
+        ;; Remove both wakeups before running writers, even if one signals.
+        (mevedel-view-render--cancel-mouse-resume)
+        (mevedel-view-render-mutate 'mouse-resume #'ignore)))))
+
+(defun mevedel-view-render--wait-for-mouse ()
+  "Drain coalesced writes after the current mouse gesture finishes.
+The hook is global only while needed: release can select another buffer.
+A two-second deadline bounds the hold if release is lost outside Emacs."
+  (unless mevedel-view-render--mouse-resume-hook
+    (let ((buffer (current-buffer)))
+      (setq mevedel-view-render--mouse-resume-hook
+            (lambda () (mevedel-view-render--resume-after-mouse buffer)))
+      (setq mevedel-view-render--mouse-resume-timer
+            (run-at-time 2 nil #'mevedel-view-render--resume-after-mouse buffer t)))
+    (add-hook 'post-command-hook mevedel-view-render--mouse-resume-hook)
+    (add-hook 'kill-buffer-hook #'mevedel-view-render--cancel-mouse-resume nil t)))
+
 (defun mevedel-view-render-terminal ()
   "Invalidate incremental work for the current turn, without changing text."
   (setq mevedel-view-render--terminal-p t
@@ -4584,6 +4633,8 @@ Nested requests coalesce by KEY and run after the active writer unwinds.
 They carry the displayed source identity, never saved view coordinates.
 REPLACEMENT invalidates queued work from the previous source or turn.
 Optional CLEANUP must run even if replacement invalidates FUNCTION.
+Mouse gestures defer writes until release: already queued mouse events carry
+numeric buffer positions that cannot follow a length-changing projection.
 Return FUNCTION's value when immediate, or t when queued.  Composed internal
 operations call their owned implementations rather than entering here again."
   (when replacement
@@ -4596,12 +4647,14 @@ operations call their owned implementations rather than entering here again."
                             mevedel-view-render--pending)))
   (let ((entry (list key mevedel-view-render--generation
                      (mevedel-view-segments-display-buffer) function cleanup)))
-    (if mevedel-view-render--owner
+    (if (or mevedel-view-render--owner (mevedel-view-render--mouse-held-p))
         (progn
           (if-let* ((previous (assoc key mevedel-view-render--pending)))
               (setcdr previous (cdr entry))
             (setq mevedel-view-render--pending
                   (nconc mevedel-view-render--pending (list entry))))
+          (unless mevedel-view-render--owner
+            (mevedel-view-render--wait-for-mouse))
           t)
       (setq mevedel-view-render--owner t)
       ;; Fontification can yield to redisplay after a writer deletes its old
@@ -4621,7 +4674,8 @@ operations call their owned implementations rather than entering here again."
                            (when (and mevedel-view-render--batch
                                       (not (memq work-key
                                                  '(full-batch status interaction
-                                                   background-elapsed))))
+                                                   background-elapsed elapsed-tick
+                                                   mouse-resume))))
                              (mevedel-view-render-cancel-batch)
                              (unless (eq work-key 'full)
                                (mevedel-view-render--full-now)))

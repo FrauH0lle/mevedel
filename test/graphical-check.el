@@ -18,7 +18,8 @@
   "Checkout whose sources and tests the runner uses.")
 
 (defconst mevedel-graphical-check--files
-  '("test-mevedel-view-table-graphical.el" "test-mevedel-view-geometry.el")
+  '("test-mevedel-view-table-graphical.el" "test-mevedel-view-geometry.el"
+    "test-mevedel-view-mouse.el")
   "Default real-display ERT suites.")
 
 (defun mevedel-graphical-check--options (arguments)
