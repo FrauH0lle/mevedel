@@ -20,9 +20,6 @@ agent with your effective instructions and capabilities.
   `agent`, and `root` becomes `agent-root`. Collisions with retained or preparing
   agents get numeric suffixes (`-2`, `-3`, ...).
   `message` is the complete assigned task, even when copying parent context.
-  For measurement work, ask for a labeled list: one measurement per item with
-  scenario/configuration, metric, value, unit, and statistic or sample count.
-  Avoid compressed, unlabeled numeric strings.
   Success returns the child's canonical path, such as `/root/review-code-block-copy`.
   Use that returned path for follow-ups rather than guessing it from the name.
 - **General-purpose (omit `role`)**: use for ordinary delegation, including
