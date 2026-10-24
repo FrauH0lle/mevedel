@@ -217,6 +217,19 @@ With RAW-P, retain the full pipeline result including hidden render data."
         (should (equal "There" (plist-get (aref options 1) :label)))
         (should (equal "Far" (plist-get (aref options 1) :description))))))
 
+  :doc "normalizes obvious boolean keywords in nested Ask question schemas"
+  (progn
+    (require 'mevedel-tool-ask)
+    (mevedel-tool-ask-register)
+    (dolist (case '((":false" . :json-false) (":true" . t)))
+      (let* ((u (obarray-make))
+             (args (list (intern ":questions" u)
+                         (vector (list (intern ":question" u) "Which?"
+                                       (intern ":multiSelect" u) (intern (car case) u)))))
+             (converted (mevedel-ptc-driver--convert-args (mevedel-tool-get "Ask") args)))
+        (should (eq (cdr case)
+                    (plist-get (aref (plist-get converted :questions) 0) :multiSelect))))))
+
   :doc "interns declared guest keywords as host keywords"
   (progn
     (mevedel-tool-fs--register)
@@ -584,6 +597,21 @@ With RAW-P, retain the full pipeline result including hidden render data."
                   ("\"text\"" . "text") ("'(1 2)" . "(1 2)")))
     (should (equal (cdr case)
                    (test-mevedel-ptc-driver--run buffer (car case)))))
+
+  :doc "boolean keyword aliases reach the pipeline and bare true names the fix"
+  (let (received)
+    (test-mevedel-ptc-driver--register-probe
+     (lambda (args) (push (plist-get args :value) received) '(:result "accepted")))
+    (setf (mevedel-tool-args (mevedel-tool-get "PTCProbe"))
+          '((value boolean :required "Flag")))
+    (test-mevedel-ptc-driver--select-probe buffer)
+    (dolist (literal '(":false" ":true"))
+      (should (equal "accepted" (test-mevedel-ptc-driver--run
+                                 buffer (format "(PTCProbe :value %s)" literal)))))
+    (should (equal '(t :json-false) received))
+    (should (string-search "use t for true"
+                           (test-mevedel-ptc-driver--run buffer "(PTCProbe :value true)")))
+    (should (= 2 (length received))))
 
   :doc "rejects a closure as the script's final value"
   (should

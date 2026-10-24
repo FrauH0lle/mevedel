@@ -385,6 +385,12 @@ dispatched), and `:pauses'."
     (should (string-match-p "setq.*unbound variable missing"
                             (test-mevedel-ptc--error "(setq missing 1)"))))
 
+  :doc "names the literal fix when JSON constants are unbound"
+  (dolist (name '("true" "false" "null"))
+    (should (string-search
+             "use t for true, nil or :json-false for false, :null for null"
+             (test-mevedel-ptc--error name))))
+
   :doc "supports pure path, take, and fixed-comparator sort primitives"
   (progn
     (should (equal "c.el" (test-mevedel-ptc--value

@@ -24,7 +24,10 @@ feedback are delivered even when an intermediate result is discarded.
 
 For object arguments use keyword plists, arrays use vectors or lists, JSON
 false uses `:json-false` (or nil for a boolean argument), and JSON null uses
-`:null`. Declared object keys are converted to the native adapter's keys.
+`:null`. Boolean schema arguments also accept `:true` and `:false`, normalized
+to `t` and `:json-false`. Bare `true`, `false` and `null` are variable names,
+not constants; an unbound use names the corresponding literal in its error.
+Declared object keys are converted to the native adapter's keys.
 JSON object syntax is not part of the dialect: its braces read as symbols and
 its commas as unquote forms. A value that is not a keyword plist where an
 object is expected is refused with the expected form, the value, and a note

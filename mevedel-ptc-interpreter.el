@@ -1210,6 +1210,9 @@ unknown wrapper around a tool call cannot run the tool first."
    ((symbolp form)
     (let ((cell (assq form env)))
       (unless cell
+        (when (member (symbol-name form) '("true" "false" "null"))
+          (error "Unbound variable: %s; use t for true, nil or :json-false for false, :null for null"
+                 (symbol-name form)))
         (error "Unbound variable: %s" (symbol-name form)))
       (mevedel-ptc--set-return state (cdr cell))))
    ((consp form)

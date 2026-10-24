@@ -148,7 +148,13 @@ Data no schema describes is checked by `mevedel-ptc-driver--check-data'."
     (cond
      ((and (symbolp value) (member (symbol-name value) '(":null" ":json-false")))
       (intern (symbol-name value)))
-     ((and (null value) (eq (plist-get schema :type) 'boolean)) :json-false)
+     ((eq (plist-get schema :type) 'boolean)
+      (cond
+       ((null value) :json-false)
+       ((eq value t) t)
+       ((and (symbolp value) (equal (symbol-name value) ":false")) :json-false)
+       ((and (symbolp value) (equal (symbol-name value) ":true")) t)
+       (t (error "Boolean arguments use t or :true for true, nil, :false or :json-false for false; received %S" value))))
      ((eq (plist-get schema :type) 'object)
       (if (null value) (make-hash-table :test #'equal)
         (unless (plist-p value)
