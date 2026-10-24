@@ -54,6 +54,9 @@ no additional timer or transcript rebuild is needed for inspection updates.
 Pending-input previews likewise expand locally, with one bounded plain-text
 disclosure identified by session and entry ID rather than list position. This
 is disposable presentation state, not a queue mutation or delivery hold.
+Fully shown inputs do not expand. Expanded headers retain the control and scope
+but omit the abbreviated input: retaining it repeated the input prefix above
+the body, including long file mentions in failure-review queues.
 Only the explicit Manage queue action enters the cockpit and pauses delivery;
 failure-review holds remain unchanged. The old whole-summary management link
 made inspection unexpectedly pause delivery, so inspection and management now

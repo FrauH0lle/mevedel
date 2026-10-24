@@ -473,7 +473,8 @@ buttons, Markdown, or interaction authority."
   "Return compact pending-input summary for LABEL and ENTRIES.
 SESSION and SELECTED identify the locally expanded entry.  Only an entry
 whose summary line cuts its input short can expand: expanding a fully
-shown input would repeat it."
+shown input would repeat it.  Expanded headers omit the abbreviated input
+because the detail body already shows it."
   (let ((index 0)
         lines)
     (dolist (entry (seq-take entries 3))
@@ -489,13 +490,13 @@ shown input would repeat it."
                                       (string-trim
                                        (mevedel--normalize-message-text prefix))))))
              (expanded (and partial id (equal id selected)))
-             (text (format "%d. %s %s"
-                           index (cond (expanded "[-]") (partial "[+]") (t "   "))
-                           (concat
-                            (when-let* ((scope (plist-get entry :scope)))
-                              (format "[◆ %s] "
-                                      (mevedel-view-composer-scope-label scope)))
-                            preview))))
+             (text (concat
+                    (format "%d. %s" index
+                            (cond (expanded "[-]") (partial "[+]") (t "   ")))
+                    (when-let* ((scope (plist-get entry :scope)))
+                      (format " [◆ %s]"
+                              (mevedel-view-composer-scope-label scope)))
+                    (unless expanded (concat " " preview)))))
         (when (and session id partial)
           (add-text-properties
            0 (length text)

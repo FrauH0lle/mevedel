@@ -2795,6 +2795,9 @@ Slash commands cannot become pending input.
 
 The interaction zone shows up to three compact previews per category. Click or
 `RET` on an entry expands its input locally, with one entry open at a time.
+Inputs already shown in full have no expansion control. An expanded row keeps
+only its number, collapse control and optional directive scope in the header;
+the input appears once in the body, not again as an abbreviated header preview.
 Inspection does not pause delivery or clear a failure-review hold. The preview
 follows the entry's stable identity through reordering and closes when the entry
 leaves the visible summary; it never silently switches to a new entry occupying

@@ -170,6 +170,7 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
 (defun mevedel-graphical-check--capture (output)
   "Render a real transcript and save fontified frame exports under OUTPUT."
   (require 'helpers)
+  (require 'mevedel-pending-inputs)
   (require 'mevedel-view)
   (require 'mevedel-view-render)
   (unless (file-equal-p (symbol-file 'mevedel-view--full-rerender 'defun)
@@ -186,10 +187,34 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
     ;; Font Lock refuses internal buffers whose names begin with a space.
     (rename-buffer "*mevedel graphical fixture*" t)
     (delete-other-windows)
-    (let ((inhibit-read-only t)
-          bold-position)
+    (let* ((inhibit-read-only t)
+           (session (mevedel-session-create
+                     "graphical"
+                     (mevedel-workspace--create
+                      :type 'file :id "graphical" :name "graphical"
+                      :root default-directory)))
+           bold-position)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (setq-local mevedel--session session)
       (mevedel-view-test--insert-composer-draft "> active draft\nsecond line")
       (mevedel-view--full-rerender)
+      ;; Reproduce the failure-review queue with the long file mention that
+      ;; used to appear in both the expanded header and the detail body.
+      (mevedel-session-enqueue-pending-input
+       session 'steering
+       '(:input "@file:/home/roland/Bilder/Bildschirmfotos/Bildschirmfoto_20261024_160228.png Can we add an elapsed time beside the background jobs?"))
+      (mevedel-session-set-pending-input-failure-paused session t)
+      (mevedel-view--interaction-rebuild)
+      (goto-char (point-min))
+      (search-forward "1. [+]")
+      (backward-char)
+      (let ((last-nonmenu-event nil))
+        (call-interactively (key-binding (kbd "RET"))))
+      (mevedel-view--interaction-rebuild)
+      (unless (and (string-search "Steering\n  1. [-]\n    @file:" (buffer-string))
+                   (= 1 (mevedel-view-test--count-substring "@file:" (buffer-string))))
+        (error "Failure-paused steering fixture duplicates or omits expanded input"))
       ;; Views defer table layout to idle.  Drain that production operation
       ;; explicitly: this bootstrap exits before the ordinary idle loop.
       (redisplay t)

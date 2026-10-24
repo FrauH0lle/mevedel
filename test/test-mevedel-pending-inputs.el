@@ -100,6 +100,42 @@
 (mevedel-deftest mevedel-view--pending-inputs-render ()
   ,test
   (test)
+  :doc "failure-paused steering with a file mention renders input once when expanded"
+  (mevedel-pending-inputs-test--with-session
+    (let* ((input "@file:/home/roland/Bilder/Bildschirmfotos/Bildschirmfoto_20261024_160228.png Can we add an elapsed time beside the background jobs?")
+           (entry (mevedel-session-enqueue-pending-input
+                   session 'steering (list :input input)))
+           (draft "> active draft\nsecond line"))
+      (mevedel-session-set-pending-input-failure-paused session t)
+      (with-current-buffer view-buf
+        (mevedel-pending-inputs-test--replace-composer view-buf draft)
+        (goto-char (+ (mevedel-view--input-start) 5))
+        (mevedel-view--interaction-rebuild)
+        (should (equal draft (mevedel-view--input-text)))
+        (should (= 5 (- (point) (mevedel-view--input-start))))
+        (should (string-search "Steering\n  1. [+] @file:" (buffer-string)))
+        (mevedel-pending-inputs-test--preview-command "1. [+] @file:")
+        (dotimes (_ 2)
+          ;; Rebuilding must preserve the selected entry without appending
+          ;; another projection or restoring the abbreviated input header.
+          (mevedel-view--interaction-rebuild)
+          (let ((rendered (buffer-string)))
+            (should (string-search
+                     "Pending-input delivery stopped after turn failure; review required"
+                     rendered))
+            (should (string-search "Steering\n  1. [-]\n    @file:" rendered))
+            (should (= 1 (how-many "@file:" (point-min) (point-max))))
+            (should (string-search
+                     input (replace-regexp-in-string "\n    " "" rendered)))))
+        (goto-char (+ (mevedel-view--input-start) 5))
+        (mevedel-view--interaction-rebuild)
+        (should (equal draft (mevedel-view--input-text)))
+        (should (= 5 (- (point) (mevedel-view--input-start))))
+        (mevedel-pending-inputs-test--preview-command "1. [-]")
+        (should (string-search "Steering\n  1. [+] @file:" (buffer-string)))
+        (should (= 1 (how-many "@file:" (point-min) (point-max))))
+        (should (eq entry (car (mevedel-session-pending-steering session))))
+        (should (mevedel-session-pending-input-failure-paused session)))))
   :doc "shows no review banner once nothing remains to review"
   (mevedel-pending-inputs-test--with-session
     (mevedel-session-set-pending-input-failure-paused session t)
@@ -145,7 +181,7 @@
           (mevedel-pending-inputs-test--preview-command "1. [+] second" t)
           (should (string-search "    second\n    complete second text" (buffer-string)))
           (should-not (string-search "    complete first text" (buffer-string)))
-          (mevedel-pending-inputs-test--preview-command "1. [-] second")
+          (mevedel-pending-inputs-test--preview-command "1. [-]")
           (should-not (string-search "    complete second text" (buffer-string)))
           (should-not (mevedel-session-pending-input-paused session))
           (should-not (mevedel-view-interaction-blocking-p))
@@ -184,7 +220,7 @@
         (mevedel-pending-inputs-test--preview-command "2. [+] second")
         (mevedel-session-set-pending-inputs session 'follow-up (list second first))
         (mevedel-view--interaction-rebuild)
-        (should (string-search "1. [-] second" (buffer-string)))
+        (should (string-search "1. [-]\n    second" (buffer-string)))
         (should (string-search "    second details" (buffer-string)))
         (let ((third (mevedel-session-enqueue-pending-input
                       session 'follow-up '(:input "third")))
@@ -202,7 +238,7 @@
         (mevedel-session-set-pending-inputs session 'follow-up (list first))
         (mevedel-session-set-pending-inputs session 'steering (list second))
         (mevedel-view--interaction-rebuild)
-        (should (string-search "Steering\n  1. [-] second" (buffer-string)))
+        (should (string-search "Steering\n  1. [-]\n    second" (buffer-string)))
         ;; Delivery removes the selected identity, not merely its old index.
         (mevedel-session-set-pending-inputs session 'steering nil)
         (mevedel-view--interaction-rebuild)
@@ -1709,7 +1745,22 @@
     (dolist (n '(1 2 3))
       (should (string-match-p (format "message %d with extra" n) body)))
     (should-not (string-match-p "message 4" body))
-    (should (string-match-p "2 more" body))))
+    (should (string-match-p "2 more" body)))
+  :doc "expanded steering and follow-ups retain scope without repeating input"
+  (dolist (label '("Steering" "Follow-ups"))
+    (dolist (scope '(nil (:directive-id "abc" :action discuss)))
+      (let* ((session (mevedel-session--create :name "preview"))
+             (entry (list :id 1 :input "first line\nsecond line" :scope scope))
+             (header (concat "  1. [-]"
+                             (when scope " [◆ directive abc/discuss]")))
+             (body (mevedel-view--pending-input-category-body
+                    label (list entry) session 1)))
+        (should (equal (concat "\n" label "\n" header
+                               "\n    first line\n    second line\n")
+                       (substring-no-properties body)))
+        (should (equal (cons session 1)
+                       (get-text-property (string-search "[-]" body)
+                                          'mevedel-pending-input-target body)))))))
 
 (mevedel-deftest mevedel-view--steering-request-context-supported-p ()
   ,test
