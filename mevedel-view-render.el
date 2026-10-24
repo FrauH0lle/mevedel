@@ -6271,15 +6271,22 @@ lookahead or later repair is needed."
 (defun mevedel-view--tool-segment-entry (seg data-buf)
   "Return SEG's normalized tool or standalone audit entry in DATA-BUF.
 Reuse classification within one activity run while source and session state
-stay unchanged.  Each caller owns the returned entry's coalescing count."
-  (let* ((state (and mevedel-view--activity-entry-cache
+stay unchanged, including live terminal completions for archived rows.
+Each caller owns the returned entry's coalescing count."
+  (let* ((live-data mevedel--data-buffer)
+         (state (and mevedel-view--activity-entry-cache
                      (boundp 'mevedel--session)
                      (mevedel-view--session-render-state-fingerprint
                       mevedel--session)))
          (key (and mevedel-view--activity-entry-cache
                    (with-current-buffer data-buf
                      (list data-buf seg (buffer-modified-tick)
-                           (point-min) (point-max) state))))
+                           (point-min) (point-max) state
+                           (and (buffer-live-p live-data)
+                                (not (eq live-data data-buf))
+                                (list live-data
+                                      (with-current-buffer live-data
+                                        (buffer-modified-tick))))))))
          (cached (and key (gethash key mevedel-view--activity-entry-cache))))
     (if cached
         (copy-sequence (cdr cached))

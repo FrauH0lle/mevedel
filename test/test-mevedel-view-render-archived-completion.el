@@ -17,7 +17,7 @@
 
 (mevedel-deftest mevedel-view-render/archived-completion-late-bound
   (:doc "An unchanged archived Bash row reflects later current completion.")
-  (dolist (batch '(nil t))
+  (let ((batch ,mode))
     (mevedel-view-test--with-buffers
       (mevedel-tools-register)
       (let ((archive (generate-new-buffer " *archived-completion-test*"))
@@ -47,6 +47,19 @@
                 (mevedel-view-toggle-section)
                 (should (string-search "OLD OUTPUT" (buffer-string)))
                 (mevedel-view--full-rerender archive)
+                (goto-char (point-max))
+                (insert "> draft\nsecond line")
+                (when (memq batch '(before clear refresh))
+                  (mevedel-view-render-batched-full)
+                  (cl-loop repeat 150
+                           until (eq 'finish (plist-get mevedel-view-render--batch
+                                                       :prepare-stage))
+                           do (mevedel-view-render--batch-step
+                               view-buf mevedel-view-render--batch))
+                  (should (eq 'finish (plist-get mevedel-view-render--batch
+                                                :prepare-stage)))
+                  (should (> (hash-table-count
+                              (plist-get mevedel-view-render--batch :tool-cache)) 0)))
                 (let ((tick (with-current-buffer archive (buffer-modified-tick))))
                   (with-current-buffer data-buf
                     (insert (mevedel--format-hook-audit-record
@@ -59,9 +72,18 @@
                                   (mevedel-view--execution-terminal-render-data
                                    archive "original" "archived-test-exec")
                                   :execution-output)))
+                  (when (eq batch 'clear)
+                    (clrhash (plist-get mevedel-view-render--batch :tool-cache)))
+                  (when (eq batch 'refresh)
+                    (let ((job mevedel-view-render--batch))
+                      (should (mevedel-view--refresh-tool-row archive "original"))
+                      (should-not mevedel-view-render--batch)
+                      ;; A retired callback cannot publish its stale entry.
+                      (mevedel-view-render--batch-step view-buf job)))
                   (if batch
                       (progn
-                        (mevedel-view-render-batched-full)
+                        (when (eq batch 'after)
+                          (mevedel-view-render-batched-full))
                         (cl-loop repeat 150 while mevedel-view-render--batch do
                                  (mevedel-view-render--batch-step
                                   view-buf mevedel-view-render--batch))
@@ -69,8 +91,20 @@
                     (mevedel-view--full-rerender archive))
                   (should (= tick (with-current-buffer archive (buffer-modified-tick))))
                   (should (string-search "FINAL OUTPUT" (buffer-string)))
-                  (should-not (string-search "OLD OUTPUT" (buffer-string))))))
-          (when (buffer-live-p archive) (kill-buffer archive)))))))
+                  (should-not (string-search "OLD OUTPUT" (buffer-string)))
+                  (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
+          (when (buffer-live-p archive) (kill-buffer archive))))))
+  (mode)
+  :doc "A synchronous projection sees a live completion."
+  nil
+  :doc "A batch started after completion sees the final output."
+  'after
+  :doc "A prepared historical batch sees a completion appended only to live data."
+  'before
+  :doc "Clearing normalized entries avoids stale historical publication."
+  'clear
+  :doc "A tool-row writer retires the batch before publishing fresh output."
+  'refresh)
 
 (provide 'test-mevedel-view-render-archived-completion)
 ;;; test-mevedel-view-render-archived-completion.el ends here
