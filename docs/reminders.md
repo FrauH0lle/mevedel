@@ -11,6 +11,13 @@ not user text or tool output.
 Contextual reminders remain a valid delivery mechanism; neither their count nor
 raw specialist-tool usage establishes whether guidance improved a task.
 
+Keep reminder bodies specific to the firing state. Stable task and tool policy
+belongs in its prompt component or tool contract, not another recurring copy.
+Plan guidance keeps its authority limits, proposal tags, replacement rule, and
+compact proposal skeleton inline; it must survive compaction without requiring
+a manual read. The task nudge supplies stale task rows and ownership recovery,
+leaving TaskWrite field/status syntax to that tool's contract.
+
 ## Delivery and history
 
 Deliver reminders only when their firing policy establishes relevance. Once

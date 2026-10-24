@@ -1261,15 +1261,15 @@ this collapses both shapes to the delivered text."
            "<proposed_plan>\n"
            "# Concrete Plan Title\n\n"
            "## Summary\n"
-           "- State the root cause or goal, intended behavior change, and important non-goals.\n\n"
+           "- Root cause or goal, behavior change, non-goals.\n\n"
            "## Key Changes\n"
-           "- Group implementation bullets by subsystem or behavior, not by file inventory. Mention files, public APIs, interfaces, or data shape changes only when needed to remove ambiguity.\n\n"
+           "- Group by subsystem or behavior; name files, APIs, interfaces, or data shapes only to remove ambiguity.\n\n"
            "## Regression Coverage\n"
-           "- List the user-visible flows, edge cases, and failure scenarios that tests must cover.\n\n"
+           "- User-visible flows, edge cases, and failures to test.\n\n"
            "## Validation\n"
-           "- List exact focused test/build commands to run.\n\n"
+           "- Exact focused test/build commands.\n\n"
            "## Assumptions\n"
-           "- Record defaults, compatibility assumptions, and intentionally unchanged behavior.\n"
+           "- Defaults, compatibility assumptions, unchanged behavior.\n"
            "</proposed_plan>")))
     (should (funcall (mevedel-reminder-trigger reminder) session))
     (should-not (mevedel-reminder-interval reminder))
@@ -1719,9 +1719,10 @@ this collapses both shapes to the delivered text."
          (batch (mevedel-reminders--collect-from (list r) 8 session)))
     (should (= 1 (length (plist-get batch :entries))))
     (let ((body (plist-get (car (plist-get batch :entries)) :body)))
-      (should (string-match-p "belong to retained child agents, not you" body))
+      (should (string-match-p "Child-owned tasks" body))
+      (should (string-match-p "reconciling their RESULT" body))
       (should (string-match-p "owner=/root/child" body))
-      (should (string-match-p "failed or interrupted turns leave them open" body)))
+      (should (string-match-p "failure/interruption leaves them open" body)))
     ;; Collection alone does not consume an undelivered reminder.
     (should (plist-get (mevedel-reminders--collect-from (list r) 8 session) :entries))
     (mapc #'funcall (plist-get batch :commits))

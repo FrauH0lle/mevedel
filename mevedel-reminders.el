@@ -878,19 +878,19 @@ The delivery observation changes only when the payload reaches the request."
    :content
    (lambda (_session)
      (concat
-      "Plan mode is active. Inspect and discuss the project. Bash is limited to commands classified as read-only, and Eval is unavailable. Standalone or sticky Plan permits ApplyPatch only for session-owned work:// descendants; directive Planning permits no file writes, including those descendants. Agents you start inherit these Plan limits; delegate bounded, independent investigation, or an independent critique of a draft plan passed in the Agent message, when that is worth its cost. Treat an implementation request as a request to produce or revise the plan, not to edit. Explore available evidence before asking questions; ask only about genuine user preferences that repository evidence cannot resolve. Every new <proposed_plan> block replaces the previous proposal completely. Do not ask whether you should proceed with implementation. When the plan is complete, emit exactly one line-oriented block with this structure:\n\n"
+      "Plan mode is active: inspect and discuss, not implement. Bash is limited to read-only-classified commands; Eval is unavailable. Standalone/sticky Plan permits ApplyPatch only for session-owned work:// descendants; directive Planning permits no file writes. Agents you start inherit these Plan limits. Delegate independent investigation or critique of a draft plan supplied in the task when useful. An implementation request means produce or revise the plan. Explore available evidence before asking about genuine user preferences it cannot resolve. Every new <proposed_plan> block replaces the previous proposal completely. Do not ask whether you should proceed with implementation. Finish with exactly one line-oriented block:\n\n"
       "<proposed_plan>\n"
       "# Concrete Plan Title\n\n"
       "## Summary\n"
-      "- State the root cause or goal, intended behavior change, and important non-goals.\n\n"
+      "- Root cause or goal, behavior change, non-goals.\n\n"
       "## Key Changes\n"
-      "- Group implementation bullets by subsystem or behavior, not by file inventory. Mention files, public APIs, interfaces, or data shape changes only when needed to remove ambiguity.\n\n"
+      "- Group by subsystem or behavior; name files, APIs, interfaces, or data shapes only to remove ambiguity.\n\n"
       "## Regression Coverage\n"
-      "- List the user-visible flows, edge cases, and failure scenarios that tests must cover.\n\n"
+      "- User-visible flows, edge cases, and failures to test.\n\n"
       "## Validation\n"
-      "- List exact focused test/build commands to run.\n\n"
+      "- Exact focused test/build commands.\n\n"
       "## Assumptions\n"
-      "- Record defaults, compatibility assumptions, and intentionally unchanged behavior.\n"
+      "- Defaults, compatibility assumptions, unchanged behavior.\n"
       "</proposed_plan>\n\n"))))
 
 (defun mevedel-reminders-stage-plan-mode (fsm)
@@ -1465,7 +1465,7 @@ INTERVAL defaults to 8 turns.  Child-owned work is labelled as such."
                                 stale-after))))))
    :content (lambda (session)
               (format
-               "The session has open tasks that have not been updated recently. Review your own work with TaskWrite (in_progress when starting, completed when done). Tasks with owner=/root/... belong to retained child agents, not you; reconcile their RESULT or follow up with the owner before changing their status. Successful agent completion closes that agent's open tasks automatically; failed or interrupted turns leave them open for recovery.\n\n%s"
+               "Stale open tasks: update your work with TaskWrite. Child-owned tasks (owner=/root/...) require reconciling their RESULT or following up with the owner before changing status. Successful child completion closes its tasks automatically; failure/interruption leaves them open for recovery.\n\n%s"
                ;; The panel rendering is a display concern; the model
                ;; reads the same shape TaskList returns, with canonical
                ;; owner paths and unabbreviated subjects.
