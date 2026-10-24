@@ -376,6 +376,37 @@
 		 ,test
 		 (test)
 
+  :doc "children and grandchildren execute in the session directory, not the checkout root"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-agent-tree-cwd-" t)))
+         (worktree (file-name-as-directory (file-name-concat root "worktree")))
+         (workspace (mevedel-workspace--create :type 'project :id root :root root :name "cwd"))
+         (session (mevedel-session-create "main" workspace worktree))
+         (parent (generate-new-buffer " *agent-cwd-root*"))
+         (child (mevedel-agent-invocation--create :agent-id "default--child" :path "/root/child"))
+         (grandchild (mevedel-agent-invocation--create :agent-id "default--grandchild" :path "/root/child/grandchild"))
+         child-buffer grandchild-buffer)
+    (unwind-protect
+        (progn
+          (make-directory worktree t)
+          (with-current-buffer parent
+            (setq-local mevedel--session session mevedel--workspace workspace
+                        default-directory root))
+          (setq child-buffer (mevedel-agent-conversation-open child parent)
+                grandchild-buffer (mevedel-agent-conversation-open grandchild child-buffer))
+          (dolist (buffer (list child-buffer grandchild-buffer))
+            (with-current-buffer buffer
+              (should (eq session mevedel--session))
+              (should (equal worktree default-directory))
+              (should (equal worktree (mevedel-tool-exec-permission-default-directory)))))
+          ;; A shell-local cd is not a session-directory mutation.
+          (with-current-buffer child-buffer
+            (should (zerop (call-process "bash" nil nil nil "-c"
+                                        (format "cd %s" (shell-quote-argument root)))))
+            (should (equal worktree (mevedel-tool-exec-permission-default-directory)))))
+      (dolist (buffer (list grandchild-buffer child-buffer parent))
+        (when (buffer-live-p buffer) (kill-buffer buffer)))
+      (delete-directory root t)))
+
   :doc "attributes retained follow-up hooks to the current invocation"
   (let* ((parent (generate-new-buffer " *agent-followup-parent*"))
          (old (mevedel-agent-invocation--create

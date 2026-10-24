@@ -32,6 +32,12 @@ instructions, tools, model policy, and delegation capability. A named role
 supplies its own configuration rather than intersecting its tools with the
 delegator's. Children are created below the caller, so recursive delegation
 forms paths such as `/root/implementation/tests`.
+All of those conversations use the root session's working directory, including
+children and grandchildren of a Worktree Fork. The workspace's original checkout
+root does not override that session directory. A shell-local `cd` in one Bash
+call changes only that process; it does not retarget the session, later tool
+calls, or children started afterwards. A task message naming another checkout
+also does not change execution state.
 The default role also inherits its delegator's context observations, frozen
 with the agent: a named delegator's own selection, or for a root child the
 root's workspace guidance, memory index, environment, tool listing, skills and
