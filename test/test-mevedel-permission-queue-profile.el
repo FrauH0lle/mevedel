@@ -54,7 +54,7 @@
                 "profile execution complete")))
            (operation (if (equal tool-name "Bash") script expression))
            (args (if (equal tool-name "Bash")
-                     (list :command script)
+                     (list :command script :description "Probe Bash authority profile")
                    (list :expression expression :mode "batch")))
            (data (generate-new-buffer " *test-pq-profile-data*"))
            (view (generate-new-buffer " *test-pq-profile-view*"))
@@ -201,7 +201,8 @@
                 (setf (mevedel-session-permission-mode session) 'edits)
                 (run tool-name
                      (if (equal tool-name "Bash")
-                         (list :command (concat "sh " (shell-quote-argument script)))
+                         (list :command (concat "sh " (shell-quote-argument script))
+                               :description "Probe Bash authority profile")
                        (list :expression (concat "(progn " expression ")") :mode "batch")))
                 (await-result)
                 (should (string-match-p "sandbox: bubblewrap" result))
@@ -277,6 +278,7 @@
                      (mevedel-tool-get "Bash")
                      (lambda (result) (push (cons id result) results))
                      (list :command script
+                           :description "Probe Bash authority profile"
                            :sandbox_permissions "with_additional_permissions"
                            :additional_permissions
                            (append (when (nth 2 request) '(:network t))

@@ -966,7 +966,7 @@
                (lambda (value)
                  (cl-incf callback-count)
                  (setq result value))
-               (list :command
+               (list :description "Probe side conversation permission" :command
                      (format "printf pending > %s"
                              (shell-quote-argument target))))))
           (should (= 1 (length
@@ -1036,6 +1036,7 @@
                (mevedel-tool-ensure "Bash")
                (lambda (value) (setq result value))
                (list
+                :description "Probe side conversation cancellation"
                 :command
                 (format
                  "sh -c %s first %s"
@@ -1126,7 +1127,7 @@
               (mevedel-pipeline-run-tool
                (mevedel-tool-ensure "Bash")
                (lambda (value) (setq result value))
-               (list :command
+               (list :description "Probe approved side effect" :command
                      (format "printf 'APPROVED SIDE EFFECT' > %s"
                              (shell-quote-argument target))))))
           (should-not result)

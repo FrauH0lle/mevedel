@@ -3494,13 +3494,14 @@ cover, so the permission step's warning about it is captured here."
 				       :network isolated))))))))
 			   (mevedel-pipeline-run-tool
 			    tool (lambda (result) (setq first-result result))
-			    '(:command "pwd"))
+				    '(:command "pwd" :description "Probe isolated network launch"))
 			   (should (= 1 (length launches)))
 			   (should (string-match-p "network denied" first-result))
 			   (should (string-match-p "network: isolated" first-result))
 			   (mevedel-pipeline-run-tool
 			    tool (lambda (result) (setq second-result result))
 			    '(:command "pwd"
+				      :description "Probe authorized network retry"
 			      :sandbox_permissions "with_additional_permissions"
 			      :additional_permissions (:network t)
 			      :justification "Reach the requested service?"))
@@ -3560,6 +3561,7 @@ cover, so the permission step's warning about it is captured here."
 			   (mevedel-pipeline-run-tool
 			    tool (lambda (value) (setq result value))
 			    (list :command (format "custom-reader %s" secret)
+					  :description "Probe Bash resource authority"
 				  :sandbox_permissions
 				  "with_additional_permissions"
 				  :additional_permissions

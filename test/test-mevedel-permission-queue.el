@@ -1886,6 +1886,7 @@
                       (mevedel-pipeline-run-tool
                        (mevedel-tool-get "Bash") (lambda (value) (setq decompressed value))
                        (list :command (concat "gzip -cd -- " (shell-quote-argument compressed))
+                             :description "Read compressed manual content"
                              :sandbox_permissions "with_additional_permissions"
                              :additional_permissions (list :file_system (list :read (vector compressed)))
                              :justification "Read the compressed manual in the approved documentation tree")))
@@ -2069,7 +2070,7 @@
                                            (mevedel-tool-get "Bash")
                                            (lambda (value) (setq result value))
                                            (append
-                                            (list :command script)
+                                            (list :command script :description "Probe execution directory authority")
                                             (when (or (zerop index) (and git-p (= index 1)))
                                               (list :sandbox_permissions "with_additional_permissions"
                                                     :additional_permissions
@@ -2129,7 +2130,7 @@
                                           (mevedel-pipeline-run-tool
                                            (mevedel-tool-get "Bash")
                                            (lambda (value) (setq result value))
-                                           (list :command script)))
+                                           (list :command script :description "Probe execution directory authority")))
                                         (let ((deadline (+ (float-time) 15)))
                                           (while (and (not result) (< (float-time) deadline))
                                             (accept-process-output nil 0.01)))
@@ -2168,7 +2169,7 @@
          (parent-rule `("Bash" :pattern ,script :action allow
                         :file-system ((:path ,root :access write :recursive t))))
          (child `(:path ,git :access write :recursive t))
-         (args `(:command ,script :sandbox_permissions "with_additional_permissions"
+         (args `(:command ,script :description "Probe confined execution authority" :sandbox_permissions "with_additional_permissions"
                  :additional_permissions (:file_system (:write [,git]))
                  :justification "Write disposable child marker"))
          (mevedel-protected-paths '(("**/.git/**" . read-only)))
@@ -2273,7 +2274,7 @@
                        (lambda (item) (setq entry item))))
               (mevedel-pipeline-run-tool
                (mevedel-tool-get "Bash") (lambda (value) (setq result value))
-               (list :command
+               (list :description "Probe masked directory read" :command
                      (format "cat %s; if cat %s 2>/dev/null; then exit 55; fi"
                              (shell-quote-argument (file-name-concat tree "value"))
                              (shell-quote-argument sibling))

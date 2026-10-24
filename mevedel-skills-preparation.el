@@ -465,6 +465,7 @@ original shell-injection marker used in diagnostics."
                (mevedel-skills-preparation--classify-injection
                 result marker "Shell" 'shell-failure callback))
              (list :command command
+                   :description "Prepare skill shell injection"
                    :suppress-sandbox-disclosure-p t
                    :wait-for-completion-p t
                    :trust-literal-p

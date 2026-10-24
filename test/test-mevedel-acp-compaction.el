@@ -267,6 +267,7 @@
                                                    [[((name . "Bash") (id . "running-bash")
                                                       (args . ((command . ,(format "while test ! -e %s; do sleep .01; done; printf 'COMPLETED ONCE'"
                                                                                    (shell-quote-argument unlock)))
+                                                               (description . "Wait across native compaction")
                                                                (yield_time_ms . 250))))] []])))))))
             (mevedel--insert-user-turn "Start a command and compact")
             (mevedel--send-request "Start a command and compact")

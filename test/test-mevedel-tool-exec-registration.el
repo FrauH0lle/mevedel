@@ -52,15 +52,19 @@
   (:before-each (mevedel-tool-exec--register))
   ,test
   (test)
-  :doc "Bash exposes an optional human-readable description"
+  :doc "Bash requires a human-readable description in native and common schemas"
   (let* ((tool (mevedel-tool-get "Bash"))
          (args (gptel-tool-args (mevedel-tool-gptel-tool tool)))
          (description (seq-find (lambda (arg)
                                   (equal "description" (plist-get arg :name)))
                                 args)))
     (should description)
-    (should (plist-get description :optional))
-    (should (equal "string" (plist-get description :type)))))
+    (should-not (plist-get description :optional))
+    (should (equal "string" (plist-get description :type)))
+    (should (eq :required (nth 2 (assq 'description (mevedel-tool-args tool)))))
+    (let* ((native (aref (gptel--parse-tools nil (list (mevedel-tool-gptel-tool tool))) 0))
+           (schema (plist-get (plist-get native :function) :parameters)))
+      (should (member "description" (append (plist-get schema :required) nil))))))
 
 (provide 'test-mevedel-tool-exec-registration)
 ;;; test-mevedel-tool-exec-registration.el ends here

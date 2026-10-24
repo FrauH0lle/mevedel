@@ -613,6 +613,17 @@ With RAW-P, retain the full pipeline result including hidden render data."
                            (test-mevedel-ptc-driver--run buffer "(PTCProbe :value true)")))
     (should (= 2 (length received))))
 
+  :doc "Bash without its required description fails before nested execution"
+  (let (called)
+    (mevedel-tool-ensure "Bash")
+    (with-current-buffer buffer
+      (setq-local gptel-tools (test-mevedel-ptc-driver--gptel-tools "Bash" "ToolCall")))
+    (cl-letf (((symbol-function 'mevedel-tool-exec--bash)
+               (lambda (&rest _) (setq called t))))
+      (should (string-search "description"
+                             (test-mevedel-ptc-driver--run buffer "(Bash :command \"pwd\")"))))
+    (should-not called))
+
   :doc "rejects a closure as the script's final value"
   (should
    (string-match-p

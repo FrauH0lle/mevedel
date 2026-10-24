@@ -1205,7 +1205,8 @@
                                       (promptAcknowledgement . ,(if receipt t :false))
                                       (responseText . "Done")
                                       (toolBatches . [[((name . "Bash") (id . ,call-id)
-                                                        (args . ((command . ,(concat "printf 'effect\n' >> "
+                                                        (args . ((description . "Append recovery test effect")
+                                                                 (command . ,(concat "printf 'effect\n' >> "
                                                                                      (shell-quote-argument file))))))]])))))))
             (insert "Append one line")
             (mevedel--send-request "Append one line")

@@ -20,6 +20,10 @@ information; neither an example nor a good/bad pair is required for every tool.
 Avoid repeating a workflow policy across tools; suitability should explain this
 tool's actual behavior.
 
+Bash requires both `command` and a short human-readable `description`. The same
+required-field schema feeds native provider tools and nested ToolCall validation;
+an omitted label is refused before execution rather than left to prompt advice.
+
 Tools with meaningful advanced behavior point to packaged Markdown and name
 the cases that need it. Read, Glob, and Grep share
 [`tools/files.md`](tools/files.md); ApplyPatch uses

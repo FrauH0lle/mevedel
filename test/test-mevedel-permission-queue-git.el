@@ -64,7 +64,7 @@
                      (lambda (value)
                        (should-not result)
                        (setq result value))
-                     (list :command
+                     (list :description "Probe confined Git authority" :command
                            (if (= index 2)
                                (concat "git -c user.name=Fixture -c user.email=fixture@example.invalid "
                                        "-c commit.gpgsign=false -c core.hooksPath=/dev/null "
@@ -161,7 +161,7 @@
                   (with-current-buffer data-buf
                     (mevedel-pipeline-run-tool
                      (mevedel-tool-get "Bash") (lambda (value) (should-not result) (setq result value))
-                     (list :command
+                     (list :description "Probe confined Git authority" :command
                            (pcase index
                              (2 (concat "git -c user.name=Fixture -c user.email=fixture@example.invalid "
                                         "-c commit.gpgsign=false -c core.hooksPath=/dev/null "
@@ -268,6 +268,7 @@
                    (mevedel-tool-get "Bash")
                    (lambda (value) (cl-incf results) (setq result value))
                    (list :command "git add -- example.txt; sh ./unrelated.sh"
+                         :description "Probe scoped Git authority"
                          :sandbox_permissions "with_additional_permissions"
                          :additional_permissions
                          (list :file_system (list :write (vector metadata)))

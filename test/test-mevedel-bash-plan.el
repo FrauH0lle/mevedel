@@ -83,7 +83,7 @@
                      (mevedel-pipeline-run-tool
                       (mevedel-tool-get "Bash")
                       (lambda (value) (setq result value))
-                      (list :command command :yield_time_ms 10000)))
+                      (list :command command :description "Inspect Git in Plan" :yield_time_ms 10000)))
                    (let ((deadline (+ (float-time) 15)))
                      (while (and (not result) (< (float-time) deadline))
                        (accept-process-output nil 0.01)))
@@ -300,7 +300,7 @@
               (mevedel-pipeline-run-tool
                (mevedel-tool-get "Bash")
                (lambda (value) (setq result value))
-               '(:command "touch mutation" :yield_time_ms 10000))
+               '(:command "touch mutation" :description "Probe mutation owner gate" :yield_time_ms 10000))
               (let ((deadline (+ (float-time) 15)))
                 (while (and (not result) (< (float-time) deadline))
                   (accept-process-output nil 0.01)))))
