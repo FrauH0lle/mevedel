@@ -14,9 +14,125 @@
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
 
+(mevedel-deftest mevedel-view-render--mouse-gesture ()
+  ,test
+  (test)
+  :doc "macro-based tracking holds for any non-nil tracking value"
+  (with-temp-buffer
+    (dolist (tracking '(t dragging dropping))
+      (let ((track-mouse tracking)
+            (last-command-event (list 'down-mouse-1)))
+        (should (eq last-command-event (mevedel-view-render--mouse-gesture)))
+        (should (mevedel-view-render--mouse-held-p)))))
+  :doc "macro expiry blocks only that gesture even with a stale terminal start"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let* ((track-mouse t)
+             (first (list 'down-mouse-1))
+             (second (list 'down-mouse-1))
+             (last-command-event first)
+             (terminal-start (list 'down-mouse-1))
+             events)
+        (cl-letf (((symbol-function 'terminal-parameter)
+                   (lambda (&rest _) terminal-start)))
+          (mevedel-view-render-mutate 'live (lambda () (push 'first events)))
+          (mevedel-view-render--resume-after-mouse view-buf t)
+          (should (equal '(first) events))
+          (should (eq first mevedel-view-render--expired-mouse-gesture))
+          (should-not (mevedel-view-render--mouse-held-p))
+          (mevedel-view-render-mutate 'live (lambda () (push 'continued events)))
+          (should (equal '(continued first) events))
+          (should-not mevedel-view-render--mouse-resume-hook)
+          (setq last-command-event second)
+          (should (mevedel-view-render--mouse-held-p))
+          (mevedel-view-render-mutate 'live (lambda () (push 'second events)))
+          (should (equal '(continued first) events))
+          (let ((track-mouse nil))
+            (funcall mevedel-view-render--mouse-resume-hook))
+          (should (equal '(second continued first) events))))))
+  :doc "built-in identity survives movement commands and changes for a new drag"
+  (with-temp-buffer
+    (let* ((track-mouse 'drag-tracking)
+           (first (list 'down-mouse-1))
+           (terminal-start first)
+           (last-command-event (list 'mouse-movement)))
+      (cl-letf (((symbol-function 'terminal-parameter)
+                 (lambda (&rest _) terminal-start)))
+        (should (eq first (mevedel-view-render--mouse-gesture)))
+        (setq mevedel-view-render--expired-mouse-gesture first)
+        (should-not (mevedel-view-render--mouse-held-p))
+        (setq last-command-event (list 'mouse-movement))
+        (should-not (mevedel-view-render--mouse-held-p))
+        (setq terminal-start (list 'down-mouse-1))
+        (should (mevedel-view-render--mouse-held-p))))))
+
+(mevedel-deftest mevedel-view-render--queued-mouse-release-p ()
+  (let ((unread-command-events ,events))
+    (should (eq (not (null (mevedel-view-render--queued-mouse-release-p))) ,expected)))
+  (events expected)
+  :doc "ordinary input does not hold a released gesture"
+  '(97 (down-mouse-1 (nil 5)) (mouse-movement (nil 5))) nil
+  :doc "queued click retains the gesture"
+  '((mouse-1 (nil 5))) t
+  :doc "queued drag release retains the gesture"
+  '((drag-mouse-1 (nil 5) (nil 8))) t
+  :doc "queued double click retains the gesture"
+  '((double-mouse-1 (nil 5))) t
+  :doc "recorded event wrapper retains the gesture"
+  '((t mouse-1 (nil 5))) t
+  :doc "unrecorded event wrapper retains the gesture"
+  '((no-record mouse-1 (nil 5))) t)
+
 (mevedel-deftest mevedel-view-render--wait-for-mouse ()
   ,test
   (test)
+  :doc "a macro-requeued release keeps writes held until its command finishes"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((last-command-event (list 'down-mouse-1))
+            events hook)
+        (let ((track-mouse t))
+          (mevedel-view-render-mutate 'live (lambda () (push 'release events)))
+          (setq hook mevedel-view-render--mouse-resume-hook))
+        (let ((track-mouse nil)
+              (unread-command-events '((mouse-1 (nil 5)))))
+          (funcall hook)
+          (should-not events)
+          (should (eq hook mevedel-view-render--mouse-resume-hook))
+          ;; A later command hook may request another projection before the
+          ;; queued release runs.  It must join the same hold, not drain it.
+          (mevedel-view-render-mutate 'status (lambda () (push 'status events)))
+          (should-not events))
+        (let ((track-mouse nil) (unread-command-events nil)) (funcall hook))
+        (should (equal '(status release) events))
+        (should-not mevedel-view-render--mouse-resume-hook))))
+  :doc "the deadline still drains a queued release that never runs"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((last-command-event (list 'down-mouse-1)) events)
+        (let ((track-mouse t))
+          (mevedel-view-render-mutate 'live (lambda () (push 'deadline events))))
+        (let ((track-mouse nil)
+              (unread-command-events '((mouse-1 (nil 5)))))
+          (mevedel-view-render--resume-after-mouse view-buf t)
+          (should (equal '(deadline) events)))
+        (should-not mevedel-view-render--mouse-resume-hook)
+        (should-not mevedel-view-render--mouse-resume-timer))))
+  :doc "nested command hooks cannot drain a macro gesture before tracking ends"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((track-mouse t)
+            (last-command-event (list 'down-mouse-1))
+            events hook)
+        (mevedel-view-render-mutate 'live (lambda () (push 'release events)))
+        (setq hook mevedel-view-render--mouse-resume-hook)
+        (should hook)
+        (run-hooks 'post-command-hook)
+        (should-not events)
+        (should (eq hook mevedel-view-render--mouse-resume-hook))
+        (let ((track-mouse nil)) (funcall hook))
+        (should (equal '(release) events))
+        (should-not mevedel-view-render--mouse-resume-hook))))
   :doc "mouse-held writes coalesce and release in another buffer drains them once"
   (mevedel-view-test--with-buffers
     (let (events hook)

@@ -12,15 +12,22 @@ identify disclosures and reader positions across projection changes. Reader
 anchors distinguish section roles and compound-child discriminators, retaining
 ordinals only among runs of the same section identity. Grouped rows reuse their
 standalone disclosure roles; neighboring separators cannot shift their anchors.
-During Emacs's mouse drag tracking, projection writes coalesce until the release
-command finishes. A temporary global command hook also handles release in a
+During any mouse tracking, projection writes coalesce until the gesture's command
+finishes. This includes `track-mouse` input loops, such as Evil's, that consume
+the release inside the press command, not just built-in multi-command drag
+tracking. A temporary global command hook also handles release in a
 different buffer and is removed on view teardown. Semantic elapsed updates share
-the hold. A two-second one-shot deadline drains writes if release is lost;
-that expired gesture cannot rearm the hold. Graphical mouse-event replay showed that an
-already-resolved release can undo correct reader/composer restoration after a
-length-changing tick or stream chunk; redisplay cannot repair numeric positions
-already inside queued events. Deferral protects both triggers without extra
-polling or changing elapsed presentation.
+the hold. A release requeued by a tracking command retains the hold until its
+own command finishes, rather than letting a write invalidate its numeric position.
+A two-second one-shot deadline drains writes if release is lost;
+that expired gesture cannot rearm the hold. Built-in drag identity comes from
+the terminal's start event; single-command tracking uses its initiating command
+event, which remains stable across nested reads. A later gesture can therefore
+hold writes again even after an earlier deadline. Graphical mouse-event replay
+showed that an already-resolved release can undo correct reader/composer
+restoration after a length-changing tick or stream chunk; redisplay cannot repair
+numeric positions already inside queued events. Deferral protects both triggers
+without extra polling or changing elapsed presentation.
 Anchor traversal probes nearby source, role and child-key boundaries, narrowing
 each search to the closest boundary already found and growing the horizon
 geometrically only when no boundary is found. A constant property's search must

@@ -259,13 +259,18 @@ flowchart TD
 The transcript supplies history; session state and interaction descriptors
 supply the surrounding controls. Each redraw preserves the user-owned composer.
 
-While Emacs tracks a mouse selection gesture, projection writes coalesce until
-the release command finishes, even if release selects another buffer. Queued
-mouse events contain numeric character positions; rewriting text above them
+While any mouse tracking is active, projection writes coalesce until
+the gesture's command finishes, even if release selects another buffer. This
+includes commands such as Evil's that read the release inside `track-mouse`,
+as well as built-in drag tracking that spans press and release commands. Requeued
+releases handed back to the command loop keep the hold until their command runs.
+Mouse events contain numeric character positions; rewriting text above them
 between press and release otherwise places point at the old offset. Semantic
 elapsed ticks use the same hold; decorative frames can still update without
 changing character positions. A two-second one-shot deadline drains held writes
 if release is lost outside Emacs, so a stale gesture cannot freeze the view.
+Expiry identifies the built-in drag by its terminal start event and single-command
+tracking by its initiating command event, so a later gesture can hold writes again.
 This adds no polling timer or permanent command hook.
 History-boundary recovery stops at the input prompt. Copying a rendered response
 and yanking it into a draft can retain transcript source/type properties, but

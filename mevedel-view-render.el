@@ -4582,10 +4582,23 @@ the render so user toggles survive streaming ticks."
 (defvar-local mevedel-view-render--expired-mouse-gesture nil
   "Mouse drag identity whose hold already reached its deadline.")
 
+(defun mevedel-view-render--mouse-gesture ()
+  "Return the identity of the current mouse tracking gesture.
+Built-in drag tracking spans commands, while macro-based tracking keeps
+the initiating command event throughout its nested input loop."
+  (or (if (eq track-mouse 'drag-tracking)
+          (terminal-parameter nil 'mouse-drag-start)
+        last-command-event)
+      t))
+
 (defun mevedel-view-render--mouse-held-p ()
-  "Return non-nil while an unexpired mouse gesture needs stable positions."
-  (and (eq track-mouse 'drag-tracking)
-       (not (eq (or (terminal-parameter nil 'mouse-drag-start) t)
+  "Return non-nil while any unexpired mouse tracking needs stable positions."
+  (and (or track-mouse
+           ;; A macro-based client can hand the release back to the command
+           ;; loop.  Only an existing hold scans input during that handoff.
+           (and mevedel-view-render--mouse-resume-hook
+                (mevedel-view-render--queued-mouse-release-p)))
+       (not (eq (mevedel-view-render--mouse-gesture)
                 mevedel-view-render--expired-mouse-gesture))))
 
 (defun mevedel-view-render--cancel-mouse-resume ()
@@ -4597,13 +4610,24 @@ the render so user toggles survive streaming ticks."
     (remove-hook 'post-command-hook mevedel-view-render--mouse-resume-hook)
     (setq mevedel-view-render--mouse-resume-hook nil)))
 
+(defun mevedel-view-render--queued-mouse-release-p ()
+  "Return non-nil if a tracked command handed its release back to input."
+  (seq-some
+   (lambda (event)
+     (when (memq (car-safe event) '(t no-record))
+       (setq event (cdr event)))
+     (and (mouse-event-p event)
+          (event-modifiers event)
+          (not (memq 'down (event-modifiers event)))))
+   unread-command-events))
+
 (defun mevedel-view-render--resume-after-mouse (buffer &optional expired)
   "Drain BUFFER's held writes after release, or when EXPIRED forces progress."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (when expired
         (setq mevedel-view-render--expired-mouse-gesture
-              (or (terminal-parameter nil 'mouse-drag-start) t)))
+              (mevedel-view-render--mouse-gesture)))
       (unless (mevedel-view-render--mouse-held-p)
         ;; Remove both wakeups before running writers, even if one signals.
         (mevedel-view-render--cancel-mouse-resume)
@@ -4633,7 +4657,7 @@ Nested requests coalesce by KEY and run after the active writer unwinds.
 They carry the displayed source identity, never saved view coordinates.
 REPLACEMENT invalidates queued work from the previous source or turn.
 Optional CLEANUP must run even if replacement invalidates FUNCTION.
-Mouse gestures defer writes until release: already queued mouse events carry
+Any mouse tracking defers writes until release: queued mouse events carry
 numeric buffer positions that cannot follow a length-changing projection.
 Return FUNCTION's value when immediate, or t when queued.  Composed internal
 operations call their owned implementations rather than entering here again."
