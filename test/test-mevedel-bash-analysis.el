@@ -320,6 +320,88 @@ cat file"
                    (mevedel-bash-analysis--split-command
                     (mevedel-bash-analysis--quote-word word))))))
 
+(mevedel-deftest mevedel-bash-analysis--heredoc-context ()
+  ,test
+  (test)
+  :doc "separates ordered bodies, quote-removed delimiters and tab stripping"
+  (let* ((source "cat <<A <<-B\" C\"\nfirst &\nA\n\tsecond &\n\tB C\necho done &")
+         (context (mevedel-bash-analysis--heredoc-context source)))
+    (should (equal '("first &\n") (cadr context)))
+    (should (string-prefix-p "cat <<A <<-B\" C\"\n" (car context)))
+    (should (string-suffix-p "echo done &" (car context)))
+    (should (= (length source) (length (car context)))))
+  :doc "does not treat arithmetic shifts, here-strings or comments as heredocs"
+  (dolist (source '("echo $((1 << 2))\nsleep 1 &"
+                    "((1 << 2))\nsleep 1 &"
+                    "cat <<< data\nsleep 1 &"
+                    "echo hi # <<EOF\nsleep 1 &"))
+    (should (equal (list source nil)
+                   (mevedel-bash-analysis--heredoc-context source)))))
+
+(mevedel-deftest mevedel-bash-analysis--background-p ()
+  ,test
+  (test)
+  :doc "heredoc payload is data, including quotes, operators and coproc words"
+  (dolist (source '("cat <<EOF\na & b\ncoproc sleep 1\nEOF"
+                    "cat <<'EOF'\n$(sleep 1 &)\n`coproc sleep 1`\nEOF"
+                    "cat <<\"EOF\"\n' & \"\nEOF"
+                    "cat <<E\\OF\n$(sleep 1 &)\nEOF"
+                    "cat <<EOF\n$(printf '%s' '&')\nEOF"
+                    "cat <<EOF\n\\$(sleep 1 &)\nEOF"
+                    "echo \"$(cat <<'EOF'\n$(sleep 1 &)\nEOF)\""
+                    "cat <<-EOF\n\tx & y\n\tEOF"
+                    "cat <<A <<B\none &\nA\ntwo &\nB"))
+    (should-not (mevedel-bash-analysis--background-p source))
+    (let ((analysis (mevedel-bash-analysis-analyze source)))
+      (should-not (plist-get analysis :background-p))
+      (should (plist-get analysis :complex-p))))
+  :doc "background work still executes outside bodies and in expanding substitutions"
+  (dolist (source '("cat <<'EOF' &\npayload &\nEOF"
+                    "cat <<EOF\npayload &\nEOF\nsleep 1 &"
+                    "cat <<EOF\n$(sleep 1 &)\nEOF"
+                    "cat <<EOF\n'$(sleep 1 &)'\nEOF"
+                    "cat <<EOF\n`coproc sleep 1`\nEOF"
+                    "cat <<A <<B\nliteral &\nA\n$(sleep 1 &)\nB"
+                    "cat <<$'EOF'\ndata\nEOF\nsleep 1 &\n$EOF"
+                    "cat <<$\"EOF\"\ndata\nEOF\nsleep 1 &\n$EOF"
+                    "echo \"$(cat <<'EOF'\npayload &\nEOF\nsleep 1 &)\""))
+    (should (mevedel-bash-analysis--background-p source))
+    (should (plist-get (mevedel-bash-analysis-analyze source) :background-p)))
+  :doc "nested substitution descendants are inspected only once"
+  (let ((source "printf '%s' '&'")
+        (inspect (symbol-function 'mevedel-bash-analysis--heredoc-context))
+        (count 0))
+    (dotimes (_ 12) (setq source (format "echo \"$(%s)\"" source)))
+    (cl-letf (((symbol-function 'mevedel-bash-analysis--heredoc-context)
+               (lambda (fragment)
+                 (cl-incf count)
+                 (funcall inspect fragment))))
+      (should-not (mevedel-bash-analysis--background-p source)))
+    (should (= 13 count)))
+  :doc "heredoc continuation joining follows delimiter quoting, not payload quotes"
+  (let ((join (string ?\\ ?\n)))
+    (dolist (prefix '("" "'\n"))
+      (let ((source (concat "cat <<EOF\n" prefix "E" join "OF\nprintf marker &\nwait")))
+        (should (mevedel-bash-analysis--background-p source))
+        (should (plist-get (mevedel-bash-analysis-analyze source) :background-p))
+        (with-temp-buffer
+          (should (zerop (process-file "bash" nil t nil "--noprofile" "--norc" "-c" source)))
+          (should (string-suffix-p "marker" (buffer-string))))))
+    (dolist (source (list (concat "cat <<'EOF'\nE" join "OF\nbody &\nEOF")
+                         (concat "echo \"$(cat <<'EOF'\nE" join "OF\nbody &\nEOF)\"")
+                         (concat "cat <<EOF\nE\\" join "OF\nbody &\nEOF")))
+      (should-not (mevedel-bash-analysis--background-p source))
+      (should-not (plist-get (mevedel-bash-analysis-analyze source) :background-p))))
+  :doc "continuations can form substitutions and conjunctions around heredocs"
+  (let ((join (string ?\\ ?\n)))
+    (dolist (source (list (concat "echo \"$" join "(printf marker &)\"")
+                         (concat "cat <<EOF\n'\n$" join "(printf marker &)\nEOF")))
+      (should (mevedel-bash-analysis--background-p source))
+      (should (plist-get (mevedel-bash-analysis-analyze source) :background-p)))
+    (let ((source (concat "cat <<'EOF' &" join "& printf done\nbody &\nEOF")))
+      (should-not (mevedel-bash-analysis--background-p source))
+      (should-not (plist-get (mevedel-bash-analysis-analyze source) :background-p)))))
+
 (mevedel-deftest mevedel-bash-analysis-prepare-read-only ()
   ,test
   (test)

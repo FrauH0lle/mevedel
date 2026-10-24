@@ -754,6 +754,14 @@ normally configured Bash Tree-sitter grammar when available and a conservative
 scanner otherwise.  Redirections, substitutions, expansions, assignments,
 subshells, here-documents, control flow, parse errors, and unsupported operators
 are complex.  A dangerous component takes precedence in a compound request.
+Here-document payload is data for the separate native-backgrounding check:
+literal `&` and `coproc` text do not reject a call. Background operators outside
+the payload and in substitutions of expanding (unquoted-delimiter) bodies still
+reject it; quoted delimiters disable those substitutions.
+Delimiter recognition joins escaped newlines only in expanding bodies;
+quoted payload retains its original physical lines.
+Delimiter words using ANSI-C or locale quoting remain conservatively scanned
+as raw source rather than guessing their expanded terminators.
 Read-only classification uses argument-aware built-in policies. Reading,
 searching, listing, comparing and path inspection need no broad default Bash
 allow patterns. Besides the existing readers, supported policies include

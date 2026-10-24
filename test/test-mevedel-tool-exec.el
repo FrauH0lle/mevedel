@@ -846,6 +846,24 @@ A synchronous result must come with exactly one matching acknowledgement."
   (should-error
    (mevedel-tool-exec-test--call-bash #'ignore '(:command "sleep 1 &"))
    :type 'error)
+  :doc "launches literal heredoc ampersands without granting read-only authority"
+  (let* ((source "cat <<'EOF'\ntext & more\n$(sleep 1 &)\nEOF")
+         captured)
+    (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+               (lambda (&rest args) (setq captured (cdr args)))))
+      (mevedel-tool-exec-test--call-bash #'ignore (list :command source)))
+    (should captured)
+    (should-not (plist-get captured :read-only-p))
+    (should (equal '("bash" "-lc") (butlast (plist-get captured :command))))
+    (with-temp-buffer
+      (should (zerop (apply #'process-file (car (plist-get captured :command))
+                           nil t nil (cdr (plist-get captured :command)))))
+      (should (string-prefix-p "text & more\n$(sleep 1 &)\n" (buffer-string)))))
+  :doc "still rejects executable backgrounding within expanding heredocs"
+  (should-error
+   (mevedel-tool-exec-test--call-bash
+    #'ignore '(:command "cat <<EOF\n$(sleep 1 &)\nEOF"))
+   :type 'error)
   :doc "forwards the yield the repair pipeline already range-checked"
   (let (captured)
     (cl-letf (((symbol-function 'mevedel-execution-start-bash)
