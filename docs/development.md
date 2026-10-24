@@ -193,9 +193,33 @@ Enforced invariants:
   The ratchet compares message counts per top-level definition, ignoring line
   shifts; fixing one definition cannot buy warnings in another. Existing
   diagnostics in changed files are summarized as advisory, not repeated.
+- Test function-cell stubs must explicitly require the defining feature before
+  installing the stub. `scripts/test-stubs-collect.el` reads definitions and
+  `provide` forms from repository libraries (the same root/immediate-directory
+  Lisp scope as the layout check), without loading them. It checks literal
+  `cl-letf`/`cl-letf*` bindings of `symbol-function`, `fset`, `defalias`, and
+  `setf`/`cl-setf` of `symbol-function` in immediate `test/` libraries. It accepts
+  unconditional top-level imports for deferred test/function bodies, or an
+  earlier unconditional import in the enclosing body or binding initializer.
+  A `require` in the stubbed body is too late; conditional and compile-only
+  imports do not establish readiness. Transitive imports through aggregators
+  do not substitute for the explicit owner import. External functions and
+  functions defined in the test library itself are outside this check. Quoted
+  data is ignored, while executable backquote unquotes are checked. Literal
+  `mevedel-deftest` templates and their setup, teardown and variable options are
+  checked per generated case, without evaluating template expressions. Other
+  macros are not expanded. Diagnostics point to the
+  containing top-level form. This is a literal-source check, not a proof of
+  arbitrary Lisp control flow or generated stubs.
+  Both complete snapshots are checked against their own definition maps, so a
+  changed defining feature also rechecks unchanged tests. New diagnostics fail
+  by per-file, per-test/function, per-message counts; line shifts and Git-detected
+  renames retain the baseline. Existing debt is summarized as advisory rather
+  than maintained in a hand-written allowlist.
 
 The checker regression suite exercises real temporary Git repos and Emacs,
-including injected violations and checkdoc negative controls:
+including injected violations, checkdoc negative controls, and a cold autoload
+that overwrites a test stub (with the preloaded-owner variant as its control):
 
 ```bash
 python3 -m unittest test/test_check_standards.py test/test_check.py
@@ -661,3 +685,9 @@ must not need a load-order recipe.
   execution registry, no workspace registry entry, no live timer, no target
   connection, and no file outside its own temporary directory. Leaked state
   makes later tests slow, noisy, and order-dependent.
+- **Stub readiness**: explicitly `require` a repository function's defining
+  feature before stubbing its function cell, either at file top level or before
+  the stubbing form in the test. A lazy load can overwrite a stub and its unwind
+  can then restore an obsolete autoload. A `require` inside the `cl-letf` body
+  does not fix this ordering. The standards checker ratchets existing violations
+  against the merge base; do not add new ones.

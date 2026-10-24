@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 COLLECTOR = Path(__file__).with_name('checkdoc-collect.el')
+STUB_COLLECTOR = Path(__file__).with_name('test-stubs-collect.el')
 
 
 def git(root, *args):
@@ -198,6 +199,28 @@ def new_diagnostics(old, current):
     return new
 
 
+def test_stubs(root, sources):
+    """Resolve function owners and lint test snapshots in non-evaluating Emacs."""
+    with tempfile.TemporaryDirectory(prefix='mevedel-test-stubs-') as tmp:
+        directory = Path(tmp)
+        request, response = directory / 'input.json', directory / 'output.json'
+        request.write_text(json.dumps([{'name': name, 'text': text}
+                                       for name, text in sources]))
+        env = {**os.environ, 'HOME': tmp, 'XDG_CONFIG_HOME': tmp,
+               'XDG_CACHE_HOME': tmp, 'XDG_DATA_HOME': tmp}
+        subprocess.run([os.environ.get('EMACS', 'emacs'), '--batch', '-Q',
+                        '--load', str(STUB_COLLECTOR), '--', str(request), str(response)],
+                       cwd=root, env=env, check=True, capture_output=True, text=True)
+        return json.loads(response.read_text()) or {}
+
+
+def stub_library(name):
+    """Use repository libraries, not nested executable fixtures or Lisp data."""
+    path = Path(name)
+    return (path.suffix == '.el' and not path.name.startswith('.') and
+            path.parent.as_posix() in ('.', 'test', 'scripts', 'benchmark'))
+
+
 def changed_lisp(root, revision):
     """Map changed Lisp paths to their base paths, preserving Git-detected renames."""
     fields = iter(git(root, 'diff', '--name-status', '-z', '--find-renames',
@@ -240,6 +263,18 @@ def run(root, base):
     index = 'docs/adr/README.md'
     previous = git(root, 'show', f'{revision}:{index}').decode() if index in base_names else ''
     errors.extend(adr_errors(root, names, previous))
+    # Rebuild both owner maps, including unchanged tests: a changed definition or
+    # provide can change the required feature without changing any test source.
+    old_stubs = test_stubs(root, [(name, git(root, 'show', f'{revision}:{name}').decode())
+                                 for name in sorted(base_names) if stub_library(name)])
+    current_stubs = test_stubs(root, [(name, (root / name).read_text())
+                                     for name in names if stub_library(name)])
+    stub_advisory = 0
+    for name, current in current_stubs.items():
+        old = old_stubs.get(origins.get(name, name), [])
+        new = new_diagnostics(old, current)
+        stub_advisory += len(current) - len(new)
+        errors.extend(f'{name}:{item["line"]}: test-stub: {item["message"]}' for item in new)
     # An absent base file must not acquire diagnostics from an empty buffer.
     old_results, results = checkdoc(root, before), checkdoc(root, after)
     advisory = 0
@@ -250,7 +285,8 @@ def run(root, base):
     for error in errors:
         print(error, file=sys.stderr)
     print(f'Standards: {len(errors)} errors; checkdoc: {len(changed)} changed Lisp files, '
-          f'{advisory} existing diagnostics advisory; merge base {revision[:12]}')
+          f'{advisory} existing diagnostics advisory; '
+          f'{stub_advisory} existing stub diagnostics advisory; merge base {revision[:12]}')
     return 1 if errors else 0
 
 

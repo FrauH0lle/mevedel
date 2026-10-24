@@ -33,8 +33,9 @@ scoped contracts and checks. Apply area-specific contracts from the
 
 The [deterministic standards check](docs/development.md#deterministic-standards-and-checkdoc-ratchet)
 enforces Lisp binding headers/final footers, local `docs/` link targets, ADR
-index integrity, and the changed-file checkdoc ratchet. Use its result instead
-of manually rechecking those invariants; the guide states their exact scope.
+index integrity, the changed-file checkdoc ratchet, and the test-stub owner-import
+ratchet. Use its result instead of manually rechecking those invariants; the guide
+states their exact scope.
 
 ## DEEP HARNESS
 

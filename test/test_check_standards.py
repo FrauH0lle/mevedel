@@ -196,6 +196,184 @@ class StandardsTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             standards.run(self.root, 'does-not-exist')
 
+    def stub_source(self, body, requires=''):
+        return library('test-demo').replace(
+            '(defun test-demo-value (value)\n  "Return VALUE."\n  value)',
+            requires + '\n(ert-deftest restore-test ()\n' + body + ')')
+
+    def stub_diagnostics(self, body, requires=''):
+        sources = [('demo.el', library()),
+                   ('test/test-demo.el', self.stub_source(body, requires))]
+        return standards.test_stubs(self.root, sources)['test/test-demo.el']
+
+    def test_stub_owner_require_order_and_scope(self):
+        stub = "(cl-letf (((symbol-function 'demo-value) #'ignore)) (demo-value))"
+        bad = self.stub_diagnostics(stub)
+        self.assertEqual(len(bad), 1)
+        self.assertIn("require 'demo", bad[0]['message'])
+        self.assertEqual(bad[0]['owner'], 'restore-test')
+        for body, requires in [
+                (stub, "(require 'demo)"),
+                ("(require 'demo)\n" + stub, ''),
+                ("(progn (require 'demo) " + stub + ')', ''),
+                (stub.replace("'demo-value", "#'demo-value"), "(require 'demo)")]:
+            with self.subTest(body=body, requires=requires):
+                self.assertEqual(self.stub_diagnostics(body, requires), [])
+        for body, requires in [
+                (stub, "(eval-when-compile (require 'demo))"),
+                (stub, "(require 'demo nil t)"),
+                (stub, "(when nil (require 'demo))"),
+                ("(when ready (require 'demo))\n" + stub, ''),
+                ("(if ready (require 'demo) " + stub + ')', ''),
+                ("(cl-letf (((symbol-function 'demo-value) #'ignore))\n"
+                 "  (require 'demo) (demo-value))", ''),
+                (stub + "\n(require 'demo)", '')]:
+            with self.subTest(body=body, requires=requires):
+                self.assertEqual(len(self.stub_diagnostics(body, requires)), 1)
+
+    def test_stub_definition_resolution_and_other_mutators(self):
+        for body in [
+                "(cl-letf* (((symbol-function 'demo-value) #'ignore)) nil)",
+                "(fset 'demo-value #'ignore)",
+                "(setf (symbol-function 'demo-value) #'ignore)",
+                "(defalias 'demo-value #'ignore)"]:
+            with self.subTest(body=body):
+                self.assertEqual(len(self.stub_diagnostics(body)), 1)
+                self.assertEqual(self.stub_diagnostics(body, "(require 'demo)"), [])
+        self.assertEqual(self.stub_diagnostics(
+            "(cl-letf (((symbol-function 'external-function) #'ignore)) nil)"), [])
+        self.assertEqual(self.stub_diagnostics(
+            "'(cl-letf (((symbol-function 'demo-value) #'ignore)) nil)"), [])
+        sources = [('different.el', library().replace("(provide 'demo)",
+                                                     "(provide 'owner-feature)")),
+                   ('test/test-demo.el', self.stub_source(
+                       "(fset 'demo-value #'ignore)", "(require 'different)"))]
+        bad = standards.test_stubs(self.root, sources)['test/test-demo.el']
+        self.assertIn("require 'owner-feature", bad[0]['message'])
+        sources[1] = (sources[1][0], sources[1][1].replace("'different", "'owner-feature"))
+        self.assertEqual(standards.test_stubs(self.root, sources)['test/test-demo.el'], [])
+        sources = [('test/helpers.el', library('helpers')),
+                   ('test/test-demo.el', self.stub_source("(defalias 'helpers-value #'ignore)"))]
+        bad = standards.test_stubs(self.root, sources)['test/test-demo.el']
+        self.assertEqual(len(bad), 1)
+        self.assertIn("require 'helpers", bad[0]['message'])
+
+    def test_stub_executable_subforms_and_initializers(self):
+        stub = "(fset 'demo-value #'ignore)"
+        for body in [f'(let ((x {stub})) x)', f'`(data ,{stub})',
+                     f'`(data ,@{stub})',
+                     f"(condition-case nil (require 'demo) (error {stub}))",
+                     f"(unwind-protect (require 'demo) {stub})"]:
+            with self.subTest(body=body):
+                self.assertEqual(len(self.stub_diagnostics(body)), 1)
+        for body in [f"(if (require 'demo) {stub})",
+                     f"(let () (require 'demo)) {stub}",
+                     f"(let ((x (require 'demo))) {stub})",
+                     "(fset 'demo-value (progn (require 'demo) #'ignore))",
+                     "(setf (symbol-function 'demo-value) "
+                     "(progn (require 'demo) #'ignore))",
+                     "(cl-letf (((symbol-function 'demo-value) #'ignore)"
+                     " ((symbol-function 'external) (progn (require 'demo) #'ignore))) nil)"]:
+            with self.subTest(body=body):
+                self.assertEqual(self.stub_diagnostics(body), [])
+        self.assertEqual(len(self.stub_diagnostics(
+            "(cl-letf* (((symbol-function 'demo-value) #'ignore)"
+            " ((symbol-function 'external) (progn (require 'demo) #'ignore))) nil)")), 1)
+
+    def test_stub_mevedel_cases_and_fixture_options(self):
+        stub = "(cl-letf (((symbol-function 'demo-value) #'ignore)) nil)"
+
+        def collect(options, template):
+            text = library('test-demo').replace(
+                '(defun test-demo-value (value)\n  "Return VALUE."\n  value)',
+                f'(mevedel-deftest demo-value ({options}) {template})')
+            return standards.test_stubs(self.root, [('demo.el', library()),
+                                                     ('test/test-demo.el', text)])[
+                                                         'test/test-demo.el']
+
+        for option in (f':before-each {stub}', f':after-each {stub}',
+                       f':vars ((x {stub}))', f':vars* ((x {stub}))'):
+            with self.subTest(option=option):
+                self.assertEqual(len(collect(option, '(should t)')), 1)
+        self.assertEqual(collect(":before-each (require 'demo)", stub), [])
+        separate = collect('', f",test (test) :doc \"one\" (require 'demo) "
+                           f':doc "two" {stub}')
+        self.assertEqual(len(separate), 1)
+        self.assertEqual(separate[0]['owner'], 'demo-value/test@2')
+        self.assertEqual(collect('', f"(progn (require 'demo) ,test) (test) {stub}"), [])
+
+    def test_stub_ratchet_uses_base_definitions_and_per_test_counts(self):
+        stub = "(cl-letf (((symbol-function 'demo-value) #'ignore)) nil)"
+        self.write('test/test-demo.el', self.stub_source(stub))
+        self.commit()
+        output, _ = self.check(0)
+        self.assertIn('1 existing stub diagnostics advisory', output)
+        self.write('test/test-demo.el', self.stub_source('\n' + stub))
+        self.check(0)  # Line shifts do not add debt.
+        self.write('test/test-demo.el', self.stub_source(stub + '\n' + stub))
+        _, errors = self.check(1)
+        self.assertIn('test-stub:', errors)
+        self.write('test/test-demo.el', self.stub_source(stub).replace(
+            'restore-test', 'another-test'))
+        self.check(1)  # A removed warning cannot buy one in a different test.
+        self.write('test/test-demo.el', self.stub_source(stub))
+        # An unchanged test must be rechecked if its defining feature changes.
+        self.write('demo.el', library().replace("(provide 'demo)", "(provide 'new-owner)"))
+        _, errors = self.check(1)
+        self.assertIn("require 'new-owner", errors)
+
+    def test_stub_transfer_shape_negative_control(self):
+        # A cold restore loads the real chat implementation over the stub, then
+        # cl-letf restores its saved autoload, losing the loaded definition.
+        self.write('chat.el', library('chat').replace('chat-value', 'chat-open'))
+        body = ("(cl-letf (((symbol-function 'chat-open) (lambda () 'stub)))\n"
+                "  (require 'chat)\n  (should (eq (chat-open nil) 'stub)))")
+        self.write('test/test-demo.el', self.stub_source(body))
+        _, errors = self.check(1)
+        self.assertIn("stubbing chat-open requires (require 'chat)", errors)
+        self.write('test/test-demo.el', self.stub_source(body, "(require 'chat)"))
+        self.check(0)
+        # Exercise the actual cold autoload/stub interaction as well as linting
+        # its source.  Both processes load only the disposable fixture library.
+        for preload in ('', "(require 'chat)"):
+            expression = f"""(progn
+              (require 'cl-lib)
+              (autoload 'chat-open "chat")
+              {preload}
+              (cl-letf (((symbol-function 'chat-open) (lambda (&rest _) 'stub)))
+                (require 'chat)
+                (unless (eq (chat-open 'real) '{'stub' if preload else 'real'})
+                  (error "Negative control did not exercise cold replacement")))
+              (unless (eq (autoloadp (symbol-function 'chat-open))
+                          {'nil' if preload else 't'})
+                (error "Unexpected restored function cell")))"""
+            subprocess.run(['emacs', '--batch', '-Q', '-L', str(self.root),
+                            '--eval', expression], check=True, capture_output=True)
+
+    def test_stub_ratchet_preserves_renames_and_catches_removed_imports(self):
+        stub = "(cl-letf (((symbol-function 'demo-value) #'ignore)) nil)"
+        self.write('test/test-demo.el', self.stub_source(stub))
+        self.commit()
+        self.git('mv', 'test/test-demo.el', 'test/test-moved.el')
+        self.write('test/test-moved.el', self.stub_source(stub).replace(
+            'test-demo', 'test-moved'))
+        output, _ = self.check(0)
+        self.assertIn('1 existing stub diagnostics advisory', output)
+        self.write('test/test-moved.el', self.stub_source(
+            stub, "(require 'demo)").replace('test-demo', 'test-moved'))
+        self.commit()
+        self.write('test/test-moved.el', self.stub_source(stub).replace(
+            'test-demo', 'test-moved'))
+        _, errors = self.check(1)
+        self.assertIn('test-stub:', errors)
+
+    def test_stub_collector_does_not_evaluate_sources(self):
+        sentinel = self.root / 'must-not-exist'
+        source = library() + f'\n(write-region "bad" nil "{sentinel}")\n'
+        source += f';; Local Variables:\n;; eval: (write-region "bad" nil "{sentinel}")\n;; End:\n'
+        standards.test_stubs(self.root, [('demo.el', source)])
+        self.assertFalse(sentinel.exists())
+
     def test_ci_base_selection(self):
         workflow = (ROOT / '.github/workflows/test.yml').read_text()
         block = workflow.split('    - name: Select standards comparison base\n', 1)[1]
