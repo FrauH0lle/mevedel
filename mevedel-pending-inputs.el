@@ -345,14 +345,18 @@ follow-ups retain their queue order.  Delivery holds are checked separately."
       (car queue))))
 
 
-(defun mevedel-view--follow-up-auto-drain-blocked-p (&optional session)
-  "Return non-nil when SESSION follow-ups should wait for user action."
+(defun mevedel-view--follow-up-auto-drain-blocked-p
+    (&optional session ignore-failure-latch)
+  "Return non-nil when SESSION follow-ups should wait for user action.
+With IGNORE-FAILURE-LATCH, the failure-recovery latch alone does not hold."
   (when-let* ((sess (or session (mevedel-view--session))))
     (or (mevedel-recovery-blocker sess)
         (mevedel-permission-absence-held-p sess)
         (cl-find 'failed-turn (mevedel-session-pending-follow-ups sess)
                  :key (lambda (entry) (plist-get entry :state)))
-        (mevedel-session-pending-input-delivery-paused-p sess)
+        (if ignore-failure-latch
+            (mevedel-session-pending-input-paused sess)
+          (mevedel-session-pending-input-delivery-paused-p sess))
         (mevedel-session-pending-plan-approval sess)
         (and (mevedel-session-directive-planning sess)
              (not (mevedel-view--next-follow-up sess)))
@@ -1196,8 +1200,11 @@ prompt, so their text cannot pose as the user.")
           (when (and (not mevedel-view--agent-transcript-p)
                      (not mevedel-view--prompt-hook-pending)
                      (not mevedel-view--pending-skill-submission)
+                     ;; Background mail is not user input: a failure latch
+                     ;; that holds no queued input must not strand it.
                      (not (mevedel-view--follow-up-auto-drain-blocked-p
-                           session))
+                           session
+                           (null (mevedel-session-pending-steering session))))
                      (not (mevedel-pending-inputs--interaction-pending-p
                            session view-buffer))
                      (string-empty-p (mevedel-view--input-text)))
@@ -1986,10 +1993,15 @@ and only a transition back to WAIT releases it."
                   (fsm (and request (mevedel-request-fsm request)))
                   ((plist-get (gptel-fsm-info fsm)
                               :mevedel-pending-input-hold)))
-        (gptel--fsm-transition fsm 'WAIT))
-      (when (buffer-live-p view)
-        (with-current-buffer view
-          (mevedel-pending-inputs-schedule-held-input-delivery))))))
+        (gptel--fsm-transition fsm 'WAIT)))
+    ;; A failure latch that holds no queued input no longer holds background
+    ;; mail, so offer it; latched input waits for explicit recovery.
+    (when (and (buffer-live-p view)
+               (or (not failure-paused)
+                   (not (or (mevedel-session-pending-steering session)
+                            (mevedel-session-pending-follow-ups session)))))
+      (with-current-buffer view
+        (mevedel-pending-inputs-schedule-held-input-delivery)))))
 
 (defun mevedel-pending-inputs--on-kill-buffer ()
   "Resume delivery when the cockpit is killed while it still owns a pause.

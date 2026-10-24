@@ -2855,7 +2855,10 @@ successfully, and a failed background-event turn does not wake again. A
 background-event turn waits for an idle transport and then rechecks every
 follow-up hold below, plus queued follow-ups and any pending permission, Ask,
 or Plan interaction, so it never replaces a draft or interrupts a decision;
-deleting the draft or closing the last interaction offers it again. Resuming
+deleting the draft or closing the last interaction offers it again. The
+failure pause holds a background-event turn only while queued steering or
+follow-ups remain: once failed input is resolved, child results wake the idle
+root even before `R`, and closing the cockpit offers them. Resuming
 pending-input delivery, leaving directive planning, resolving readiness or
 recovery holds, and successfully finishing manual compaction also offer held
 follow-ups first, then background mail. Those release edges do not start a

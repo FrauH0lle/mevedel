@@ -13,6 +13,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-chat)
 (require 'mevedel-cockpit)
 (require 'mevedel-file-state)
 (require 'mevedel-pending-inputs)
@@ -811,6 +812,28 @@
       (should-not scheduled)
       (should (mevedel-session-pending-input-failure-paused session))
       (should-not (mevedel-session-pending-input-paused session))))
+
+  :doc "a failure latch with no queued input re-offers background mail"
+  (mevedel-pending-inputs-test--with-session
+    (let ((failed (mevedel-session-enqueue-pending-input
+                   session 'steering
+                   '(:input "drop" :request-id "dead" :state failed-turn)))
+          scheduled)
+      (mevedel-session-set-pending-input-failure-paused session t)
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          ;; Resolving the failed input by deletion leaves the latch set.
+          (mevedel-pending-inputs--set-queues
+           session 'steering
+           (remq failed (mevedel-session-pending-steering session)))
+          (cl-letf (((symbol-function
+                      'mevedel-pending-inputs-schedule-held-input-delivery)
+                     (lambda () (setq scheduled t))))
+            (kill-buffer cockpit))))
+      (should scheduled)
+      (should (mevedel-session-pending-input-failure-paused session))))
 
   :doc "reopening for the same session keeps its pause and delivers nothing"
   (mevedel-pending-inputs-test--with-session
@@ -2262,6 +2285,29 @@ BODY sees SUBMITTED, a list of (PROMPT DISPLAY ATTRIBUTION) per turn."
                (lambda (&rest _) t)))
       (mevedel-pending-inputs--run-event-wake data-buf))
     (should-not submitted))
+  :doc "a failure latch with no queued input does not strand background mail"
+  ;; Regression: a failed turn latched delivery; once its failed input was
+  ;; resolved the latch remained until `R' or a user message, and child
+  ;; results never woke the idle root in between.
+  (mevedel-pending-inputs-test--with-event
+    (mevedel-session-set-pending-input-failure-paused session t)
+    (with-current-buffer view-buf
+      (mevedel-view--interaction-rebuild))
+    (mevedel-pending-inputs--run-event-wake data-buf)
+    (should (= 1 (length submitted))))
+  :doc "the failure latch still holds the wake while failed input awaits review"
+  (dolist (category '(steering follow-up))
+    (mevedel-pending-inputs-test--with-event
+      (mevedel-session-enqueue-pending-input
+       session category '(:input "review me" :request-id "dead"
+                          :state failed-turn))
+      (mevedel-session-set-pending-input-failure-paused session t)
+      (with-current-buffer view-buf
+        (mevedel-view--interaction-rebuild))
+      (mevedel-pending-inputs--run-event-wake data-buf)
+      (ert-info ((symbol-name category))
+        (should-not submitted)
+        (should (mevedel-agent-control-wake-pending-p session)))))
   :doc "no live view means no wake"
   (mevedel-pending-inputs-test--with-event
     (with-current-buffer data-buf
