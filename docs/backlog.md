@@ -50,17 +50,6 @@ change then leaves the characters in place (Ebox `ebox--rewrite-span`,
 `4785ad7`). Measure the redisplay cost of a status tick, and check whether some
 of the logical-state capture and restore becomes unnecessary.
 
-### Reuse rendered turns in a full projection
-
-A full projection costs 153.7 ms for a 40-exchange history and about 200 ms for
-a restored real session
-([ADR 0119](adr/0119-keep-views-reconstructable-and-rendering-bounded.md#decision-history),
-`cfea5b70`). Tool renderings are cached by `mevedel-view--source-revision`;
-complete turns are not. First profile whether the time goes to segmentation
-and parsing or to rendering turns. If it goes to rendering, cache each turn's
-rendered text keyed by source revision, fold state and width. The cache must
-stay derived, so views remain reconstructable.
-
 ### Interrupt large single-turn preparation on input
 
 Scheduled projection treats one turn as indivisible, so a very large turn

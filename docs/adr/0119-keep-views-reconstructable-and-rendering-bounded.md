@@ -417,6 +417,41 @@ and retains the last good display where possible.
 
 ## Decision history
 
+### October 24, 2026: reject turn preparation plans after measuring reuse
+
+The original backlog proposed caching final rendered turn text. Reject that
+representation: installed text carries position-bearing markers, buttons and
+interaction identities, and its decoration depends on the current environment.
+Instead, test position-free pure preparation plans for settled, sample-free
+built-in turns. Both synchronous and batch projection used one preparation
+owner; replay still inserted text, invoked renderers and reconciled runtime,
+variant, path and environmental state. The candidate included consumer-owned
+source revision tracking, successful-complete-projection sweeps, incremental
+byte-bounded LRU eviction and view teardown, not a second authoritative history.
+
+The measured result rejects this replacement too. Seven alternating compiled
+pairs per fixture and GC setting proved full warm hits with no builders or
+eligibility bypass, yet all eight warm paths slowed down. Restored synchronous /
+batch medians rose from 555.589 / 644.663 to 576.671 / 678.169 ms at default GC
+(+3.79% / +5.20%), and from 264.724 / 335.343 to 272.021 / 361.025 ms at 64 MiB
+(+2.76% / +7.66%). First batches with response and plan caches cleared slowed
+3.04–5.90%; the candidate retained 56,350 synthetic / 114,922 restored string
+payload bytes, excluding object overhead. It was archived and discarded, not
+committed or left as an optional runtime path.
+
+After the targeted preparation fixes below removed duplicated work, exact key
+construction, validation and replay bookkeeping cost more than the remaining
+reusable pure preparation saved. Exclusive stage observations support this
+aggregate tradeoff, not isolated per-primitive causality. Resolve the turn-reuse
+backlog item with those local fixes (approximately 21–31% faster restored
+projections) and this negative result, rather than retaining a complex cache.
+Reopen only with evidence that identity can be proved substantially more cheaply
+or that source preparation again dominates. The
+[benchmark ledger](../../benchmark/profiler-optimization-results.md#rejected-turn-preparation-plans-2026-10-24)
+records the complete warm/cold matrices, retained memory, independent correctness
+fix costs and measurement limits. Complete turns remain reconstructed on every
+projection; existing response, tool and reasoning caches remain in use.
+
 ### October 24, 2026: remove repeated projection preparation first
 
 Complete-projection profiles exposed repeated grammar probes, whole-source

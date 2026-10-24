@@ -341,12 +341,21 @@ their private buffers and caches. Preparation uses the same merged tool/audit
 source spans as publication and commits its cursor after each normalized entry.
 Completed batch Markdown enters the bounded per-view response cache, so a later
 batch-only projection can reuse it; unfinished output never enters that cache.
+Historical tool cache keys also track the live source identity and revision when
+it differs from the archived transcript, so execution completion cannot leave
+archived output displaying a stale running state. Full projections still replay
+the turn renderers and rebuild their view-position and interaction state; neither
+final turn text nor intermediate turn-preparation plans are cached. The design
+rejection of final-text caching and measured rejection of preparation plans are in
+[ADR 0119](adr/0119-keep-views-reconstructable-and-rendering-bounded.md#decision-history).
 Once ready, the refresh
 renders every turn a displaying window shows, the turns needed to restore
 point, selection, and window anchors, and all chat prompt turns immediately (so
 moving onto pending responses still has an accurate prompt and click target).
 Offscreen turn placeholders are then replaced one per timer callback; a reader
-never sees a placeholder replaced in front of them. Each callback
+never sees a placeholder replaced in front of them. Pending-history placeholders
+do not count as later rendered turns when deciding whether to collapse the
+newest directive. Each callback
 captures the current draft and reader state, so typing between callbacks is
 preserved. Source text or property changes retire the old plan. Callbacks pause
 while the view is unattended or its transport is busy, and view teardown cancels

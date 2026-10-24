@@ -460,3 +460,210 @@ bodies after publication newly remembers an expanded fold.
   and mutation ownership. This is not a graphical redisplay, maximum callback
   delay, retained-memory, or provider-transport measurement. The conditional
   suite skips remain unverified; no new skip was added.
+
+## Rejected turn preparation plans (2026-10-24)
+
+**Decision: discard the candidate; no turn-plan cache is committed.** Final-text
+reuse was rejected at design time because installed turn output carries view
+positions, markers, buttons and interaction identities with environmental
+dependencies. A position-free pure preparation-plan cache was implemented and
+tested instead. Normal replay still performed insertion, renderer calls, runtime
+reconciliation and variant/path/environment decoration. It had shared sync/batch
+preparation ownership, settled/sample-free built-in eligibility, consumer-owned
+revision tracking, complete-projection sweeps, incremental byte-bounded LRU and
+full teardown. The complexity did not earn a performance benefit.
+
+### Protocol and provenance
+
+The final cache comparison isolates cache cost against `04ab1a4b` (three
+independent fixes on `9b710fc9`), not against the earlier buggy revision. A
+separate lighter comparison below measures those fixes against `9b710fc9`.
+Both sides used private compiled snapshots and matching harness, dependencies,
+assets and installed Markdown grammars in fresh isolated Emacs 31.1 processes.
+Restored input was `/tmp/mevedel-projection-fixture-xk2PCJ/session`; the other
+fixture was synthetic. Frame 80×25, GC percentage 0.1, thresholds 800000 and
+67108864. The shared benchmark flock serialized all heavy runs with other view
+work. No worktree code was loaded into the user's running Emacs.
+
+Exactly seven alternating outer base/change pairs per fixture/GC cell: 56 warm
+processes, each with sync and drained batch paths, two warmups and seven ordinary
+timings per path. Wall results are medians of the seven process medians. Separate
+exclusive-attribution rounds and native CPU/memory profiles never enter wall
+timings. Another 56 fresh processes measured separately cleared first/second
+batches, with separate untimed counter pairs. Main raw evidence contains 112 warm
+path records, 784 timings and 784 attribution rounds. History hashes match across
+variants/paths/populations; composer text and point, leading-`>` multiline draft,
+no-sync-fallback, job completion and loaded-bytecode guards pass.
+
+Disposable evidence roots are `.scratch/turn-plans-main-measurements/` and
+`.scratch/turn-plans-bugfix-cost/`. Main `final/` contains raw metrics Lisp/JSON,
+native profiles, schedules, summaries, source/build/fixture/helper manifests and
+postchecks. Independent recomputation checked all ordinary samples, partition
+shares, stages, counters and retention. Final rehashing checked 5,181 unique
+physical paths / 228,758,324 bytes; independent parsing checked all 224 main
+CPU/memory profiles / 54,869 stack rows against metrics and inclusive-owner maps.
+
+The discarded 37-file candidate (32 tracked and five new modules/tests) is saved
+as `.scratch/turn-plans-rejected-candidate.patch`, 268,358 bytes, SHA-256
+`1d71e26c1e8cc952351cc3daec2d1b5b744d59a24e0479472ee533c82db32235`.
+Its adjacent manifest records base `04ab1a4b96c89344c5e3c8eb6547537720579ea2`
+and per-file hashes. Main `final/frozen-candidate-files.json` SHA-256:
+`f0d357caeb628b4953f8a49e971c78fa64a2721a5ca8a8fa3811134ee9634afd`.
+The archive was checked before restoring the retained tree; it is not packaged.
+
+### Warm full projections
+
+Milliseconds; positive signed time change means **slower**. GC columns are wall
+time spent in GC, not a separately subtracted estimate.
+
+| GC | Fixture | Path | Base wall | Plan-cache wall | Time change | Base GC | Cache GC |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| default | synthetic | sync | 242.199 | 246.591 | +1.81% | 154.489 | 159.333 |
+| default | synthetic | batch | 278.567 | 290.515 | +4.29% | 160.878 | 164.820 |
+| default | restored | sync | 555.589 | 576.671 | +3.79% | 286.311 | 294.394 |
+| default | restored | batch | 644.663 | 678.169 | +5.20% | 298.880 | 302.204 |
+| 64 MiB | synthetic | sync | 86.586 | 87.392 | +0.93% | 0 | 0 |
+| 64 MiB | synthetic | batch | 115.547 | 122.251 | +5.80% | 0 | 0 |
+| 64 MiB | restored | sync | 264.724 | 272.021 | +2.76% | 0 | 0 |
+| 64 MiB | restored | batch | 335.343 | 361.025 | +7.66% | 0 | 0 |
+
+All eight warm paths regress, not merely fail to reach the approximately 5%
+restored-warm improvement threshold. Preflights prove actual reuse: every warm
+lookup hit, zero builders or eligibility bypass, exact ordinary-count versus
+attribution-count parity. This is not a cache-disabled benchmark. Synthetic has
+81 hits per sync / 162 per batch projection; restored has 80 / 160.
+
+### Separate cold batch population and retained memory
+
+Only response and plan caches are cleared immediately before the first batch;
+this is **not** disk, process or session-load cold. The second batch follows
+without synchronous warmup. Values are medians, milliseconds.
+
+| GC / fixture | First base | First cache | Time change | Second base | Second cache | Time change |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| default / synthetic | 715.941 | 737.679 | +3.04% | 277.150 | 329.431 | +18.86% |
+| default / restored | 1959.349 | 2045.057 | +4.37% | 653.997 | 758.204 | +15.93% |
+| 64 MiB / synthetic | 358.523 | 374.572 | +4.48% | 116.672 | 137.200 | +17.59% |
+| 64 MiB / restored | 1123.174 | 1189.463 | +5.90% | 335.956 | 406.452 | +20.98% |
+
+Cold first projections materially regress by 3–6%. The second is not guaranteed
+to have fully warm plan inputs: initial disclosure capture changes absent fold
+state to remembered folds. Timed first/second retained payloads grow from
+55,070 → 56,350 bytes synthetic and 111,414 → 114,922 restored. Separate cleared
+counter pairs retain the final-size payload throughout; these populations are
+not equated. Both variants start 40 synthetic / 190 restored Markdown jobs first
+and zero second; fontification calls are 360 / 37 and mode probes one per pass.
+
+| Fixture | Warm entries | String payload bytes | Strings | Traversed conses |
+| --- | ---: | ---: | ---: | ---: |
+| synthetic | 81 | 56,350 | 401 | 13,058 |
+| restored | 80 | 114,922 | 1,212 | 30,199 |
+
+Independent walking follows pure hash keys/values and string properties,
+deduplicating by identity within each entry, matching the storage budget.
+Reported payload equals independently counted payload in every checked pass.
+These are retained **string bytes**, not total heap; cons/vector/hash/property
+overheads are excluded. The retained implementation has no turn-plan entries.
+
+### What the profile supports
+
+Restored 64 MiB exclusive stage medians, milliseconds:
+
+| Stage | Sync base → cache | Batch base → cache |
+| --- | ---: | ---: |
+| preparation key | 0 → 4.556 | 0 → 8.947 |
+| plan lookup | 0 → 1.953 | 0 → 3.630 |
+| preparation owner remainder | 0 → 0.897 | 0 → 1.614 |
+| publication | 33.146 → 35.030 | 67.634 → 78.924 |
+| remaining turn | 120.958 → 122.756 | 111.356 → 112.850 |
+
+After the targeted fixes removed duplicate preparation, key construction,
+validation and replay bookkeeping outweighed remaining reusable pure work.
+These aggregates do not isolate hashing, equality, copying or any single
+primitive. Stage medians need not sum to total medians. The cached-depth share
+includes descendants of cache owners, not just exclusive cache buckets.
+All cells still exceed the existing 25% uncached-share flag; that flag is neither
+a predicted speedup nor the cache acceptance criterion.
+
+Native restored/64 MiB CPU totals across seven processes increase from 1,865 to
+1,935 sync and 2,375 to 2,557 batch samples. Median sampled allocation decreases
+from 24,099,781 to 23,509,353 bytes sync and 29,617,422 to 29,328,705 batch, which
+does not override slower ordinary wall time or measure retained heap. Inclusive
+owners overlap and must not be summed or confused with exclusive stage times.
+
+### Separate cost of the retained fixes
+
+Fresh matching builds, exactly seven alternating warm pairs, restored/default GC
+only; no cold or additional fixture/GC cells. This is `9b710fc9` → `04ab1a4b`,
+**not** cache evidence, and does not apportion cost among the three commits.
+
+| Path | Original wall (ms) | Fixed wall (ms) | Time change | Original GC (ms) | Fixed GC (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| sync | 564.956 | 554.778 | −1.80% | 292.787 | 286.005 |
+| batch | 638.037 | 646.016 | +1.25% | 299.784 | 297.814 |
+
+Both sides have median nine GCs per timing sample and retain no plans. Do not
+claim zero cost or a general speedup from these small mixed changes. Retained:
+
+- `076fb336`: archived tool output follows live execution completion by including
+  distinct live source identity/revision in historical rendering keys.
+- `f1f25097`: deferred history placeholders do not collapse the newest directive.
+- `04ab1a4b`: Eval workdir regression asserts an existing exact canonical fixture
+  directory without racing two shared-`/tmp` parent metadata reads.
+
+The first two bugs reproduce on original master `6d6f4a95`, pre-4a `dcb5e5af`
+and `9b710fc9`; they were not introduced by 4a. Historical archive failures reach
+the sync assertion first, so those runs do not independently prove batch failure.
+The Eval case passes alone on both current and `9b710fc9`; controlled temp-file
+creation between parent attribute reads reproduces the original failure on both.
+The original concurrent interleaving was not captured. The stronger exact-path
+test avoids the irrelevant parent timestamp assertion, not product behavior.
+
+### Callback diagnostic and limitations
+
+Separate instrumented batch event-loop population: one fresh process per
+variant/fixture/GC, two warmups, seven rounds each; 21,966 callbacks and 9,259
+one-shot 1 ms sentinels. Observed maxima, milliseconds, not universal bounds:
+
+| GC / fixture | Base callback | Cache callback | Base sentinel lateness | Cache sentinel lateness |
+| --- | ---: | ---: | ---: | ---: |
+| default / synthetic | 276.410 | 296.943 | 276.131 | 273.750 |
+| default / restored | 477.699 | 521.648 | 450.988 | 520.670 |
+| 64 MiB / synthetic | 107.903 | 110.372 | 107.247 | 104.136 |
+| 64 MiB / restored | 220.112 | 235.366 | 220.157 | 234.382 |
+
+Maximum initial batch start is 0.442 ms. The first diagnostic failed retention
+because its observer walked a temporary serialization buffer instead of the
+view, not because product entries disappeared. Failed outputs remain separate;
+the corrected eight-process rerun passes strict retention guards. Main ordinary
+wall, attribution and cold populations were unchanged.
+
+Real keyboard/graphical input and redisplay latency remain unverified. Sentinel
+lateness includes scheduler/observer effects. Lazy bootstrap filtered disclosure
+capture/restore before they were defined, so no separate disclosure breakout was
+collected; those costs remain in enclosing publication/turn buckets, not zero.
+This attribution limitation does not affect the ordinary wall-time rejection.
+
+### Verification
+
+The candidate passed 12,592/12,592 full-suite results, zero unexpected and 38
+conditional skips, and warning-free compilation before measurement. These are
+candidate-era checks, not evidence for the retained post-discard tree.
+
+Fresh post-discard validation of the retained `04ab1a4b` implementation:
+
+- Required `npx @emacs-eask/cli clean elc`, then isolated parallel full suite:
+  **12,522/12,522 results, zero unexpected, 38 conditional skips**, eight workers
+  exit 0, 212.49 s. Report `.scratch/test-suite-performance/20261024-021637/`;
+  no warning/error diagnostics found in worker logs. The archive and directive
+  regressions exercise real synchronous and drained batch interfaces.
+- `npx @emacs-eask/cli compile`: **261 files compiled, zero skipped**, no warnings.
+  `bench-gate` passes unchanged budgets: stream **864/964**, composer **50/150**,
+  zone **1732/1832** net conses, zero GCs. All ran under the shared benchmark lock;
+  command logs are `.scratch/turn-plans-retained-validation/`.
+- Independent read-only review found no actionable documentation inaccuracies;
+  `git diff --check` passes. `mevedel-view-zone.el` is unchanged from `9b710fc9`;
+  `.eask` remains an untracked dependency symlink. Candidate modules are absent.
+
+Conditional transport/environment skips remain unverified. No cache-specific
+candidate test is presented as a current runtime guarantee after its removal.
