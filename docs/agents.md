@@ -9,11 +9,19 @@ stay within its existing JSON response schema. Only the main prompt receives
 the recent journal map; all roles may use permitted journal reads on demand.
 
 The model-facing `Agent` tool starts a retained child asynchronously. It
-accepts a `task_name` path segment matching `[a-z0-9_-]+` (lowercase ASCII
-letters, digits, underscores, and hyphens; `root` is reserved), a complete
-`message`, and optional `role`, `context`, `model`, and `effort` controls, then
-returns the committed canonical path after preparation and provider dispatch
-succeed.
+accepts a free-form `task_name`, a complete `message`, and optional `role`,
+`context`, `model`, and `effort` controls, then returns the committed canonical
+path after preparation and provider dispatch succeed.
+
+The harness lowercases the name, replaces runs outside `[a-z0-9_-]` with
+hyphens, and trims boundary hyphens. An empty result becomes `agent`; `root`
+becomes `agent-root`. Reservation adds `-2`, `-3`, and so on until the path
+is unique among retained and preparing siblings. For example, `Review
+code-block copy` becomes `/root/review-code-block-copy` for a root child,
+or `/root/review-code-block-copy-2` if the first path is occupied. Callers use
+the returned path for follow-ups; a repeated name creates a new conversation,
+not a continuation. Canonical path inputs remain strict lowercase ASCII paths.
+
 An omitted role selects `default` and inherits the delegator's effective
 instructions, tools, model policy, and delegation capability. A named role
 supplies its own configuration rather than intersecting its tools with the

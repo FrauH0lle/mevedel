@@ -1182,14 +1182,24 @@ rewrite after the complete registry has been repaired."
   "Validate SESSION, TASK-NAME, and MESSAGE for a new child."
   (unless (mevedel-session-p session)
     (error "Agent requires an active mevedel session"))
-  (unless (and (stringp task-name)
-               (let ((case-fold-search nil))
-                 (string-match-p "\\`[a-z0-9_-]+\\'" task-name))
-               (not (equal task-name "root")))
-    (user-error
-     "Agent task_name must match [a-z0-9_-]+ and must not be root"))
+  (unless (stringp task-name)
+    (user-error "Agent task_name must be plain text"))
   (unless (and (stringp message) (not (string-empty-p message)))
     (user-error "Agent message must be non-empty plain text")))
+
+(defun mevedel-agent-control--task-segment (task-name)
+  "Derive one canonical child path segment from free-form TASK-NAME.
+Lowercase the name, replace runs outside the ASCII path alphabet with a
+hyphen, and trim boundary hyphens.  Use agent for an empty result and
+agent-root for the reserved root name.  Uniqueness belongs to reservation."
+  (let* ((case-fold-search nil)
+         (segment (string-trim
+                   (replace-regexp-in-string
+                    "[^a-z0-9_-]+" "-" (downcase task-name))
+                   "-+" "-+")))
+    (cond ((string-empty-p segment) "agent")
+          ((equal segment "root") "agent-root")
+          (t segment))))
 
 (defun mevedel-agent-control--normalize-context (value)
   "Normalize model-facing parent context VALUE.
@@ -1208,13 +1218,18 @@ positive decimal strings, or \"summary\"."
 
 (defun mevedel-agent-control--reserve
     (session parent-path task-name role)
-  "Atomically reserve TASK-NAME below PARENT-PATH in SESSION for ROLE."
+  "Atomically reserve a unique TASK-NAME path below PARENT-PATH for ROLE.
+SESSION's retained identities and private reservations both occupy paths."
   (mevedel-session-publication-barrier session)
-  (let* ((path (concat parent-path "/" task-name))
+  (let* ((base (concat parent-path "/"
+                       (mevedel-agent-control--task-segment task-name)))
+         (path base)
+         (suffix 2)
          (registry (mevedel-session-agent-registry session))
          (reservations (mevedel-session-agent-reservations session)))
-    (when (or (assoc path registry) (assoc path reservations))
-      (user-error "Agent path is already reserved: %s" path))
+    (while (or (assoc path registry) (assoc path reservations))
+      (setq path (format "%s-%d" base suffix)
+            suffix (1+ suffix)))
     (when (>= (mevedel-agent-control--active-count session)
               (mevedel-session-agent-turn-capacity session))
       (user-error "Agent tree is at its active-turn capacity"))

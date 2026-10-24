@@ -532,20 +532,44 @@
   (test)
   :doc "accepts the minimal spawn contract and rejects malformed values"
   (let ((session (mevedel-agent-control-test--session)))
-    (dolist (task-name '("task_2" "switch-buffer-error" "task-2_child" "-"))
+    (dolist (task-name '("task_2" "switch-buffer-error" "task-2_child" "-"
+                        "" "Upper" "two/parts" "root" "." ".."
+                        "two words" "task.name" "task\\name" "caf\u00e9"))
       (should-not
        (mevedel-agent-control--validate-spawn session task-name "Do work.")))
-    (dolist (task-name '(nil "" "Upper" "two/parts" "root" "." ".."
-                        "two words" "task.name" "task\\name" "caf\u00e9"))
+    (dolist (task-name '(nil 42 ("task")))
       (let ((err (should-error
                   (mevedel-agent-control--validate-spawn
                    session task-name "Do work.")
                   :type 'user-error)))
-        (should (equal "Agent task_name must match [a-z0-9_-]+ and must not be root"
+        (should (equal "Agent task_name must be plain text"
                        (cadr err)))))
     (dolist (message '(nil ""))
       (should-error
        (mevedel-agent-control--validate-spawn session "task" message)))))
+
+(mevedel-deftest mevedel-agent-control--task-segment ()
+  ,test
+  (test)
+  :doc "derives safe segments from display names, path attempts, and unusable text"
+  (dolist (pair '(("Review code-block copy" . "review-code-block-copy")
+                  ("task_2" . "task_2")
+                  ("Task-2_child" . "task-2_child")
+                  ("two/parts" . "two-parts")
+                  ("../../escape\\name" . "escape-name")
+                  ("  task.name!  " . "task-name")
+                  ("caf\u00e9" . "caf")
+                  ("ROOT" . "agent-root")
+                  ("root" . "agent-root")
+                  ("" . "agent")
+                  ("  \n\t" . "agent")
+                  ("..." . "agent")
+                  ("-" . "agent")
+                  ("\u65e5\u672c\u8a9e" . "agent")))
+    (let ((segment (mevedel-agent-control--task-segment (car pair))))
+      (should (equal (cdr pair) segment))
+      (should (mevedel-agent-path-p (concat "/root/" segment)))
+      (should-not (equal "root" segment)))))
 
 (mevedel-deftest mevedel-agent-control--reserve ()
   ,test
@@ -585,7 +609,30 @@
                  (setq drained t))))
       (mevedel-agent-control--reserve session "/root" "first" "default"))
     (should drained)
-    (should (assoc "/root/first" (mevedel-session-agent-reservations session)))))
+    (should (assoc "/root/first" (mevedel-session-agent-reservations session))))
+  :doc "suffixes retained and preparing collisions without reusing identities"
+  (let* ((session (mevedel-agent-control-test--session))
+         (retained (mevedel-agent-record--create
+                    :path "/root/review-copy" :parent-path "/root"
+                    :activity 'idle)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/review-copy" retained)))
+    (dolist (pair '(("Review Copy" . "/root/review-copy-2")
+                    ("review/copy" . "/root/review-copy-3")
+                    ("review-copy-2" . "/root/review-copy-2-2")
+                    ("root" . "/root/agent-root")
+                    ("ROOT" . "/root/agent-root-2")
+                    ("" . "/root/agent")
+                    ("..." . "/root/agent-2")))
+      (should (equal (cdr pair)
+                     (mevedel-agent-record-path
+                      (mevedel-agent-control--reserve
+                       session "/root" (car pair) "default")))))
+    (should (eq retained (cdar (mevedel-session-agent-registry session))))
+    (should (equal "/root/review-copy/review-copy"
+                   (mevedel-agent-record-path
+                    (mevedel-agent-control--reserve
+                     session "/root/review-copy" "Review Copy" "default"))))))
 
 (mevedel-deftest mevedel-agent-control-context-path ()
   ,test

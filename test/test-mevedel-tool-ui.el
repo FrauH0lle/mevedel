@@ -117,19 +117,29 @@
       (should (string-match-p "Select a named role for its specialization"
                               (plist-get role-arg :description)))))
 
-  :doc "Agent advertises the exact task-name alphabet and reserved name"
+  :doc "Agent native schema and ToolSearch contract accept free-form names"
   (progn
     (mevedel-tool-ui--register)
     (let* ((tool (mevedel-tool-get "Agent"))
            (provider-tool (mevedel-tool-gptel-tool tool))
            (task-arg (cl-find "task_name" (gptel-tool-args provider-tool)
                               :key (lambda (arg) (plist-get arg :name))
-                              :test #'equal)))
-      (dolist (text (list (mevedel-tool-prompt tool)
+                              :test #'equal))
+           contract)
+      (with-temp-buffer
+        (setq-local mevedel--session (mevedel-tool-ui-test--session))
+        (setf (mevedel-session-tool-catalog mevedel--session)
+              '((("mevedel" "Agent") . "Start a child")))
+        (mevedel-tools--tool-search (lambda (text) (setq contract text)) "Agent"))
+      (dolist (text (list contract (mevedel-tool-prompt tool)
                          (plist-get task-arg :description)))
-        (should (string-match-p (regexp-quote "[a-z0-9_-]+") text))
-        (should (string-match-p "hyphens" text))
-        (should (string-match-p "root.*reserved" text)))))
+        (let ((case-fold-search t))
+          (should (string-match-p "free-form task name" text)))
+        (should (string-match-p "numeric suffixes" text))
+        (should (string-match-p "canonical path" text))
+        (should-not (string-match-p "matching.*a-z0-9" text)))
+      (should (string-search (plist-get task-arg :description) contract))
+      (should (string-search (mevedel-tool-prompt tool) contract))))
 
   :doc "a request's role and model rosters never reach the shared schema"
   (let ((gptel--known-tools nil)
@@ -353,11 +363,14 @@
                 (should (equal "/root/switch-buffer-error"
                                (mevedel-agent-control-resolve-path
                                 session "/root" target)))))
-            (should-error
-             (mevedel-tool-ui--agent
-              #'ignore
-              '(:task_name "task_0" :message "Paths remain reserved."))
-             :type 'user-error)
+            (let (result)
+              (mevedel-tool-ui--agent
+               (lambda (value &rest _) (setq result value))
+               '(:task_name "task_0" :message "Start a new conversation."))
+              (should (equal "/root/task_0-2"
+                             (gethash "path" (json-parse-string
+                                              (plist-get result :result)))))
+              (funcall (car callbacks) "Finished duplicate name."))
             (dolist
                 (args '((:task_name "bad_context" :message "bad"
                          :context "0")
@@ -372,9 +385,23 @@
               (should-not
                (assoc (concat "/root/" (plist-get args :task_name))
                       (mevedel-session-agent-registry session))))
-            (dolist (args '((:task_name "Upper" :message "bad")
-                            (:task_name "two/parts" :message "bad")))
-              (should-error (mevedel-tool-ui--agent #'ignore args)))))
+            (dolist (pair '(("Review code-block copy" . "/root/review-code-block-copy")
+                            ("Review code-block copy" . "/root/review-code-block-copy-2")
+                            ("Upper" . "/root/upper")
+                            ("two/parts" . "/root/two-parts")
+                            ("ROOT" . "/root/agent-root")
+                            ("\u65e5\u672c\u8a9e" . "/root/agent")))
+              (let (result)
+                (mevedel-tool-ui--agent
+                 (lambda (value &rest _) (setq result value))
+                 (list :task_name (car pair) :message "Inspect the task."))
+                (let ((path (gethash "path" (json-parse-string
+                                           (plist-get result :result)))))
+                  (should (equal (cdr pair) path))
+                  (should (equal path (plist-get (plist-get result :render-data) :path)))
+                  (should (equal path (mevedel-agent-control-resolve-path
+                                       session "/root" path))))
+                (funcall (car callbacks) "Completed display-name task.")))))
       (dolist (invocation invocations)
         (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
                     ((buffer-live-p buffer)))

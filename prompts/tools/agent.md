@@ -13,10 +13,14 @@ agent with your effective instructions and capabilities.
 
 ### How to use `Agent`
 
-- `task_name` is one segment matching `[a-z0-9_-]+`: lowercase ASCII letters,
-  digits, underscores, or hyphens. The name `root` is reserved.
+- `task_name` is a free-form task name, such as `Review code-block copy`.
+  The harness derives a unique lowercase ASCII path segment: other character
+  runs become hyphens, boundary hyphens are trimmed, an empty result becomes
+  `agent`, and `root` becomes `agent-root`. Collisions with retained or preparing
+  agents get numeric suffixes (`-2`, `-3`, ...).
   `message` is the complete assigned task, even when copying parent context.
-  Success returns the child's canonical path, such as `/root/spec_review`.
+  Success returns the child's canonical path, such as `/root/review-code-block-copy`.
+  Use that returned path for follow-ups rather than guessing it from the name.
 - **General-purpose (omit `role`)**: use for ordinary delegation, including
   research, implementation, debugging, and mixed tasks. The child inherits your
   effective instructions, tools, model policy, and delegation capability, subject

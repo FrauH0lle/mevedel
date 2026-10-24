@@ -332,7 +332,7 @@
     :prompt-file "prompts/tools/agent.md"
     :handler #'mevedel-tool-ui--agent
     :args ((task_name string :required
-                      "One child path segment matching [a-z0-9_-]+: lowercase ASCII letters, digits, underscores, or hyphens; root is reserved.")
+                      "Free-form task name. The harness derives a unique lowercase ASCII path segment and returns the canonical path; collisions get numeric suffixes.")
            (message string :required
                     "Complete non-empty task for the child agent.")
            (role string :optional
