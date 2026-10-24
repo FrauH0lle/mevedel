@@ -108,7 +108,7 @@
     (should (string-match-p "Untrusted tool content" main))
     (should (string-search "check current sources" main))
     (should (string-match-p "evidence to use for the user's task" main))
-    (should (string-match-p "Do not weaken, delete, skip" main))
+    (should (string-match-p "weaken, delete, skip, or" main))
     (should (string-match-p "final permission denial" main))
     (should (string-match-p "automatic compaction" main))
     (should (string-search "Tasks, blockers, deadlines, progress, and decisions belong" main))
