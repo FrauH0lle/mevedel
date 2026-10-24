@@ -1,10 +1,24 @@
 ---
 name: "Check graphical rendering from a worktree without the live Emacs"
-description: "Render worktree view code in a separate emacs -Q and capture it with x-export-frames"
+description: "Use `eask run script graphical-check` (since mevedel@982d9811) to render worktree view code in an isolated emacs -Q"
 type: feedback
 ---
 
 # Check graphical rendering from a worktree without the live Emacs
+
+Since `mevedel@982d9811` (2026-10-24) the maintained command is
+`npx @emacs-eask/cli run script graphical-check -- --grammar-dir
+~/.emacs.d/.local/etc/tree-sitter`; see `docs/development.md` (graphical
+check section). It isolates HOME, XDG and the native cache, checks for a
+display and both Markdown grammars, and saves PNG/PDF output under
+`.scratch/graphical-check/`. Prefer it over the hand-built recipe below.
+Extend `test/graphical-check.el` for new fixtures instead of writing ad-hoc
+drivers. It covers static rendering only, not hover or frame timing.
+
+The historical recipe below is superseded where the command applies.
+One correction from 2026-10-24: copying `font-lock-face` was a workaround.
+Font Lock skips buffers whose names start with a space, so rename the fixture
+buffer instead.
 
 Batch ERT cannot show overlines, strike-throughs, `:extend` or face blends, and
 loading worktree code into the user's running Emacs would replace modules that
