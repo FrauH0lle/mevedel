@@ -110,10 +110,6 @@ stale:
 git -C .scratch/upstream/gptel pull --ff-only
 ```
 
-For design comparisons with Codex, Claude Code, or its ACP adapter, consult
-[Local reference sources](reference-sources.md) for verified local entry points,
-revision/version checks, and source-versus-installed-runtime limitations.
-
 ## Development Commands
 
 ### Checks before committing
