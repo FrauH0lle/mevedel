@@ -20,33 +20,54 @@
           "mevedel-engine-test-support"))
 
 (mevedel-deftest mevedel-eask--isolate-test-home
-  (:doc "redirects native caches before a fresh Eask run loads dependencies")
+  (:doc "isolates native caches and ignores an archive being refreshed by another worker")
   (let* ((script (cadr (member "-scriptload" command-line-args)))
          (cache (make-temp-file "mevedel-test-inherited-eln-" t))
+         (packages (make-temp-file "mevedel-test-archives-" t))
+         (archive (file-name-concat packages "archives" "gnu" "archive-contents"))
+         (startup (file-name-concat packages "startup.el"))
          (fixture (file-name-concat mevedel-test--worktree-root
                                     "test/fixtures/eask-startup.el")))
     (unwind-protect
-        (with-temp-buffer
-          (let* ((default-directory mevedel-test--worktree-root)
-                 (process
-                  (make-process
-                   :name "mevedel-eask-startup" :buffer (current-buffer)
-                   :connection-type 'pipe :sentinel #'ignore :noquery t
-                   :command
-                   (list (expand-file-name invocation-name invocation-directory)
-                         "--batch" "-Q" "--eval"
-                         (prin1-to-string
-                          `(startup-redirect-eln-cache ,cache))
-                         "--script" script fixture))))
-            (with-timeout (60 (delete-process process)
-                             (ert-fail "Eask startup timed out"))
-              (while (process-live-p process)
-                (accept-process-output process 0.05)))
-            (accept-process-output process 0)
-            (ert-info ((buffer-string))
-              (should (zerop (process-exit-status process))))
-            (should-not (directory-files cache nil directory-files-no-dot-files-regexp))))
-      (delete-directory cache t))))
+        (progn
+          ;; Freeze the truncate-before-write window in a private archive tree.
+          ;; Installed dependencies were activated before this hook runs.
+          (make-directory (file-name-directory archive) t)
+          (with-temp-file archive (insert "(1"))
+          ;; --script loads before --eval.  Use a wrapper so setup really runs
+          ;; before Eask, while preserving its script path and argument parsing.
+          (with-temp-file startup
+            (insert ";;; -*- lexical-binding: t -*-\n")
+            (prin1 `(progn
+                      ;; Seed the inherited path at the boundary under test,
+                      ;; after Eask has loaded its own startup dependencies.
+                      (advice-add 'mevedel-eask--isolate-test-home :before
+                                  (lambda () (startup-redirect-eln-cache ,cache)))
+                      (add-hook 'eask-before-test/ert-hook
+                                (lambda () (setq package-user-dir ,packages)) t)
+                      (setcar (cdr (member "-scriptload" command-line-args)) ,script)
+                      (load ,script nil t))
+                   (current-buffer)))
+          (with-temp-buffer
+            (let* ((default-directory mevedel-test--worktree-root)
+                   (process
+                    (make-process
+                     :name "mevedel-eask-startup" :buffer (current-buffer)
+                     :connection-type 'pipe :sentinel #'ignore :noquery t
+                     :command
+                     (list (expand-file-name invocation-name invocation-directory)
+                           "--batch" "-Q" "--script" startup fixture))))
+              (with-timeout (60 (delete-process process)
+                               (ert-fail "Eask startup timed out"))
+                (while (process-live-p process)
+                  (accept-process-output process 0.05)))
+              (accept-process-output process 0)
+              (ert-info ((buffer-string))
+                (should (zerop (process-exit-status process))))
+              (should-not (directory-files cache nil directory-files-no-dot-files-regexp))))
+          (should (equal "(1" (mevedel-test--read-file archive))))
+      (delete-directory cache t)
+      (delete-directory packages t))))
 
 (mevedel-deftest mevedel-deftest
   (:doc "isolates tool registries and cleans up even when a case fails")

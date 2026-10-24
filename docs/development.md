@@ -280,6 +280,12 @@ that same process; unrelated files cannot supply missing imports or initialize
 fixtures for it. CI enforces this as a separate parallel matrix job, alongside
 the ordinary strict compilation/partitioned-suite job.
 
+All ERT processes disable package archives in the Eask startup hook, after
+installed dependencies are activated and before Eask initializes package
+metadata. Workers neither read nor refresh the shared archive cache, so a
+parallel refresh cannot expose a partially written `archive-contents` file.
+Dependency installation remains a separate setup step for local and CI runs.
+
 Local validation on 2026-10-24 covered 440 files and 12,618 cases: the fresh-file
 lane took 426.83 seconds, versus 251.35 seconds for the partitioned suite (eight
 workers each, 32 CPUs available; both ran alongside provisioned remote checks).

@@ -21,7 +21,10 @@
     (should-not gptel-loaded)
     (should (file-in-directory-p (car paths) home))
     (should (equal (cdr paths)
-                   (list (car (last native-comp-eln-load-path)))))))
+                   (list (car (last native-comp-eln-load-path)))))
+    (should-not package-archives)
+    ;; Disabling archives must not disable installed dependency activation.
+    (should (require 'gptel-request))))
 
 (provide 'eask-startup)
 ;;; eask-startup.el ends here

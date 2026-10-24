@@ -59,7 +59,11 @@
  (depends-on "mcp"))
 
 (defun mevedel-eask--isolate-test-home ()
-  "Run ERT without access to the user's real home state."
+  "Run ERT without shared archive I/O or access to real home state."
+  ;; Eask activates installed dependencies before this hook, then refreshes
+  ;; archives before loading tests.  Parallel workers must neither read nor
+  ;; rewrite that shared cache; dependency installation is a separate step.
+  (setq package-archives nil)
   (let ((home (make-temp-file "mevedel-test-home-" t)))
     (setq default-directory (expand-file-name default-directory))
     (setenv "HOME" home)
