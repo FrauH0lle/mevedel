@@ -166,16 +166,7 @@ The pipeline supplies these invocation-only capabilities, never model input.")
 
 (defun mevedel-tool-exec-permission-default-directory ()
   "Return the working directory for Bash and Eval."
-  (let* ((session (and (boundp 'mevedel--session) mevedel--session))
-         (workspace (or (and session (mevedel-session-workspace session))
-                        (and (boundp 'mevedel--workspace)
-                             mevedel--workspace)))
-         (session-dir (and session
-                           (ignore-errors
-                             (mevedel-session-working-directory session))))
-         (root (and workspace
-                    (ignore-errors (mevedel-workspace-root workspace)))))
-    (file-name-as-directory (or session-dir root default-directory))))
+  (mevedel-conversation-working-directory))
 
 (defun mevedel-tool-exec-permission--capture-permission-origin (input)
   "Return INPUT with its permission owner and session captured."
@@ -192,7 +183,9 @@ The pipeline supplies these invocation-only capabilities, never model input.")
     (unless (plist-member context :execution-directory)
       (setq context
             (plist-put context :execution-directory
-                       (mevedel-tool-exec-permission-default-directory))))
+                       (mevedel-conversation-working-directory
+                        (plist-get context :session)
+                        (plist-get context :buffer)))))
     (plist-put copy :permission-context context)))
 
 (defun mevedel-tool-exec-permission--permission-origin (permission-context)
@@ -436,8 +429,9 @@ PERMISSION-CONTEXT supplies the session execution target."
   (let* ((session (or (plist-get permission-context :session)
                       (and (boundp 'mevedel--session) mevedel--session)))
          (directory
-          (or (and session (mevedel-session-working-directory session))
-              (mevedel-tool-exec-permission-default-directory)))
+          (or (plist-get permission-context :execution-directory)
+              (mevedel-conversation-working-directory
+               session (plist-get permission-context :buffer))))
          (target (or (and session
                           (mevedel-session-execution-target session))
                      (and (file-remote-p directory)

@@ -15,6 +15,7 @@
 
 (require 'mevedel-agent-control)
 (require 'mevedel-agents)
+(require 'mevedel-execution-target)
 (require 'mevedel-reminders)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
@@ -242,14 +243,17 @@ have no result yet, but a stored result always includes both fields."
            (memq outcome '(completed errored interrupted)))))
 
 (defun mevedel-agent-persistence--serialize-record
-    (entry seen-paths seen-ids)
-  "Encode registry ENTRY, rejecting duplicates in SEEN-PATHS and SEEN-IDS."
+    (entry seen-paths seen-ids target)
+  "Encode registry ENTRY for TARGET's native filesystem domain.
+Reject duplicates in SEEN-PATHS and SEEN-IDS."
   (let* ((record (cdr entry))
          (id (and (mevedel-agent-record-p record)
                   (mevedel-agent-record-id record)))
          (path (and id (mevedel-agent-record-path record)))
          (parent (and id (mevedel-agent-record-parent-path record)))
          (role (and id (mevedel-agent-record-role record)))
+         (working-directory
+          (and id (mevedel-agent-record-working-directory record)))
          (activity (and id (mevedel-agent-record-activity record)))
          (location
           (and id (mevedel-agent-record-conversation-location record)))
@@ -265,6 +269,9 @@ have no result yet, but a stored result always includes both fields."
         (and (equal (car entry) path)
              (mevedel-agent-persistence--identity-p
               id path parent role activity location seen-paths seen-ids)
+             (or (null working-directory)
+                 (and (stringp working-directory)
+                      (file-name-absolute-p working-directory)))
              (proper-list-p hook-context)
              (mevedel--plain-data-p hook-context)
              (mevedel-agent-persistence--settled-result-p
@@ -277,6 +284,9 @@ have no result yet, but a stored result always includes both fields."
                  :path path
                  :parent-path parent
                  :role role
+                 :working-directory (and working-directory
+                                         (mevedel-execution-target-native-path
+                                          target working-directory))
                  :configuration
                  (mevedel-agent-persistence--encode-configuration
                   (mevedel-agent-record-configuration record))
@@ -305,7 +315,8 @@ succeed after silently losing an addressable agent."
     (mapcar
      (lambda (entry)
        (let ((encoded (mevedel-agent-persistence--serialize-record
-                       entry seen-paths seen-ids)))
+                       entry seen-paths seen-ids
+                       (mevedel-session-execution-target session))))
          ;; Agents of one type share a frozen configuration of many
          ;; kilobytes.  The sidecar prints with `print-circle', so one
          ;; shared object is written once and referenced by every other
@@ -426,12 +437,14 @@ succeed after silently losing an addressable agent."
        :agent agent :request-locals locals))))
 
 (defun mevedel-agent-persistence--deserialize-record
-    (entry seen-paths seen-ids)
-  "Decode registry ENTRY, rejecting duplicates in SEEN-PATHS and SEEN-IDS."
+    (entry seen-paths seen-ids target)
+  "Decode registry ENTRY into TARGET's current client filesystem domain.
+Reject duplicates in SEEN-PATHS and SEEN-IDS."
   (let* ((id (and (proper-list-p entry) (plist-get entry :id)))
          (path (and id (plist-get entry :path)))
          (parent (and id (plist-get entry :parent-path)))
          (role (and id (plist-get entry :role)))
+         (working-directory (and id (plist-get entry :working-directory)))
          (activity (and id (plist-get entry :activity)))
          (location (and id (plist-get entry :conversation-location)))
          (hook-context (and id (plist-get entry :hook-context-pending)))
@@ -440,6 +453,11 @@ succeed after silently losing an addressable agent."
          (model-metadata (and id (plist-get entry :model-metadata))))
     (unless (and (mevedel-agent-persistence--identity-p
                   id path parent role activity location seen-paths seen-ids)
+                 (plist-member entry :working-directory)
+                 (or (null working-directory)
+                     (and (stringp working-directory)
+                          (not (file-remote-p working-directory))
+                          (file-name-absolute-p working-directory)))
                  (proper-list-p hook-context)
                  (mevedel--plain-data-p hook-context)
                  (mevedel-agent-persistence--settled-result-p
@@ -454,6 +472,9 @@ succeed after silently losing an addressable agent."
             :path path
             :parent-path parent
             :role role
+            :working-directory (and working-directory
+                                    (mevedel-execution-target-expand-path
+                                     target working-directory))
             :configuration
             (mevedel-agent-persistence--decode-configuration
              (plist-get entry :configuration) role)
@@ -487,8 +508,9 @@ succeed after silently losing an addressable agent."
              candidates)))
     candidates))
 
-(defun mevedel-agent-persistence-deserialize-registry (raw)
+(defun mevedel-agent-persistence-deserialize-registry (raw target)
   "Return a validated retained registry decoded from sidecar data RAW.
+Qualify target-native working directories through the current TARGET.
 
 Malformed identities are diagnosed and dropped independently.  Unexpected
   programming errors propagate instead of masquerading as corrupt user data."
@@ -499,7 +521,7 @@ Malformed identities are diagnosed and dropped independently.  Unexpected
     (dolist (entry (and (proper-list-p raw) raw))
       (condition-case err
           (push (mevedel-agent-persistence--deserialize-record
-                 entry seen-paths seen-ids)
+                 entry seen-paths seen-ids target)
                 candidates)
         (mevedel-agent-persistence-invalid-data
          (display-warning
@@ -564,6 +586,8 @@ hydration."
                 (mevedel-agent-invocation-path invocation) path
                 (mevedel-agent-invocation-description invocation)
                 (mevedel-agent-record-role record)
+                (mevedel-agent-invocation-working-directory invocation)
+                (mevedel-agent-record-working-directory record)
                 (mevedel-agent-invocation-parent-session invocation)
                 session
                 (mevedel-agent-invocation-parent-data-buffer invocation)

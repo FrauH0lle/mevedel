@@ -15,7 +15,7 @@
   (require 'mevedel-structs))
 
 ;; `mevedel-agent-persistence'
-(declare-function mevedel-agent-persistence-deserialize-registry "mevedel-agent-persistence" (raw))
+(declare-function mevedel-agent-persistence-deserialize-registry "mevedel-agent-persistence" (raw target))
 (declare-function mevedel-agent-persistence-sanitize-mailbox "mevedel-agent-persistence" (raw recipient))
 (declare-function mevedel-agent-persistence-serialize-registry "mevedel-agent-persistence" (session))
 (autoload 'mevedel-agent-persistence-deserialize-registry
@@ -163,7 +163,7 @@
 ;;
 ;;; Constants
 
-(defconst mevedel-session-codec-format-version "v0.5.13"
+(defconst mevedel-session-codec-format-version "v0.5.14"
   "Current on-disk session sidecar format.
 
 The authority profile is part of this format.  Readers accept exactly this
@@ -917,7 +917,8 @@ their hygiene filters."
          (latest-user-message (plist-get plist :latest-user-message))
          (raw-agent-registry (plist-get plist :agent-registry))
          (agent-registry
-          (mevedel-agent-persistence-deserialize-registry raw-agent-registry))
+          (mevedel-agent-persistence-deserialize-registry
+           raw-agent-registry execution-target))
          (tasks
           (mevedel-task-prune-resolved-dependencies
            (delq

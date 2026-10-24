@@ -7,8 +7,11 @@
 ;;; Code:
 
 (require 'mevedel-agent-control)
+(require 'mevedel-agent-conversation)
 (require 'mevedel-agent-persistence)
+(require 'mevedel-agent-runtime)
 (require 'mevedel-agents)
+(require 'mevedel-execution-target)
 (require 'mevedel-reminders)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
@@ -148,7 +151,8 @@
       (should-error
        (mevedel-agent-persistence--encode-configuration configuration)))))
 
-(mevedel-deftest mevedel-agent-persistence--serialize-record ()
+(mevedel-deftest mevedel-agent-persistence--serialize-record
+  (:vars ((target (mevedel-execution-target-create "/"))))
   ,test
   (test)
   :doc "encodes one valid identity and reserves its path and opaque ID"
@@ -157,12 +161,41 @@
          (paths (make-hash-table :test #'equal))
          (ids (make-hash-table :test #'equal))
          (encoded
-          (mevedel-agent-persistence--serialize-record entry paths ids)))
+          (mevedel-agent-persistence--serialize-record entry paths ids target)))
     (should (equal "/root/task" (plist-get encoded :path)))
+    (should (plist-member encoded :working-directory))
+    (should-not (plist-get encoded :working-directory))
     (should (gethash "/root/task" paths))
     (should (gethash "opaque-id" ids))
     (should-error
-     (mevedel-agent-persistence--serialize-record entry paths ids)))
+     (mevedel-agent-persistence--serialize-record entry paths ids target)))
+
+  :doc "round-trips explicit nil, local and remote working directories without probing them"
+  (dolist (directory '(nil "/tmp/agent-persisted-cwd/"
+                          "/ssh:example.invalid:/srv/agent/"))
+    (let* ((target (mevedel-execution-target-create (or directory "/")))
+           (record (mevedel-agent-persistence-test--record))
+           (_ (setf (mevedel-agent-record-working-directory record) directory))
+           (encoded (mevedel-agent-persistence--serialize-record
+                     (cons "/root/task" record)
+                     (make-hash-table :test #'equal)
+                     (make-hash-table :test #'equal) target))
+           (restored (cdr (mevedel-agent-persistence--deserialize-record
+                           (car (read-from-string (prin1-to-string encoded)))
+                           (make-hash-table :test #'equal)
+                           (make-hash-table :test #'equal) target))))
+      (should (equal (and directory (mevedel-execution-target-native-path target directory))
+                     (plist-get encoded :working-directory)))
+      (should (equal directory (mevedel-agent-record-working-directory restored)))))
+
+  :doc "rejects malformed and other-target live working directory overrides"
+  (dolist (directory '("relative/" "" 17 t "/ssh:other-route:/srv/agent/"))
+    (let ((record (mevedel-agent-persistence-test--record)))
+      (setf (mevedel-agent-record-working-directory record) directory)
+      (should-error
+       (mevedel-agent-persistence--serialize-record
+        (cons "/root/task" record)
+        (make-hash-table :test #'equal) (make-hash-table :test #'equal) target))))
 
   :doc "persists a running turn's acknowledged provider without changing its frozen identity"
   (let* ((record (mevedel-agent-persistence-test--record
@@ -183,11 +216,11 @@
     (let* ((encoded (mevedel-agent-persistence--serialize-record
                      (cons "/root/task" record)
                      (make-hash-table :test #'equal)
-                     (make-hash-table :test #'equal)))
+                     (make-hash-table :test #'equal) target))
            (restored (cdr (mevedel-agent-persistence--deserialize-record
                            (car (read-from-string (prin1-to-string encoded)))
                            (make-hash-table :test #'equal)
-                           (make-hash-table :test #'equal)))))
+                           (make-hash-table :test #'equal) target))))
       (should (equal (mevedel-agent-configuration-model-metadata effective)
                      (mevedel-agent-control-record-model-metadata restored)))
       (should (equal launch (mevedel-agent-record-model-metadata record)))
@@ -203,23 +236,23 @@
     (let* ((encoded (mevedel-agent-persistence--serialize-record
                      (cons "/root/task" record)
                      (make-hash-table :test #'equal)
-                     (make-hash-table :test #'equal)))
+                     (make-hash-table :test #'equal) target))
            (restored (cdr (mevedel-agent-persistence--deserialize-record
                            (car (read-from-string (prin1-to-string encoded)))
                            (make-hash-table :test #'equal)
-                           (make-hash-table :test #'equal)))))
+                           (make-hash-table :test #'equal) target))))
       (should (equal metadata (plist-get encoded :model-metadata)))
       (should (equal metadata (mevedel-agent-record-model-metadata restored)))
       (should-error
        (mevedel-agent-persistence--deserialize-record
         (plist-put (copy-sequence encoded) :model-metadata '(:model "m"))
-        (make-hash-table :test #'equal) (make-hash-table :test #'equal))
+        (make-hash-table :test #'equal) (make-hash-table :test #'equal) target)
        :type 'mevedel-agent-persistence-invalid-data)
       (setf (mevedel-agent-record-model-metadata record) '(:model "m"))
       (should-error
        (mevedel-agent-persistence--serialize-record
         (cons "/root/task" record)
-        (make-hash-table :test #'equal) (make-hash-table :test #'equal))))))
+        (make-hash-table :test #'equal) (make-hash-table :test #'equal) target)))))
 
 (mevedel-deftest mevedel-agent-persistence--identity-p ()
   ,test
@@ -309,7 +342,8 @@
          (mevedel-agent-persistence--decode-configuration invalid "default")
          :type 'mevedel-agent-persistence-invalid-data)))))
 
-(mevedel-deftest mevedel-agent-persistence--deserialize-record ()
+(mevedel-deftest mevedel-agent-persistence--deserialize-record
+  (:vars ((target (mevedel-execution-target-create "/"))))
   ,test
   (test)
   :doc "decodes one identity and rejects a duplicate in the same registry"
@@ -318,16 +352,30 @@
           (mevedel-agent-persistence--serialize-record
            (cons "/root/task" record)
            (make-hash-table :test #'equal)
-           (make-hash-table :test #'equal)))
+           (make-hash-table :test #'equal) target))
          (paths (make-hash-table :test #'equal))
          (ids (make-hash-table :test #'equal))
          (decoded
-          (mevedel-agent-persistence--deserialize-record encoded paths ids)))
+          (mevedel-agent-persistence--deserialize-record encoded paths ids target)))
     (should (equal "/root/task" (car decoded)))
     (should (mevedel-agent-record-p (cdr decoded)))
     (should-error
-     (mevedel-agent-persistence--deserialize-record encoded paths ids)
-     :type 'mevedel-agent-persistence-invalid-data)))
+     (mevedel-agent-persistence--deserialize-record encoded paths ids target)
+     :type 'mevedel-agent-persistence-invalid-data))
+
+  :doc "rejects missing and malformed persisted working directories without a legacy default"
+  (let ((encoded (mevedel-agent-persistence--serialize-record
+                  (cons "/root/task" (mevedel-agent-persistence-test--record))
+                  (make-hash-table :test #'equal) (make-hash-table :test #'equal) target)))
+    (dolist (directory '("relative/" "" 17 t missing "/ssh:old-route:/srv/agent/"))
+      (let ((invalid (copy-tree encoded)))
+        (if (eq directory 'missing)
+            (cl-remf invalid :working-directory)
+          (setf (plist-get invalid :working-directory) directory))
+        (should-error
+         (mevedel-agent-persistence--deserialize-record
+          invalid (make-hash-table :test #'equal) (make-hash-table :test #'equal) target)
+         :type 'mevedel-agent-persistence-invalid-data)))))
 
 (mevedel-deftest mevedel-agent-persistence--drop-orphans ()
   ,test
@@ -567,7 +615,8 @@
                      (how-many ":system-prompt" (point-min) (point-max)))))
       ;; The printed sidecar still decodes into three independent records.
       (let ((restored (mevedel-agent-persistence-deserialize-registry
-                       (car (read-from-string printed)))))
+                       (car (read-from-string printed))
+                       (mevedel-session-execution-target session))))
         (should (equal paths (mapcar #'car restored)))
         (should-not (eq (mevedel-agent-record-configuration (cdr (nth 0 restored)))
                         (mevedel-agent-record-configuration (cdr (nth 1 restored)))))))))
@@ -575,6 +624,30 @@
 (mevedel-deftest mevedel-agent-persistence-deserialize-registry ()
   ,test
   (test)
+  :doc "stores remote cwd natively and rebinds it through another client route or locally"
+  (let* ((old-target (mevedel-execution-target-create "/ssh:old-route:/srv/project/"))
+         (source (mevedel-session--create :execution-target old-target))
+         (record (mevedel-agent-persistence-test--record))
+         (original "/ssh:old-route:/srv/agent/"))
+    (setf (mevedel-agent-record-working-directory record) original
+          (mevedel-session-agent-registry source) (list (cons "/root/task" record)))
+    (let* ((raw (mevedel-agent-persistence-serialize-registry source))
+           (stored (plist-get (car raw) :working-directory))
+           (readback (car (read-from-string (prin1-to-string raw)))))
+      (should (equal "/srv/agent/" stored))
+      (should-not (file-remote-p stored))
+      (should (equal original (mevedel-agent-record-working-directory record)))
+      (dolist (root '("/ssh:new-route:/srv/project/" "/srv/project/"))
+        (let* ((target (mevedel-execution-target-create root))
+               (restored (mevedel-agent-persistence-deserialize-registry readback target))
+               (directory (mevedel-agent-record-working-directory (cdar restored))))
+          (should (equal (if (file-remote-p root)
+                             "/ssh:new-route:/srv/agent/"
+                           "/srv/agent/")
+                         directory))
+          (should (equal "/srv/agent/"
+                         (mevedel-execution-target-native-path target directory)))))))
+
   :doc "round-trips frozen configuration and retained identity data"
   (let* ((source (mevedel-agent-persistence-test--session))
          (configuration (mevedel-agent-persistence-test--configuration
@@ -602,7 +675,8 @@
              :reminders
              (list (mevedel-reminders-make-date-change))))
            (restored
-            (mevedel-agent-persistence-deserialize-registry raw))
+            (mevedel-agent-persistence-deserialize-registry
+             raw (mevedel-session-execution-target source)))
            (result (cdar restored))
            (restored-agent
             (mevedel-agent-configuration-agent
@@ -645,7 +719,8 @@
       (setcdr (assq 'gptel-backend locals) "Missing Backend")
       (mevedel-test--with-captured-diagnostics nil
 							      (should
-         (mevedel-agent-persistence-deserialize-registry raw))))
+         (mevedel-agent-persistence-deserialize-registry
+          raw (mevedel-session-execution-target source)))))
     (let* ((raw (mevedel-agent-persistence-serialize-registry source))
            (locals
             (plist-get (plist-get (car raw) :configuration)
@@ -653,7 +728,8 @@
       (setcdr (assq 'gptel-tools locals) '(("missing" "tool")))
       (mevedel-test--with-captured-diagnostics nil
         (should-not
-         (mevedel-agent-persistence-deserialize-registry raw)))))
+         (mevedel-agent-persistence-deserialize-registry
+          raw (mevedel-session-execution-target source))))))
 
   :doc "drops an identity whose trusted reminder key has invalid arguments"
   (let* ((source (mevedel-agent-persistence-test--session))
@@ -666,7 +742,8 @@
     (setf (plist-get agent-data :reminders) '((pending-events 1)))
     (mevedel-test--with-captured-diagnostics nil
       (should-not
-       (mevedel-agent-persistence-deserialize-registry raw))))
+       (mevedel-agent-persistence-deserialize-registry
+        raw (mevedel-session-execution-target source)))))
 
   :doc "drops malformed identities and every descendant of a rejected parent"
   (let* ((source (mevedel-agent-persistence-test--session))
@@ -699,7 +776,7 @@
          (equal '("/root/valid")
                 (mapcar #'car
                         (mevedel-agent-persistence-deserialize-registry
-                         raw)))))))
+                         raw (mevedel-session-execution-target source))))))))
 
   :doc "propagates unexpected decoder bugs instead of dropping identities"
   (let* ((source (mevedel-agent-persistence-test--session))
@@ -717,7 +794,8 @@
                   'mevedel-reminders-restore-agent-templates)
                  (lambda (_recipes) (error "Decoder regression"))))
         (should-error
-         (mevedel-agent-persistence-deserialize-registry raw))))))
+         (mevedel-agent-persistence-deserialize-registry
+          raw (mevedel-session-execution-target source)))))))
 
 (mevedel-deftest mevedel-agent-persistence-restore-tree ()
   ,test
@@ -927,6 +1005,9 @@
       (delete-directory root-dir t))))
 
 (mevedel-deftest mevedel-agent-persistence-ensure-conversation ()
+  ,test
+  (test)
+  :doc "hydrates a local override for inspection and retained follow-up"
   (let* ((root (make-temp-file "mevedel-agent-lazy-" t))
          (session (mevedel-agent-persistence-test--session root))
          (parent (generate-new-buffer " *lazy-agent-root*"))
@@ -936,6 +1017,7 @@
          (record (mevedel-agent-record--create
                   :id "lazy" :path "/root/lazy" :parent-path "/root"
                   :role "default" :activity 'idle :settled-outcome 'completed
+                  :working-directory (file-name-as-directory root)
                   :configuration configuration :conversation-location relative))
          (sibling (mevedel-agent-record--create :path "/root/sibling" :activity 'running))
          inspected resident dispatched)
@@ -953,6 +1035,11 @@
           ;; Read-only observation can be reused, and does not touch another agent.
           (setq inspected (mevedel-agent-persistence-ensure-conversation
                            session record parent t))
+          (should (equal (file-name-as-directory root)
+                         (buffer-local-value 'default-directory inspected)))
+          (should (equal (mevedel-agent-record-working-directory record)
+                         (mevedel-agent-invocation-working-directory
+                          (buffer-local-value 'mevedel--agent-invocation inspected))))
           (should (buffer-local-value 'buffer-read-only inspected))
           (should (buffer-local-value 'mevedel-session--inspection-buffer-p inspected))
           (should-not (buffer-local-value 'buffer-offer-save inspected))
@@ -975,6 +1062,8 @@
                 (mevedel-agent-control-send-message session "/root/lazy" "Continue"))))
           (should dispatched)
           (should-not (eq inspected resident))
+          (should (equal (file-name-as-directory root)
+                         (buffer-local-value 'default-directory resident)))
           (should (eq resident (mevedel-agent-persistence-ensure-conversation
                                 session record parent)))
           (setf (mevedel-agent-record-activity record) 'idle)
@@ -992,7 +1081,36 @@
         (when (buffer-live-p buffer)
           (with-current-buffer buffer (set-buffer-modified-p nil))
           (kill-buffer buffer)))
-      (delete-directory root t))))
+      (delete-directory root t)))
+
+  :doc "passes explicit nil and remote overrides unchanged into lazy hydration"
+  (dolist (directory '(nil "/ssh:example.invalid:/srv/retained/"))
+    (let* ((session (mevedel-agent-persistence-test--session))
+           (record (mevedel-agent-persistence-test--record))
+           (parent (generate-new-buffer " *cwd-hydrate-root*"))
+           (conversation (generate-new-buffer " *cwd-hydrate-agent*"))
+           hydrated)
+      (unwind-protect
+          (progn
+            (setf (mevedel-session-save-path session) temporary-file-directory
+                  (mevedel-agent-record-working-directory record) directory)
+            (with-current-buffer parent (setq-local mevedel--session session))
+            (cl-letf (((symbol-function 'mevedel-agent-conversation-hydrate)
+                       (lambda (invocation root relative inspection)
+                         (setq hydrated t)
+                         (should (eq root parent))
+                         (should (equal "agents/task.chat.org" relative))
+                         (should inspection)
+                         (should (equal directory
+                                        (mevedel-agent-invocation-working-directory
+                                         invocation)))
+                         conversation)))
+              (should (eq conversation
+                          (mevedel-agent-persistence-ensure-conversation
+                           session record parent t))))
+            (should hydrated))
+        (kill-buffer conversation)
+        (kill-buffer parent)))))
 
 (provide 'test-mevedel-agent-persistence)
 

@@ -9,6 +9,7 @@
 (require 'mevedel-permissions)
 (require 'mevedel-execution-target)
 (require 'mevedel-permission-mode)
+(require 'mevedel-permission-persistence)
 (require 'mevedel-permission-rules)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-session-durability)
@@ -18,6 +19,7 @@
 (require 'mevedel-reminders)
 (require 'mevedel-plan)
 (require 'mevedel-plan-mode)
+(require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -1177,6 +1179,21 @@
 (mevedel-deftest mevedel-permission--invocation-context ()
   ,test
   (test)
+  :doc "captures a selected conversation directory without changing shared policy"
+  (let* ((session (mevedel-session--create :working-directory "/tmp/parent/"))
+         (tool (mevedel-tool--create :name "Read" :read-only-p t))
+         (mevedel--session session)
+         (mevedel--conversation-working-directory "/tmp/child/")
+         (context (mevedel-permission--invocation-context
+                   :tool tool :session session :mode 'ask)))
+    (should (equal "/tmp/child/" (plist-get context :execution-directory)))
+    (should (equal "/tmp/parent/" (mevedel-session-working-directory session)))
+    (let ((captured (mevedel-permission--invocation-context
+                     :tool tool :session session :mode 'ask
+                     :execution-directory "/tmp/captured/")))
+      (should (equal "/tmp/captured/"
+                     (plist-get captured :execution-directory)))))
+
   :doc "captured request and invocation Plan stamps survive ambient drift"
   (let* ((mevedel-permission-rules nil)
          (session (mevedel-session--create :authority-mode 'pid-lock))

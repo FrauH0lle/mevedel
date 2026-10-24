@@ -223,6 +223,38 @@ directory they happen to be sitting in."
   "Return Git exit status for ARGS in DIRECTORY."
   (plist-get (apply #'mevedel-worktree--git-result directory args) :exit))
 
+(defun mevedel-worktree-related-directory-p (directory workspace-root)
+  "Return non-nil if DIRECTORY belongs to WORKSPACE-ROOT's Git worktrees.
+Both paths must already name the same execution target.  Compare canonical
+common Git directories and the registered top-level checkout, not branch names
+or path prefixes.  Subdirectories are accepted, but unrelated nested
+repositories and submodules have different common directories."
+  (when-let* ((root (mevedel-worktree-repository-root directory))
+              (common (mevedel-worktree--git-success-output
+                       directory "rev-parse" "--path-format=absolute"
+                       "--git-common-dir"))
+              (workspace-common
+               (mevedel-worktree--git-success-output
+                workspace-root "rev-parse" "--path-format=absolute"
+                "--git-common-dir"))
+              ((equal (file-truename
+                       (mevedel-worktree--expand-git-path common directory))
+                      (file-truename
+                       (mevedel-worktree--expand-git-path
+                        workspace-common workspace-root))))
+              (listing (mevedel-worktree--git-success-output
+                        workspace-root "worktree" "list" "--porcelain" "-z")))
+    (let ((root (file-name-as-directory (file-truename root))))
+      (cl-some
+       (lambda (field)
+         (and (string-prefix-p "worktree " field)
+              (equal root
+                     (file-name-as-directory
+                      (file-truename
+                       (mevedel-worktree--expand-git-path
+                        (substring field 9) workspace-root))))))
+       (split-string listing "\0" t)))))
+
 (defun mevedel-worktree--expand-git-path (path base-directory)
   "Expand Git PATH relative to BASE-DIRECTORY when needed."
   (when (and path (not (string-empty-p path)))

@@ -38,6 +38,12 @@ agent with your effective instructions and capabilities.
   requests. Later parent turns are not synchronized.
 - `model` selects a configured tier or exact `BACKEND:MODEL`; `effort` must be
   supported by that model. Use overrides when the assignment calls for them.
+- `working_directory` selects an existing directory, absolute or relative to
+  your execution directory. It must be in the session workspace or a registered
+  Git worktree of the same repository on the same target. The child and its
+  descendants use it for execution and relative file paths, including retained
+  follow-ups. Omit it to inherit your directory. This does not grant filesystem
+  authority or widen sandbox writable roots.
 - The child runs independently and sends its terminal RESULT to its spawn parent,
   waking an idle parent. Use WaitAgent when you need
   to wait within your current turn. The child's path remains reserved for

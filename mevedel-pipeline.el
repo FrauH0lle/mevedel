@@ -1824,14 +1824,8 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
           (cond
            (session (mevedel-session-workspace session))
            ((and (boundp 'mevedel--workspace) mevedel--workspace))))
-         (workspace-root (and workspace
-                              (ignore-errors
-                                (mevedel-workspace-root workspace))))
-         (session-dir (and session
-                           (ignore-errors
-                             (mevedel-session-working-directory session))))
          (workdir (file-name-as-directory
-                   (or session-dir workspace-root default-directory)))
+                   (mevedel-conversation-working-directory session)))
          (request (mevedel-pipeline--current-request))
          (invocation (mevedel-pipeline--current-invocation))
          (fsm (or (plist-get metadata :engine)

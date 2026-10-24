@@ -412,8 +412,7 @@ Creates a `mevedel-agent' struct and registers it in
                 :workspace (and mevedel--session
                                 (mevedel-session-workspace mevedel--session))
                 :working-directory
-                (and mevedel--session
-                     (mevedel-session-working-directory mevedel--session))
+                (mevedel-conversation-working-directory mevedel--session)
                 :session mevedel--session
                 :refresh-buffer (current-buffer))))))
     `(let ((agent (mevedel-agent--create
@@ -480,6 +479,7 @@ and render-data markers are runtime-only caches for cheap live updates."
   (path nil :type (or null string))
   (description nil :type (or null string))
   (parent-session nil)
+  (working-directory nil :type (or null string))
   (parent-data-buffer nil)
   (parent-turn nil :type (or null integer))
   ;; Root engine owner whose Goal pays for this invocation's usage, or nil.

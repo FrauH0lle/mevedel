@@ -101,6 +101,28 @@
   (mevedel-worktree-test--git-ok root "add" "file.txt")
   (mevedel-worktree-test--git-ok root "commit" "-m" "init"))
 
+(mevedel-deftest mevedel-worktree-related-directory-p
+  (:doc "accepts registered related checkouts and rejects foreign or nested repositories")
+  (let* ((base (make-temp-file "mevedel-related-worktree-" t))
+         (root (file-name-concat base "root"))
+         (linked (file-name-concat base "linked checkout"))
+         (foreign (file-name-concat base "foreign"))
+         (subdir (file-name-concat linked "subdir")))
+    (unwind-protect
+        (progn
+          (make-directory root)
+          (make-directory foreign)
+          (mevedel-worktree-test--init-repo root)
+          (mevedel-worktree-test--init-repo foreign)
+          (mevedel-worktree-test--git-ok root "worktree" "add" "-b" "child" linked)
+          (make-directory subdir)
+          (should (mevedel-worktree-related-directory-p linked root))
+          (should (mevedel-worktree-related-directory-p subdir root))
+          (should-not (mevedel-worktree-related-directory-p foreign root))
+          (mevedel-worktree-test--init-repo subdir)
+          (should-not (mevedel-worktree-related-directory-p subdir root)))
+      (delete-directory base t))))
+
 (defun mevedel-worktree-test--open-real-list
     (root workspace data-buffer)
   "Open a worktree list backed by real Git state under ROOT."

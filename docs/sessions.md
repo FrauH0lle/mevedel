@@ -190,13 +190,21 @@ Transport and publication scheduling defer metadata work until it can run safely
 It updates the persisted name and buffer/view presentation, without moving files.
 Save As creates a new identity with the explicitly supplied display name.
 
-The closed sidecar schema is `v0.5.13`, including recovery issues, retained input and pause state,
+The closed sidecar schema is `v0.5.14`, including recovery issues, retained input and pause state,
 naming input, closed chats (`:chapters`),
 the ids of attached [store artifacts](view.md#artifact-store) (`:attached-artifacts`),
 and, for an artifact's own conversation, that artifact's id (`:dedicated-artifact`).
 Other schemas are rejected by the runtime loader; older sessions are converted
 only by the [explicit migration](#explicit-session-migration). Recovery records
 contain issue messages, never credentials.
+Every retained-agent registry entry includes `:working-directory`: `nil` means
+no override, while an absolute target-native directory string retains that
+agent's own working directory without a client-specific TRAMP prefix. Resume
+qualifies the stored path through the current execution target before rebuilding
+the live record and its lazy conversation invocation. It does not infer an
+override from a transcript file's location. Save As copies the override with the retained registry. Conversation
+and Worktree forks still discard retained-agent identities under
+[ADR 0062](adr/0062-do-not-clone-live-agents-into-session-forks.md).
 Queued follow-ups retain text, attribution, scope and attachment grants. Live
 submission objects are excluded. Undelivered steering reloads as requiring review,
 with automatic delivery paused; a restart never resurrects a submitted request.
@@ -832,9 +840,9 @@ no resource address changes a session's target. See
 The workspace identity is one opaque 64-character lowercase hexadecimal value
 stored in `.mevedel/workspace-id` when the first session is materialized.  The
 sidecar's nested `:workspace` record stores that `:workspace-id` together with
-`:target-native-root`; the top-level `:working-directory` is target-native as
-well.  Neither field stores a client-specific TRAMP prefix or the process-local
-workspace registry id.  Resume binds the record to the currently opened
+`:target-native-root`; the top-level and per-agent `:working-directory` fields
+are target-native as well. None stores a client-specific TRAMP prefix or the
+process-local workspace registry id. Resume binds the record to the currently opened
 workspace, verifies its project-owned identity, maps saved target-native paths
 to the current target root, and constructs a fresh immutable execution target.
 A missing identity is an error.  An identity mismatch requires explicit
@@ -845,7 +853,7 @@ identity. Superseded sidecar shapes are not migrated during resume; the
 [explicit migration](#explicit-session-migration) runs separately.
 
 The package release is `0.5.0`; its persisted session format is independently
-`v0.5.13`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
+`v0.5.14`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
 execution-target incarnation are
 required by that session format:
 project sessions persist `portable`, while file-workspace sessions
@@ -2218,8 +2226,8 @@ run continues past individual conversion failures. Unsupported versions are
 failures, not successful skips. A live session or pending recovery aborts the
 whole run before any session is changed.
 
-Supported source versions are v0.5.6, v0.5.9, v0.5.10, v0.5.11, v0.5.12 and
-v0.5.13; the current target is v0.5.13. Versions v0.5.7 and v0.5.8 are not
+Supported source versions are v0.5.6, v0.5.9, v0.5.10, v0.5.11, v0.5.12,
+v0.5.13 and v0.5.14; the current target is v0.5.14. Versions v0.5.7 and v0.5.8 are not
 supported. Each source follows an ordered chain of version-to-next-version
 steps. The script checks that the chain ends at the runtime codec's current
 format. To retire old support, remove the oldest prefix of steps and their
@@ -2264,7 +2272,11 @@ incomplete-usage tracking gains an explicit complete-usage flag; an invalid
 Goal refuses conversion instead of being dropped silently by the runtime
 loader. Fields an older format never persisted start empty: queued input
 before v0.5.10, attachments before v0.5.11 unless imported below, naming input
-before v0.5.12, and chat boundaries before v0.5.13. Unsaved queues and earlier
+before v0.5.12, and chat boundaries before v0.5.13. Retained agents from before
+v0.5.14 gain an explicit `:working-directory nil`; migration does not guess a
+per-agent override from the root directory or transcript location. A legacy
+record already containing that field is refused instead of overwritten.
+Unsaved queues and earlier
 chat titles cannot be reconstructed. Retrying an old attempted title asks for
 a description rather than guessing from history. Migration makes no model
 requests, creates no worktrees, and does not resume interrupted native turns.

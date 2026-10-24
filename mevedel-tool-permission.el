@@ -453,6 +453,7 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
            :patch-session-only-p
            (plist-get (plist-get context :patch-proposal) :session-only-p)
            :buffer (plist-get context :buffer)
+           :execution-directory (plist-get context :default-directory)
            :path (plist-get context :permission-path)
            :resource-access (plist-get context :permission-access)
            :permission-request

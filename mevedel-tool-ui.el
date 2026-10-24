@@ -96,6 +96,7 @@
             :context context
             :model model
             :effort effort
+            :working-directory (plist-get args :working_directory)
             :parent-tool-use-id
             (mevedel-pipeline-active-tool-use-id))))
       (when (and (boundp 'mevedel--current-request)
@@ -343,7 +344,9 @@
            (model string :optional
                   "Configured tier or exact BACKEND:MODEL override.")
            (effort string :optional
-                   "Reasoning-effort override validated for the model."))
+                   "Reasoning-effort override validated for the model.")
+           (working_directory string :optional
+                              "Existing directory, absolute or relative to the parent agent's directory. Must be in the session workspace or a registered Git worktree of its repository on the same target. Inherited by descendants; does not grant filesystem authority."))
     :async-p t
     :max-result-size 50000
     :groups (agents)

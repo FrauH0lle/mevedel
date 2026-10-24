@@ -149,7 +149,7 @@ per pending image; the prompt may carry other parts around them."
     (mevedel-context-delivery--observations
      names (mevedel-system--make-context
             (mevedel-session-workspace session)
-            (mevedel-session-working-directory session) session (current-buffer)))))
+            (mevedel-conversation-working-directory session) session (current-buffer)))))
 
 (defun mevedel-claude-code-context-system (owner system &optional selected)
   "Compose OWNER's SYSTEM with its complete selected observation baseline.

@@ -1735,7 +1735,7 @@ AGENTS.local.md after AGENTS.md.  Do not acknowledge them until delivery."
               (target-dir (file-name-directory path))
               (cwd (file-name-as-directory
                     (file-truename
-                     (mevedel-session-working-directory session))))
+                     (mevedel-conversation-working-directory session))))
               ((file-in-directory-p target-dir cwd)))
     (let ((baseline
            (mapcar #'file-truename

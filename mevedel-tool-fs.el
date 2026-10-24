@@ -109,12 +109,7 @@ cosmetic loss in a header, against a renderer that cannot fail."
                  (not (string-empty-p path)))
         (let* ((root (mevedel-tool-fs-current-workspace-root))
                (expanded-root (and root (expand-file-name root)))
-               (base (or (and (boundp 'mevedel--session)
-                              mevedel--session
-                              (ignore-errors
-                                (mevedel-session-working-directory
-                                 mevedel--session)))
-                         default-directory))
+               (base (mevedel-conversation-working-directory))
                (full-path (expand-file-name path base)))
           (when (and expanded-root
                      (string-prefix-p (file-name-as-directory expanded-root)

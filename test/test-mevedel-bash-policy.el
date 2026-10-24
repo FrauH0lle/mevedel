@@ -1062,6 +1062,33 @@ for effects despite reusable authority"
           (should-not
            (mevedel-bash-policy-missing-resource-paths
             "cat ./file" context '(:level use-default))))
+      (delete-directory parent t)))
+
+  :doc "captured execution directory wins a nonnil session directory without widening roots"
+  (let* ((parent (make-temp-file "mevedel-bash-agent-cwd-" t))
+         (root (file-name-concat parent "root"))
+         (child (file-name-concat parent "child"))
+         (session (mevedel-session--create :working-directory root))
+         (context `(:session ,session :mode ask
+                            :execution-directory ,child
+                            :allowed-roots (,child) :resource-grants nil)))
+    (unwind-protect
+        (progn
+          (make-directory root)
+          (make-directory child)
+          (should
+           (equal (list (file-name-concat child "file"))
+                  (mevedel-bash-policy--bash-resource-paths
+                   "cat ./file" nil context)))
+          (should-not
+           (mevedel-bash-policy-missing-resource-paths
+            "cat ./file" context '(:level use-default)))
+          ;; Changing authority, not cwd, controls the same relative operand.
+          (setq context (plist-put context :allowed-roots (list root)))
+          (should
+           (equal (list (file-name-concat child "file"))
+                  (mevedel-bash-policy-missing-resource-paths
+                   "cat ./file" context '(:level use-default)))))
       (delete-directory parent t))))
 
 (provide 'test-mevedel-bash-policy)

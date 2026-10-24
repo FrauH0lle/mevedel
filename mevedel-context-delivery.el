@@ -162,7 +162,7 @@ Use the recipient's selected components; never give a worker the root Goal."
                         mevedel-system-retained-components))
                (context (mevedel-system--make-context
                          (mevedel-session-workspace mevedel--session)
-                         (mevedel-session-working-directory mevedel--session)
+                         (mevedel-conversation-working-directory mevedel--session)
                          mevedel--session buffer))
                (observations (mevedel-context-delivery--observations names context))
                (types (mapcar #'car observations))

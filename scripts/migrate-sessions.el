@@ -143,12 +143,29 @@ one sidecar.  DATA is the private copy owned by the converter."
     (error "Unexpected chat records in legacy sidecar"))
   (plist-put data :chapters nil))
 
+(defun mevedel-migrate-session--v0.5.13-to-v0.5.14 (data _attached)
+  "Add the absent per-agent working directory override to v0.5.13 DATA."
+  (let ((registry (plist-get data :agent-registry)))
+    (unless (proper-list-p registry)
+      (error "Invalid legacy agent registry"))
+    (plist-put
+     data :agent-registry
+     (mapcar
+      (lambda (entry)
+        (unless (and (proper-list-p entry) (cl-evenp (length entry)))
+          (error "Invalid legacy agent record"))
+        (when (plist-member entry :working-directory)
+          (error "Unexpected agent working directory in legacy sidecar"))
+        (plist-put entry :working-directory nil))
+      registry))))
+
 (defconst mevedel-migrate-session--steps
   '(("v0.5.6" "v0.5.9" mevedel-migrate-session--v0.5.6-to-v0.5.9)
     ("v0.5.9" "v0.5.10" mevedel-migrate-session--v0.5.9-to-v0.5.10)
     ("v0.5.10" "v0.5.11" mevedel-migrate-session--v0.5.10-to-v0.5.11)
     ("v0.5.11" "v0.5.12" mevedel-migrate-session--v0.5.11-to-v0.5.12)
-    ("v0.5.12" "v0.5.13" mevedel-migrate-session--v0.5.12-to-v0.5.13))
+    ("v0.5.12" "v0.5.13" mevedel-migrate-session--v0.5.12-to-v0.5.13)
+    ("v0.5.13" "v0.5.14" mevedel-migrate-session--v0.5.13-to-v0.5.14))
   "Ordered (SOURCE TARGET FUNCTION) format steps.
 Retire old formats by deleting a prefix and its unused step functions.
 Append a step whenever the runtime codec's current format changes.")

@@ -437,12 +437,17 @@ round trip per file to discover."
 (defun mevedel-system-workspace-config-files (workspace &optional working-directory)
   "Return layered workspace instruction files for WORKSPACE.
 
-Files are ordered from workspace root to WORKING-DIRECTORY.  Within a
+Files are ordered from workspace root to WORKING-DIRECTORY, or from the
+validated agent checkout's instruction root for an external worktree.  Within a
 single directory, AGENTS.local.md is loaded after AGENTS.md when
 present."
   (when-let* ((workspace-root (and workspace (mevedel-workspace-root workspace))))
     (let* ((root (file-name-as-directory (expand-file-name workspace-root)))
            (cwd (mevedel-system--working-directory workspace working-directory))
+           (root (if (and mevedel--conversation-instruction-root
+                          (string-prefix-p mevedel--conversation-instruction-root cwd))
+                     mevedel--conversation-instruction-root
+                   root))
            ;; Containment by name, not by `file-in-directory-p': that
            ;; resolves both arguments with `file-truename', which on a remote
            ;; workspace is a round trip per directory level, once per send.
@@ -533,7 +538,8 @@ present."
                         (mevedel-system-context-working-directory context))))
          (session-dir (file-name-as-directory
                        (expand-file-name
-                        (mevedel-session-working-directory session)))))
+                        (mevedel-conversation-working-directory
+                         session (mevedel-system-context-refresh-buffer context))))))
     (and (or (null workspace)
              (eq workspace session-workspace)
              (equal context-root session-root))

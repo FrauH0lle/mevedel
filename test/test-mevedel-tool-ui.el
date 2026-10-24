@@ -192,7 +192,7 @@
            (args (mevedel-tool-args tool))
            (context-arg (assq 'context args))
            (prompt (mevedel-tool-prompt tool)))
-      (dolist (name '(role context model effort))
+      (dolist (name '(role context model effort working_directory))
         (let ((arg (assq name args)))
           (should arg)
           (should (eq :optional (nth 2 arg)))))
@@ -212,7 +212,67 @@
                       "model-visible roles"
                       "actionable instructions"
                       "background and not continue prior"))
-        (should (string-match-p text prompt))))))
+        (should (string-match-p text prompt)))))
+
+  :doc "Agent exposes optional working_directory in provider and discovery contracts"
+  (progn
+    (mevedel-tool-ui--register)
+    (let* ((tool (mevedel-tool-get "Agent"))
+           (provider (mevedel-tool-gptel-tool tool))
+           (arg (cl-find "working_directory" (gptel-tool-args provider)
+                         :key (lambda (entry) (plist-get entry :name))
+                         :test #'equal))
+           contract)
+      (should arg)
+      (should (equal "string" (plist-get arg :type)))
+      (should (plist-get arg :optional))
+      (with-temp-buffer
+        (setq-local mevedel--session (mevedel-tool-ui-test--session))
+        (setf (mevedel-session-tool-catalog mevedel--session)
+              '((("mevedel" "Agent") . "Start a child")))
+        (mevedel-tools--tool-search (lambda (text) (setq contract text)) "Agent"))
+      (should (string-search "working_directory" contract))
+      (should (string-search (plist-get arg :description) contract)))))
+
+(mevedel-deftest mevedel-tool-ui--agent/working-directory-forwarding
+  (:before-each (mevedel-tools-register))
+  ,test
+  (test)
+  :doc "registered provider dispatch forwards explicit and omitted cwd to spawn"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-agent-forward-" t)))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id root :root root :name "forward"))
+         (session (mevedel-session-create "main" workspace root))
+         (tool (mevedel-tool-gptel-tool (mevedel-tool-get "Agent")))
+         forwarded)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session mevedel--workspace workspace
+                      default-directory root)
+          (setf (mevedel-session-permission-mode session) 'full-auto)
+          (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
+                     (lambda (seen-session task message callback &rest options)
+                       (push (list seen-session task message options) forwarded)
+                       (funcall callback '(:outcome aborted))
+                       #'ignore)))
+            (dolist (directory (list root nil))
+              (let* ((args (append '(:task_name "cwd" :message "Inspect cwd.")
+                                   (and directory
+                                        (list :working_directory directory))))
+                     result)
+                (apply (gptel-tool-function tool)
+                       (lambda (value &rest _) (setq result value))
+                       (mapcar (lambda (arg)
+                                 (plist-get args (intern (concat ":" (plist-get arg :name)))))
+                               (gptel-tool-args tool)))
+                (should result)
+                (should (= (if directory 1 2) (length forwarded)))
+                (pcase-let ((`(,seen-session ,task ,message ,options) (car forwarded)))
+                  (should (eq session seen-session))
+                  (should (equal "cwd" task))
+                  (should (equal "Inspect cwd." message))
+                  (should (equal directory (plist-get options :working-directory))))))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-tool-ui--agent
   (:after-each (mevedel-workspace-clear-registry))

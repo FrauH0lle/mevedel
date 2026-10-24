@@ -1127,6 +1127,17 @@ confinement policy. Any
 "allow-session" / "deny-session" outcome accepted inside the sub-agent's
 prompt is written via `setf` on the same struct -- so the new rule
 applies immediately to the root and to every other live sub-agent.
+An Agent `working_directory` override changes the base for relative operands,
+not this shared authority. The pipeline captures its conversation directory for
+file tools and execution; Bash resource analysis uses that captured directory
+even when the root session has a different cwd. Path rules match the resolved
+absolute target with their existing glob semantics; a directory selection does
+not rewrite or re-anchor shared rules. Sandbox writable roots are still derived
+from session policy, never enlarged merely because an external Git worktree was
+selected. Native operations outside allowed roots need ordinary resource
+authority. Confined execution additionally retains the requirement that cwd
+itself be in a configured writable root; additive grants alone do not satisfy
+that cwd boundary. Ordinary authorization for unconfined execution is unchanged.
 Plan restrictions are the exception to live sharing. An agent turn started
 under Plan carries an immutable Plan read-only stamp, so leaving Plan or
 accepting a proposal does not widen a turn that is already running. See

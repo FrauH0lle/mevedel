@@ -264,8 +264,9 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
       (when parent-workspace
         (setq-local mevedel--workspace parent-workspace))
       (setq default-directory
-            (mevedel-agent-conversation--working-directory
-             parent-session parent-workspace))
+            (or (mevedel-agent-invocation-working-directory invocation)
+                (mevedel-agent-conversation--working-directory
+                 parent-session parent-workspace)))
       (let ((org-element-use-cache nil))
         (mevedel--transcript-org-mode))
       (when (fboundp 'org-element-cache-reset)
@@ -294,6 +295,8 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
       (when parent-specs
         (mevedel-agents-set-specs parent-specs))
       (setq-local mevedel--agent-invocation invocation)
+      (setq-local mevedel--conversation-working-directory
+                  (mevedel-agent-invocation-working-directory invocation))
       (add-hook 'before-change-functions #'mevedel-engine-record-history-edit nil t)
       (when (require 'mevedel-skills-prompt nil t)
         (mevedel-skills-install-activation-hook))
@@ -420,10 +423,12 @@ BUFFER defaults to INVOCATION's retained conversation buffer."
         (error "Agent request-local configuration is invalid"))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
+          (setq-local mevedel--conversation-working-directory
+                      (mevedel-agent-invocation-working-directory invocation))
           (setq default-directory
-                (mevedel-agent-conversation--working-directory
-                 (mevedel-agent-invocation-parent-session invocation)
-                 (and (boundp 'mevedel--workspace) mevedel--workspace)))
+                (mevedel-conversation-working-directory
+                 (mevedel-agent-invocation-parent-session invocation)))
+          (setq-local mevedel--conversation-instruction-root nil)
           (dolist (symbol mevedel-agent-request-local-symbols)
             (when-let* ((entry (assq symbol locals)))
               (set (make-local-variable symbol) (cdr entry))))

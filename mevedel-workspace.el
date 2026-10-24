@@ -113,16 +113,6 @@ session.  When set globally, grants persist across all sessions."
 ;;
 ;;; Workspace system variables
 
-(defvar-local mevedel--workspace nil
-  "Cached `mevedel-workspace' struct for this buffer.
-
-In chat buffers, this is set during buffer creation (before the session
-is created) and serves as a temporary cache.  Once `mevedel--session' is
-set, workspace access goes through the session instead.
-
-In non-session buffers (patch, diff-preview), this holds the workspace
-struct directly.")
-
 ;; Ensure `mevedel--workspace' is always buffer-local
 (put 'mevedel--workspace 'permanent-local t)
 

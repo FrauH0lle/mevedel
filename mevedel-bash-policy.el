@@ -349,7 +349,7 @@ recursively, even when the original shell word is quoted."
              (root (plist-get permission-context :workspace-root))
              (allowed-root (car (plist-get permission-context :allowed-roots))))
         (file-name-as-directory
-         (or session-dir directory root allowed-root
+         (or directory session-dir root allowed-root
              (error "Permission context has no execution directory"))))
     default-directory))
 

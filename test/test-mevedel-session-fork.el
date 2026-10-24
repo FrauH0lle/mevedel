@@ -12,10 +12,30 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 (require 'mevedel-tool-exec-permission)
+(require 'mevedel-agent-control)
 
 
-(mevedel-deftest mevedel-session-fork-clone-session
-  (:doc "covers every session slot and isolates both clone policies")
+(mevedel-deftest mevedel-session-fork-clone-session ()
+  ,test
+  (test)
+  :doc "Save As copies per-agent cwd while forks discard retained identities"
+  (dolist (directory '(nil "/tmp/agent-copy/" "/ssh:example.invalid:/srv/agent/"))
+    (let* ((record (mevedel-agent-record--create
+                    :id "cwd" :path "/root/cwd" :parent-path "/root"
+                    :working-directory directory))
+           (source (mevedel-session--create
+                    :agent-registry (list (cons "/root/cwd" record))))
+           (saved (mevedel-session-fork-clone-session source 'save-as))
+           (forked (mevedel-session-fork-clone-session source 'fork))
+           (copied (cdr (assoc "/root/cwd" (mevedel-session-agent-registry saved)))))
+      (should (mevedel-agent-record-p copied))
+      (should-not (eq record copied))
+      (should (equal directory (mevedel-agent-record-working-directory copied)))
+      (setf (mevedel-agent-record-working-directory copied) "/tmp/changed-copy/")
+      (should (equal directory (mevedel-agent-record-working-directory record)))
+      (should-not (mevedel-session-agent-registry forked))))
+
+  :doc "covers every session slot and isolates both clone policies"
   (progn
     (should (= 100
                (length

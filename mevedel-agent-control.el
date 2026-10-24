@@ -29,6 +29,11 @@
 (autoload 'mevedel-agent-conversation-save "mevedel-agent-conversation")
 (defvar mevedel--agent-invocation)
 
+;; `mevedel-agent-directory'
+(declare-function mevedel-agent-directory-resolve
+                  "mevedel-agent-directory" (session directory))
+(autoload 'mevedel-agent-directory-resolve "mevedel-agent-directory")
+
 ;; `mevedel-agent-persistence'
 (declare-function mevedel-agent-persistence-ensure-conversation
                   "mevedel-agent-persistence"
@@ -290,6 +295,7 @@ inside a settlement, timers included, sees the binding.")
   path
   parent-path
   role
+  working-directory
   configuration
   activity
   conversation-location
@@ -1598,6 +1604,7 @@ PARENT-TOOL-USE-ID and PLAN-READ-ONLY are as in
            nil (file-name-nondirectory (mevedel-agent-record-path record))
            message
            :path (mevedel-agent-record-path record)
+           :working-directory (mevedel-agent-record-working-directory record)
            :frozen-configuration configuration
            :retained-id (mevedel-agent-record-id record)
            :retained-buffer buffer
@@ -1798,12 +1805,14 @@ alone.  The agent stays retained, as after `InterruptAgent'."
 
 (cl-defun mevedel-agent-control-spawn
     (session task-name message callback
-             &key role agent context model effort model-policy
+             &key role agent context model effort model-policy working-directory
              description on-invocation result-handler
              skill-permission-rules skill-hook-rules parent-tool-use-id)
   "Prepare and spawn TASK-NAME with MESSAGE asynchronously in SESSION.
 CALLBACK receives a success, error, or aborted outcome plist.  Return an
-idempotent cancellation thunk for the unpublished preparation transaction."
+idempotent cancellation thunk for the unpublished preparation transaction.
+WORKING-DIRECTORY selects an existing execution directory; omission inherits
+the caller's optional override, without changing shared resource authority."
   (mevedel-agent-control--validate-spawn session task-name message)
   (unless (functionp callback)
     (error "Agent spawn callback must be a function"))
@@ -1830,6 +1839,11 @@ idempotent cancellation thunk for the unpublished preparation transaction."
           (or model-policy
               (mevedel-model-resolve-workload
                (intern role-name) model-selector effort)))
+         (directory
+          (if working-directory
+              (mevedel-agent-directory-resolve session working-directory)
+            (and (eq session mevedel--session)
+                 mevedel--conversation-working-directory)))
          (caller-path (mevedel-agent-control-current-path session))
          (record (mevedel-agent-control--reserve
                   session caller-path task-name role-name))
@@ -1840,7 +1854,8 @@ idempotent cancellation thunk for the unpublished preparation transaction."
          committed
          cancelled
          settled)
-    (setf (mevedel-agent-record-result-handler record) result-handler)
+    (setf (mevedel-agent-record-result-handler record) result-handler
+          (mevedel-agent-record-working-directory record) directory)
     (cl-labels
         ((settle (outcome)
            (unless settled
@@ -1869,6 +1884,7 @@ idempotent cancellation thunk for the unpublished preparation transaction."
                           (plist-get prepared :start-hook-audits)
                           :parent-tool-use-id parent-tool-use-id
                           :path (mevedel-agent-record-path record)
+                          :working-directory directory
                           :on-invocation
                           (lambda (invocation)
                             (mevedel-agent-control--record-invocation

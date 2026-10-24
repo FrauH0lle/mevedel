@@ -34,6 +34,30 @@
 ;;
 ;;; Session transient state
 
+(mevedel-deftest mevedel-conversation-working-directory
+  (:doc "projects only the selected conversation directory, preserving root and sibling defaults")
+  (let* ((workspace (mevedel-workspace--create :root "/tmp/workspace/"))
+         (session (mevedel-session--create :workspace workspace
+                                           :working-directory "/tmp/workspace/session/")))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (let ((parent (current-buffer)))
+        (should (equal "/tmp/workspace/session/"
+                       (mevedel-conversation-working-directory)))
+        (with-temp-buffer
+          (setq-local mevedel--session session
+                      mevedel--conversation-working-directory "/tmp/workspace/child/")
+          (should (equal "/tmp/workspace/child/"
+                         (mevedel-conversation-working-directory)))
+          (should (equal "/tmp/other-session/"
+                         (mevedel-conversation-working-directory
+                          (mevedel-session--create
+                           :working-directory "/tmp/other-session/"))))
+          (should (equal "/tmp/workspace/session/"
+                         (mevedel-conversation-working-directory session parent))))
+        (should (equal "/tmp/workspace/session/"
+                       (mevedel-session-working-directory session)))))))
+
 (mevedel-deftest mevedel-session-authority-mode-for-session
   (:doc "normalizes workspace authority once and rejects unset or mismatched state")
   (let* ((workspace

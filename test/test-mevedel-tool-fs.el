@@ -128,6 +128,13 @@
   ,test
   (test)
 
+  :doc "resolves a relative header path in the selected agent directory"
+  (let* ((workspace (mevedel-workspace--create :root "/tmp/project/"))
+         (mevedel--session (mevedel-session--create
+                            :workspace workspace :working-directory "/tmp/project/"))
+         (mevedel--conversation-working-directory "/tmp/project/child/"))
+    (should (equal "child/file.el" (mevedel-tool-fs-display-path "file.el"))))
+
   :doc "shortens a path under the workspace root without touching the target"
   ;; Runs from a tool renderer, and renderers run from the redraw path:
   ;; a stat here lands inside whatever remote command the redraw

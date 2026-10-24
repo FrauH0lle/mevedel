@@ -26,6 +26,7 @@
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-workspace)
+(require 'mevedel-worktree)
 (require 'mevedel-session-artifacts)
 (require 'helpers
          (file-name-concat
@@ -168,6 +169,25 @@
 			 (should-not
 			  (local-variable-p 'kill-buffer-hook buffer)))
 		     (kill-buffer buffer)))
+
+  :doc "cold configure projects persisted cwd without probing an unrelated remote target"
+  (with-temp-buffer
+    (let* ((directory "/ssh:unrelated.invalid:/tmp/")
+           (invocation (mevedel-agent-invocation--create
+                        :working-directory directory
+                        :frozen-configuration (mevedel-agent-configuration--create)))
+           (containment-probes 0)
+           (repository-probes 0))
+      (cl-letf (((symbol-function 'file-in-directory-p)
+                 (lambda (&rest _) (cl-incf containment-probes) nil))
+                ((symbol-function 'mevedel-worktree-repository-root)
+                 (lambda (&rest _) (cl-incf repository-probes) nil)))
+        (mevedel-agent-conversation-configure invocation (current-buffer)))
+      (should (= 0 containment-probes))
+      (should (= 0 repository-probes))
+      (should (equal directory default-directory))
+      (should (equal directory mevedel--conversation-working-directory))
+      (should-not mevedel--conversation-instruction-root)))
 
   :doc "a direct Agent advertises the roster the child inherited"
   (progn
@@ -405,6 +425,50 @@
                                         (format "cd %s" (shell-quote-argument root)))))
             (should (equal worktree (mevedel-tool-exec-permission-default-directory)))))
       (dolist (buffer (list grandchild-buffer child-buffer parent))
+        (when (buffer-live-p buffer) (kill-buffer buffer)))
+      (delete-directory root t)))
+
+  :doc "explicit cwd survives open and configure without retargeting root or sibling"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-agent-local-cwd-" t)))
+         (child-root (file-name-as-directory (file-name-concat root "child")))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id root :root root :name "cwd"))
+         (session (mevedel-session-create "main" workspace root))
+         (parent (generate-new-buffer " *agent-local-cwd-parent*"))
+         (child (mevedel-agent-invocation--create
+                 :agent-id "default--local-cwd" :path "/root/child"
+                 :parent-session session :working-directory child-root
+                 :frozen-configuration (mevedel-agent-configuration--create)))
+         (sibling (mevedel-agent-invocation--create
+                   :agent-id "default--sibling-cwd" :path "/root/sibling"
+                   :parent-session session))
+         child-buffer sibling-buffer)
+    (unwind-protect
+        (progn
+          (make-directory child-root t)
+          (with-current-buffer parent
+            (setq-local mevedel--session session mevedel--workspace workspace
+                        default-directory root))
+          (setq child-buffer (mevedel-agent-conversation-open child parent)
+                sibling-buffer (mevedel-agent-conversation-open sibling parent))
+          (should (equal child-root (buffer-local-value 'default-directory child-buffer)))
+          (should (equal child-root
+                         (mevedel-conversation-working-directory session child-buffer)))
+          ;; A retained follow-up must restore its own cwd, not whichever
+          ;; directory a provider buffer or the root currently happens to use.
+          (with-current-buffer child-buffer
+            (setq default-directory root
+                  mevedel--conversation-working-directory nil))
+          (mevedel-agent-conversation-configure child child-buffer)
+          (should (equal child-root (buffer-local-value 'default-directory child-buffer)))
+          (should (equal child-root
+                         (mevedel-conversation-working-directory session child-buffer)))
+          (should (equal root (mevedel-session-working-directory session)))
+          (dolist (buffer (list parent sibling-buffer))
+            (should (equal root (buffer-local-value 'default-directory buffer)))
+            (should-not (buffer-local-value 'mevedel--conversation-working-directory buffer))
+            (should (equal root (mevedel-conversation-working-directory session buffer)))))
+      (dolist (buffer (list sibling-buffer child-buffer parent))
         (when (buffer-live-p buffer) (kill-buffer buffer)))
       (delete-directory root t)))
 

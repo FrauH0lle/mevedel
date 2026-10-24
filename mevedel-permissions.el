@@ -222,7 +222,7 @@ EXPLICIT takes precedence when non-nil."
           path pattern domain name mode workspace-root allowed-roots
           exact-allowed-paths invocation-rules request-rules session-rules
           persistent-rules persistent-snapshot resource-grants
-          resource-access permission-request
+          resource-access permission-request execution-directory
           one-shot-mutations-p patch-session-only-p warn-no-session-p)
   "Return normalized permission invocation context.
 
@@ -241,7 +241,8 @@ ONE-SHOT-MUTATIONS-P defaults from REQUEST.
 PATCH-SESSION-ONLY-P classifies prepared ApplyPatch proposals containing only
 session-owned work descendants for the Plan boundary.
 PERMISSION-REQUEST admits an interactive request at its hook boundary before
-it enters the shared queue."
+it enters the shared queue.  EXECUTION-DIRECTORY captures the caller's relative
+path base; absent an explicit snapshot, use BUFFER's conversation directory."
   (setq tool (or tool
                  (and tool-name (mevedel-tool-ensure tool-name)))
         tool-name (or tool-name (and tool (mevedel-tool-name tool))))
@@ -356,6 +357,9 @@ happen for a non-read-only tool."
            :request request
            :invocation invocation
            :buffer buffer
+           :execution-directory
+           (or execution-directory
+               (mevedel-conversation-working-directory session buffer))
            :specifier-key specifier-key
            :specifier-value specifier-value
            :protected-path (plist-get context :protected-path-p)

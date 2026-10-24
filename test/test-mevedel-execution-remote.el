@@ -8,7 +8,10 @@
 
 (require 'cl-lib)
 (require 'ert)
+(require 'mevedel-agent-control)
+(require 'mevedel-agent-exec)
 (require 'mevedel-agents)
+(require 'mevedel-chat)
 (require 'mevedel-diff-apply)
 (require 'mevedel-execution)
 (require 'mevedel-execution-process)
@@ -182,24 +185,28 @@ shell launcher independent of Lisp source interpolation."
     (while (not (funcall predicate))
       (accept-process-output nil 0.05))))
 
-(defun test-mevedel-execution-remote--run-tool (session name args)
-  "Run registered tool NAME with ARGS in SESSION and return its result."
-  (let (done result)
-    (with-temp-buffer
-      (setq default-directory (mevedel-session-working-directory session))
-      (setq-local mevedel--workspace (mevedel-session-workspace session)
-                  mevedel--session session)
-      (let ((mevedel-permission-rules nil)
-            (mevedel-protected-paths nil))
-        (mevedel-pipeline-run-tool
-         (mevedel-tool-ensure name)
-         (lambda (value)
-           (setq result value
-                 done t))
-         args)
-        (test-mevedel-execution-remote--wait
-         (lambda () done) (format "%s did not settle" name) 60)))
-    result))
+(defun test-mevedel-execution-remote--run-tool (session name args &optional buffer)
+  "Run registered tool NAME with ARGS in SESSION and return its result.
+Optional BUFFER retains the real caller's conversation and agent identity."
+  (if (not buffer)
+      (with-temp-buffer
+        (setq default-directory (mevedel-session-working-directory session))
+        (setq-local mevedel--workspace (mevedel-session-workspace session)
+                    mevedel--session session)
+        (test-mevedel-execution-remote--run-tool
+         session name args (current-buffer)))
+    (let (done result)
+      (with-current-buffer buffer
+        (let ((mevedel-permission-rules nil)
+              (mevedel-protected-paths nil))
+          (mevedel-pipeline-run-tool
+           (mevedel-tool-ensure name)
+           (lambda (value)
+             (setq result value done t))
+           args)
+          (test-mevedel-execution-remote--wait
+           (lambda () done) (format "%s did not settle" name) 60)))
+      result)))
 
 (defun test-mevedel-execution-remote--start-reader
     (session root owner label &optional owner-context)
@@ -359,6 +366,111 @@ before returning."
         (should (string-match-p
                  "Remote skill marker"
                  (mevedel-skill-load-body skill)))))))
+
+(defun test-mevedel-execution-remote--exercise-agent-directory
+    (session root buffer)
+  "Spawn a registered Agent in SESSION at a distinct directory under ROOT.
+Only the provider start is substituted; tool admission, retained conversation,
+target filesystem, Bash and Eval use their production paths in BUFFER."
+  (let* ((child (file-name-as-directory (file-name-concat root "agent-cwd")))
+         (file (file-name-concat child "cwd-marker.txt"))
+         (grants (copy-tree (mevedel-session-resource-grants session)))
+         invocation)
+    (make-directory child)
+    (write-region "root-marker\n" nil
+                  (file-name-concat root "cwd-marker.txt") nil 'silent)
+    (write-region "child-marker\n" nil file nil 'silent)
+    (unwind-protect
+        (with-current-buffer buffer
+          (let* ((gptel--known-backends (copy-tree gptel--known-backends))
+                 (gptel-backend
+                  (gptel-make-openai "Remote cwd acceptance"
+                    :key "test" :models '(test-model)))
+                 (gptel-model 'test-model)
+                 (roots (mevedel--all-allowed-roots buffer)))
+            (cl-letf (((symbol-function 'mevedel-agent-exec-run)
+                       (lambda (_callback _role _description child-invocation
+                                          _buffer &optional _configure)
+                         (setq invocation child-invocation)
+                         'provider-request)))
+              (let ((result
+                     (test-mevedel-execution-remote--run-tool
+                      session "Agent"
+                      '(:task_name "cwd acceptance"
+                        :message "Inspect the selected directory."
+                        :working_directory "agent-cwd") buffer)))
+                (should-not (string-prefix-p "Error:" result))
+                (should invocation)))
+            (let ((agent-buffer (mevedel-agent-invocation-buffer invocation)))
+              (should (buffer-live-p agent-buffer))
+              (with-current-buffer agent-buffer
+                (should (equal child (mevedel-conversation-working-directory)))
+                (should (equal roots (mevedel--all-allowed-roots agent-buffer))))
+              (dolist (spec '(("Read" (:file_path "cwd-marker.txt"))
+                              ("Glob" (:pattern "cwd-marker.txt"))
+                              ("Grep" (:pattern "child-marker" :path "."
+                                       :output_mode "content"))))
+                (let ((result (test-mevedel-execution-remote--run-tool
+                               session (car spec) (cadr spec) agent-buffer)))
+                  (should (string-search (if (equal (car spec) "Glob")
+                                            "cwd-marker.txt" "child-marker")
+                                         result))
+                  (should-not (string-search "root-marker" result))))
+              (test-mevedel-execution-remote--run-tool
+               session "ApplyPatch"
+               '(:patch "*** Begin Patch\n*** Add File: cwd-patch.txt\n+child patch\n*** End Patch")
+               agent-buffer)
+              (should (file-exists-p (file-name-concat child "cwd-patch.txt")))
+              (dolist (spec '(("Bash" (:command "cat ./cwd-marker.txt"
+                                      :description "Read child cwd marker"))
+                              ("Eval" (:expression
+                                       "(with-temp-buffer (insert-file-contents \"cwd-marker.txt\") (buffer-string))"
+                                       :mode "live"))
+                              ("Eval" (:expression
+                                       "(with-temp-buffer (insert-file-contents \"cwd-marker.txt\") (buffer-string))"
+                                       :mode "batch"))))
+                (let ((result (test-mevedel-execution-remote--run-tool
+                               session (car spec) (cadr spec) agent-buffer)))
+                  (if (and (file-remote-p root)
+                           (equal (plist-get (cadr spec) :mode) "batch"))
+                      (should
+                       (equal
+                        (concat "Error: Permission denied: "
+                                "Batch Eval is unavailable for remote sessions; "
+                                "use Live Eval or Bash on the execution target")
+                        result))
+                    (should (string-search "child-marker" result))
+                    (should-not (string-search "root-marker" result)))))
+              ;; Directory selection does not rewrite any resource authority.
+              (should (equal grants (mevedel-session-resource-grants session)))
+              (should (equal roots (mevedel--all-allowed-roots buffer)))
+              (with-current-buffer agent-buffer
+                (let ((context (mevedel-tool-exec-permission-current-context
+                                "Bash" nil session)))
+                  (setq context (plist-put context :mode 'ask)
+                        context (plist-put context :allowed-roots (list root)))
+                  (should
+                   (equal (list (mevedel-execution-target-native-path
+                                 (mevedel-session-execution-target session)
+                                 (file-name-concat
+                                  (file-name-directory (directory-file-name root))
+                                  "outside-cwd-authority")))
+                          (mevedel-bash-policy-missing-resource-paths
+                           "cat ../../outside-cwd-authority" context
+                           '(:level use-default))))))
+              (should (equal root (mevedel-session-working-directory session)))
+              (should-not (file-exists-p (file-name-concat root "cwd-patch.txt")))
+              (should (string-search
+                       "root-marker"
+                       (test-mevedel-execution-remote--run-tool
+                        session "Read" '(:file_path "cwd-marker.txt") buffer))))))
+      (when invocation
+        (mevedel-agent-control-interrupt
+         session (mevedel-agent-invocation-path invocation))
+        (when-let* ((agent-buffer (mevedel-agent-invocation-buffer invocation))
+                    ((buffer-live-p agent-buffer)))
+          (with-current-buffer agent-buffer (set-buffer-modified-p nil))
+          (kill-buffer agent-buffer))))))
 
 (defun test-mevedel-execution-remote--exercise-control-filesystem (root)
   "Round trip pinned control operations against the real target at ROOT.
@@ -543,6 +655,32 @@ connection charges for, so the program path is proved here too."
 
 ;;
 ;;; Remote execution
+
+(mevedel-deftest test-mevedel-execution-remote--exercise-agent-directory
+  (:quiet t :before-each (mevedel-tools-register))
+  ,test
+  (test)
+  :doc "registered Agent cwd journey also works locally without remote provisioning"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-agent-cwd-" t)))
+         (workspace (test-mevedel-execution--workspace root))
+         (session (mevedel-session-create "cwd" workspace root))
+         (buffer (generate-new-buffer " *agent-cwd-acceptance*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (mevedel-chat-prepare-transcript-buffer)
+            (setq-local mevedel--session session mevedel--workspace workspace
+                        default-directory root))
+          (mevedel-session-set-root-buffer session buffer)
+          (setf (mevedel-session-permission-mode session) 'full-auto
+                (mevedel-session-sandbox-mode session) 'off)
+          (test-mevedel-execution-remote--exercise-agent-directory
+           session root buffer))
+      (mevedel-execution-teardown-session session)
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution-run-one-shot/remote (:quiet t)
   ,test
@@ -2597,6 +2735,8 @@ work in flight genuinely unprovable rather than merely finished."
 		    session target root)))
 	      (message "mevedel: real remote %s Bash/Eval/resources/skills" method)
 	      (test-mevedel-execution-remote--exercise-tools-and-resources
+	       session root root-buffer)
+	      (test-mevedel-execution-remote--exercise-agent-directory
 	       session root root-buffer)
 	      (test-mevedel-execution-remote--exercise-project-hook
 	       session root)

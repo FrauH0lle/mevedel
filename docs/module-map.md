@@ -215,6 +215,7 @@ Prompt / presets / agents
   mevedel-gptel-retry.el      admitted native gptel sample retries across backends, conservative error classification, small Responses normalization, backoff and bounded diagnostics
   mevedel-agents.el           worker/explorer/verifier/reviewer definitions
   mevedel-agent-conversation.el  retained conversation buffers, activity, and saves
+  mevedel-agent-directory.el  same-target workspace/worktree cwd validation without authority grants
   mevedel-agent-control.el    retained-agent tree addressing, turns, mail, waits
   mevedel-agent-exec.el       sub-agent request runner and FSM handlers
   mevedel-agent-persistence.el durable agent registry codec and cold hydration

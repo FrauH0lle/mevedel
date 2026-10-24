@@ -18,6 +18,33 @@ registry. Failed unpublished spawns release it;
 forks and Rewind clear retained ownership under
 [ADR 0062](0062-do-not-clone-live-agents-into-session-forks.md).
 
+Agent optionally accepts `working_directory`, an existing absolute directory or
+one relative to its parent's effective directory. Retained identity owns the
+canonical selection independently of the root session's directory, and children
+inherit it by default. Without a selection anywhere in the ancestor chain, the
+existing root-session directory policy is unchanged. Bash/Eval, relative file
+tools, permission resource analysis, and environment observations use the same
+conversation directory. Save/restore and Save As preserve it; session forks
+continue to discard retained agents under ADR 0062.
+
+The directory must resolve on the existing execution target and be inside the
+canonical workspace or a currently registered worktree of the same Git
+repository. For an external checkout, compare common Git-directory identity and
+the registered top-level checkout; names, branch labels and lexical path prefixes
+are insufficient. Subdirectories are allowed, but unrelated nested repositories
+and submodules outside the workspace do not share that identity. Revalidate an
+override before each turn, without falling back when it becomes unavailable.
+
+This is execution context, not a new authority scope. Root-session rules,
+resource grants, protected paths, Plan ceilings and sandbox writable roots stay
+shared and unchanged. An external linked checkout can be a valid directory
+while still requiring resource authority for native writes. Confined execution
+retains its existing requirement that cwd lie inside a configured writable root;
+an additive grant alone does not replace that boundary.
+Logical resources keep their original roots. The selected checkout supplies its
+workspace instruction hierarchy without changing the session's workspace or
+memory identity.
+
 Targets accept canonical `/root/...` paths or relative descendants beneath the
 caller. Ancestors and peers use canonical paths. Empty segments, dot/dot-dot,
 malformed names, unknown paths, and opaque invocation IDs are rejected.
@@ -42,6 +69,14 @@ remain internal persistence identities. Control-specific restrictions still
 apply, such as InterruptAgent refusing the root and caller.
 
 ## Decision history
+
+**Per-agent directories replace mandatory root-session cwd sharing.** On
+2026-10-24 orchestrated worktree tasks depended on every agent remembering
+`cd` or `git -C`; a stray Git operation reached the main checkout. A shell-local
+directory change never changed the durable conversation directory. Make that
+choice an explicit optional Agent input and carry it through the existing
+execution and permission boundaries, rather than adding more prompt reminders.
+This does not reverse ADR 0062: a session fork does not clone agents.
 
 **Task IDs no longer authorize cross-agent updates.** A later workstream reused
 IDs #1-3 belonging to a completed sibling, changing their content and reopening

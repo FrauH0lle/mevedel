@@ -504,6 +504,12 @@ Root view, interaction and persistence code read it whether or not
 ;;
 ;;; Session buffer-local
 
+(defvar-local mevedel--workspace nil
+  "Cached `mevedel-workspace' struct for this buffer.
+Chat setup uses it before session creation.  Session buffers subsequently
+resolve workspace identity through their shared session; non-session buffers
+such as patch previews retain the workspace directly.")
+
 (defvar-local mevedel--session nil
   "The `mevedel-session' struct for this chat buffer.
 Set when a session is created, never cleared during buffer lifetime.")
@@ -750,6 +756,31 @@ Set at request start and cleared by the request lifecycle owner.")
 
 (defvar-local mevedel--agent-invocation nil
   "Invocation that owns this retained agent conversation buffer.")
+
+(defvar-local mevedel--conversation-working-directory nil
+  "Durable agent directory projected into its conversation buffer.
+Nil preserves the session's ordinary working-directory policy.")
+
+(defvar-local mevedel--conversation-instruction-root nil
+  "Instruction boundary for an agent in an external linked checkout.
+This affects instruction discovery only, never permission roots.")
+
+(defun mevedel-conversation-working-directory (&optional session buffer)
+  "Return the execution directory for SESSION in BUFFER.
+An agent's projected directory overrides the shared session directory, not
+its workspace identity or resource authority.  BUFFER defaults to current."
+  (with-current-buffer (or buffer (current-buffer))
+    (let* ((override (and (or (null session) (eq session mevedel--session))
+                          mevedel--conversation-working-directory))
+           (session (or session mevedel--session))
+           (workspace (or (and session (mevedel-session-workspace session))
+                          mevedel--workspace)))
+      (file-name-as-directory
+       (expand-file-name
+        (or override
+            (and session (mevedel-session-working-directory session))
+            (and workspace (mevedel-workspace-root workspace))
+            default-directory))))))
 
 (defvar-local mevedel--pending-implementation-policy nil
   "Accepted implementation policy waiting for request admission.")

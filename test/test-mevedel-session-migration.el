@@ -21,6 +21,27 @@
     (setf (nth 4 attributes) nil)
     attributes))
 
+(defun mevedel-migration-test--legacy-agents ()
+  "Return a v0.5.13 retained parent and child with durable configuration."
+  (let ((configuration
+         (list :agent '(:name "default" :description "Kept agent" :tools nil
+                       :system-prompt "Kept instructions" :context-components nil
+                       :max-turns nil :reminders nil :hook-rules nil)
+               :request-locals
+               (mapcar (lambda (symbol)
+                         (cons symbol
+                               (pcase symbol
+                                 ('gptel-backend "Migration fixture")
+                                 ('gptel-model 'fixture-model))))
+                       mevedel-agent-request-local-symbols))))
+    (list (list :id "parent" :path "/root/parent" :parent-path "/root"
+                :role "default" :configuration configuration :activity 'idle
+                :settled-result "Kept result" :settled-outcome 'completed
+                :conversation-location "agents/parent.chat.org" :mailbox nil)
+          (list :id "child" :path "/root/parent/child" :parent-path "/root/parent"
+                :role "default" :configuration configuration :activity 'running
+                :conversation-location "agents/child.chat.org" :mailbox nil))))
+
 (defmacro mevedel-migration-test--with-source (version &rest body)
   "Run BODY with a two-head VERSION session and a separate destination."
   (declare (indent 1) (debug t))
@@ -31,9 +52,9 @@
           (workspace (mevedel-session-workspace session))
           (old (cl-loop for (key value) on (mevedel-session-codec-serialize session) by #'cddr
                         ;; Strip exactly the fields VERSION predates.
-                        unless (or (and (not (equal ,version "v0.5.13"))
+                        unless (or (and (not (member ,version '("v0.5.13" "v0.5.14")))
                                         (eq key :chapters))
-                                   (and (not (member ,version '("v0.5.12" "v0.5.13")))
+                                   (and (not (member ,version '("v0.5.12" "v0.5.13" "v0.5.14")))
                                         (eq key :naming-input))
                                    (and (member ,version '("v0.5.6" "v0.5.9"))
                                         (memq key '(:recovery-issues :pending-follow-ups :pending-steering
@@ -75,6 +96,28 @@
            ,@body)
        (delete-directory root t)
        (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-migrate-session--v0.5.13-to-v0.5.14 ()
+  ,test
+  (test)
+  :doc "adds nil overrides to each legacy agent, preserving every prior field"
+  (let* ((agents (mevedel-migration-test--legacy-agents))
+         (data (list :agent-registry (copy-tree agents)))
+         (converted (mevedel-migrate-session--v0.5.13-to-v0.5.14 data nil)))
+    (cl-loop for old in agents
+             for new in (plist-get converted :agent-registry) do
+             (should (plist-member new :working-directory))
+             (should-not (plist-get new :working-directory))
+             (cl-remf new :working-directory)
+             (should (equal old new))))
+
+  :doc "rejects an unexpected cwd and malformed legacy registries instead of guessing"
+  (dolist (registry '((:broken . tail) ((:id))
+                     ((:id "agent" :working-directory nil))
+                     ((:id "agent" :working-directory "/tmp/override/"))))
+    (should-error
+     (mevedel-migrate-session--v0.5.13-to-v0.5.14
+      (list :agent-registry registry) nil))))
 
 (mevedel-deftest mevedel-migrate-session--sidecar ()
   ,test
@@ -201,6 +244,22 @@
     (should-error (mevedel-migrate-session--sidecar
                    (plist-put (copy-tree data) :chapters nil))))
 
+  :doc "v0.5.13 agents gain explicit nil through the chain and the normal decoder"
+  (let* ((agents (mevedel-migration-test--legacy-agents))
+         (data (test-mevedel-session-persistence--complete-sidecar
+                (list :version "v0.5.13" :agent-registry agents)))
+         (converted (mevedel-migrate-session--sidecar data))
+         (loaded (mevedel-agent-persistence-deserialize-registry
+                  (plist-get converted :agent-registry)
+                  (mevedel-execution-target-create "/"))))
+    (should (equal mevedel-session-codec-format-version (plist-get converted :version)))
+    (should (= 2 (length loaded)))
+    (dolist (entry loaded)
+      (should-not (mevedel-agent-record-working-directory (cdr entry))))
+    (should (equal "Kept result" (mevedel-agent-record-settled-result (cdar loaded))))
+    (should-not (plist-member (car agents) :working-directory))
+    (should (equal converted (mevedel-migrate-session--sidecar converted))))
+
   :doc "current sidecars retain queued input, recovery state and naming input unchanged"
   (let ((data (test-mevedel-session-persistence--complete-sidecar nil)))
     (setq data (plist-put data :pending-follow-ups '((:id 3 :category follow-up :input "Keep this")))
@@ -275,7 +334,7 @@
   ,test
   (test)
   :doc "converts all retained heads, preserves bytes and loads through the current reader"
-  (dolist (version '("v0.5.6" "v0.5.9" "v0.5.10" "v0.5.11" "v0.5.12"))
+  (dolist (version '("v0.5.6" "v0.5.9" "v0.5.10" "v0.5.11" "v0.5.12" "v0.5.13"))
     (mevedel-migration-test--with-source version
       (let ((before (mapcar (lambda (file) (cons file (mevedel-migrate-session--hash file)))
                             (directory-files-recursively source "."))))
@@ -300,6 +359,39 @@
                              (mevedel-migrate-session--hash (file-name-concat destination relative)))))))
         ;; Runtime loading remains strict; only this explicit script accepts old data.
         (should-error (mevedel-session-codec-deserialize old workspace)))))
+
+  :doc "adds nil cwd to legacy agents in fixed and retained publication sidecars"
+  (mevedel-migration-test--with-source "v0.5.13"
+    (setq old (plist-put old :agent-registry (mevedel-migration-test--legacy-agents)))
+    (mevedel-migrate-session--write (file-name-concat source "session.meta.el") old)
+    (dolist (name '("aaaaaaaaaaaaaaaaaaaa" "bbbbbbbbbbbbbbbbbbbb"))
+      (let* ((directory (concat ".publications/generation-" name))
+             (file (file-name-concat source directory "000001.data"))
+             (manifest-file (file-name-concat source directory "manifest.el"))
+             (manifest (mevedel-migrate-session--read manifest-file)))
+        (mevedel-migrate-session--write file old)
+        (setf (plist-get (cdar (plist-get manifest :artifacts)) :sha256)
+              (mevedel-migrate-session--hash file))
+        (mevedel-migrate-session--write manifest-file manifest)))
+    (let ((before (mapcar (lambda (file) (cons file (mevedel-migrate-session--hash file)))
+                          (directory-files-recursively source "."))))
+      (should (= 3 (mevedel-migrate-session-copy source destination)))
+      (dolist (row before)
+        (should (equal (cdr row) (mevedel-migrate-session--hash (car row)))))
+      (dolist (name '("aaaaaaaaaaaaaaaaaaaa" "bbbbbbbbbbbbbbbbbbbb"))
+        (let* ((publication (mevedel-session-publication-read
+                             destination (concat ".publications/generation-" name "/manifest.el")))
+               (data (mevedel-session-codec-read (plist-get publication :sidecar)))
+               (loaded (plist-get (mevedel-session-codec-deserialize data workspace) :session))
+               (registry (mevedel-session-agent-registry loaded)))
+          (should (= 2 (length registry)))
+          (should (equal "Kept result" (mevedel-agent-record-settled-result (cdar registry))))
+          (dolist (entry (plist-get data :agent-registry))
+            (should (plist-member entry :working-directory))
+            (should-not (plist-get entry :working-directory)))
+          (dolist (entry registry)
+            (should-not (mevedel-agent-record-working-directory (cdr entry))))))
+      (should (eq 'current (plist-get (cdar (mevedel-migrate-sessions destination)) :status)))))
 
   :doc "converts unprepared Worktree retries in every head and refuses prepared ones without source writes"
   (dolist (prepared '(nil t))
@@ -470,7 +562,7 @@
 
   :doc "removing every old step leaves current-only validation"
   (let ((mevedel-migrate-session--steps nil))
-    (mevedel-migration-test--with-source "v0.5.13"
+    (mevedel-migration-test--with-source mevedel-session-codec-format-version
       (should (equal old (mevedel-migrate-session--sidecar old))))
     (mevedel-migration-test--with-source "v0.5.12"
       (should-error (mevedel-migrate-session--sidecar old)))))
@@ -525,7 +617,7 @@
                                  (file-name-concat backup "session.meta.el")) :version)))))
 
   :doc "already-current metadata is not rewritten or backed up"
-  (mevedel-migration-test--with-source "v0.5.13"
+  (mevedel-migration-test--with-source mevedel-session-codec-format-version
     (let ((before (directory-files root t))
           (attributes (mevedel-migration-test--stable-attributes
                        (file-name-concat source "session.meta.el"))))

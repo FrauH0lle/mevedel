@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'mevedel-agent-directory)
+
 (require 'mevedel-recovery)
 
 ;; `setf' on a slot of a struct defined elsewhere needs that
@@ -225,6 +227,11 @@
 (autoload 'mevedel-view-agent-live-transcript-finalize
   "mevedel-view-agent")
 (autoload 'mevedel-view-agent-live-transcript-start "mevedel-view-agent")
+
+;; `mevedel-worktree'
+(declare-function mevedel-worktree-repository-root
+                  "mevedel-worktree" (directory))
+(autoload 'mevedel-worktree-repository-root "mevedel-worktree")
 
 (defconst mevedel-agent-runtime--partial-max-chars (* 32 1024)
   "Maximum inline partial response size for an interrupted turn.")
@@ -1123,7 +1130,7 @@ Return a marker at the start of the turn's Agent Task heading."
            on-invocation on-settle path frozen-configuration
            retained-id retained-buffer retained-transcript
            pending-hook-context on-hook-context parent-tool-use-id
-           plan-read-only token)
+           plan-read-only token working-directory)
   "Start one asynchronous retained agent turn and return its invocation.
 AGENT starts a new conversation; FROZEN-CONFIGURATION and the three retained
 identity values continue one.  PATH is the conversation's canonical address.
@@ -1132,7 +1139,8 @@ TOKEN, when the caller runs under a queued publication preparation, is its
 gate ownership: every persisting step of the turn setup and of its error
 settlement carries it, so the error cleanup cannot wait on its own gate.
 The turn is Plan read-only when PLAN-READ-ONLY is non-nil or its caller
-works under Plan read-only authority."
+works under Plan read-only authority.  WORKING-DIRECTORY is the retained
+conversation's optional execution directory, never a resource grant."
   (unless (and (stringp path) (string-match-p "\\`/root/" path))
     (error "Agent requires a canonical path below /root"))
   (when (and frozen-configuration
@@ -1167,7 +1175,11 @@ works under Plan read-only authority."
       (error "Agent requires an active mevedel session"))
     (unless (or retained-p prepared-turn)
       (error "Initial agent turn requires prepared task"))
+    (when working-directory
+      (setq working-directory
+            (mevedel-agent-directory-resolve session working-directory)))
     (setf (mevedel-agent-invocation-agent-id invocation) agent-id
+          (mevedel-agent-invocation-working-directory invocation) working-directory
           (mevedel-agent-invocation-path invocation) path
           (mevedel-agent-invocation-description invocation) description
           (mevedel-agent-invocation-parent-session invocation) session
@@ -1200,7 +1212,8 @@ works under Plan read-only authority."
     (when skill-permission-rules
       (setf (mevedel-agent-invocation-skill-permission-rules invocation)
             skill-permission-rules))
-    (let ((configuration
+    (let* ((mevedel--conversation-working-directory working-directory)
+           (configuration
            (or frozen-configuration
                (mevedel-agent-exec-freeze-configuration
                 agent-type invocation model-policy))))
@@ -1224,6 +1237,16 @@ works under Plan read-only authority."
               (setq-local mevedel--agent-invocation invocation)))
         (mevedel-agent-runtime--setup-transcript invocation buffer))
       (mevedel-agent-conversation-configure invocation buffer)
+      ;; Hydration itself performs no directory probes.  Discover a linked
+      ;; checkout's instructions only after this turn validated the target and
+      ;; current repository membership above.
+      (when working-directory
+        (with-current-buffer buffer
+          (unless (file-in-directory-p
+                   working-directory
+                   (mevedel-workspace-root (mevedel-session-workspace session)))
+            (setq-local mevedel--conversation-instruction-root
+                        (mevedel-worktree-repository-root working-directory)))))
       (let (published-p)
         (condition-case err
             (let ((turn

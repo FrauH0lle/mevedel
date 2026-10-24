@@ -10,7 +10,7 @@ the recent journal map; all roles may use permitted journal reads on demand.
 
 The model-facing `Agent` tool starts a retained child asynchronously. It
 accepts a free-form `task_name`, a complete `message`, and optional `role`,
-`context`, `model`, and `effort` controls, then returns the committed canonical
+`context`, `model`, `effort`, and `working_directory` controls, then returns the committed canonical
 path after preparation and provider dispatch succeed.
 
 Delegation and result guidance asks for labeled measurement lists rather than
@@ -32,12 +32,43 @@ instructions, tools, model policy, and delegation capability. A named role
 supplies its own configuration rather than intersecting its tools with the
 delegator's. Children are created below the caller, so recursive delegation
 forms paths such as `/root/implementation/tests`.
-All of those conversations use the root session's working directory, including
-children and grandchildren of a Worktree Fork. The workspace's original checkout
-root does not override that session directory. A shell-local `cd` in one Bash
-call changes only that process; it does not retarget the session, later tool
-calls, or children started afterwards. A task message naming another checkout
-also does not change execution state.
+Without `working_directory`, conversations inherit their parent's directory;
+when no ancestor selected an override, they use the root session's working
+directory, including fresh agents in a Worktree Fork. The workspace's original
+checkout root does not override that session directory. A shell-local `cd` in
+one Bash call changes only that process; it does not retarget later tool calls
+or children. A task message naming another checkout also does not change
+execution state.
+
+`working_directory` selects an existing directory, absolute or relative to
+the parent's effective directory. It is canonicalized, including symlinks,
+on the session's execution target. The directory must be within the session
+workspace, or within a registered Git worktree of the workspace's repository.
+External worktrees are checked against the canonical common Git directory and
+the repository's current worktree list; unrelated repositories, symlink escapes
+to unrelated directories, and paths naming another execution target are rejected.
+Subdirectories of a registered checkout are accepted. Validation happens before
+reservation for an explicit argument and again before each provider turn.
+Missing or no-longer-related directories fail rather than silently falling back.
+
+The selection is durable across retained follow-ups, save/restore, and Save As;
+children inherit it unless they select another directory. Conversation Fork and
+Worktree Fork still start with no retained agents under
+[ADR 0062](adr/0062-do-not-clone-live-agents-into-session-forks.md). Fresh agents
+there inherit the forked session's directory. The directory applies consistently
+to Bash and Eval, ordinary relative Read/Glob/Grep/ApplyPatch paths, permission
+path resolution, and environment observations. Workspace instruction discovery
+in an external linked checkout uses that checkout's root. Logical resource
+addresses such as `work://` retain their own roots.
+
+A directory selection is **not a permission grant**. Permission modes, rules,
+resource grants, protected paths, Plan ceilings, and sandbox writable roots stay
+owned by the shared session. Native operations on an external linked checkout
+still need ordinary resource authority. Confined Bash and local batch Eval
+require their cwd to lie within an existing configured writable root; additive
+path grants alone do not satisfy that existing cwd boundary. Selecting a
+checkout never adds a writable root. Unconfined execution remains subject to its
+ordinary explicit authorization and hard denies.
 The default role also inherits its delegator's context observations, frozen
 with the agent: a named delegator's own selection, or for a root child the
 root's workspace guidance, memory index, environment, tool listing, skills and
