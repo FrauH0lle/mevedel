@@ -507,7 +507,8 @@ empty folder; see [Shared working-note lifecycle](#shared-working-note-lifecycle
 satisfies the count by itself, so a workspace without digests or with
 journaling disabled is still cleaned up; a shared folder alone makes the
 workspace a candidate. The admitted review then also carries any eligible
-digests. `/remember` bypasses timing and count thresholds.
+digests, unless an oversized note owns the batch alone. `/remember` bypasses
+timing and count thresholds.
 
 Turn completion checks cached timing and settings without target I/O. Queued
 turns coalesce, and filesystem work waits for idle transport. A failed count
@@ -529,8 +530,11 @@ count. Zero disables automatic review in auto mode. Propose retains the ordinary
 interval. A failed catch-up review ends the catch-up chain; later offers must
 pass the ordinary successful-review clock again. The cap bounds successful
 batch admissions, not tokens or billing: catch-up can
-cost up to eight normal-sized review requests per day rather than one, each
-retaining its existing evidence, deadline and output limits. Failed attempts
+cost up to eight successful review batches per day rather than one. Ordinary
+batches keep the same note/digest/request bounds; an oversized note is a
+single batch with bounded additional sequential summary calls, followed by
+its final review, all sharing the review's deadline and output limits.
+The cap counts batches, not provider calls. Failed attempts
 still may incur provider charges. Explicit review and drain bypass the cap.
 
 Auto applies proposals sequentially with fresh workspace and original-root
@@ -743,14 +747,17 @@ or `directory` as the type; a disposal whose extraction is undecided shows
 waiting for an active turn. `/remember drain` and `M-x mevedel-remember-drain`
 start the same operation. The header shows batch number, status and the last
 observed notes-remaining count; completion messages report each batch's notes
-and digest backlog. Drain runs successive general reviews, each with the same
-16-note / 96-KiB capture and ordinary digest/request limits, until a fresh
+and digest backlog. Drain runs successive general reviews, with ordinary-note
+batches bounded to 16 notes / 96 KiB and oversized notes reviewed alone in
+bounded chunks; digest/request limits remain unchanged. It stops when a fresh
 selection finds no ready shared notes, housekeeping or uncovered digests. It
 does not request an empty current-memory review. Pending, kept and blocked
 notes are not ready; propose/manual drain leaves decisions for approval rather
 than deleting their files. Active workspace turns wait with a 60-second retry,
 so drain neither captures their notes nor spins on empty reviews. Closing its
 originating buffer or exiting stops it; a failed review stops without retry.
+A changed chunked note reports `restart-required`, not a failed review; drain
+continues to the next ready batch and automatic catch-up remains armed.
 The explicit command is not subject to the automatic daily cap.
 
 `m` runs another consolidation; a prefix argument asks for focus. The first-class
@@ -827,8 +834,8 @@ admitted while a conversation in the workspace runs a turn captures no notes.
 else is an attachment. At most 16 ordinary text notes and 96 KiB are captured,
 oldest first, each at most 32 KiB; the review request admits them beside
 digests (one of each when both fit, then oldest first). A larger text note is
-captured alone, up to `mevedel-memory-notes-max-review-bytes` (default 512 KiB,
-about sixteen chunks).
+captured alone, leaving eligible digests unpinned for the next batch, up to
+`mevedel-memory-notes-max-review-bytes` (default 512 KiB, about sixteen chunks).
 It is reviewed sequentially in UTF-8 chunks of at most 32 KiB, carrying a
 running summary capped at 16 KiB. The final review uses that summary to
 extract knowledge and decide keep, condense or delete through the normal

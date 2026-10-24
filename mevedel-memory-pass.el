@@ -440,7 +440,7 @@ The retry ends after one attempt that finds the workspace idle."
             (let* ((workspace (plist-get state :workspace))
                    (claim (plist-get state :claim))
                    (id (plist-get claim :owner))
-                   (status (if (eq (plist-get result :outcome) 'aborted) 'cancelled 'failed))
+                   (status (if (memq (plist-get result :outcome) '(aborted restart-required)) 'cancelled 'failed))
                    (reported (if-let* ((read-usage (plist-get (plist-get state :request) :usage)))
                                  (funcall read-usage) result))
                    ;; Freeze diagnostics before storage can replace RESULT with an error.
@@ -535,7 +535,8 @@ The retry ends after one attempt that finds the workspace idle."
                 ;; rechecks the rolling cap and readiness under target ownership.
                 (setf (mevedel-workspace-memory-schedule workspace)
                       (list :after 0 :catch-up t)))
-              (when (and (not entry) (plist-get state :automatic))
+              (when (and (not entry) (plist-get state :automatic)
+                         (not (eq (plist-get result :outcome) 'restart-required)))
                 ;; A failed catch-up attempt ends the chain.  A later ordinary
                 ;; opportunity must pass the normal successful-review clock.
                 (setf (mevedel-workspace-memory-schedule workspace)
@@ -616,6 +617,7 @@ inference and is marked :housekeeping-only."
          (mevedel-memory-notes-quiet-hours (plist-get payload :notes-quiet-hours))
          (mevedel-memory-notes-review-days (plist-get payload :notes-review-days))
          (mevedel-memory-notes-undo-quota (plist-get payload :notes-quota))
+         (mevedel-memory-notes-max-review-bytes (plist-get payload :notes-max-review-bytes))
          notes scope)
     (mevedel-memory-store--assert-owned claim)
     (mevedel-memory-decision-recover workspace)
@@ -644,6 +646,14 @@ inference and is marked :housekeeping-only."
                         (mevedel-memory-pass-select observed (not general))))
            (entries (plist-get selection :entries)))
       (when selection (funcall capture))
+      (when (cl-some (lambda (note) (plist-get (cdr note) :chunked))
+                     (plist-get (cdr (plist-get notes :root)) :notes))
+        ;; An oversized note owns this review.  Leave digests unpinned for
+        ;; the next batch rather than carrying unused evidence through chunks.
+        (setq selection (plist-put selection :remaining
+                                   (+ (or (plist-get selection :remaining) 0) (length entries)))
+              selection (plist-put selection :entries nil)
+              entries nil))
       (if (and automatic (not selection))
           (list :skipped t :schedule (mevedel-workspace-memory-schedule workspace))
         (when (and (plist-get payload :drain) (not entries) (not (plist-get notes :root)))
@@ -803,6 +813,7 @@ settles with outcome `empty' without starting inference or publishing a review."
                                 :notes-quiet-hours mevedel-memory-notes-quiet-hours
                                 :notes-review-days mevedel-memory-notes-review-days
                                 :notes-quota mevedel-memory-notes-undo-quota
+                                :notes-max-review-bytes mevedel-memory-notes-max-review-bytes
                                 ;; Active conversations may still be using notes.
                                 :defer-notes (mevedel-memory-notes-workspace-busy-p workspace)
                                 :client (mevedel-workspace-identity-client)
