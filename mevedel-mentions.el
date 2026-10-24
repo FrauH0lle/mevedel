@@ -153,10 +153,11 @@
 (declare-function mevedel-tool-fs-read-pdf-media-p
                   "mevedel-tool-fs-read" (filename))
 (declare-function mevedel-tool-fs-read-session-artifact
-                  "mevedel-tool-fs-read" (session logical path offset limit))
+                  "mevedel-tool-fs-read"
+                  (session logical path offset limit &optional char-offset))
 (declare-function mevedel-tool-fs-read-slurp-file-contents
                   "mevedel-tool-fs-read"
-                  (path &optional offset limit display-path))
+                  (path &optional offset limit display-path char-offset))
 (autoload 'mevedel-tool-fs-read-format-large-pdf-reminder
   "mevedel-tool-fs-read")
 (autoload 'mevedel-tool-fs-read-large-pdf-p "mevedel-tool-fs-read")

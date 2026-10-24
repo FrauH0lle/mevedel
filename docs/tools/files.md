@@ -136,6 +136,21 @@ continuation offset when available; the end of a bounded result need not be
 the end of the file. Unchanged duplicate reads may be suppressed in a session;
 ToolCall nested reads still return the content needed by the script.
 
+Every truncated Read line includes an executable continuation with the same
+visible path/address, line number, and `char_offset`. This zero-based offset
+counts decoded characters, not bytes or display columns. A positive value
+selects a single line (`limit` must be 1 or omitted); each call still returns
+at most 2000 source characters. Follow successive hints to reach any part of
+a long line, including artifact logs and history projections:
+
+```text
+Read(file_path="artifact://executions/run.log", offset=42, limit=1, char_offset=2000)
+```
+
+The line number stays 42; this call starts at its 2001st character. Zero starts
+the line again. An offset beyond the selected line's length is an error with
+a concrete restart call. Character paging is text-only and cannot select media.
+
 An offset past the end of nonempty text remains an error. Its diagnostic gives
 the observed line bounds and a concrete last-page `Read` call using the visible
 path or resource address. The suggested page is no wider than the requested
@@ -149,6 +164,9 @@ ripgrep's 2000-column limit and an omission marker. Grep's `head_limit` and zero
 select returned lines/entries. `head_limit` defaults to 250; zero removes that
 page limit while retaining the other bounds. Paging does not make an unbounded
 search cheap.
+For an omitted long-line tail, use Read on the result's source and line with
+`limit=1`, then follow its character-page continuations. Grep's `offset` pages
+search results, not characters within a match.
 For a bounded content page, collection stops after at most
 `min(1000, offset + head_limit + 1)` matches per file. The extra match preserves
 truncation reporting; context lines remain part of the returned line budget.

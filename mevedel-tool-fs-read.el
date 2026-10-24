@@ -792,6 +792,13 @@ DISPLAY-PATH replaces the physical PATH in model-visible text."
         (when (and (numberp value) (< value 0))
           (error "Parameter %s must be a positive integer"
                  (substring (symbol-name key) 1)))))
+    (when-let* ((chars (plist-get normalized :char_offset)))
+      (unless (and (integerp chars) (>= chars 0))
+        (error "Parameter char_offset must be a nonnegative integer"))
+      (when (> chars 0)
+        (unless (memq (plist-get normalized :limit) '(nil 1))
+          (error "Parameter char_offset requires limit=1 or no limit"))
+        (plist-put normalized :limit 1)))
     normalized))
 
 (defun mevedel-tool-fs-read--media-file (path args k)
@@ -981,11 +988,19 @@ Call K with a media result plist once every page is rendered."
                                             candidate)))
                                  suggestions "\n"))))))
 
-(defun mevedel-tool-fs-read--add-line-numbers (start-line)
+(defun mevedel-tool-fs-read--add-line-numbers (start-line &optional path char-offset)
   "Add line numbers starting at START-LINE and truncate long lines.
-Operates on current buffer.  Lines longer than 2000 characters are
-truncated with a [...] marker."
+Operates on current buffer.  PATH names the visible source for continuation
+calls.  Skip CHAR-OFFSET characters of the first selected line.  Each line
+returns at most 2000 characters, followed by an exact retry when truncated."
   (goto-char (point-min))
+  (when (and char-offset (> char-offset 0))
+    (let ((length (- (line-end-position) (point))))
+      (when (> char-offset length)
+        (let ((print-escape-newlines t))
+          (error "Character offset %d starts after line %d of %s (%d characters).  Use Read(file_path=%S, offset=%d, limit=1, char_offset=0) to restart the line"
+                 char-offset start-line path length path start-line)))
+      (delete-region (point) (+ (point) char-offset))))
   (let ((line-num start-line)
         (max-line (+ start-line (count-lines (point-min) (point-max))))
         (width))
@@ -993,8 +1008,14 @@ truncated with a [...] marker."
     (while (not (eobp))
       (let ((line-end (line-end-position)))
         (when (> (- line-end (point)) 2000)
-          (delete-region (+ (point) 2000) line-end)
-          (insert " [...]")))
+          (save-excursion
+            (forward-char 2000)
+            (delete-region (point) line-end)
+            (let ((print-escape-newlines t))
+              (insert (format " [... Read(file_path=%S, offset=%d, limit=1, char_offset=%d) to continue this line]"
+                              path line-num
+                              (+ 2000 (if (= line-num start-line)
+                                          (or char-offset 0) 0))))))))
       (insert (format (format "%%%dd\t" width) line-num))
       (forward-line 1)
       (setq line-num (1+ line-num)))))
@@ -1036,12 +1057,15 @@ The suggested last page is capped at the normal default line limit."
                     "Read the last page with Read(file_path=%S, offset=%d, limit=%d).")
             offset visible last-line visible start (1+ (- last-line start)))))
 
-(defun mevedel-tool-fs-read--finalize-read-buffer (path start-line line-truncated-next)
+(defun mevedel-tool-fs-read--finalize-read-buffer (path start-line line-truncated-next
+                                                    &optional char-offset)
   "Line-number and bound current text Read buffer.
 PATH is used in continuation guidance.  START-LINE is the first line
 number.  LINE-TRUNCATED-NEXT is the next line when an upstream line cap
-already truncated the buffer, or nil.  Return the model-visible string."
-  (mevedel-tool-fs-read--add-line-numbers start-line)
+already truncated the buffer, or nil.  CHAR-OFFSET selects the first line's
+character page.  Return the model-visible string."
+  (mevedel-tool-fs-read--add-line-numbers
+   start-line (mevedel-tool-fs-read--visible-path path) char-offset)
   (let (char-truncated-next)
     (when (> (buffer-size) mevedel-tool-fs-read--max-output-chars)
       (goto-char (+ (point-min) mevedel-tool-fs-read--max-output-chars))
@@ -1114,11 +1138,12 @@ Synchronous, for mention expansion; the Read tool waits asynchronously."
     (mevedel-tool-fs-read--directory-listing path exit output max-entries)))
 
 (defun mevedel-tool-fs-read-slurp-file-contents
-    (path &optional offset limit display-path)
+    (path &optional offset limit display-path char-offset)
   "Return file PATH content with OFFSET and LIMIT.
 Apply Read-tool safety validation before reading.
 
 DISPLAY-PATH, when non-nil, is used in model-facing continuation text.
+CHAR-OFFSET skips characters within the first selected line.
 
 Validate readability, reject directories, binary files, and blocking
 device paths, and resolve symlinks.  For full-file reads (both OFFSET and
@@ -1157,8 +1182,8 @@ wrap in `condition-case'."
               (let ((line-truncated-p
                      (mevedel-tool-fs-read--truncate-buffer-to-lines num-lines)))
                 (mevedel-tool-fs-read--finalize-read-buffer
-                 (or display-path path)
-                 1 (and line-truncated-p (1+ num-lines))))))
+                 visible-path
+                 1 (and line-truncated-p (1+ num-lines)) char-offset))))
         (let* ((file-size (file-attribute-size (file-attributes path)))
                (chunk-size (min file-size (* 512 1024)))
                (coding
@@ -1287,8 +1312,8 @@ wrap in `condition-case'."
                 (decode-coding-inserted-region
                  (point-min) (point-max) path)))
             (mevedel-tool-fs-read--finalize-read-buffer
-             (or display-path path)
-             start-line line-truncated-next)))))))
+             visible-path
+             start-line line-truncated-next char-offset)))))))
 
 (defun mevedel-tool-fs-read--session-artifact-context (path)
   "Return `(SESSION . LOGICAL)' when PATH is in a remote session store."
@@ -1302,11 +1327,11 @@ wrap in `condition-case'."
         (cons session (substring path (length root)))))))
 
 (defun mevedel-tool-fs-read-session-artifact
-    (session logical path offset limit)
+    (session logical path offset limit &optional char-offset)
   "Read SESSION artifact LOGICAL under model-facing PATH.
 
-OFFSET and LIMIT select the requested line range.  Remote fixed-path caches
-are deliberately ignored."
+OFFSET and LIMIT select the requested line range; CHAR-OFFSET selects the
+character page.  Remote fixed-path caches are deliberately ignored."
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
@@ -1333,20 +1358,24 @@ File %s exists but is empty (0 bytes). This is the actual file \
 content, not a read failure.\n</system-reminder>"
                       (mevedel-tool-fs-model-path path))
             (mevedel-tool-fs-read-slurp-file-contents
-             temporary offset limit path)))
+             temporary offset limit path char-offset)))
       (when (file-exists-p temporary)
         (delete-file temporary)))))
 
 (defun mevedel-tool-fs-read--file (args k)
   "Read file contents, then call K with the result.
-ARGS is a plist with :file_path and optional :offset, :limit, :pages,
-:max_width, :max_height, and :max_tokens.  Text reads call K before
+ARGS is a plist with :file_path and optional :offset, :limit, :char_offset,
+:pages, :max_width, :max_height, and :max_tokens.  Text reads call K before
 returning; media reads may continue from helper callbacks."
   (cl-block mevedel-tool-fs-read--file
     (let* ((args (mevedel-tool-fs-read--normalize-read-args args))
            (filename (plist-get args :file_path))
            (offset (plist-get args :offset))
-           (limit (plist-get args :limit)))
+           (limit (plist-get args :limit))
+           (char-offset (plist-get args :char_offset))
+           (dedup-offset (if (and char-offset (> char-offset 0))
+                             (list :line offset :char-offset char-offset)
+                           offset)))
       (when-let* ((artifact
                   (mevedel-tool-fs-read--session-artifact-context filename)))
         (when (plist-get args :pages)
@@ -1355,7 +1384,7 @@ returning; media reads may continue from helper callbacks."
           (error "`max_width', `max_height', and `max_tokens' are only supported for image files and PDF page images"))
         (cl-return-from mevedel-tool-fs-read--file
           (funcall k (mevedel-tool-fs-read-session-artifact
-                      (car artifact) (cdr artifact) filename offset limit))))
+                      (car artifact) (cdr artifact) filename offset limit char-offset))))
     (unless (file-exists-p filename)
       (error "%s" (mevedel-tool-fs-read--format-missing-file-error filename)))
     (unless (file-readable-p filename)
@@ -1369,6 +1398,8 @@ returning; media reads may continue from helper callbacks."
              (mevedel-tool-fs-read--visible-path filename)))
     (if (mevedel-tool-fs-read-media-mime-type filename)
         (progn
+          (when (and char-offset (> char-offset 0))
+            (error "Parameter char_offset is only supported for text reads"))
           ;; A model without document input reads a whole PDF as its
           ;; leading page images; the result says how to continue.
           (when (and (mevedel-tool-fs-read-pdf-media-p filename)
@@ -1453,23 +1484,23 @@ returning; media reads may continue from helper callbacks."
        (cond
         ((and (mevedel-tool-fs-read--dedup-p)
               (mevedel-session-read-is-duplicate-p
-               mevedel--session filename offset limit))
+               mevedel--session filename dedup-offset limit))
          (format "File %s unchanged since last read.  Reuse the previous contents."
                  (mevedel-tool-fs-read--visible-path filename)))
         ((zerop (file-attribute-size (file-attributes filename)))
          (when (mevedel-tool-fs-read--dedup-p)
            (mevedel-session-record-file-access
-            mevedel--session filename 'read offset limit))
+            mevedel--session filename 'read dedup-offset limit))
          (format "<system-reminder>\n\
 File %s exists but is empty (0 bytes). This is the actual file \
 content, not a read failure.\n</system-reminder>"
                  (mevedel-tool-fs-read--visible-path filename)))
         (t
          (let ((content (mevedel-tool-fs-read-slurp-file-contents
-                         filename offset limit)))
+                         filename offset limit nil char-offset)))
            (when (mevedel-tool-fs-read--dedup-p)
              (mevedel-session-record-file-access
-              mevedel--session filename 'read offset limit))
+              mevedel--session filename 'read dedup-offset limit))
            content))))))))
 
 (defun mevedel-tool-fs-read--resource-directory (path address k)
@@ -1534,7 +1565,8 @@ content, not a read failure.\n</system-reminder>"
                  (mevedel-tool-fs-read--truncate-buffer-to-lines num-lines)))
             (mevedel-tool-fs-read--finalize-read-buffer
              address start-line
-             (and line-truncated-p (+ start-line num-lines)))))))))
+             (and line-truncated-p (+ start-line num-lines))
+             (plist-get args :char_offset))))))))
 
 (defun mevedel-tool-fs-read--shared (args descriptor address k)
   "Read the shared item view DESCRIPTOR names at ADDRESS, then call K.
@@ -1585,6 +1617,7 @@ from a private copy the Read releases."
       ;; even when the caller selected a later range of the eventual result.
       (when (eq (plist-get path :resource-status) 'not-ready)
         (plist-put read-args :offset 1)
+        (plist-put read-args :char_offset 0)
         (plist-put read-args :limit mevedel-tool-fs-read--default-limit))
       (funcall k (mevedel-tool-fs-read--virtual-text
                   (plist-get path :result) read-args address))))

@@ -21,7 +21,10 @@ permissions and the current model's media capabilities.
 - Text returns numbered lines starting at 1, by default up to 2000 lines.
   Use `offset` and `limit` for a focused range; files over 512 KB require a
   range. Lines over 2000 characters and output over 50 Ki characters are
-  truncated; follow the returned continuation guidance when present.
+  truncated. Each truncated line gives an exact Read continuation using
+  `char_offset` (zero-based decoded characters, not bytes). A positive
+  `char_offset` selects one line; `limit` must be 1 or omitted. Follow the
+  returned guidance to retrieve the rest without raising the output caps.
 - Images (PNG, JPEG, GIF, WEBP) need model and backend image support. PDF
   document delivery also depends on backend support. An envelope alone does
   not mean the media was delivered; do not infer visual content from it.

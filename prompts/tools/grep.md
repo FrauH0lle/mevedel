@@ -25,6 +25,8 @@ Search file contents with ripgrep regular expressions.
 - The default result is file paths. `output_mode="content"` returns matching
   lines and supports context; `"count"` returns per-file match counts.
   `head_limit` and `offset` bound the returned entries, not the search scope.
+- Long content lines are previews. Read the returned source and line with
+  `limit=1`, then follow Read's `char_offset` continuations to reach the tail.
 - Scope with `path`, `glob`, or `type`. Glob filters are relative to `path`;
   absolute filters and parent traversal are rejected. Ordinary traversal
   includes hidden files and respects ignores; an explicit path or positive

@@ -87,6 +87,12 @@ the suggestion is capped at the requested/default page width and does not
 expose backing paths. Bounds describe that read, not future file contents.
 Empty text remains a successful empty result.
 
+Long text lines retain their address and line number across Read character
+pages. Each truncated line gives an exact `char_offset` continuation; positive
+offsets select one line and count decoded characters. This works for physical
+and virtual resources without exposing backing paths or raising output caps.
+Grep previews lead to the same source line; see the [file-tool limits](tools/files.md#text-ranges-and-search-limits).
+
 Canonical serialization uses UTF-8 RFC 3986 percent encoding: leave only
 unreserved bytes literal and use uppercase hexadecimal escapes. For
 path-oriented families, split on literal `/` before decoding each component

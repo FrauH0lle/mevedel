@@ -68,6 +68,12 @@ during the failed traversal, without a second scan; virtual text counts only on
 the error path. Neither recovery silently clamps offsets or changes settlement,
 publication, containment, permission, or mailbox semantics.
 
+Read character pages make long lines reachable without increasing output caps.
+Every truncated line supplies an exact continuation using its visible address,
+line number and decoded-character offset. Grep keeps bounded previews and leads
+to Read for the tail. Physical and virtual text share the formatter; private
+backing paths are neither necessary nor exposed for recovery.
+
 ## Rationale and alternatives
 
 A closed dispatch keeps the trust boundary auditable and avoids a tool per
@@ -107,6 +113,12 @@ substitute for checking a settled operation's result.
 ## Decision history
 
 All revisions below refine ADR 0104's closed resolver decision.
+
+- **Long-line recovery (2026-10-24).** An escaped ERT backtrace occupied one
+  7,849-character artifact line. Both Read and Grep discarded its decisive tail,
+  so repeating either tool could never reach it. A single Read character offset
+  and exact per-line retries replace that dead end without a new tool, resource
+  syntax, shell escape hatch, or larger output budget.
 
 - **Logical execution storage (2026-10).** Retained output dominated the
   non-publication disk footprint and compressed well, but a filename fallback

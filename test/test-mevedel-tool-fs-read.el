@@ -1365,7 +1365,7 @@ An error result is signalled, as a Read that failed before waiting does."
     (let ((result (test-mevedel-tool-fs-read--settle
                    (lambda (k)
                      (mevedel-tool-fs-read--file (list :file_path tmp) k)))))
-      (should (string-match-p "\\[\\.\\.\\.]" result))
+      (should (string-search "char_offset=2000" result))
       (should (string-match-p "2\tshort" result))))
   :doc "caps default text reads with continuation guidance"
   (test-mevedel-tool-fs-read--with-file nil nil
@@ -1920,9 +1920,13 @@ An error result is signalled, as a Read that failed before waiting does."
   :doc "truncates lines over 2000 characters"
   (with-temp-buffer
     (insert (make-string 3000 ?a) "\n")
-    (mevedel-tool-fs-read--add-line-numbers 1)
-    (should (string-match-p "\\[\\.\\.\\.]" (buffer-string)))
-    (should (<= (length (buffer-string)) 2100))))
+    (mevedel-tool-fs-read--add-line-numbers 1 "long.txt")
+    (should (string-prefix-p (concat "1\t" (make-string 2000 ?a))
+                            (buffer-string)))
+    (should (string-search
+             "Read(file_path=\"long.txt\", offset=1, limit=1, char_offset=2000)"
+             (buffer-string)))
+    (should (<= (length (buffer-string)) 2200))))
 
 ;;
 ;;; Directory listing helper

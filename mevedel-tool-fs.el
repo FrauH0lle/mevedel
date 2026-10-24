@@ -272,6 +272,8 @@ whole PATH from inside gptel's curl sentinel."
                   "Text-file line number to start reading from. Do not provide for images or PDFs.")
            (limit integer :optional
                   "Text-file number of lines to read. Do not provide for images or PDFs.")
+           (char_offset integer :optional
+                        "Zero-based character offset within the selected text line (default 0). A positive value selects one line; limit must be 1 or omitted. Returns at most 2000 characters with continuation guidance. Do not provide for images or PDFs.")
            (pages string :optional
                   "PDF-only page selector. Use for specific or large PDFs. Supports forms like \"3\", \"1-5\", and \"3-\". Each request is capped at 20 pages.")
            (max_width integer :optional
