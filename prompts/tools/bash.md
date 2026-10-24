@@ -1,16 +1,7 @@
 Execute Bash commands for builds, tests, version control, and system operations.
 
-### When to use `Bash`
-
-- A task needs a shell command, executable, or command-line development tool.
-
-### When NOT to use `Bash`
-
-- Ordinary text reads/searches/edits are better served by Read, Grep, Glob,
-  and ApplyPatch, which provide integrated results and review.
-- Communicating with the user: write the response directly.
-
-### How to use `Bash`
+Prefer Read, Grep, Glob, and ApplyPatch for ordinary text operations and review.
+Communicate directly in responses, not through shell output.
 
 - Commands start in the session working directory. Quote shell arguments
   correctly; command substitution still executes inside double quotes.
@@ -43,30 +34,5 @@ Execute Bash commands for builds, tests, version control, and system operations.
 - Results preserve exit codes. Simple grep/rg no-match, diff differences, and
   test/[ false are classified as expected command outcomes, not execution failures.
 
-### Examples of good usage
-
-<example>
-- Build, then test only if the build succeeds:
 Bash(command="make build && make test", description="Build and run tests")
-If it yields an execution_id, continue other work or end the turn; root completion
-arrives automatically. Use WriteStdin if intermediate output is needed.
-</example>
-
-### Examples of bad usage
-
-<example>
-Bash(command="make test &", description="Run tests")
-<reasoning>
-Shell backgrounding is rejected. Use Bash(command="make test", description="Run tests", yield_time_ms=1000)
-to yield through the managed execution lifecycle. Completion arrives automatically
-for root-owned commands; yielding itself is not success.
-</reasoning>
-</example>
-
-<example>
-Bash(command="for f in src/*.el; do emacs --batch -f batch-byte-compile \"$f\"; done")
-<reasoning>
-No description: the user sees this whole loop in background work and notices.
-Add description="Byte-compile sources".
-</reasoning>
-</example>
+runs tests only if the build succeeds. Yielding is not evidence of success.

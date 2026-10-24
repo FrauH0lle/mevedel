@@ -13,6 +13,13 @@ accepts a free-form `task_name`, a complete `message`, and optional `role`,
 `context`, `model`, `effort`, and `working_directory` controls, then returns the committed canonical
 path after preparation and provider dispatch succeed.
 
+Work directly by default. Delegation earns its overhead for useful parallel work
+or fresh-context investigation returning compact results. The task message owns
+the assignment, file ownership, and expected result even when dialogue is copied.
+The contract keeps these decisions and authority limits inline; name
+normalization and lifecycle reference details live here behind its
+`mevedel://agents.md` pointer.
+
 Delegation and result guidance asks for labeled measurement lists rather than
 compressed numeric strings. Each item names its scenario/configuration, metric,
 value, unit, and statistic or sample count; distinct metrics stay separate.

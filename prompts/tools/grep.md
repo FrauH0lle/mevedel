@@ -1,16 +1,6 @@
 Search file contents with ripgrep regular expressions.
 
-### When to use `Grep`
-
-- Locate text, investigate code, or check occurrences across files.
-- Search a persisted oversized result or packaged documentation.
-
-### When NOT to use `Grep`
-
-- Finding filenames rather than contents: use Glob.
-- Reading a known contiguous range: use Read.
-
-### How to use `Grep`
+Use Glob for filenames and Read for a known contiguous range.
 
 - Searches from the session working directory unless `path` selects another
   file or directory. Supported resources: `work://`, `artifact://`, a selected `skill://` package,
@@ -37,19 +27,5 @@ Search file contents with ripgrep regular expressions.
 - For resource aliases, search caps, and partial-output details, read
   `mevedel://tools/files.md`. If unavailable, stay within the known contract.
 
-### Examples of good usage
-
-<example>
-- Locate an error with surrounding code:
 Grep(pattern="authentication failed", path="src", output_mode="content", context=3)
-The result contains matching lines and three lines of surrounding context.
-</example>
-
-### Examples of bad usage
-
-<example>
-Grep(pattern="*.test.js")
-<reasoning>
-This is a filename glob, not a content regex. Use Glob(pattern="**/*.test.js").
-</reasoning>
-</example>
+returns matches with three lines of surrounding context.

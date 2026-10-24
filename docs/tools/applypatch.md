@@ -4,6 +4,22 @@ The description contains the ordinary patch grammar and permission/Plan-mode
 boundaries. This manual explains disambiguation and less common operations.
 It does not override a rejected proposal, user scope, or permissions.
 
+## Ordinary update
+
+Pass the patch as one string. Use Update for an existing file and Add only for a
+new file; include the actual old content and unique context:
+
+```text
+ApplyPatch(patch="*** Begin Patch
+*** Update File: config.py
+@@
+ API_HOST = 'localhost'
+-MAX_RETRIES = 1
++MAX_RETRIES = 3
+ TIMEOUT = 10
+*** End Patch")
+```
+
 ## Context, anchors, and repeated matches
 
 An Update may contain multiple `@@` hunks, ordered top-to-bottom. Include enough

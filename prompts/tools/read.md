@@ -1,18 +1,8 @@
 Read text or supported media from a file or resource address, subject to access
 permissions and the current model's media capabilities.
 
-### When to use `Read`
-
-- Inspect a known file, code range, screenshot, or PDF.
-- Retrieve packaged guidance at `mevedel://RELATIVE-PATH`.
-
-### When NOT to use `Read`
-
-- A filename pattern or directory listing: use Glob. Read does not expand
-  wildcards or read filesystem directories.
-- Searching contents across files: use Grep.
-
-### How to use `Read`
+Use Glob for filename patterns/directories and Grep for content searches.
+Read does not expand wildcards or read directories.
 
 - Relative paths start at the session working directory. Resource families:
   `work://`, `artifact://`, `skill://`, `agent://`, `history://`, `memory://`,
@@ -33,19 +23,5 @@ permissions and the current model's media capabilities.
 - Missing, unreadable, or unsupported targets return an error. If a manual
   cannot be read, use the known ordinary contract or report missing guidance.
 
-### Examples of good usage
-
-<example>
-- A search located the relevant function at src/utils.ts:45:
-Read(file_path="src/utils.ts", offset=40, limit=30)
-Inspect its surrounding implementation before deciding on a change. This requests
-lines 40-69, subject to truncation; the search hit alone did not show that context.
-</example>
-
-<example>
-- An oversized result supplied artifact://tool-results/call-42.txt, and its Read
-  continuation guidance supplied offset=241 and limit=40:
-Read(file_path="artifact://tool-results/call-42.txt", offset=241, limit=40)
-Reuse the exact address and continuation values from the actual result; these
-values are illustrative. A bounded page is not proof that the artifact ends there.
-</example>
+Read(file_path="src/utils.ts", offset=40, limit=30) requests lines 40-69.
+A bounded page is not proof of end-of-file; follow returned continuation hints.

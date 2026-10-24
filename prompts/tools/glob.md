@@ -1,17 +1,7 @@
 Find files by name patterns, including hidden and ignored files except
 version-control metadata.
 
-### When to use `Glob`
-
-- Locate files by extension or name, or inspect directory structure.
-- Discover packaged manuals under `mevedel://`.
-
-### When NOT to use `Glob`
-
-- Searching file contents: use Grep.
-- Reading a known file: use Read.
-
-### How to use `Glob`
+Use Grep for file contents and Read for a known file.
 
 - Patterns such as `**/*.ts`, `*.{js,jsx}`, and `src/**/*.py` are relative to
   `path`, which defaults to the session working directory. Absolute patterns
@@ -27,19 +17,4 @@ version-control metadata.
 - For resource aliases and detailed search limits, read
   `mevedel://tools/files.md`. If unavailable, stay within the known contract.
 
-### Examples of good usage
-
-<example>
-- Find JavaScript test files:
-Glob(pattern="**/*.test.js", path="src")
-The result lists matching paths beneath src.
-</example>
-
-### Examples of bad usage
-
-<example>
-Glob(pattern="password")
-<reasoning>
-This finds files named password. To find that text inside files, use Grep(pattern="password").
-</reasoning>
-</example>
+Glob(pattern="**/*.test.js", path="src") finds test files beneath src.

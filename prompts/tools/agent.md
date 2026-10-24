@@ -3,25 +3,18 @@ agent with your effective instructions and capabilities.
 
 ### When to use `Agent`
 
-- Delegate a self-contained task that can progress independently alongside useful
-  local work, or benefits from a specialized role.
+- Delegate self-contained parallel work or fresh-context investigation returning
+  compact results. Work directly for small tasks or continuously changing context.
 
 ### When NOT to use `Agent`
 
 - Continuing an existing agent's work; SendMessage reuses its conversation.
-- A quick direct call or work requiring continuous access to your changing context.
 
 ### How to use `Agent`
 
-- `task_name` is a free-form task name, such as `Review code-block copy`.
-  The harness derives a unique lowercase ASCII path segment: other character
-  runs become hyphens, boundary hyphens are trimmed, and the base is capped at
-  40 characters, preferring the last hyphen boundary. An empty result becomes
-  `agent`, and `root` becomes `agent-root`. Collisions with retained or preparing
-  agents get numeric suffixes (`-2`, `-3`, ...).
-  `message` is the complete assigned task, even when copying parent context.
-  Success returns the child's canonical path, such as `/root/review-code-block-copy`.
-  Use that returned path for follow-ups rather than guessing it from the name.
+- `task_name` is a free-form task name; the harness returns a unique canonical path.
+  Use that returned path for follow-ups. `message` is the complete assigned task,
+  even when copying parent context; specify ownership and the compact result needed.
 - **General-purpose (omit `role`)**: use for ordinary delegation, including
   research, implementation, debugging, and mixed tasks. The child inherits your
   effective instructions, tools, model policy, and delegation capability, subject
@@ -49,6 +42,8 @@ agent with your effective instructions and capabilities.
   to wait within your current turn. The child's path remains reserved for
   follow-ups. Roles with Agent can create children; the complete session tree
   shares one active-turn limit.
+- For name normalization, context-copy details, or lifecycle recovery, read
+  `mevedel://agents.md`. Discovery and directory selection grant no authority.
 
 ### Examples of good usage
 

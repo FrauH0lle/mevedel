@@ -1,19 +1,9 @@
 Propose a coherent text-file change as one structured patch. Related operations
 can be reviewed and applied together.
 
-### When to use `ApplyPatch`
-
-- Create, edit, delete, move, or rename text files.
-- Edit working files through `work://` or curated memory through explicit
-  `memory://ROOT-KEY/RELATIVE-PATH` addresses.
-
-### When NOT to use `ApplyPatch`
-
-- Empty files or standalone directory creation: the patch grammar cannot express them.
-- Directive Planning remains read-only even for session working files.
-- Re-proposing a rejected change unless the user's feedback asks for a revision.
-
-### How to use `ApplyPatch`
+Create, edit, delete, move, or rename text files; empty files and standalone
+directories are not expressible. Re-propose rejected changes only when the
+user's feedback asks for a revision.
 
 - Paths are absolute or relative to the session working directory. Writable
   resources are `work://` descendants and explicit memory file descendants.
@@ -25,6 +15,7 @@ can be reviewed and applied together.
   materialization. Outside Plan mode, resource and ordinary paths may share one
   atomic proposal, subject to permission/review. `work://shared/...` belongs to
   the workspace and follows normal edit permissions and review.
+- Directive Planning remains read-only even for session working files.
 - Understand the relevant contents before changing them. Unsaved buffer edits
   are rejected; existing user changes must be preserved.
 - The basic grammar is:
@@ -57,29 +48,3 @@ can be reviewed and applied together.
   guidance.
 - Results report application/rejection or actionable errors. Do not treat a
   proposed or rejected patch as an applied change.
-
-### Examples of good usage
-
-<example>
-- Update a small configuration with unique context:
-ApplyPatch(patch="*** Begin Patch
-*** Update File: config.py
-@@
- API_HOST = 'localhost'
--MAX_RETRIES = 1
-+MAX_RETRIES = 3
- TIMEOUT = 10
-*** End Patch")
-</example>
-
-### Examples of bad usage
-
-<example>
-ApplyPatch(patch="*** Begin Patch
-*** Add File: config.py
-+MAX_RETRIES = 3
-*** End Patch")
-<reasoning>
-If config.py already exists, Add fails. Use Update with its actual content.
-</reasoning>
-</example>

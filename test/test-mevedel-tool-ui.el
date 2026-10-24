@@ -135,9 +135,12 @@
                          (plist-get task-arg :description)))
         (let ((case-fold-search t))
           (should (string-match-p "free-form task name" text)))
-        (should (string-match-p "numeric suffixes" text))
         (should (string-match-p "canonical path" text))
         (should-not (string-match-p "matching.*a-z0-9" text)))
+      (should (string-search "numeric suffixes" (plist-get task-arg :description)))
+      (should (string-search "Use that returned path for follow-ups"
+                             (mevedel-tool-prompt tool)))
+      (should (string-search "mevedel://agents.md" (mevedel-tool-prompt tool)))
       (should (string-search (plist-get task-arg :description) contract))
       (should (string-search (mevedel-tool-prompt tool) contract))))
 
