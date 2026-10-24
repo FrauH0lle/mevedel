@@ -852,6 +852,9 @@
 		         '(:implementation-retry (:selection (:location here))))
 		   (unwind-protect
 		       (with-temp-buffer
+			         (org-mode)
+			         (insert ":PROPERTIES:\n:GPTEL_MODEL: stale-model\n:END:\nTranscript\n")
+			         (set-buffer-modified-p nil)
 			 (setq-local mevedel--session session)
 			   (cl-letf (((symbol-function
 				     'mevedel-reminders-install-defaults)
@@ -899,6 +902,8 @@
 			 (should (eq notified-workspace workspace))
 			 (should (eq probed-session session))
 			 (should (eq validated-workspace workspace))
+				 (should-not (org-entry-get (point-min) "GPTEL_MODEL"))
+				 (should-not (buffer-modified-p))
 			 (should (memq #'mevedel-tool-repair-pre-tool-call
 				       gptel-pre-tool-call-functions))
 			 ;; mevedel's permission pipeline confirms tool calls.
@@ -920,12 +925,19 @@
 				       gptel-post-stream-hook))
 			 (should (memq #'mevedel-tool-repair-clear-ledger
 				       kill-buffer-hook))
-			 (with-temp-buffer
-			   (setq-local mevedel--session session)
-                           (cl-letf (((symbol-function 'mevedel-view--ensure) #'ignore))
-			     (mevedel-test--with-captured-messages inspection-messages
-			       (mevedel--chat-buffer-init-common
-			        (current-buffer) workspace "resume" t))))
+				 (dolist (modified '(nil t))
+				   (with-temp-buffer
+				     (org-mode)
+				     (insert ":PROPERTIES:\n:GPTEL_MODEL: stale-model\n:END:\nTranscript\n")
+				     (set-buffer-modified-p modified)
+				     (setq-local mevedel--session session)
+				     (setq buffer-read-only t)
+                             (cl-letf (((symbol-function 'mevedel-view--ensure) #'ignore))
+				       (mevedel-test--with-captured-messages inspection-messages
+				         (mevedel--chat-buffer-init-common
+				          (current-buffer) workspace "resume" t)))
+				     (should-not (org-entry-get (point-min) "GPTEL_MODEL"))
+				     (should (eq modified (buffer-modified-p)))))
 			 (should-not (string-match-p
 			              "mevedel-retry-plan-implementation"
 			              inspection-messages)))

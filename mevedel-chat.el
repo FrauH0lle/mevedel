@@ -669,8 +669,13 @@ mutation lease."
     ;; A restored segment may still carry gptel's request-config Org
     ;; properties; gptel's send advice would prefer them over the live
     ;; buffer-locals set below.  The sidecar is the config source, so
-    ;; delete them on sight.  Fresh buffers have no drawer: no-op.
-    (mevedel-session-artifacts-strip-gptel-config-properties)
+    ;; delete them on sight.  This derived cleanup is not a local edit:
+    ;; dirtying a joined buffer would prevent following and control transfer.
+    ;; Preserve existing edits, and do not cover arbitrary setup hooks below.
+    (let ((modified (buffer-modified-p)))
+      (unwind-protect
+          (mevedel-session-artifacts-strip-gptel-config-properties)
+        (set-buffer-modified-p modified)))
     (mevedel-preset-restore-session mevedel--session buf)
     (require 'mevedel-models)
     (mevedel-model-apply-session-policy mevedel--session buf)

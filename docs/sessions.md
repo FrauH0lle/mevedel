@@ -2144,7 +2144,11 @@ source of session request configuration; a stale drawer copy would
 otherwise override live buffer-locals through gptel's send advice
 (`gptel-org--send-with-props`), silently undoing a mid-session model
 change. The same strip runs at chat-buffer initialization and agent hydration,
-preventing transcript properties from overriding sidecar request policy. Restored
+preventing transcript properties from overriding sidecar request policy. Chat
+initialization preserves the incoming buffer-modified flag around this derived
+cleanup: stripping configuration must not turn a clean read-only follower into
+a locally edited buffer that cannot follow or request control. Existing local
+edits remain modified, and later setup hooks do not share this exemption. Restored
 sessions rebuild model, effort, and preset from the sidecar
 (`mevedel-model-apply-session-policy`, `mevedel-preset-restore-session`).
 

@@ -11,6 +11,9 @@
 (require 'cl-lib)
 (require 'ert)
 (require 'mevedel)
+;; Restore also autoloads chat's cache setup.  Load its definitions before
+;; stubbing initialization, or that autoload replaces the inert fixture.
+(require 'mevedel-chat)
 (require 'mevedel-execution)
 (require 'mevedel-execution-target)
 (require 'mevedel-session-control-transfer)
