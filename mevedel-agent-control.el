@@ -641,8 +641,11 @@ REASON is the wake outcome, or `cancelled' when omitted."
   "Wake PATH's waiter in SESSION with REASON exactly once."
   (when-let* ((waiter (mevedel-agent-control--waiter session path)))
     (let ((callback (mevedel-agent-waiter-callback waiter)))
-      (funcall callback reason)
+      ;; A callback can throw after reconnect or synchronously start another
+      ;; wait.  Retire this registration before entering arbitrary tool code;
+      ;; unread mail remains owned by the durable mailbox, not this callback.
       (mevedel-agent-control-cancel-wait session path reason)
+      (funcall callback reason)
       t)))
 
 (defun mevedel-agent-control--wait-timeout (session path waiter)

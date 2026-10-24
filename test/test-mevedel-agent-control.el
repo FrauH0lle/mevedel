@@ -3230,7 +3230,7 @@
     (mevedel-agent-control-cancel-wait session "/root")
     (should-not (memq timer timer-list)))
 
-  :doc "retains the waiter when its callback fails after durable enqueue"
+  :doc "a failed callback releases its wait without losing the triggering mail"
   (let ((session (mevedel-agent-control-test--session))
         (attempts 0) diagnostics)
     (cl-letf (((symbol-function 'run-at-time)
@@ -3248,10 +3248,42 @@
       (should (string-match-p "Mailbox notification failed: Injected delivery failure"
                               diagnostics))
       (should (= 1 attempts))
-      (should (mevedel-session-agent-root-waiter session))
+      (should-not (mevedel-session-agent-root-waiter session))
       (should (= 1 (length (mevedel-agent-control--mailbox session "/root"))))
-      (should (mevedel-agent-control--wake session "/root" 'mailbox))
+      (mevedel-agent-control-wait
+       session
+       (lambda (reason)
+         (should (eq 'mailbox reason))
+         (should (equal "arrived"
+                        (plist-get (car (mevedel-agent-control--mailbox session "/root"))
+                                   :payload)))
+         (cl-incf attempts))
+       10000)
       (should (= 2 attempts))
+      (should-not (mevedel-session-agent-root-waiter session))))
+
+  :doc "a synchronous callback may start a successor wait without losing it"
+  (let ((session (mevedel-agent-control-test--session))
+        first successor reasons)
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (&rest _) 'fake-timer)))
+      (mevedel-agent-control-wait
+       session
+       (lambda (reason)
+         (push reason reasons)
+         (mevedel-agent-control-wait
+          session (lambda (next) (push next reasons)) 10000)
+         (setq successor (mevedel-session-agent-root-waiter session)))
+       10000)
+      (setq first (mevedel-session-agent-root-waiter session))
+      (should (mevedel-agent-control--wake session "/root" 'timeout))
+      (should successor)
+      (should-not (eq first successor))
+      (should (eq successor (mevedel-session-agent-root-waiter session)))
+      (mevedel-agent-control--wait-timeout session "/root" first)
+      (should (equal '(timeout) reasons))
+      (should (mevedel-agent-control--wake session "/root" 'user))
+      (should (equal '(user timeout) reasons))
       (should-not (mevedel-session-agent-root-waiter session))))
 
   :doc "times out and clamps or defaults out-of-range timeouts"

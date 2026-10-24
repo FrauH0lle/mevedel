@@ -169,6 +169,11 @@ does not activate a turn. `WaitAgent` suspends its ordinary
 asynchronous tool callback until mail, user steering, or its bounded successful
 timeout wakes it. A `MAIL` wake-up is not sender completion; only the canonical
 `RESULT` is terminal.
+The wait registration is released before its callback resumes. A disconnected
+or erroring callback cannot leave the recipient stuck waiting or remove a new
+wait started by the callback. The triggering mail remains queued until ordinary
+conversation delivery acknowledges it; another WaitAgent observes that mail
+immediately even when the previous callback failed.
 `InterruptAgent` aborts one retained non-root agent's current turn by canonical
 path, returns its previous activity, and leaves its identity, conversation,
 mailbox, descendants, and future follow-up capability intact.
