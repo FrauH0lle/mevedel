@@ -268,8 +268,10 @@ supplied by the decision owner. No curated file is written."
    workspace claim target accepted proposal (plist-get proposal :before)
    (mevedel-memory-apply-changes (or scope (plist-get (plist-get accepted :prepared) :scope)) proposal) nil))
 
-(defun mevedel-memory-write--changes (before after)
-  "Prepare exact patch changes between retained BEFORE and AFTER snapshots."
+(defun mevedel-memory-write--changes (before after &optional snapshots-only)
+  "Prepare exact changes between retained BEFORE and AFTER snapshots.
+SNAPSHOTS-ONLY omits duplicate patch payloads for shared-note mutations,
+which read their content directly from the exact :after snapshot."
   (let (changes)
     (dolist (row before (nreverse changes))
       (let* ((old (cdr row)) (new (cdr (assoc (car row) after))) (path (plist-get old :path)))
@@ -279,7 +281,7 @@ supplied by the decision owner. No curated file is written."
                      (equal (plist-get old :directory) (plist-get new :directory)))
           (push (append (list :path path :before old :action (if (plist-get new :exists) 'write 'delete)
                               :after new)
-                        (when (and (plist-get new :exists) (plist-get new :bytes))
+                        (when (and (not snapshots-only) (plist-get new :exists) (plist-get new :bytes))
                           (list :bytes (plist-get new :bytes) :mode (plist-get new :mode)
                                 :content (decode-coding-string (plist-get new :bytes) 'utf-8-unix)))) changes))))))
 
@@ -291,7 +293,8 @@ The decision owner must verify an accepted application before calling this."
     (error "Expected an original memory application intent"))
   (mevedel-memory-write--prepare
    workspace claim target (plist-get intent :accepted) (plist-get intent :item)
-   (plist-get intent :after) (mevedel-memory-write--changes (plist-get intent :after) (plist-get intent :before))
+   (plist-get intent :after) (mevedel-memory-write--changes (plist-get intent :after) (plist-get intent :before)
+                                                        (mevedel-memory-write--notes-root intent))
    (list (plist-get intent :id) (plist-get intent :hash))))
 
 (defun mevedel-memory-write--mutate (target before after)
@@ -383,7 +386,8 @@ interruption leaves the original intent sufficient for another checked recovery.
             (push (cons (car row) after) reached))))
       (mevedel-memory-write--commit
        workspace target intent
-       (mevedel-memory-write--changes (nreverse reached) (plist-get intent :before)) currentp))))
+       (mevedel-memory-write--changes (nreverse reached) (plist-get intent :before)
+                                     (mevedel-memory-write--notes-root intent)) currentp))))
 
 (defun mevedel-memory-write-retire (target intent)
   "Retire INTENT's marker under TARGET after a durable resolved decision.

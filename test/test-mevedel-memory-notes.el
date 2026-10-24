@@ -191,7 +191,7 @@
     (should (= 0 (plist-get (mevedel-memory-notes-capture workspace nil :quiet-hours 0) :remaining)))
     (should (= 1 (plist-get (mevedel-memory-notes-capture workspace nil :quiet-hours 0) :notes))))
   :doc "every blocked item is counted while the listed reasons stay bounded"
-  (progn
+  (let ((mevedel-memory-notes-max-review-bytes mevedel-memory-notes--max-note-bytes))
     (dotimes (index 70)
       (write-region (make-string (* 33 1024) ?x) nil (file-name-concat shared (format "big-%02d.md" index)) nil 'silent))
     (let ((capture (mevedel-memory-notes-capture workspace nil :quiet-hours 0)))

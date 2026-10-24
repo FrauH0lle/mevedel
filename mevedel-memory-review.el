@@ -29,8 +29,10 @@
 ;; `mevedel-memory-notes'
 (declare-function mevedel-memory-notes-documents "mevedel-memory-notes" (scope))
 (declare-function mevedel-memory-notes-index "mevedel-memory-notes" (scope))
+(declare-function mevedel-memory-notes-review "mevedel-memory-notes" (reviewer scope callback &rest args))
 (autoload 'mevedel-memory-notes-documents "mevedel-memory-notes")
 (autoload 'mevedel-memory-notes-index "mevedel-memory-notes")
+(autoload 'mevedel-memory-notes-review "mevedel-memory-notes")
 
 ;; `mevedel-structs'
 (defvar mevedel--agent-invocation)
@@ -86,6 +88,7 @@ counts captured notes left for a later review."
                               (list :id (plist-get note :id) :path (plist-get note :path)
                                     :modified (plist-get note :modified)
                                     :cited_by_memory (if (plist-get note :cited) t :json-false)
+                                    :sequential_summary (if (plist-get note :chunked) t :json-false)
                                     :body (plist-get note :body)))
                             notes))
     :omitted_notes (or omitted-notes 0)
@@ -102,17 +105,30 @@ counts captured notes left for a later review."
 
 (cl-defun mevedel-memory-review-request
     (scope entries callback &key focus rejections memory-only (currentp (lambda () t)))
+  "Review SCOPE and ENTRIES, delivering the settled result to CALLBACK.
+FOCUS, REJECTIONS, MEMORY-ONLY and CURRENTP control the bounded review.
+An oversized shared note is summarized alone in sequential chunks first."
+  (if (cl-some (lambda (note) (plist-get note :chunked)) (mevedel-memory-notes-documents scope))
+      (mevedel-memory-notes-review
+       #'mevedel-memory-review--request scope
+       (lambda (result) (funcall callback (plist-put result :omitted-digests (length entries))))
+       :focus focus :rejections rejections :currentp currentp)
+    (mevedel-memory-review--request scope entries callback
+                                    :focus focus :rejections rejections :memory-only memory-only :currentp currentp)))
+
+(cl-defun mevedel-memory-review--request
+    (scope entries callback &key focus rejections memory-only (currentp (lambda () t)))
   "Run a bounded read-only review of captured SCOPE and candidate ENTRIES.
 CALLBACK receives :outcome success/error/aborted and the admitted :entries,
-:scope, :references, model :policy, and usage. Success also carries the exact
-:reply, parsed :proposals, and :no-action. It never writes coverage
+:scope, :references, model :policy, and usage.  Success also carries the exact
+:reply, parsed :proposals, and :no-action.  It never writes coverage
 or proposals.
 
-CURRENTP checks the consumer's current ownership generation. MEMORY-ONLY
-permits an explicitly requested empty digest batch. FOCUS and REJECTIONS
-are optional bounded text. Return a plist with :buffer for inspection,
+CURRENTP checks the consumer's current ownership generation.  MEMORY-ONLY
+permits an explicitly requested empty digest batch.  FOCUS and REJECTIONS
+are optional bounded text.  Return a plist with :buffer for inspection,
 an idempotent :cancel function, and a :usage function returning a snapshot
-of provider usage and client output counters. The deadline is 180 seconds,
+of provider usage and client output counters.  The deadline is 180 seconds,
 including input preparation.  The cumulative budgets are captured from
 `mevedel-memory-review-max-tokens' and `mevedel-memory-review-max-bytes'.
 Callback results and usage snapshots include :output-bytes and
@@ -121,8 +137,8 @@ tool arguments; :result-bytes measures the current round's reply alone.
 The breakdown is :reasoning-bytes, :reply-bytes (all rounds), and
 :tool-call-bytes, plus admitted :tool-call-count and completed :rounds.
 A guard failure adds :budget-kind and :output-limit, naming the guard and
-its numeric threshold. Sparse reminders report remaining budgets before another
-model step. ACP uses completed tool batches plus final completion for :rounds;
+its numeric threshold.  Sparse reminders report remaining budgets before another
+model step.  ACP uses completed tool batches plus final completion for :rounds;
 its exact provider payload and per-step token usage are not exposed.
 
 Complete shared working notes captured in SCOPE are admitted like digests:

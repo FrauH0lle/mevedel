@@ -24,8 +24,10 @@
 (autoload 'mevedel-memory-notes-index "mevedel-memory-notes")
 (autoload 'mevedel-memory-notes-root "mevedel-memory-notes")
 
-(defconst mevedel-memory-store--max-bytes (* 4 1024 1024)
-  "Maximum private immutable pass record bytes, including escaped snapshots.")
+(defconst mevedel-memory-store--max-bytes (* 5 1024 1024)
+  "Maximum private immutable pass or write record bytes.
+A 512 KiB shared note appears twice in a write intent, with up to fourfold
+byte-string escaping.  The remaining MiB holds metadata and after-state.")
 
 (defun mevedel-memory-store--directory (workspace id)
   "Return WORKSPACE's private pass directory for ID."

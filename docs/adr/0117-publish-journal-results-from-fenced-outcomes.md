@@ -166,7 +166,15 @@ that memory or instructions cite are not removed silently. Accepted reviews
 and decisions are the processing record. Note decisions reuse checked intents
 and reversal through a shared-notes target whose coordination stays outside
 the cleaned folder; the previous bytes are retained as content-addressed
-blobs for the ordinary history window, within a quota. Auto mode applies them
+blobs for the ordinary history window, within a quota. Over-quota attachments
+instead retain a verified copy in local system trash before the locked original
+removal; trash unavailable on the original target means no removal. Undo from
+trash remains checked and depends on those bytes still existing. Oversized
+UTF-8 notes within a configured upper bound are reviewed alone in sequential
+chunks with a compact running summary, retaining whole-file before-state and
+invalidating that summary if the file changes. Attachment reference scanning
+streams large text rather than making size alone an incomplete scan.
+Auto mode applies them
 without prompts once no turn runs in the workspace.
 
 The [memory manual](../memory.md) owns configuration, limits, scheduling, proposal
@@ -193,6 +201,15 @@ longer than ordinary recall when evidence or recovery still needs it; the recall
 limit is not an erasure guarantee.
 
 ## Decision history
+
+- **Size alone no longer blocks every shared-file cleanup path.** On
+  2026-10-24, a 2.6 MB transcript copy made the reference scan incomplete and
+  blocked unrelated attachment cleanup; 14 shared items were blocked by size
+  limits. Scanning now streams with filename overlap. Useful oversized notes
+  can receive bounded chunk review while very large copies remain explicitly
+  blocked for manual splitting or relocation. Attachments above the undo quota
+  use verified system trash instead of permanent deletion or an unbounded blob
+  exception. Remote and unknown platform trash remains fail-closed.
 
 - **Shared files left the journal for a consolidation-owned lifecycle.**
   Capture read shared files before session files within one 32-KiB bound in

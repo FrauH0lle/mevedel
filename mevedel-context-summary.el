@@ -239,7 +239,7 @@ Copy the data because gptel merges shared model and backend parameter lists."
 
 (cl-defun mevedel-context-summary-generate
     (source purpose callback
-            &key session previous-summary focus guidance policy)
+            &key session previous-summary focus guidance policy output-guard)
   "Generate one context summary from frozen SOURCE for PURPOSE.
 
 PURPOSE is `continuation', `handoff', or `digest'.
@@ -248,11 +248,16 @@ CALLBACK receives one plist with
 `:summary'; errors carry `:error' and `:error-class'.  Available provider usage
 is returned as `:input-tokens', `:cached-tokens', and `:output-tokens',
 including without SESSION.  Input and cached token counts are exclusive.
+Client counters :output-bytes and :output-estimated-tokens include reasoning
+and reply text; :reasoning-bytes and :reply-bytes provide the breakdown.
 The return value is a
 zero-argument cancellation thunk.  SESSION is used only for model policy and
 telemetry ownership.  PREVIOUS-SUMMARY is valid only for continuation.  FOCUS
 and bounded GUIDANCE influence relevance without changing the output contract.
 POLICY, when non-nil, is a previously resolved model policy.
+OUTPUT-GUARD, when non-nil, receives incremental client output counters on
+each reasoning or reply fragment.  Signalling from it cancels and settles
+the request as an error with the incurred usage retained.
 Otherwise use the `journal' workload for digests and `summarization' for
 continuation and handoff summaries."
   (unless (and (stringp source) (not (string-blank-p source)))
@@ -292,6 +297,8 @@ continuation and handoff summaries."
          (request-started nil)
          (chunks nil)
          (output-bytes 0)
+         (reasoning-bytes 0)
+         (output-estimated-tokens 0)
          span
          (settle
           (lambda (result &optional info)
@@ -322,20 +329,43 @@ continuation and handoff summaries."
                            (append
                             result
                             (list :backend (plist-get policy :backend))
+                            (list :output-bytes (+ output-bytes reasoning-bytes)
+                                  :output-estimated-tokens output-estimated-tokens
+                                  :reasoning-bytes reasoning-bytes :reply-bytes output-bytes)
                             usage
                             (list :model (plist-get policy :model)
                                   :effort (plist-get policy :effort)))))))))
+         (observe
+          (lambda (info)
+            (when output-guard
+              (condition-case err
+                  (funcall output-guard
+                           (list :output-bytes (+ output-bytes reasoning-bytes)
+                                 :output-estimated-tokens output-estimated-tokens
+                                 :reasoning-bytes reasoning-bytes :reply-bytes output-bytes))
+                (error
+                 (funcall settle (list :outcome 'error :error-class 'size :error (error-message-string err)) info)
+                 (ignore-errors (gptel-abort request-buffer)))))))
          (provider-callback
           (lambda (response info)
             (pcase response
               ((guard settled))
-              (`(reasoning . ,_))
+              (`(reasoning . ,text)
+               (when (stringp text)
+                 (cl-incf reasoning-bytes (string-bytes text))
+                 (cl-incf output-estimated-tokens
+                          (mevedel-context-summary--estimated-tokens "" text))
+                 (funcall observe info)))
               ('abort
                (funcall settle '(:outcome aborted) info))
               ((and (pred stringp)
                     (guard (plist-get info :stream)))
                (setq output-bytes (+ output-bytes (string-bytes response)))
-               (if (and (eq purpose 'digest)
+               (cl-incf output-estimated-tokens
+                        (mevedel-context-summary--estimated-tokens "" response))
+               (funcall observe info)
+               (unless settled
+                 (if (and (eq purpose 'digest)
                         (> output-bytes mevedel-context-summary--digest-max-bytes))
                    (progn
                      ;; Settle first: gptel-abort calls this callback again.
@@ -343,11 +373,16 @@ continuation and handoff summaries."
                               (list :outcome 'error :error-class 'validation
                                     :error "Digest exceeds its byte limit") info)
                      (ignore-errors (gptel-abort request-buffer)))
-                 (push response chunks)))
+                   (push response chunks))))
               ((or 't (pred stringp))
                (let ((text (if (stringp response)
                                response
                              (apply #'concat (nreverse chunks)))))
+                 (when (stringp response)
+                   (setq output-bytes (string-bytes response))
+                   (cl-incf output-estimated-tokens
+                            (mevedel-context-summary--estimated-tokens "" response))
+                   (funcall observe info))
                  (condition-case err
                      (funcall
                       settle

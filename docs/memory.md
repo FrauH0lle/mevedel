@@ -413,7 +413,7 @@ Focus must fit the public record's 4 KiB bound before inference begins.
 
 Private records live in `.mevedel/state/journal/passes/<pass-id>/prepared.el` and `accepted.el`.
 They use bounded durable Lisp data, preserving literal byte strings in captured
-before-state; each record is limited to 4 MiB. Reading disables evaluation and
+before-state; each record is limited to 5 MiB. Reading disables evaluation and
 circular-reader syntax. Evidence pins live under
 `.mevedel/state/journal/evidence-pins/<digest-id>/<pass-id>.pin` and bind to the prepared record's
 hash. These records are internal storage, outside `memory://journal/`; displaying their
@@ -824,11 +824,24 @@ admitted while a conversation in the workspace runs a turn captures no notes.
 
 **Capture.** Each general review walks the folder without following links
 (at most 4,096 entries). Text is complete UTF-8 without NUL bytes; anything
-else is an attachment. At most 16 complete text notes and 96 KiB are captured,
+else is an attachment. At most 16 ordinary text notes and 96 KiB are captured,
 oldest first, each at most 32 KiB; the review request admits them beside
-digests (one of each when both fit, then oldest first). Larger, unreadable and
-linked files are never truncated or deleted: they remain blocked with a
-reason. The latest observation of ready, waiting and blocked items is
+digests (one of each when both fit, then oldest first). A larger text note is
+captured alone, up to `mevedel-memory-notes-max-review-bytes` (default 512 KiB,
+about sixteen chunks).
+It is reviewed sequentially in UTF-8 chunks of at most 32 KiB, carrying a
+running summary capped at 16 KiB. The final review uses that summary to
+extract knowledge and decide keep, condense or delete through the normal
+decision path. Whole-file bytes and hash remain the before-state, never a
+truncated prefix. Each chunk and final settlement recheck that whole-file
+state. A change discards the summary and reports `restart-required`; the
+next review starts from the beginning once the new version is quiet. The
+chunk sequence and final review share a 180-second deadline. The sequence's
+reasoning and replies also share the ordinary cumulative
+output budgets, guarded during streaming; cancellation retains incurred usage.
+Files beyond the configured bound stay blocked with an explicit request to split, delete
+or move them manually; unreadable files and links also stay blocked with a reason.
+The latest observation of ready, waiting and blocked items is
 recorded in `.mevedel/state/shared-notes/observation.el`; it counts every
 blocked item and lists at most 64 with reasons. `s` in the memory cockpit
 shows it, and review completion messages report the counts.
@@ -852,8 +865,12 @@ disposition stale, leaving the note for a later review.
 **Housekeeping.** Quiet attachments that no surviving text file references
 (conservatively by root-relative, note-relative, URL-encoded or address
 spelling) and quiet empty folders receive delete and prune decisions without
-inference, at most 128 per review. An incomplete reference scan blocks
-attachment cleanup, not text review. Application rechecks text written since
+inference, at most 128 per review. Reference scans stream large texts in
+1 MiB chunks with overlapping filename spellings, so transcript copies above
+1 MiB do not make the scan incomplete; references split across chunk
+boundaries still protect attachments. Read failures, changing files and
+incomplete inventories block attachment cleanup, not text review.
+Application rechecks text written since
 capture, so a newly referenced attachment becomes stale. A review with only
 housekeeping starts no model request.
 
@@ -872,6 +889,22 @@ ordinary resolution-based history window. `mevedel-memory-notes-undo-quota`
 review and before refusing a capture, and a change that would exceed the quota
 is refused with the note left in place. Unsaved visiting buffers and changed
 content refuse mutation.
+
+An attachment larger than the undo quota instead uses verified **system
+trash**, recorded as ordinary housekeeping. On GNU/Linux with Emacs's
+standard trash implementation, a private staging copy is moved with
+`move-file-to-trash` and `delete-by-moving-to-trash` enabled; its retained
+trash bytes must match the whole-file hash before the locked program can
+remove the original. Failure (including an implementation that deletes
+instead of trashing) leaves the original in place. The intent retains the
+exact content-addressed trash location for checked undo without consuming
+the undo-blob quota. With the default freedesktop trash Emacs also writes
+`.trashinfo`; an explicitly configured local `trash-directory` uses Emacs's
+configured trash semantics. Emptying or editing trash can make later undo
+unavailable, and never authorizes an unchecked restoration. TRAMP attachments,
+unknown/native platform trash implementations, and linked or unwritable
+trash locations remain blocked with an explicit reason; there is no permanent
+deletion fallback.
 
 **Modes.** `manual` processes notes only through `/remember`; `propose` leaves
 their decisions in the cockpit; `auto` applies extraction, deletion,
