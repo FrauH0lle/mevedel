@@ -315,6 +315,12 @@ before returning."
     ;; The target login shell is irrelevant: Bash always launches explicit
     ;; `bash' argv, including the final status snapshot, on every transport.
     (dolist (case '(("false | cat" "0" "failure" "1 0")
+                    ("set -- sample; (printf '%s\\n' \"$@\"; exit 7) | tail -1"
+                     "0" "failure" "7 0")
+                    ("for f in *.el; do printf '%s\\n' \"${f}\"; false; done | tail -1"
+                     "0" "failure" "1 0")
+                    ("for f in x; do trap 'exit $((40 + PIPESTATUS[0]))' EXIT; done; false | cat"
+                     "41" "failure" nil)
                     ("yes | head -1" "0" "success" "141 0")
                     ("(exit 7) | yes | head -1" "0" "failure" "7 141 0")
                     ("yes | head -1 && printf continued" "0" "success" nil)

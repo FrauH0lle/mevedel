@@ -860,37 +860,132 @@ The result contains `:class', `:commands', `:parser', `:resources', and
                  (and (mevedel-bash-analysis--background-p original) t)))
     analysis))
 
+(defun mevedel-bash-analysis--snapshot-expansions-safe-p (source)
+  "Return non-nil when SOURCE contains only plain parameter expansions.
+Even quoted or escaped complex expansions are declined.  Arithmetic, array
+subscripts, indirect expansion and parameter operators can execute code."
+  (let ((index 0)
+        (safe t)
+        (case-fold-search nil)
+        (parameter "[a-zA-Z_][a-zA-Z_0-9]*"))
+    (while (and safe (< index (length source)))
+      (let ((char (aref source index)))
+        (cond
+         ((eq char ?$)
+          (if (and (string-match
+                    (concat "\\$\\(?:{\\(" parameter "\\)}\\|\\("
+                            parameter "\\)\\|\\([@#?]\\)\\)")
+                    source index)
+                   (= (match-beginning 0) index)
+                   (if-let* ((name (or (match-string 1 source) (match-string 2 source))))
+                       (and (string-match-p "\\`[a-z_][a-z0-9_]*\\'" name)
+                            (not (equal name "_")))
+                     (or (not (equal (match-string 3 source) "@"))
+                         (and (> index 0) (eq (aref source (1- index)) ?\")
+                              (< (match-end 0) (length source))
+                              (eq (aref source (match-end 0)) ?\")))))
+              (setq index (1- (match-end 0)))
+            (setq safe nil)))
+         ((memq char '(?` ?{ ?} ?\[ ?\])) (setq safe nil))
+         ((and (memq char '(?< ?>)) (< (1+ index) (length source))
+               (memq (aref source (1+ index)) '(?\( ?<)))
+          (setq safe nil))
+         ((and (eq char ?\() (< (1+ index) (length source))
+               (eq (aref source (1+ index)) ?\())
+          (setq safe nil))))
+      (setq index (1+ index)))
+    safe))
+
+(defun mevedel-bash-analysis--snapshot-command-safe-p (segment)
+  "Return non-nil when SEGMENT cannot visibly run code in the caller shell.
+Support plain for loops, but require literal executable names.  Decline
+builtins that evaluate code, callbacks or variable subscripts."
+  (condition-case nil
+      (let* ((case-fold-search nil)
+             (text (replace-regexp-in-string "\\`[([:space:]]+" "" segment))
+             (text (replace-regexp-in-string "[)[:space:]]+\\'" "" text))
+             (argv (mevedel-bash-analysis--split-command text)))
+        (cond
+         ((equal (car argv) "for")
+          (and (string-match-p "\\`[a-z_][a-z0-9_]*\\'" (or (cadr argv) ""))
+               (not (equal (cadr argv) "_"))
+               (or (null (cddr argv)) (equal (nth 2 argv) "in"))))
+         ((equal (car argv) "done") (null (cdr argv)))
+         (t
+          (when (equal (car argv) "do") (pop argv))
+          (let ((name (car argv)))
+            (and name
+                 (not (cl-some (lambda (char)
+                                 (memq char '(?$ ?` ?{ ?} ?< ?> ?* ?? ?\[ ?\] ?\( ?\))))
+                               (string-to-list name)))
+                 (not (mevedel-bash-analysis--assignment-word-p name))
+                 (not (member name mevedel-bash-analysis--control-words))
+                 (not (member name
+                              '("!" "time" "trap" "eval" "exec" "source" "."
+                                "builtin" "command" "alias" "shopt" "mapfile"
+                                "readarray" "enable" "bind" "let" "declare"
+                                "typeset" "local" "readonly" "unset" "read"
+                                "getopts" "wait" "fc" "compgen" "complete" "test" "[")))
+                 ;; These builtins can interpret arguments as variable names,
+                 ;; including array subscripts evaluated in the caller shell.
+                 (not (and (equal name "export")
+                           (string-search "$" text)))
+                 (or (not (equal name "printf"))
+                     (let ((format (cadr argv)))
+                       (and format
+                            (not (string-prefix-p "-" format))
+                            (not (string-match-p "%[-+ #0-9.*hlLqjzt]*n\\|[$]" format))))))))))
+    (error nil)))
+
 (defun mevedel-bash-analysis-snapshot-safe-p (source)
   "Return non-nil when SOURCE cannot visibly install a caller EXIT trap.
-Decline dynamic shell code and function definitions rather than guessing.
-Startup-file and inherited-function traps are outside this source proof."
-  (pcase-let* ((`(,segments ,reasons) (mevedel-bash-analysis--scan-segments source))
-               (`(,commands ,argv-reasons) (mevedel-bash-analysis--argv segments)))
-    (and (not (string-match-p "[$`{}]\\|\\[\\|\\]\\|((" source))
-         (null argv-reasons)
-         ;; A leading redirection can hide the executable from candidate
-         ;; normalization (for example `2>/dev/null trap ...').
-         (cl-every (lambda (argv)
-                     (and (not (string-match-p "[<>]" (car argv)))
-                          (not (member (car argv) '("!" "time")))
-                          (or (not (equal (car argv) "printf"))
-                              (not (cl-some
-                                    (lambda (arg)
-                                      (or (string-prefix-p "-v" arg)
-                                          (string-match-p "%[-+ #0-9.*hlLqjzt]*n" arg)))
-                                    (cdr argv))))))
-                   commands)
+Plain parameter arguments and for loops are supported, not dynamic executable
+names, shell code or function definitions.  Startup-file and inherited-function
+traps or namerefs are outside this source proof."
+  (setq source (mevedel-bash-analysis--normalize-line-continuations source))
+  (pcase-let ((`(,segments ,reasons ,spans)
+               (mevedel-bash-analysis--scan-segments source t)))
+    (and (mevedel-bash-analysis--snapshot-expansions-safe-p source)
          (cl-every
           (lambda (reason)
-            (equal reason
-                   "Expansion, substitution, grouping, or redirection is unsupported"))
+            (member reason
+                    '("Expansion, substitution, grouping, or redirection is unsupported"
+                      "Expansion or substitution is unsupported")))
           reasons)
-         (not (cl-some
-               (lambda (candidate)
-                 (string-match-p
-                  "\\`\\(?:trap\\|eval\\|exec\\|source\\|\\.\\|builtin\\|command\\|alias\\|shopt\\|mapfile\\|readarray\\|test\\|\\[\\|let\\|declare\\|typeset\\|local\\|readonly\\|unset\\|read\\|getopts\\|wait\\|enable\\|bind\\|fc\\|compgen\\|complete\\)\\(?:[[:space:]]\\|\\'\\)"
-                  candidate))
-               (plist-get (mevedel-bash-analysis-analyze source) :candidates))))))
+         (mevedel-bash-analysis--snapshot-command-spans source segments spans)
+         (cl-every #'mevedel-bash-analysis--snapshot-command-safe-p segments))))
+
+(defun mevedel-bash-analysis--snapshot-command-spans (source segments spans)
+  "Return SPANS with plain for loops in SOURCE grouped as compound stages.
+SEGMENTS correspond to SPANS.  Return nil for incomplete or nested loops,
+other control flow, or pipelines inside a loop body."
+  (let (result loop-start state previous invalid)
+    (while (and segments (not invalid))
+      (let* ((segment (pop segments))
+             (span (pop spans))
+             (head (car (mevedel-bash-analysis--split-command segment))))
+        (when (and state previous
+                   (not (member (string-trim
+                                 (substring source (cdr previous) (car span)))
+                                '(";" "&&" "||"))))
+          (setq invalid t))
+        (cond
+         ((equal head "for")
+          (if state (setq invalid t)
+            (setq loop-start (car span) state 'do)))
+         ((equal head "do")
+          (if (eq state 'do) (setq state 'body) (setq invalid t)))
+         ((equal head "done")
+          (if (eq state 'body)
+              (progn (push (cons loop-start (cdr span)) result)
+                     (setq state nil loop-start nil))
+            (setq invalid t)))
+         ((or (eq state 'do)
+              (member head mevedel-bash-analysis--control-words))
+          (setq invalid t))
+         ((null state) (push span result)))
+        (setq previous span)))
+    (unless (or invalid state) (nreverse result))))
 
 (defun mevedel-bash-analysis-final-pipeline (source count)
   "Return stage analyses for SOURCE's sole final COUNT-stage outer pipeline.
@@ -900,6 +995,9 @@ as in conditional lists.  Quoted pipe characters are not connectors."
                 (mevedel-bash-analysis--scan-segments
                  (mevedel-bash-analysis--normalize-line-continuations source) t))
                (source (mevedel-bash-analysis--normalize-line-continuations source))
+               (spans (mevedel-bash-analysis--snapshot-command-spans source segments spans))
+               (segments (mapcar (lambda (span) (substring source (car span) (cdr span)))
+                                 spans))
                (pipes 0)
                (trailing 0))
     (while (cdr spans)

@@ -24,6 +24,13 @@
   :doc "admits ordinary final pipelines, including stderr redirection"
   (should (mevedel-bash-analysis-snapshot-safe-p "npx test 2>&1 | tail -2"))
   (should (mevedel-bash-analysis-snapshot-safe-p "(exit 7) | yes | head"))
+  :doc "admits plain parameters as arguments and plain for loops"
+  (dolist (source '("cmd \"$x\" | tail"
+                    "cmd $x ${x} \"$@\" $# $? | tail"
+                    "for f in *.el; do printf '%s\\n' \"${f}\"; done | tail"
+                    "for f; do false; done | tail"
+                    "cmd \"$\\\nx\" | tail"))
+    (should (mevedel-bash-analysis-snapshot-safe-p source)))
   :doc "declines traps, dynamic shell code, and function definitions"
   (dolist (source '("trap 'echo done' EXIT; false | cat"
                     "tr''ap 'echo done' EXIT; false | cat"
@@ -37,6 +44,46 @@
                     ". hooks; false | cat"
                     "f() { false | cat; }; f"
                     "$runner | tail -2"))
+    (should-not (mevedel-bash-analysis-snapshot-safe-p source))))
+
+(mevedel-deftest mevedel-bash-analysis--snapshot-expansions-safe-p ()
+  ,test
+  (test)
+  :doc "rejects code-bearing expansion forms, even inside quotes"
+  (dolist (source '("cmd $(trap x EXIT) | tail" "cmd `trap x EXIT` | tail"
+                    "cmd <(echo x) | tail" "cmd > >(cat) | tail"
+                    "cmd $((x)) | tail" "(( x )); false | cat"
+                    "cmd ${x:-$(trap x EXIT)} | tail"
+                    "cmd ${x@P} | tail" "cmd ${!x} | tail"
+                    "cmd ${a[$x]} | tail" "cmd $'\\x74rap' | tail"
+                    "cmd \"$(echo x)\" | tail" "cmd '$((x))' | tail"
+                    "cmd $RANDOM | tail" "cmd ${OPTIND} | tail"
+                    "cmd $_ | tail" "cmd $1 | tail" "cmd $$ | tail"
+                    "cmd $! | tail" "cmd $@ | tail"
+                    "cmd $xUpper | tail" "cmd ${_} | tail"
+                    "for RANDOM in x; do false; done | cat"
+                    "for OPTIND in x; do false; done | cat"
+                    "for SECONDS in x; do false; done | cat"
+                    "for _ in x; do false; done | cat"))
+    (should-not (mevedel-bash-analysis-snapshot-safe-p source))))
+
+(mevedel-deftest mevedel-bash-analysis--snapshot-command-safe-p ()
+  ,test
+  (test)
+  :doc "rejects dynamic executables and caller-shell evaluation builtins"
+  (dolist (source '("\"${runner}\" arg | tail" "do $runner arg; done | tail"
+                    "${dir}/runner arg | tail" "tr?p x EXIT; false | cat"
+                    "for f in x; do trap 'exit 42' EXIT; done; false | cat"
+                    "for f in x; do 2>/dev/null trap x EXIT; done; false | cat"
+                    "for f in x; do eval \"$x\"; done | tail"
+                    "declare -n x=y; cmd \"$x\" | tail"
+                    "unset \"$x\"; false | cat" "read \"$x\"; false | cat"
+                    "test -v \"$x\"; false | cat" "export \"$x\"; false | cat"
+                    "printf -v \"$x\" %s value; false | cat"
+                    "printf \"$x\" value; false | cat"
+                    "printf '%n' \"$x\"; false | cat"
+                    "enable -f \"$x\" name; false | cat"
+                    "compgen -F \"$x\"; false | cat"))
     (should-not (mevedel-bash-analysis-snapshot-safe-p source))))
 
 (mevedel-deftest mevedel-bash-analysis-final-pipeline ()
@@ -71,6 +118,24 @@
                     "printf '%lln' a; false | cat"))
     (should-not (mevedel-bash-analysis-snapshot-safe-p source)))
   (should (mevedel-bash-analysis-snapshot-safe-p "printf '%s\\n' value | cat")))
+
+(mevedel-deftest mevedel-bash-analysis--snapshot-command-spans ()
+  ,test
+  (test)
+  :doc "keeps a loop's complete source as one conservative pipeline stage"
+  (let* ((loop "for f in *.el; do printf '%s\\n' \"$f\"; false; done")
+         (stages (mevedel-bash-analysis-final-pipeline (concat loop " | tail") 2)))
+    (should (equal (mevedel-bash-analysis-analyze loop) (car stages)))
+    (should (eq 'complex (plist-get (car stages) :class)))
+    (should (equal '(("tail")) (plist-get (cadr stages) :commands))))
+  :doc "declines nested, incomplete, and pipeline-containing loop bodies"
+  (dolist (source '("for f in x; do for g in y; do echo $g; done; done | tail"
+                    "for f in x; printf '%s' $f; done | tail"
+                    "for f in x; do printf '%s' $f | cat; done | tail"
+                    "do printf '%s' $f; done | tail"
+                    "for f in x; do printf '%s' $f | tail"))
+    (should-not (mevedel-bash-analysis-snapshot-safe-p source))
+    (should-not (mevedel-bash-analysis-final-pipeline source 2))))
 
 (mevedel-deftest mevedel-bash-analysis-analyze ()
   ,test

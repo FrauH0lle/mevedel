@@ -1386,12 +1386,29 @@ The snapshot runs after the source returns, without enabling `pipefail` or
 installing traps. This preserves `yes | head && echo continued` and caller
 shell options. Source that visibly installs traps or runs dynamic shell code
 is left untouched, preserving the pipeline context available to user EXIT
-traps. EXIT traps installed by startup files or inherited shell functions
+traps. Plain parameter arguments (`$x`, `${x}`, `"$@"`) and plain `for` loops
+are eligible, including `for f in *.el; do ... "$f" ...; done | tail`.
+Variable and loop names must match `[a-z_][a-z0-9_]*`, except `_`; uppercase
+and special shell variables are declined because some evaluate arithmetic on
+assignment or read. The only special expansions admitted are `"$@"`, `$#`, `$?`.
+Nested loops and pipelines inside loop bodies remain ineligible. A loop is one
+conservative compound stage, not its last body command.
+This does not make those commands read-only or grant execution authority.
+Dynamic executable names, command/process substitution, arithmetic, array or
+indirect expansions, parameter operators, function definitions, and builtins
+that evaluate shell code or variable subscripts remain ineligible. Complex
+expansion syntax is declined even when quoted or escaped; `printf` requires a
+literal non-option format without `%n`.
+EXIT traps installed by startup files or inherited shell functions
 are not detected; the appended snapshot can change the `PIPESTATUS` they see.
 The proof also declines arithmetic, subscript syntax, variable-targeting or
 code-evaluating builtins (including `test`, `[`, `let`, and `declare`), and
 `printf -v` or `%n` formats: these can evaluate a subscript taken from the
 environment even without visible substitution syntax in the source.
+Startup-file namerefs are likewise outside the source proof.
+More generally, startup-file variable attributes (including integer attributes)
+and shell functions are not inspected. This is conservative source observation,
+not a security boundary or a proof about the inherited shell environment.
 Explicit `exit`/`exec`, early shell exits, and pipelines hidden inside compound
 commands can bypass or collapse the snapshot. Classification requires a sole
 syntactic pipeline at the end of the source. Multiple pipelines, including
