@@ -77,6 +77,52 @@
       (should (string-empty-p (string-trim (buffer-string)))))))
 
 
+(mevedel-deftest mevedel--compact-should-compact-p ()
+  ,test
+  (test)
+  :doc "persists both budgets and fallback provenance even below the trigger"
+  (let* ((root (make-temp-file "mevedel-context-diagnostics-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "context-diagnostics" :root root
+                     :name "context-diagnostics"))
+         (session (mevedel-session-create "main" workspace root))
+         (gptel-model (make-symbol "unknown-target"))
+         (gptel-backend nil)
+         (gptel-max-tokens nil)
+         (gptel--request-params nil)
+         (summary-model (make-symbol "known-summary"))
+         (mevedel-model-context-limit nil)
+         (mevedel-model-reserve-tokens 20000)
+         (mevedel-compact-estimation-token-threshold 0.8))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-save-path session) root)
+          (put summary-model :context-window 1000)
+          (cl-letf (((symbol-function 'mevedel-compact-estimation-workload-policy)
+                     (lambda () (list :model summary-model))))
+            (should-not (mevedel--compact-should-compact-p 10)))
+          (let ((entry (with-temp-buffer
+                         (insert-file-contents
+                          (file-name-concat root "telemetry-log.el"))
+                         (read (current-buffer)))))
+            (should (eq 'compaction-threshold-evaluated (plist-get entry :event)))
+            (should (= 128000 (plist-get entry :model-context-window)))
+            (should (eq 'built-in-fallback (plist-get entry :model-context-source)))
+            (should (= 20000 (plist-get entry :target-reserve-tokens)))
+            (should (= 108000 (plist-get entry :target-usable-tokens)))
+            (should (= 86400 (plist-get entry :target-threshold)))
+            (should (equal (symbol-name summary-model)
+                           (symbol-name (plist-get entry :summary-model))))
+            (should (= 1000000 (plist-get entry :summary-context-window)))
+            (should (eq 'model-metadata (plist-get entry :summary-context-source)))
+            (should (= 20000 (plist-get entry :summary-reserve-tokens)))
+            (should (= 980000 (plist-get entry :summary-usable-tokens)))
+            (should (= 784000 (plist-get entry :summary-threshold)))
+            (should (= 0.8 (plist-get entry :threshold-ratio)))
+            (should (= 86400 (plist-get entry :threshold)))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel--compact-provider-wait
   (:doc "injects reminders and records dispatch before forwarding the FSM wait")
   (let* ((session (mevedel-session--create :name "provider-dispatch"))

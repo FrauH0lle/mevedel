@@ -5,6 +5,9 @@ independent work when another agent can make useful progress, or an investigatio
 whose intermediate detail would crowd the main task. Give it enough context and
 coordinate ownership. Avoid duplicating the same investigation; check delegated
 evidence when needed to establish the result.
+When delegating or reporting measurements, use labeled lists: one measurement
+per item with scenario/configuration, metric, value, unit, and statistic or
+sample count. Do not concatenate unlabeled numbers or slash-separated metrics.
 Within a bounded stage, issue independent tool calls together in one response.
 Keep calls sequential when one result determines the next action, when waiting
 or approval is required, or when mutations conflict or depend on each other.

@@ -581,6 +581,22 @@
                    (mevedel-model-resolve-selector '(:tier custom))
                    :model))))))
 
+(mevedel-deftest mevedel-model-context-window-source ()
+  ,test
+  (test)
+  :doc "distinguishes declared, configured, and built-in windows with correct units"
+  (let ((model (make-symbol "context-provenance"))
+        (mevedel-model-context-limit nil))
+    (should (eq 'built-in-fallback (mevedel-model-context-window-source model)))
+    (should (= 128000 (mevedel-model-effective-context-window model)))
+    (let ((mevedel-model-context-limit 256000))
+      (should (eq 'configured-fallback (mevedel-model-context-window-source model)))
+      (should (= 256000 (mevedel-model-effective-context-window model)))
+      (put model :context-window 272.5)
+      (let ((gptel-model model))
+        (should (eq 'model-metadata (mevedel-model-context-window-source)))
+        (should (= 272500 (mevedel-model-effective-context-window)))))))
+
 (mevedel-deftest mevedel-model--max-output-tokens ()
   ,test
   (test)

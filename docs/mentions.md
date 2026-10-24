@@ -142,7 +142,13 @@ schema, send-time binding, and dispatch branches.
   capped at
   `mevedel-file-mention-directory-max-entries` (default 1000). Text
   contents read through `mevedel-tool-fs-read-slurp-file-contents` (512 KiB cap,
-  line numbers). An exact path inside an active remote session store resolves
+  line numbers). Text delivery explicitly labels the attachment as task data,
+  not host-loaded workspace instructions. An instruction-like filename such as
+  `AGENTS.local.md` does not activate the attached contents as policy. The user
+  can explicitly ask the model to follow an attachment; independently applicable
+  workspace instructions retain their authority. This label belongs to the file
+  mention envelope, not to the file's contents or a filename-specific heuristic.
+  An exact path inside an active remote session store resolves
   only through that session's artifact resolver: fixed-path cache files do
   not establish presence or content. Resolved media bytes are staged in a
   local temporary file for gptel and removed when the request ends.

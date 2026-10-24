@@ -36,6 +36,7 @@ nav:
       - Execution: tools/execution.md
   - Development:
       - Development guide: development.md
+      - Local reference sources: reference-sources.md
       - Telemetry and diagnostics: telemetry.md
       - Commit conventions: commits.md
       - Domain documentation: agents/domain.md

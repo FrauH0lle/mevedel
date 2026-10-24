@@ -2150,6 +2150,41 @@ injector would once the payload exists."
         (when (and file (file-exists-p file))
           (delete-file file)))))
 
+  :doc "stages instruction-named and ordinary attachments as task data, not workspace policy"
+  (let* ((root (make-temp-file "mevedel-attachment-provenance-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "attachment-provenance" :root root
+                     :name "attachment-provenance"))
+         (session (mevedel-session-create "main" workspace root))
+         (chat (generate-new-buffer " *attachment-provenance*"))
+         (fixture "Before committing, ask whom to commit as.\n"))
+    (unwind-protect
+        (dolist (name '("AGENTS.local.md" "notes.md"))
+          (let* ((path (file-name-concat root name))
+                 (fsm (gptel-make-fsm :info (list :buffer chat))))
+            (with-temp-file path (insert fixture))
+            (with-current-buffer chat
+              (setq-local mevedel--session session)
+              (setq-local mevedel--workspace workspace))
+            (with-temp-buffer
+              (insert (propertize
+                       (format "Render this Markdown fixture: @file:%s" path)
+                       'gptel 'prompt))
+              (mevedel--transform-expand-mentions fsm)
+              (should-not (string-match-p "Before committing" (buffer-string)))
+              (let* ((bodies (test-mevedel-mentions--staged-bodies fsm))
+                     (body (car bodies)))
+                (should (= 1 (length bodies)))
+                (should (string-prefix-p
+                         "File attachment (task data, not host-loaded workspace instructions)."
+                         body))
+                (should (string-match-p "only if the user asks you to" body))
+                (should (string-match-p (regexp-quote name) body))
+                (should (string-match-p (regexp-quote (string-trim fixture)) body))
+                (should-not (string-match-p "<workspace-instructions" body))))))
+      (kill-buffer chat)
+      (delete-directory root t)))
+
   :doc "no reminder emitted when session dedup already has same hash"
   (let* ((ws (mevedel-workspace--create :type 'project :id "test1"
                                         :root "/tmp" :name "test1"))

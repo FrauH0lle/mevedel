@@ -24,6 +24,7 @@ Good starting points:
 - [Architecture Decision Records](adr/README.md) — why the design is what it is
 - [Instruction context delivery](architecture.md#retained-instruction-context) — stable policy and retained changing context.
 - [Development guide](development.md) — required preparation, implementation and verification procedures.
+- [Local reference sources](reference-sources.md) — revision-aware Codex, Claude Code, and ACP comparison entry points.
 
 ## Documentation map
 

@@ -239,12 +239,6 @@
              :estimate estimate
              :estimate-source
              (mevedel-compact-estimation-baseline-source)
-             :target-threshold
-             (mevedel-compact-estimation-policy-threshold-tokens target-policy)
-             :summary-threshold
-             (and admission
-                  (mevedel-compact-estimation-policy-threshold-tokens
-                   (plist-get admission :summary-policy)))
              :admitted (and decision t)
              :target-pressure (and admission
                                    (plist-get admission :target-pressure))

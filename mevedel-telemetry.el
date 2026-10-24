@@ -198,7 +198,7 @@ profile file larger and cost a little more per sample."
     :ineligible-reason :input-bytes :input-p :input-pending :input-tokens
     :interaction-id :issue-count
     :kind :lane
-    :max-ms :message-chars :message-hash :mode :model :model-context-window :modes
+    :max-ms :message-chars :message-hash :mode :model :model-context-source :model-context-window :modes
     :native-resource-capture :native-resource-report-bytes :nested-call-count
     :network
     :new-count :new-segment :old-segment :omitted-count :operation-count :origin :outcome
@@ -220,9 +220,11 @@ profile file larger and cost a little more per sample."
     :restored :result-bytes :result-chars :retained :retained-count :reviewed-count :roster-chars :rounds
     :sandbox :sandbox-mode :sandbox-permissions :scope :settled :settlement-source
     :skill-count :skill-name :skill-names :skip-gates :span-id
-    :specifier-key :stage :status :step :summary-threshold
+    :specifier-key :stage :status :step :summary-context-source :summary-context-window
+    :summary-model :summary-reserve-tokens :summary-threshold :summary-usable-tokens
     :system-configuration :target-model :target-origin :target-pressure
-    :target-threshold :termination :test-scope :threshold :threshold-ms
+    :target-reserve-tokens :target-threshold :target-usable-tokens
+    :termination :test-scope :threshold :threshold-ms :threshold-ratio
     :timed-out :timeout-ms :timer-callback :timer-gc-count :timer-gc-ms :timer-ms :token-source :tokens-after :tokens-before
     :tokens-used :tool-call-bytes :tool-call-count :tool-name :tool-use-id
     :trigger :tty :turns-run :updated-file-count :usage-status :via

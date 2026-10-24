@@ -109,6 +109,15 @@ default, so a caller always has a number to divide."
       mevedel-model-context-limit
       128000))
 
+(defun mevedel-model-context-window-source (&optional model)
+  "Return the provenance of MODEL's effective context window.
+MODEL defaults to `gptel-model'.  Metadata is a local declaration, not
+confirmation from the provider that the declared window is available."
+  (cond
+   ((mevedel-model-context-window model) 'model-metadata)
+   (mevedel-model-context-limit 'configured-fallback)
+   (t 'built-in-fallback)))
+
 (defun mevedel-model--max-output-tokens (policy)
   "Return POLICY's configured maximum output token count, or zero."
   (let ((gptel-backend (plist-get policy :backend))

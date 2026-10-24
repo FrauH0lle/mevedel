@@ -413,6 +413,8 @@
                    (let ((gptel-tools nil))
                      (mevedel-system--join-parts (mevedel-system--tool-orchestration-prompt context) (mevedel-system--resource-roster context))))))
     (should (string-match-p "Tool orchestration" prompt))
+    (should (string-match-p "When delegating or reporting measurements, use labeled lists" prompt))
+    (should (string-match-p "metric, value, unit" prompt))
     (should (string-match-p "work://" prompt))
     (should (string-match-p "artifact://" prompt))
     (should-not (string-match-p "{{RESOURCE_ROSTER}}" prompt))

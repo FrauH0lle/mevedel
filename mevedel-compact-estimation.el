@@ -110,6 +110,38 @@ block."
   (mevedel-compact-estimation-threshold-tokens
    (mevedel-model-usable-input-tokens policy)))
 
+(defun mevedel-compact-estimation-context-diagnostics (&optional target-policy)
+  "Return context provenance and trigger budgets for TARGET-POLICY.
+Default to the current request policy.  Include both target and summarizer:
+the smaller threshold triggers local compaction.  This reports declared or
+fallback budgets, not provider confirmation or native Claude admission."
+  (let* ((target (or target-policy (mevedel-compact-estimation-target-policy)))
+         (summary (mevedel-compact-estimation-workload-policy))
+         (target-model (plist-get target :model))
+         (summary-model (plist-get summary :model))
+         (target-window (mevedel-model-effective-context-window target-model))
+         (summary-window (mevedel-model-effective-context-window summary-model))
+         (target-usable (mevedel-model-usable-input-tokens target))
+         (summary-usable (mevedel-model-usable-input-tokens summary))
+         (target-threshold
+          (mevedel-compact-estimation-threshold-tokens target-usable))
+         (summary-threshold
+          (mevedel-compact-estimation-threshold-tokens summary-usable)))
+    (list :target-model target-model
+          :model-context-window target-window
+          :model-context-source (mevedel-model-context-window-source target-model)
+          :target-reserve-tokens (- target-window target-usable)
+          :target-usable-tokens target-usable
+          :target-threshold target-threshold
+          :summary-model summary-model
+          :summary-context-window summary-window
+          :summary-context-source (mevedel-model-context-window-source summary-model)
+          :summary-reserve-tokens (- summary-window summary-usable)
+          :summary-usable-tokens summary-usable
+          :summary-threshold summary-threshold
+          :threshold-ratio mevedel-compact-estimation-token-threshold
+          :threshold (min target-threshold summary-threshold))))
+
 (defun mevedel-compact-estimation--token-usage-count (tokens)
   "Return total prompt/output TOKENS from a gptel token-usage plist."
   (when-let* ((input (mevedel-compact-estimation--token-usage-input tokens))
@@ -277,32 +309,27 @@ joined by newlines; count that shape without building it."
 (defun mevedel-compact-estimation-telemetry-inputs (estimate target-policy)
   "Return detailed compaction telemetry for ESTIMATE and TARGET-POLICY."
   (let* ((baseline mevedel-compact-estimation--known-token-baseline)
-         (position (plist-get baseline :position))
-         (summary-policy (mevedel-compact-estimation-workload-policy)))
-    (list
-     :request-id (mevedel-compact-estimation-current-request-id)
-     :baseline-request-id (plist-get baseline :request-id)
-     :provider-context-model (plist-get baseline :model)
-     :provider-context-window (plist-get baseline :model-context-window)
-     :provider-context-usage
-     (mevedel-telemetry-usage-normalize (plist-get baseline :provider-context-usage))
-     :cumulative-usage
-     (mevedel-telemetry-usage-normalize (plist-get baseline :cumulative-usage))
-     :provider-context-tokens (plist-get baseline :provider-context-tokens)
-     :cumulative-usage-tokens (plist-get baseline :cumulative-usage-tokens)
-     :provider-context-status (plist-get baseline :provider-context-status)
-     :chosen-active-context-tokens estimate
-     :chosen-source (or (plist-get baseline :source) 'fresh-estimate)
-     :target-model (plist-get target-policy :model)
-     :model-context-window
-     (mevedel-model-context-window (plist-get target-policy :model))
-     :threshold
-     (min (mevedel-compact-estimation-policy-threshold-tokens target-policy)
-          (mevedel-compact-estimation-policy-threshold-tokens summary-policy))
-     :baseline-marker-position
-     (and (integer-or-marker-p position)
-          (if (markerp position) (marker-position position) position))
-     :buffer-chars-total (buffer-size))))
+         (position (plist-get baseline :position)))
+    (append
+     (mevedel-compact-estimation-context-diagnostics target-policy)
+     (list
+      :request-id (mevedel-compact-estimation-current-request-id)
+      :baseline-request-id (plist-get baseline :request-id)
+      :provider-context-model (plist-get baseline :model)
+      :provider-context-window (plist-get baseline :model-context-window)
+      :provider-context-usage
+      (mevedel-telemetry-usage-normalize (plist-get baseline :provider-context-usage))
+      :cumulative-usage
+      (mevedel-telemetry-usage-normalize (plist-get baseline :cumulative-usage))
+      :provider-context-tokens (plist-get baseline :provider-context-tokens)
+      :cumulative-usage-tokens (plist-get baseline :cumulative-usage-tokens)
+      :provider-context-status (plist-get baseline :provider-context-status)
+      :chosen-active-context-tokens estimate
+      :chosen-source (or (plist-get baseline :source) 'fresh-estimate)
+      :baseline-marker-position
+      (and (integer-or-marker-p position)
+           (if (markerp position) (marker-position position) position))
+      :buffer-chars-total (buffer-size)))))
 
 (defun mevedel-compact-estimation-admission (estimate target-policy)
   "Return compaction admission for ESTIMATE and TARGET-POLICY, or nil."

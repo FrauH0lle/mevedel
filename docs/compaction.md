@@ -128,6 +128,21 @@ The effective context window comes from:
 2. `mevedel-model-context-limit` when model metadata is absent.
 3. A 128000 token fallback.
 
+For one-place diagnosis in the chat data buffer, evaluate
+`(mevedel-compact-estimation-context-diagnostics)`. It returns both the target
+and summarization models' effective windows, provenance, actual reserves,
+usable tokens, individual thresholds, configured ratio, and winning threshold.
+The same fields appear in each `compaction-threshold-evaluated` telemetry
+event, even below the trigger. `model-metadata` means a local gptel declaration
+(`:context-window` in thousands of tokens), not independent provider confirmation;
+`configured-fallback` means `mevedel-model-context-limit`, and
+`built-in-fallback` means the unverified conservative 128000-token default.
+An unknown model therefore cannot silently look like a verified 128k model in
+diagnostics. Check the provider's current model documentation and the loaded
+backend's model declaration before correcting metadata; do not infer capability
+from the fallback. Native Claude owns its own compaction trigger, so these
+figures describe local admission and summary preflight, not its native trigger.
+
 Usable context is:
 
 ```

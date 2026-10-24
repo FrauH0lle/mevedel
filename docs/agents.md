@@ -13,6 +13,10 @@ accepts a free-form `task_name`, a complete `message`, and optional `role`,
 `context`, `model`, and `effort` controls, then returns the committed canonical
 path after preparation and provider dispatch succeed.
 
+Delegation and result guidance asks for labeled measurement lists rather than
+compressed numeric strings. Each item names its scenario/configuration, metric,
+value, unit, and statistic or sample count; distinct metrics stay separate.
+
 The harness lowercases the name, replaces runs outside `[a-z0-9_-]` with
 hyphens, trims boundary hyphens, and caps the base at 40 characters, preferring
 the last hyphen boundary. An empty result becomes `agent`; `root`
