@@ -148,6 +148,9 @@
   launch-attempted-p
   output-function
   output-limit-p
+  pipeline-buffer
+  pipeline-exit-codes
+  pipeline-marker
   process
   settle-timer
   spool-path
@@ -167,7 +170,7 @@
   workdir)
 
 (cl-defun mevedel-execution-process-create
-    (&key workdir tty spool-path filter-function output-function
+    (&key workdir tty spool-path filter-function output-function pipeline-marker
           stderr-function terminal-function)
   "Create an opaque child for WORKDIR without launching it.
 OUTPUT-FUNCTION and STDERR-FUNCTION receive (CHILD RETAINED-CHUNK) after
@@ -176,6 +179,7 @@ OUTPUT-FUNCTION; otherwise both streams use the ordinary output path."
   (mevedel-execution-process--child-create
    :filter-function filter-function
    :output-function output-function
+   :pipeline-marker pipeline-marker
    :spool-path (or spool-path (make-temp-file "mevedel-execution-output-"))
    :started-at (float-time)
    :stderr-function stderr-function
@@ -216,6 +220,8 @@ OUTPUT-FUNCTION; otherwise both streams use the ordinary output path."
         :direct-async-p
         (mevedel-execution-process--child-direct-async-p child)
         :exit-code (mevedel-execution-process--child-exit-code child)
+        :pipeline-exit-codes
+        (copy-sequence (mevedel-execution-process--child-pipeline-exit-codes child))
         :group-id (mevedel-execution-process--child-group-id child)
         :group-start-time
         (mevedel-execution-process--child-group-start-time child)
@@ -485,6 +491,38 @@ whether CHUNK exceeded the remaining cap."
                       nil path t 'silent)))
     (cons retained (> length remaining))))
 
+(defun mevedel-execution-process--filter-pipeline-marker (child chunk)
+  "Remove CHILD's private final-pipeline status frame from CHUNK.
+Keep only a bounded possible frame between chunks; all other bytes remain raw."
+  (let ((marker (mevedel-execution-process--child-pipeline-marker child)))
+    (if (null marker)
+        chunk
+      (let ((text (concat (mevedel-execution-process--child-pipeline-buffer child)
+                          chunk))
+            (prefix (concat "\036" marker ":"))
+            pieces start)
+        (setf (mevedel-execution-process--child-pipeline-buffer child) nil)
+        (while (setq start (string-search "\036" text))
+          (push (substring text 0 start) pieces)
+          (setq text (substring text start))
+          (cond
+           ((and (string-prefix-p prefix text)
+                 (string-search "\037" text))
+            (let* ((end (string-search "\037" text))
+                   (payload (substring text (length prefix) end)))
+              (if (string-match-p "\\`[0-9]+\\(?: [0-9]+\\)* ?\\'" payload)
+                  (setf (mevedel-execution-process--child-pipeline-exit-codes child)
+                        (mapcar #'string-to-number (split-string payload " " t)))
+                (push (substring text 0 (1+ end)) pieces))
+              (setq text (substring text (1+ end)))))
+           ((or (string-prefix-p text prefix)
+                (and (string-prefix-p prefix text) (< (length text) 65536)))
+            (setf (mevedel-execution-process--child-pipeline-buffer child) text)
+            (setq text ""))
+           (t (push (substring text 0 1) pieces)
+              (setq text (substring text 1)))))
+        (apply #'concat (nreverse (cons text pieces)))))))
+
 (defun mevedel-execution-process--consume-output (child chunk &optional stderr)
   "Append bounded raw output CHUNK to CHILD and notify its consumer.
 STDERR selects the separate consumer and bypasses stdout marker filtering."
@@ -495,6 +533,9 @@ STDERR selects the separate consumer and bypasses stdout marker filtering."
                 (unless stderr
                   (mevedel-execution-process--child-filter-function child)))
                (chunk (or (if filter (funcall filter child chunk) chunk) ""))
+               (chunk (if stderr chunk
+                        (mevedel-execution-process--filter-pipeline-marker
+                         child chunk)))
                (appended (mevedel-execution-process--append-spool child chunk))
                (retained (car appended)))
           (when-let* ((function
@@ -705,6 +746,10 @@ deferred work, so that case deletes immediately rather than leak."
                 ((memq (process-status process) '(exit signal))))
       (while (accept-process-output process 0.01 nil 1)))
     (mevedel-execution-process--drain-stderr child)
+    (when-let* ((pending (mevedel-execution-process--child-pipeline-buffer child)))
+      (setf (mevedel-execution-process--child-pipeline-marker child) nil
+            (mevedel-execution-process--child-pipeline-buffer child) nil)
+      (mevedel-execution-process--consume-output child pending))
     (setf (mevedel-execution-process--child-finished-p child) t
           (mevedel-execution-process--child-exit-code child) status)
     (let* ((path (mevedel-execution-process--child-spool-path child))

@@ -22,6 +22,27 @@
     (while (not (funcall predicate))
       (accept-process-output nil 0.02))))
 
+(mevedel-deftest mevedel-execution-process--filter-pipeline-marker ()
+  ,test
+  (test)
+  :doc "removes a split private frame without changing surrounding bytes"
+  (let ((child (mevedel-execution-process--child-create :pipeline-marker "token")))
+    (should (equal "before"
+                   (mevedel-execution-process--filter-pipeline-marker
+                    child "before\036tok")))
+    (should (equal "" (mevedel-execution-process--filter-pipeline-marker
+                      child "en:7 141")))
+    (should (equal "after" (mevedel-execution-process--filter-pipeline-marker
+                           child " 0\037after")))
+    (should (equal '(7 141 0)
+                   (plist-get (mevedel-execution-process-status child)
+                              :pipeline-exit-codes))))
+  :doc "preserves unrelated and malformed frames"
+  (let* ((child (mevedel-execution-process--child-create :pipeline-marker "token"))
+         (text "a\036other:7 0\037b\036token:bad\037c"))
+    (should (equal text (mevedel-execution-process--filter-pipeline-marker child text)))
+    (should-not (mevedel-execution-process--child-pipeline-exit-codes child))))
+
 (mevedel-deftest mevedel-execution-process--direct-async-p ()
   ,test
   (test)

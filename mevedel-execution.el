@@ -351,6 +351,8 @@ row redraws a second.")
   recoverable-output-bytes
   recoverable-output-path
   output-tail
+  pipeline-facts-function
+  pipeline-marker
   permission-approvals
   preparation-cancel
   progress-timer
@@ -943,6 +945,7 @@ TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
    :workdir (mevedel-execution--record-workdir record)
    :tty (mevedel-execution--record-tty-p record)
    :spool-path spool-path
+   :pipeline-marker (mevedel-execution--record-pipeline-marker record)
    :filter-function
    (lambda (_child chunk)
      (mevedel-execution--managed-filter record chunk))
@@ -1297,7 +1300,18 @@ execution's progress cost."
                          (mevedel-execution--record-exit-code record)))
          (termination (mevedel-execution--termination record))
          (outcome-function
-          (mevedel-execution--record-outcome-function record)))
+          (mevedel-execution--record-outcome-function record))
+         (pipeline-codes (plist-get child-status :pipeline-exit-codes))
+         (pipeline-facts
+          (cond
+           ((and finished (null pipeline-codes)
+                 (mevedel-execution--record-pipeline-marker record))
+            '(:pipeline-classification unavailable))
+           ((and finished (> (length pipeline-codes) 1))
+               (condition-case nil
+                   (funcall (mevedel-execution--record-pipeline-facts-function record)
+                            pipeline-codes)
+                 (error '(:pipeline-classification unavailable)))))))
     (list :kind (or (mevedel-execution--record-kind record) 'bash)
           :description (mevedel-execution--record-description record)
           :expires-at (mevedel-execution--record-expires-at record)
@@ -1312,9 +1326,16 @@ execution's progress cost."
           :state (mevedel-execution--lifecycle-state record)
           :termination termination
           :exit-code exit-code
+          :pipeline-exit-codes (and (> (length pipeline-codes) 1) pipeline-codes)
+          :pipeline-failed-stages (plist-get pipeline-facts :pipeline-failed-stages)
+          :pipeline-classification (plist-get pipeline-facts :pipeline-classification)
           :outcome (and finished
-                        (mevedel-execution--resolve-outcome
-                         outcome-function exit-code termination))
+                        (or (and (eq termination 'exited)
+                                 (or (plist-get pipeline-facts :pipeline-failed-stages)
+                                     (equal exit-code (car (last pipeline-codes))))
+                                 (plist-get pipeline-facts :pipeline-outcome))
+                            (mevedel-execution--resolve-outcome
+                             outcome-function exit-code termination)))
           :wall-time-seconds
           (- (float-time) (mevedel-execution--record-started-at record))
           :output-bytes (mevedel-execution--record-output-bytes record)
@@ -2114,6 +2135,7 @@ process-filter appends use the published path."
               writable-roots temporary-root
               additional-permissions sandbox-permissions artifact-directory
               outcome-function read-only-p tool-args tool-use-id tty
+              pipeline-marker pipeline-facts-function
               permission-approvals (kind 'bash) description (timeout-ms 300000)
               (yield-time-ms 10000))
   "Start managed Bash COMMAND and call CALLBACK at terminal or yield.
@@ -2125,6 +2147,8 @@ match the one-shot interface; TEMPORARY-ROOT is the writable temporary
 directory that protected-path discovery skips.  ARTIFACT-DIRECTORY owns the
 spool after yield.
 OUTCOME-FUNCTION derives canonical outcome from exit code and termination.
+PIPELINE-MARKER identifies a private final-pipeline status frame;
+PIPELINE-FACTS-FUNCTION derives final pipeline facts from its exit codes.
 READ-ONLY-P selects the overlapping reader lane; all other calls are exclusive.
 DATA-BUFFER and TOOL-USE-ID identify the authoritative transcript row.
 TOOL-ARGS correlates immutable events with the original call.
@@ -2207,6 +2231,8 @@ and uses DESCRIPTION and TIMEOUT-MS for its root-owned event lifetime."
               :tool-args tool-args
               :tool-use-id tool-use-id)
              :outcome-function outcome-function
+             :pipeline-marker pipeline-marker
+             :pipeline-facts-function pipeline-facts-function
              :permission-approvals
              (mevedel-execution--copy-value permission-approvals)
              :mutating-p (not read-only-p)

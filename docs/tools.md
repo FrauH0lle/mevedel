@@ -1370,8 +1370,33 @@ Progress and completion refresh the table in place, and terminal rows
 disappear instead of becoming tombstones.
 
 Terminal facts preserve the raw exit code and derive a separate `outcome`.
-Zero is `success`. Exit one is `no-match` for one proven simple `grep` or `rg`
-command, `different` for `diff`, and `false` for `test` or `[`. These outcomes
+For a final outer pipeline, Bash also reports `pipeline_exit_codes` and
+one-based `pipeline_failed_stages`. A genuine stage failure makes `outcome`
+`failure` even when the last stage and raw `exit_code` are zero; a short line
+identifies the failed stages. Nonfinal SIGPIPE (141) is benign when a downstream
+stage succeeded. Each identifiable stage uses the same expected-status rules
+as a simple command, so `grep` no-match and `diff` differences remain ordinary
+observations in pipelines.
+
+The snapshot runs after the source returns, without enabling `pipefail` or
+installing traps. This preserves `yes | head && echo continued` and caller
+shell options. Source that visibly installs traps or runs dynamic shell code
+is left untouched, preserving the pipeline context available to user EXIT
+traps. EXIT traps installed by startup files or inherited shell functions
+are not detected; the appended snapshot can change the `PIPESTATUS` they see.
+Explicit `exit`/`exec`, early shell exits, and pipelines hidden inside compound
+commands can bypass or collapse the snapshot. Classification requires a sole
+syntactic pipeline at the end of the source. Multiple pipelines, including
+sequential or conditional lists, make stage identity ambiguous: captured exit
+codes remain visible, but
+`pipeline_classification="unavailable"` leaves the shell outcome unchanged.
+This is final-pipeline observation, not an audit of every earlier command.
+Both local and TRAMP execution explicitly launch Bash, independent of the
+target's default login shell; a missing Bash executable is a launch failure.
+
+Without a classified pipeline, zero is `success`. Exit one is `no-match` for
+one proven simple `grep` or `rg` command, `different` for `diff`, and `false`
+for `test` or `[`. These outcomes
 are successful tool observations rather than execution errors. Exit codes two
 and above, non-exit termination, path-qualified executables, and compound,
 dangerous, complex, or unsupported analysis fall back to `failure`. Command

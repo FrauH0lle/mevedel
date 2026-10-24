@@ -322,6 +322,9 @@ operation rather than a successful or semantic non-error result."
                      (:state . "state")
                      (:termination . "termination")
                      (:exit-code . "exit_code")
+                     (:pipeline-exit-codes . "pipeline_exit_codes")
+                     (:pipeline-failed-stages . "pipeline_failed_stages")
+                     (:pipeline-classification . "pipeline_classification")
                      (:outcome . "outcome")
                      (:wall-time-seconds . "wall_time_seconds")
                      (:output-bytes . "output_bytes")
@@ -337,6 +340,7 @@ operation rather than a successful or semantic non-error result."
                     (cond
                      ((eq value t) "true")
                      ((null value) "false")
+                     ((listp value) (mapconcat #'number-to-string value " "))
                      ;; A model reads a calendar time, not epoch seconds.
                      ((eq (car entry) :expires-at)
                       (format-time-string "%FT%T%z" value))
@@ -403,6 +407,39 @@ operation rather than a successful or semantic non-error result."
      ((and (equal exit-code 1) exit-one-outcome) exit-one-outcome)
      (t 'failure))))
 
+(defun mevedel-tool-exec--pipeline-source (source marker &optional original-source)
+  "Append a final outer pipeline snapshot to SOURCE using private MARKER.
+No traps or shell options change.  Explicit exit/exec may bypass the snapshot.
+Sources that can install EXIT traps are left untouched.  ORIGINAL-SOURCE,
+when non-nil, supplies the authored source before trusted Git hardening."
+  (if (not (mevedel-bash-analysis-snapshot-safe-p (or original-source source)))
+      source
+    (let ((variable (concat "__mevedel_" marker)))
+      (concat source "\n"
+              variable "=$? " variable "_stages=(\"${PIPESTATUS[@]}\")\n"
+              "builtin printf -v " variable "_frame '%s ' \"${" variable "_stages[@]}\"\n"
+              "builtin printf '\\036" marker ":%s\\037' \"$" variable "_frame\"\n"
+              "exit \"$" variable "\""))))
+
+(defun mevedel-tool-exec--pipeline-facts (source codes)
+  "Return final pipeline facts for SOURCE and observed CODES.
+Expected grep/diff/test statuses retain their ordinary Bash outcomes.
+Upstream SIGPIPE is benign when a downstream stage succeeded."
+  (let* ((stages (mevedel-bash-analysis-final-pipeline source (length codes)))
+         (index 0)
+         failures outcome)
+    (if (null stages)
+        '(:pipeline-classification unavailable)
+      (dolist (code codes)
+        (setq outcome (mevedel-tool-exec--bash-outcome (pop stages) code 'exited))
+        (unless (or (memq outcome '(success no-match different false))
+                    (and (= code 141) (memq 0 (nthcdr (1+ index) codes))))
+          (push (1+ index) failures))
+        (setq index (1+ index)))
+      (list :pipeline-failed-stages (nreverse failures)
+            :pipeline-outcome (if failures 'failure outcome)
+            :pipeline-classification 'observed))))
+
 (defun mevedel-tool-exec--observation-envelope
     (observation &optional suppress-sandbox-disclosure-p force-success-p)
   "Return a handler envelope for managed OBSERVATION.
@@ -419,7 +456,12 @@ stopped command's outcome."
                (eq (plist-get facts :outcome) 'failure)))
          (body (if error-data
                    (format "Failed to start process: %s" error-data)
-                 output))
+                 (concat output
+                         (when-let* ((stages (plist-get facts :pipeline-failed-stages)))
+                           (format "\nPipeline failed at stage(s) %s (exit codes: %s)."
+                                   (mapconcat #'number-to-string stages ", ")
+                                   (mapconcat #'number-to-string
+                                              (plist-get facts :pipeline-exit-codes) " "))))))
          (with-sandbox
           (mevedel-tool-exec--sandbox-disclosure
            body observation suppress-sandbox-disclosure-p failed-p))
@@ -623,17 +665,21 @@ CALLBACK receives the envelope.  ARGS has :command; KIND may be `monitor'."
            (session (mevedel-queue--current-session))
            (workdir (mevedel-tool-exec-permission-default-directory))
            (temporary-root (mevedel-tool-exec--sandbox-temporary-root workdir))
+           (pipeline-marker (make-temp-name "pipeline_"))
            (launch-command
             (if read-only-p
                 ;; -p suppresses startup files and inherited shell functions
                 ;; and shell-option variables.  It grants no OS authority.
                 (list "bash" "--noprofile" "--norc" "-p" "-c"
-                      (mevedel-bash-analysis-prepare-read-only
-                       command analysis
-                       (mevedel-execution-target-native-path
-                        (and session (mevedel-session-execution-target session))
-                        temporary-root)))
-              (list "bash" "-lc" command)))
+                      (mevedel-tool-exec--pipeline-source
+                       (mevedel-bash-analysis-prepare-read-only
+                        command analysis
+                        (mevedel-execution-target-native-path
+                         (and session (mevedel-session-execution-target session))
+                         temporary-root))
+                       pipeline-marker command))
+              (list "bash" "-lc"
+                    (mevedel-tool-exec--pipeline-source command pipeline-marker))))
            (sandbox-request
             (mevedel-tool-exec-permission-effective-sandbox-request
              args "Bash" command nil
@@ -662,6 +708,9 @@ CALLBACK receives the envelope.  ARGS has :command; KIND may be `monitor'."
        :tool-use-id (mevedel-pipeline-active-tool-use-id)
        :permission-approvals (mevedel-pipeline-active-permission-approvals)
        :command launch-command
+       :pipeline-marker pipeline-marker
+       :pipeline-facts-function
+       (lambda (codes) (mevedel-tool-exec--pipeline-facts command codes))
        :workdir workdir
        :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
        :temporary-root temporary-root

@@ -702,6 +702,52 @@ The result contains `:class', `:commands', `:parser', `:resources', and
                             (plist-get result :reasons))))))
     (mevedel-bash-analysis--heuristic source)))
 
+(defun mevedel-bash-analysis-snapshot-safe-p (source)
+  "Return non-nil when SOURCE cannot visibly install a caller EXIT trap.
+Decline dynamic shell code and function definitions rather than guessing.
+Startup-file and inherited-function traps are outside this source proof."
+  (pcase-let* ((`(,segments ,reasons) (mevedel-bash-analysis--scan-segments source))
+               (`(,commands ,argv-reasons) (mevedel-bash-analysis--argv segments)))
+    (and (not (string-match-p "[$`{}]" source))
+         (null argv-reasons)
+         ;; A leading redirection can hide the executable from candidate
+         ;; normalization (for example `2>/dev/null trap ...').
+         (cl-every (lambda (argv)
+                     (and (not (string-match-p "[<>]" (car argv)))
+                          (not (member (car argv) '("!" "time")))))
+                   commands)
+         (cl-every
+          (lambda (reason)
+            (equal reason
+                   "Expansion, substitution, grouping, or redirection is unsupported"))
+          reasons)
+         (not (cl-some
+               (lambda (candidate)
+                 (string-match-p
+                  "\\`\\(?:trap\\|eval\\|exec\\|source\\|\\.\\|builtin\\|command\\|alias\\|shopt\\|mapfile\\|readarray\\)\\(?:[[:space:]]\\|\\'\\)"
+                  candidate))
+               (plist-get (mevedel-bash-analysis-analyze source) :candidates))))))
+
+(defun mevedel-bash-analysis-final-pipeline (source count)
+  "Return stage analyses for SOURCE's sole final COUNT-stage outer pipeline.
+Return nil when another pipeline could have supplied the observed statuses,
+as in conditional lists.  Quoted pipe characters are not connectors."
+  (pcase-let* ((`(,segments ,_reasons ,spans)
+                (mevedel-bash-analysis--scan-segments
+                 (mevedel-bash-analysis--normalize-line-continuations source) t))
+               (source (mevedel-bash-analysis--normalize-line-continuations source))
+               (pipes 0)
+               (trailing 0))
+    (while (cdr spans)
+      (let ((connector (string-trim
+                        (substring source (cdar spans) (caadr spans)))))
+        (if (member connector '("|" "|&"))
+            (setq pipes (1+ pipes) trailing (1+ trailing))
+          (setq trailing 0)))
+      (setq spans (cdr spans)))
+    (when (and (> count 1) (= pipes (1- count)) (= trailing pipes))
+      (mapcar #'mevedel-bash-analysis-analyze (last segments count)))))
+
 (provide 'mevedel-bash-analysis)
 
 ;;; mevedel-bash-analysis.el ends here

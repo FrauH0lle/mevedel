@@ -227,6 +227,28 @@ before returning."
                    (with-temp-buffer
                      (insert-file-contents bash-file)
                      (buffer-string))))
+    ;; The target login shell is irrelevant: Bash always launches explicit
+    ;; `bash' argv, including the final status snapshot, on every transport.
+    (dolist (case '(("false | cat" "0" "failure" "1 0")
+                    ("yes | head -1" "0" "success" "141 0")
+                    ("(exit 7) | yes | head -1" "0" "failure" "7 141 0")
+                    ("yes | head -1 && printf continued" "0" "success" nil)
+                    ("trap 'printf user-exit-trap' EXIT; false | cat"
+                     "0" "success" nil)
+                    ("trap 'exit $((40 + PIPESTATUS[0]))' EXIT; false | cat"
+                     "41" "failure" nil)))
+      (let ((result
+             (test-mevedel-execution-remote--run-tool
+              session "Bash" (list :command (car case)))))
+        (should (string-search (format "exit_code=\"%s\"" (nth 1 case)) result))
+        (should (string-search (format "outcome=\"%s\"" (nth 2 case)) result))
+        (when (nth 3 case)
+          (should (string-search (format "pipeline_exit_codes=\"%s\"" (nth 3 case))
+                                 result)))
+        (when (string-search "continued" (car case))
+          (should (string-prefix-p "y\ncontinued" result)))
+        (when (string-search "user-exit-trap" (car case))
+          (should (string-prefix-p "user-exit-trap" result)))))
     (let ((eval-result
            (test-mevedel-execution-remote--run-tool
             session "Eval"

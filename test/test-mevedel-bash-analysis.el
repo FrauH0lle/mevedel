@@ -18,6 +18,44 @@
 ;;
 ;;; Analysis
 
+(mevedel-deftest mevedel-bash-analysis-snapshot-safe-p ()
+  ,test
+  (test)
+  :doc "admits ordinary final pipelines, including stderr redirection"
+  (should (mevedel-bash-analysis-snapshot-safe-p "npx test 2>&1 | tail -2"))
+  (should (mevedel-bash-analysis-snapshot-safe-p "(exit 7) | yes | head"))
+  :doc "declines traps, dynamic shell code, and function definitions"
+  (dolist (source '("trap 'echo done' EXIT; false | cat"
+                    "tr''ap 'echo done' EXIT; false | cat"
+                    "builtin trap 'echo done' EXIT; false | cat"
+                    "2>/dev/null trap 'echo done' EXIT; false | cat"
+                    "! 2>/dev/null trap 'echo done' EXIT; false | cat"
+                    "eval 'false | cat'"
+                    "exec > output; false | cat"
+                    "mapfile -C 'trap done EXIT' -c 1 < input; false | cat"
+                    "source hooks; false | cat"
+                    ". hooks; false | cat"
+                    "f() { false | cat; }; f"
+                    "$runner | tail -2"))
+    (should-not (mevedel-bash-analysis-snapshot-safe-p source))))
+
+(mevedel-deftest mevedel-bash-analysis-final-pipeline ()
+  ,test
+  (test)
+  :doc "identifies a sole final outer pipeline without mistaking quoted connectors"
+  (dolist (source '("grep needle file | head"
+                    "printf 'x|y'; grep needle file | head"
+                    "true && grep needle file | head"))
+    (should (equal '(("grep" "needle" "file") ("head"))
+                   (mapcar (lambda (stage) (car (plist-get stage :commands)))
+                           (mevedel-bash-analysis-final-pipeline source 2)))))
+  :doc "declines earlier or ambiguous pipeline identities"
+  (dolist (source '("false | cat || grep absent | cat"
+                    "grep absent | cat || false | cat"
+                    "grep absent | cat || true"
+                    "grep absent | cat; printf done"))
+    (should-not (mevedel-bash-analysis-final-pipeline source 2))))
+
 (mevedel-deftest mevedel-bash-analysis-analyze ()
   ,test
   (test)
