@@ -492,8 +492,11 @@ together; a test flushes at once instead of waiting for the pair."
   (test)
   :doc "renders and continues the stream in the batch's own timer"
   (mevedel-gptel-stream-bridge-test--with-paced-stream
-    (let ((events nil)
-          (timers (length timer-list)))
+    (let* ((events nil)
+           (unrelated-fired nil)
+           ;; An unrelated timer can expire during the event-loop waits.
+           (unrelated (run-at-time 0 nil (lambda () (setq unrelated-fired t))))
+           (timers (copy-sequence timer-list)))
       (cl-labels ((orig (response _info &optional _raw)
                     (push (list 'insert response) events)
                     ;; What the view's stream hook does during the flush.
@@ -515,6 +518,10 @@ together; a test flushes at once instead of waiting for the pair."
           (mevedel-gptel-stream-bridge--pace-reading process "data: {}\n\n")
           (should (eq 'stop (mevedel-gptel-stream-bridge-test--await-status
                              process 'stop)))
+          (with-timeout (2 nil)
+            (while (not unrelated-fired) (accept-process-output nil 0.01)))
+          (should unrelated-fired)
+          (should-not (memq unrelated timer-list))
           (mevedel-gptel-stream-bridge-test--batch-falls-due process)
           (let (messages)
             (mevedel-test--with-captured-diagnostics messages
@@ -524,7 +531,8 @@ together; a test flushes at once instead of waiting for the pair."
           (should (equal '(second render (insert "chunk")) events))
           (should-not mevedel-transport--paused)
           (should-not (process-get process 'mevedel-transport--resume-timer))
-          (should (= timers (length timer-list)))
+          ;; Existing timers may have fired; only newly pending timers leak.
+          (should-not (cl-set-difference timer-list timers :test #'eq))
           (should (eq 'run (mevedel-gptel-stream-bridge-test--await-status
                             process 'run)))))))
 
@@ -562,7 +570,7 @@ together; a test flushes at once instead of waiting for the pair."
   (mevedel-gptel-stream-bridge-test--with-data-buffer
     (let ((info (list :buffer data-buf))
           (mevedel-gptel-stream-bridge-insert-batch-delay 30)
-          (timers (length timer-list))
+          (timers (copy-sequence timer-list))
           observed)
       (with-current-buffer data-buf
         (setq-local
@@ -588,7 +596,7 @@ together; a test flushes at once instead of waiting for the pair."
             (should-not observed)
             (mevedel-gptel-stream-bridge--flush-batch-due info)
             (should (equal observed "first second"))
-            (should (= timers (length timer-list))))
+            (should-not (cl-set-difference timer-list timers :test #'eq)))
         (when-let* ((timer (plist-get info :mevedel-stream-insert-timer)))
           (cancel-timer timer))))))
 

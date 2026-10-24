@@ -687,6 +687,9 @@ must not need a load-order recipe.
   execution registry, no workspace registry entry, no live timer, no target
   connection, and no file outside its own temporary directory. Leaked state
   makes later tests slow, noisy, and order-dependent.
+  Timer cleanup assertions across event-loop waits compare timer identities,
+  not global counts: pre-existing timers may fire while the test waits. Snapshot
+  the timer objects and assert that no newly pending timers remain.
 - **Stub readiness**: explicitly `require` a repository function's defining
   feature before stubbing its function cell, either at file top level or before
   the stubbing form in the test. A lazy load can overwrite a stub and its unwind
