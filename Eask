@@ -35,6 +35,7 @@
 
 (script "check" "sh scripts/check.sh")
 (script "test" "python3 test/run_tests.py")
+(script "graphical-check" "eask clean elc && eask emacs --batch -L . -L test -l test/graphical-check.el --funcall mevedel-graphical-check-run --")
 (script "bench-gate" "eask emacs --batch -L . -L benchmark -l benchmark/mevedel-bench-runner.el -- gate")
 (script "bench-twin" "eask emacs --batch -L . -L benchmark -l benchmark/mevedel-bench-runner.el -- twin")
 

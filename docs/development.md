@@ -318,6 +318,79 @@ tests exercise compiled behavior before loading their ordinary test fixtures.
 Required dependencies loaded from source can also hide missing compile-time
 imports; use compiled dependency copies when testing that boundary.
 
+### Graphical view checks
+
+For view presentation changes, run the maintained graphical check from the
+checkout being tested, after the worktree bootstrap:
+
+```bash
+npx @emacs-eask/cli run script graphical-check
+# Grammars outside the system library path must be supplied explicitly:
+npx @emacs-eask/cli run script graphical-check -- --grammar-dir /path/to/tree-sitter
+# Optional new artifact directory and graphical-child deadline (default 120s):
+npx @emacs-eask/cli run script graphical-check -- --grammar-dir /path/to/tree-sitter --output .scratch/view-check --timeout 90
+```
+
+The command cleans stale bytecode itself, obtains dependency load paths from
+Eask, then starts a **separate graphical `emacs -Q`**. It never loads checkout
+code into the running editor. The child has temporary HOME, all XDG roots
+(including runtime), and native cache; JIT native compilation is disabled to
+avoid fresh-cache background compilation. The parent removes this private
+state on success, failure, or timeout. Existing output directories are rejected.
+
+Prerequisites are a graphical Emacs build with Cairo PNG/PDF frame export,
+SVG image support, DejaVu Sans and DejaVu Sans Mono, and an accessible active
+Wayland or X display. The preflight reports missing display variables,
+unavailable Wayland sockets, inaccessible displays and missing export support;
+a bounded parent process terminates a hung graphical child. A relative Wayland
+socket is resolved against the original runtime directory before isolation;
+X authentication is preserved separately from HOME.
+
+Both **`markdown` and `markdown-inline` tree-sitter grammars** must load in the
+isolated child. Missing grammars are a hard failure, not silently unfontified
+Markdown or a prompt to download code. Install them separately (for example
+with Emacs's `M-x treesit-install-language-grammar`), then pass the directory
+containing their shared libraries with `--grammar-dir`. Repeat the option for
+multiple directories. The runner does not read personal Emacs configuration
+or automatically search its custom grammar directories.
+
+The smoke fixture builds a real paired transcript/view through production
+setup and full rendering, including Markdown and a table, and checks an active
+multiline `>` composer draft survives. It explicitly enables and forces font
+lock, checks the assistant's native Markdown bold face after redisplay, and
+exports the frame. Fixture buffers have visible names: Emacs refuses to enable font
+lock for internal names beginning with a space. No face-copying workaround is
+needed. The existing graphical table and native viewport geometry ERT suites
+then run in that same graphical process. Unexpected results **or skipped
+tests** fail the command, so missing fonts or image support cannot count as
+graphical coverage.
+
+Artifacts default to a fresh `.scratch/graphical-check/TIMESTAMP/` directory:
+`view.png` and `view.pdf` are actual Emacs frame exports; `view.txt` records the
+rendered fixture text; `ert.log` and `graphical.log` retain test/launch diagnostics;
+`summary.json` records the checkout and loaded view library,
+Emacs/window-system/font, required grammars, grammar search paths and test
+counts. The fixture rejects view code loaded from another checkout. Inspect
+the image when assessing a visual change: green
+geometry assertions alone do not establish visual quality.
+
+This is a static rendering/geometry check, **not** a frame-rate, CPU or compositor
+presentation benchmark. Exported frames and `redisplay` do not prove distinct
+presented ticks; do not use this command to claim latency gains or rule out
+coalesced redraws. Timing work needs a warmed fixture, evidence of actual
+presentation and a display that stays active. Desktop locks or powered-down
+outputs can suppress presentation; for unattended timing, use an isolated
+compositor with locking disabled and verify its frame delivery separately.
+Pointer/hover automation remains outside this command. It is opt-in locally,
+not part of hosted CI or the ordinary `check` script.
+
+The batch-safe runner regression tests are included in the normal suite:
+
+```bash
+npx @emacs-eask/cli clean elc
+npx @emacs-eask/cli test ert test/test-mevedel-graphical-check.el
+```
+
 ### View allocation gate
 
 ```bash
