@@ -911,6 +911,25 @@ A synchronous result must come with exactly one matching acknowledgement."
     (should-not (equal source (car (last (plist-get captured :command)))))
     (should (string-match-p "--no-optional-locks"
                             (car (last (plist-get captured :command))))))
+  :doc "standalone assignments launch intact rather than failing read-only preparation"
+  (progn
+    (skip-unless (treesit-language-available-p 'bash))
+    (let* ((source "IFS=,; false | cat") captured)
+      (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+                 (lambda (&rest keys) (setq captured (cdr keys)))))
+        (mevedel-tool-exec-test--call-bash #'ignore (list :command source)))
+      (should captured)
+      (should-not (plist-get captured :read-only-p))
+      (should (equal '("bash" "-lc") (butlast (plist-get captured :command))))
+      (should (string-prefix-p source (car (last (plist-get captured :command)))))
+      (with-temp-buffer
+        (should (zerop (apply #'process-file (car (plist-get captured :command))
+                             nil t nil (cdr (plist-get captured :command))))))
+      ;; Removing the assignment restores the ordinary read-only launch path.
+      (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+                 (lambda (&rest keys) (setq captured (cdr keys)))))
+        (mevedel-tool-exec-test--call-bash #'ignore '(:command "false | cat")))
+      (should (plist-get captured :read-only-p))))
   :doc "launches a default call with its matching remembered profile"
   (let* ((session
           (mevedel-session--create

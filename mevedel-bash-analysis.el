@@ -763,20 +763,23 @@ the segments whenever the grammar rejects the program.  Discarding them
 would leave `:segments', `:candidates', and `:resources' empty for every
 unsupported construct, and those are the surfaces protected-path checks
 and explicit deny rules match against: an environment assignment in front
-of a denied command would otherwise present nothing to match."
+of a denied command would otherwise present nothing to match.  Even supported
+nodes must retain every scanner segment: a standalone assignment is not a
+command node and must not disappear before read-only classification."
   (with-temp-buffer
     (insert source)
     (pcase-let* ((`(,scan-segments ,scan-reasons)
                   (mevedel-bash-analysis--scan-segments source))
                  (parser (treesit-parser-create 'bash))
                  (root (treesit-parser-root-node parser))
+                 (grammar-segments
+                  (mevedel-bash-analysis--treesit-command-texts root))
                  (supported
                   (and (null scan-reasons)
-                       (mevedel-bash-analysis--treesit-supported-p root)))
+                       (mevedel-bash-analysis--treesit-supported-p root)
+                       (equal scan-segments grammar-segments)))
                  (segments
-                  (if supported
-                      (mevedel-bash-analysis--treesit-command-texts root)
-                    scan-segments))
+                  (if supported grammar-segments scan-segments))
                  (`(,commands ,argv-reasons)
                   (mevedel-bash-analysis--argv segments))
                  (reasons (append

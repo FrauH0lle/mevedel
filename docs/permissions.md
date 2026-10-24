@@ -805,6 +805,10 @@ preserving shell connectors, quoting and short-circuit behavior. Original
 authored commands remain the permission/hook/audit facts; prepared launch
 text is not new user authority. Parser/preparation disagreement refuses
 launch. Unknown commands and unsupported syntax remain conservative.
+Tree-sitter extraction must retain every scanner segment before classification.
+Standalone assignments such as `IFS=,; false | cat` remain complex, preserving
+the assignment and using ordinary authorized launch instead of entering
+read-only preparation with a silently shortened command list.
 Ripgrep receives `--no-config`, so inherited `RIPGREP_CONFIG_PATH` cannot inject
 helper-enabling options absent from the analyzed command.
 Bash keeps its specialized permission entry and controls, but an `ask` passes

@@ -429,7 +429,8 @@ cat file"
                    source '(:class unknown))))
   :doc "comments and effectful compounds never enter preparation"
   (dolist (source '("git status # comment" "git status && touch file"
-                    "git diff >out" "git log --output=out"))
+                    "git diff >out" "git log --output=out"
+                    "IFS=,; false | cat" "IFS=,; git status --short"))
     (let ((analysis (mevedel-bash-analysis-analyze source)))
       (should-not (eq 'read-only (plist-get analysis :class)))
       (should-error (mevedel-bash-analysis-prepare-read-only source analysis)))))
@@ -492,6 +493,11 @@ cat file"
     ;; either rejects outright or, for single-bracket predicates, must
     ;; accept exactly as the scanner does.
     (dolist (source '("NODE_ENV=test npm run test"
+                      "IFS=,; false | cat"
+                      "IFS=,; git status --short"
+                      "git status --short; IFS=,"
+                      "IFS=,"
+                      "A=1 B=2"
                       "DOCKER_HOST=tcp://example docker ps"
                       "FOO='bar baz' rm file"
                       "A+=1 cmd"
