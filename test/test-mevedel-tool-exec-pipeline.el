@@ -58,6 +58,8 @@
                           ("(exit 7) | yes | head -1" 0 failure (7 141 0))
                           ("trap 'printf user-exit-trap' EXIT; false | cat" 0 success nil)
                           ("trap 'exit 42' EXIT; true | cat" 42 failure nil)
+                          ("test -v a[x]; false | cat" 42 failure nil)
+                          ("[ -v a[x] ]; false | cat" 42 failure nil)
                           ("trap 'exit $((40 + PIPESTATUS[0]))' EXIT; false | cat" 41 failure nil)
                           ("2>/dev/null trap '(( PIPESTATUS[0] )) && exit 41' EXIT; false | cat"
                            41 failure nil)
@@ -71,7 +73,12 @@
                           ("false | cat; exec true" 0 success nil)
                           ("exec > redirected; false | cat" 0 success nil)
                           ("printf '\\036'" 0 success nil)))
-            (let (result)
+            ;; Arithmetic subscript evaluation can install a caller trap from
+            ;; environment data even when the command has no dollar syntax.
+            (let ((process-environment
+                   (cons "x=a[${ trap \"exit 42\" EXIT; printf 0; }]"
+                         process-environment))
+                  result)
               (mevedel-pipeline-run-tool-outcome
                (mevedel-tool-ensure "Bash")
                (lambda (value) (setq result value))

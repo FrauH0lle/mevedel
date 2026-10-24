@@ -1388,6 +1388,10 @@ shell options. Source that visibly installs traps or runs dynamic shell code
 is left untouched, preserving the pipeline context available to user EXIT
 traps. EXIT traps installed by startup files or inherited shell functions
 are not detected; the appended snapshot can change the `PIPESTATUS` they see.
+The proof also declines arithmetic, subscript syntax, variable-targeting or
+code-evaluating builtins (including `test`, `[`, `let`, and `declare`), and
+`printf -v` or `%n` formats: these can evaluate a subscript taken from the
+environment even without visible substitution syntax in the source.
 Explicit `exit`/`exec`, early shell exits, and pipelines hidden inside compound
 commands can bypass or collapse the snapshot. Classification requires a sole
 syntactic pipeline at the end of the source. Multiple pipelines, including

@@ -866,13 +866,19 @@ Decline dynamic shell code and function definitions rather than guessing.
 Startup-file and inherited-function traps are outside this source proof."
   (pcase-let* ((`(,segments ,reasons) (mevedel-bash-analysis--scan-segments source))
                (`(,commands ,argv-reasons) (mevedel-bash-analysis--argv segments)))
-    (and (not (string-match-p "[$`{}]" source))
+    (and (not (string-match-p "[$`{}]\\|\\[\\|\\]\\|((" source))
          (null argv-reasons)
          ;; A leading redirection can hide the executable from candidate
          ;; normalization (for example `2>/dev/null trap ...').
          (cl-every (lambda (argv)
                      (and (not (string-match-p "[<>]" (car argv)))
-                          (not (member (car argv) '("!" "time")))))
+                          (not (member (car argv) '("!" "time")))
+                          (or (not (equal (car argv) "printf"))
+                              (not (cl-some
+                                    (lambda (arg)
+                                      (or (string-prefix-p "-v" arg)
+                                          (string-match-p "%[-+ #0-9.*hlLqjzt]*n" arg)))
+                                    (cdr argv))))))
                    commands)
          (cl-every
           (lambda (reason)
@@ -882,7 +888,7 @@ Startup-file and inherited-function traps are outside this source proof."
          (not (cl-some
                (lambda (candidate)
                  (string-match-p
-                  "\\`\\(?:trap\\|eval\\|exec\\|source\\|\\.\\|builtin\\|command\\|alias\\|shopt\\|mapfile\\|readarray\\)\\(?:[[:space:]]\\|\\'\\)"
+                  "\\`\\(?:trap\\|eval\\|exec\\|source\\|\\.\\|builtin\\|command\\|alias\\|shopt\\|mapfile\\|readarray\\|test\\|\\[\\|let\\|declare\\|typeset\\|local\\|readonly\\|unset\\|read\\|getopts\\|wait\\|enable\\|bind\\|fc\\|compgen\\|complete\\)\\(?:[[:space:]]\\|\\'\\)"
                   candidate))
                (plist-get (mevedel-bash-analysis-analyze source) :candidates))))))
 

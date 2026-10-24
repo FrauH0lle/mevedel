@@ -56,6 +56,22 @@
                     "grep absent | cat; printf done"))
     (should-not (mevedel-bash-analysis-final-pipeline source 2))))
 
+(mevedel-deftest mevedel-bash-analysis-snapshot-safe-p/subscripts ()
+  ,test
+  (test)
+  :doc "declines implicit arithmetic and variable-targeting builtin forms"
+  (dolist (source '("test -v a[x]; false | cat" "[ -v a[x] ]; false | cat"
+                    "test -R a; false | cat" "[[ -v a[x] ]]; false | cat"
+                    "(( x )); false | cat" "let x; false | cat"
+                    "declare -i x; false | cat" "unset a[x]; false | cat"
+                    "printf -v a[x] %s value; false | cat"
+                    "printf %n a; false | cat" "printf '%1$n' a; false | cat"
+                    "printf '%+1n' a; false | cat" "printf '%1n' a; false | cat"
+                    "printf '%ln' a; false | cat" "printf '%hn' a; false | cat"
+                    "printf '%lln' a; false | cat"))
+    (should-not (mevedel-bash-analysis-snapshot-safe-p source)))
+  (should (mevedel-bash-analysis-snapshot-safe-p "printf '%s\\n' value | cat")))
+
 (mevedel-deftest mevedel-bash-analysis-analyze ()
   ,test
   (test)
