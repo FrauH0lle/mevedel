@@ -106,19 +106,20 @@
                   (source vtype &optional previous-key))
 
 ;; `mevedel-view-render'
-(declare-function mevedel-view--sandbox-summary-line
-                  "mevedel-view-render" (summary))
-(autoload 'mevedel-view--sandbox-summary-line "mevedel-view-render")
-(declare-function mevedel-view-render-add-display-properties
-                  "mevedel-view-render" (start end &optional default-vtype))
-(autoload 'mevedel-view-render-add-display-properties "mevedel-view-render")
-(declare-function mevedel-view--full-rerender "mevedel-view-render" ())
-(declare-function mevedel-view--tool-call-parse "mevedel-view-render"
-                  (data-buf seg-start seg-end &optional raw))
 (declare-function mevedel-view--execution-terminal-render-data
                   "mevedel-view-render" (data-buf tool-use-id &optional yielded-id))
+(declare-function mevedel-view--full-rerender "mevedel-view-render" ())
+(declare-function mevedel-view--sandbox-summary-line
+                  "mevedel-view-render" (summary))
+(declare-function mevedel-view--tool-call-parse "mevedel-view-render"
+                  (data-buf seg-start seg-end &optional raw))
+(declare-function mevedel-view-render-add-display-properties
+                  "mevedel-view-render" (start end &optional default-vtype))
 (autoload 'mevedel-view--execution-terminal-render-data
   "mevedel-view-render")
+(autoload 'mevedel-view--sandbox-summary-line "mevedel-view-render")
+(autoload 'mevedel-view--tool-call-parse "mevedel-view-render")
+(autoload 'mevedel-view-render-add-display-properties "mevedel-view-render")
 
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-segments-display-buffer

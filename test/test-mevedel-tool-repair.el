@@ -6,6 +6,7 @@
 
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-repair)
+(require 'mevedel-tool-repair-diagnostics)
 (require 'mevedel-agents)
 (require 'mevedel-execution-target)
 (require 'mevedel-session-durability)

@@ -8,6 +8,7 @@
 (require 'helpers
          (file-name-concat
           (file-name-directory (or load-file-name buffer-file-name)) "helpers"))
+(require 'gptel)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-collaboration-background)

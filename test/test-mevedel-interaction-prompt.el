@@ -13,6 +13,8 @@
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
+(require 'mevedel-view-render)
+(require 'mevedel-view-stream)
 (require 'helpers
          (file-name-concat
           (file-name-directory

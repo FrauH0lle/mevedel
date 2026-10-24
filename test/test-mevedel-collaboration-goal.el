@@ -12,6 +12,7 @@
 (require 'mevedel-collaboration-task)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-goal)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-codec)
 (require 'mevedel-structs)
 (require 'mevedel-tool-goal)

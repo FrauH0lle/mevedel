@@ -13,6 +13,7 @@
           "helpers"))
 (require 'mevedel-ptc-checkpoint)
 (require 'mevedel-agents)
+(require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-tool-render-data)
 

@@ -10,7 +10,9 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-markdown)
+(require 'mevedel-view-stream)
 
 (mevedel-deftest mevedel-view--realign-markdown ()
   ,test

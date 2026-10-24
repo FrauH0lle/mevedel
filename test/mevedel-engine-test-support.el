@@ -11,6 +11,7 @@
           "mevedel-session-test-support"))
 (require 'mevedel-agent-control)
 (require 'mevedel-claude-code)
+(require 'mevedel-readiness)
 
 (defconst mevedel-engine-test--owned-timer-functions
   '(mevedel-goal--scheduled-continuation
