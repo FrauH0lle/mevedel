@@ -377,6 +377,12 @@ disclosure. Its expansion is independent of the Prompt drawer, hook context,
 and ordinary system-reminder batches; attachments do not increase the reminder
 batch count.
 
+Previously user-invoked user-only skills retain their resolved invocation
+records across handoff. A redundant model-side Skill read returns the recorded
+prepared guidance in that conversation without re-running commands, injections,
+hooks or policy. It is not a new user invocation or permission grant; the
+guidance remains subject to the original task's scope and applicability.
+
 ### Worktree implementation
 
 A Worktree implementation is a [Worktree Fork](sessions.md#fork) of the

@@ -1813,6 +1813,74 @@ description: Yell
     (should-not (string-match-p "BODY MUST NOT BE RETURNED" received))
     (should (equal (list record) (mevedel-session-invoked-skills session))))
 
+  :doc "user-only guidance survives a new request without invoking preparation again"
+  (let* ((session (mevedel-skills-test--make-session))
+         (source "/tmp/resolved/SKILL.md")
+         (skill (mevedel-skill--create :name "resolved" :source-file source
+                                      :body "UNPREPARED" :context 'inline
+                                      :model-invocable-p nil))
+         (record (mevedel-skill-invocation-record--create
+                  :name "resolved" :origin 'user :role 'command :args "accepted task"
+                  :source-path source :agent-path "/root" :turn 1
+                  :prepared-body "Resolved instructions for accepted task"))
+         received)
+    (setf (mevedel-session-skills session) (list skill)
+          (mevedel-session-invoked-skills session) (list record))
+    (with-temp-buffer
+      (setq-local mevedel--session session
+                  mevedel--current-request (mevedel-request--create :session session))
+      (cl-letf (((symbol-function 'mevedel-skills--invoke-inline)
+                 (lambda (&rest _) (ert-fail "Must not prepare or invoke again"))))
+        (mevedel-skills--invoke-handler
+         (lambda (value) (setq received (test-mevedel-skills--handler-result value)))
+         '(:name "resolved")))
+      (should (string-search "Previously prepared user skill" received))
+      (should (string-search "Resolved instructions for accepted task" received))
+      (should-not (string-search "UNPREPARED" received))
+      (should-not (mevedel-request-attached-skill-records mevedel--current-request))
+      (should (equal (list record) (mevedel-session-invoked-skills session)))
+      ;; Neither a different conversation nor new arguments can reuse it.
+      (setf (mevedel-skill-invocation-record-agent-path record) "/root/other")
+      (mevedel-skills--invoke-handler
+       (lambda (value) (setq received (test-mevedel-skills--handler-result value)))
+       '(:name "resolved"))
+      (should (string-search "not model-invocable" received))
+      (setf (mevedel-skill-invocation-record-agent-path record) "/root")
+      (mevedel-skills--invoke-handler
+       (lambda (value) (setq received (test-mevedel-skills--handler-result value)))
+       '(:name "resolved" :arguments "different task"))
+      (should (string-search "not model-invocable" received))))
+
+  :doc "cold model-side reuse loads its caller-identity dependency on demand"
+  (let ((program
+         `(progn
+            (setq load-path ',load-path)
+            (require 'mevedel-skills-invoke)
+            (when (featurep 'mevedel-agent-control)
+              (error "Cold probe preloaded agent control"))
+            (let* ((skill (mevedel-skill--create
+                           :name "resolved" :source-file "/tmp/resolved/SKILL.md"
+                           :model-invocable-p nil))
+                   (record (mevedel-skill-invocation-record--create
+                            :name "resolved" :origin 'user :agent-path "/root"
+                            :source-path "/tmp/resolved/SKILL.md" :prepared-body "RESOLVED"))
+                   (session (mevedel-session--create :name "cold" :skills (list skill)
+                                                     :invoked-skills (list record)))
+                   received)
+              (with-temp-buffer
+                (setq-local mevedel--session session)
+                (mevedel-skills--invoke-handler
+                 (lambda (value) (setq received (plist-get value :result)))
+                 '(:name "resolved")))
+              (unless (and (stringp received) (string-search "RESOLVED" received))
+                (error "Cold Skill reuse failed: %S" received))
+              (princ "reused")))))
+    (with-temp-buffer
+      (should (zerop (call-process
+                      (expand-file-name invocation-name invocation-directory)
+                      nil t nil "-Q" "--batch" "--eval" (prin1-to-string program))))
+      (should (equal "reused" (buffer-string)))))
+
   :doc "required attachments lead the result and travel beside it"
   (let* ((mevedel-skills-check-for-modifications nil)
          (root (make-temp-file "mevedel-skill-attach-" t))

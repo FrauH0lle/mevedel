@@ -42,6 +42,7 @@
                   "mevedel-agent-control" (cl-x) t)
 (declare-function mevedel-agent-record-role
                   "mevedel-agent-control" (cl-x) t)
+(autoload 'mevedel-agent-control-current-path "mevedel-agent-control")
 
 ;; `mevedel-agent-conversation'
 (defvar mevedel--agent-invocation)
@@ -1443,10 +1444,33 @@ asynchronous agent and calls CALLBACK when that turn settles."
      ((and (not skip-gates)
            (eq origin 'model)
            (not (mevedel-skill-model-invocable-p skill)))
-      (mevedel-skills--invoke-error
-       skill 'disabled
-       (format "Skill '%s' is not model-invocable" skill-name)
-       callback display-callback))
+      (let* ((source (mevedel-skills-source-key (mevedel-skill-source-file skill)))
+             (path (and session (mevedel-agent-control-current-path session)))
+             (prepared
+              (and source path
+                   (cl-find-if
+                    (lambda (record)
+                      (and (eq 'user (mevedel-skill-invocation-record-origin record))
+                           (equal path (mevedel-skill-invocation-record-agent-path record))
+                           (equal source (mevedel-skills-source-key
+                                          (mevedel-skill-invocation-record-source-path record)))
+                           (or (not arguments) (equal arguments "")
+                               (equal arguments (mevedel-skill-invocation-record-args record)))
+                           (stringp (mevedel-skill-invocation-record-prepared-body record))))
+                    (reverse (mevedel-session-invoked-skills session))))))
+        (if prepared
+            ;; Re-reading resolved user guidance does not invoke the skill:
+            ;; no source reload, injections, policy, hooks or new record.
+            (mevedel-skills--invoke-done
+             skill
+             (list :status 'ok :kind 'already-prepared
+                   :body (concat "Previously prepared user skill; reuse this guidance where it remains applicable, without invoking it again.\n\n"
+                                 (mevedel-skill-invocation-record-prepared-body prepared)))
+             callback display-callback)
+          (mevedel-skills--invoke-error
+           skill 'disabled
+           (format "Skill '%s' is not model-invocable" skill-name)
+           callback display-callback))))
      (t
       (pcase (mevedel-skill-context skill)
         ('inline

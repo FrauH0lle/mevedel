@@ -529,6 +529,14 @@ as hidden turn context. The attachment reminder tells the model that the host
 already attached the skill and that it must follow the skill without calling
 `Skill`. A redundant model-side call for the same canonical skill in that
 request succeeds with `already attached` and does not inject the body again.
+After a request ends, a model re-read of a user-only skill can reuse its latest
+user-prepared body from the same conversation. This uses the durable resolved
+invocation record, including after Plan handoff, rather than preparing the
+skill again: no injections, hooks, model/permission policy, fork, or duplicate
+record. The body remains scoped by the user's task and current applicability.
+Disabled skills, user-only skills never prepared there, and calls with different
+nonempty arguments still refuse. Other agent conversations cannot reuse the
+record. This does not make the skill model-invocable.
 Instruction preparation always receives empty
 arguments and ignores `context`, model, effort, agent, and declared skill
 hooks. Its allowed-tool rules exist only while preparing body injections.
