@@ -2815,21 +2815,26 @@
     (mevedel-agent-control-send-message session "/root" "uncaptured")
     (setq uncaptured (car (mevedel-session-messages session)))
     (setf (mevedel-session-save-path session) temporary-file-directory)
-    (cl-letf (((symbol-function 'mevedel-session-persistence-autosave-buffer)
-               (lambda (&rest _) (ert-fail "Consumption must not save"))))
-      ;; A detached copy models capture/restore; identity, not object eq, wins.
-      (mevedel-agent-control-acknowledge-mail session (list (copy-tree captured))))
-    (should (equal (list uncaptured) (mevedel-session-messages session)))
-    (should (equal (mevedel-agent-persistence-sanitize-mailbox
-                    (list uncaptured captured) "/root")
-                   (plist-get (mevedel-session-checkpoint-project
-                               session (list :messages (mevedel-session-messages session)))
-                              :messages)))
-    ;; Explicit discard is not a delivery receipt: it only drops live mail.
-    (mevedel-agent-control-clear-context-mailbox session)
-    (should (equal (mevedel-agent-persistence-sanitize-mailbox (list captured) "/root")
-                   (plist-get (mevedel-session-checkpoint-project session nil)
-                              :messages)))))
+    ;; Clearing the mailbox schedules a deferred agent-state save for this
+    ;; root-less fixture session; release it so later tests don't drain it.
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-session-persistence-autosave-buffer)
+                     (lambda (&rest _) (ert-fail "Consumption must not save"))))
+            ;; A detached copy models capture/restore; identity, not object eq, wins.
+            (mevedel-agent-control-acknowledge-mail session (list (copy-tree captured))))
+          (should (equal (list uncaptured) (mevedel-session-messages session)))
+          (should (equal (mevedel-agent-persistence-sanitize-mailbox
+                          (list uncaptured captured) "/root")
+                         (plist-get (mevedel-session-checkpoint-project
+                                     session (list :messages (mevedel-session-messages session)))
+                                    :messages)))
+          ;; Explicit discard is not a delivery receipt: it only drops live mail.
+          (mevedel-agent-control-clear-context-mailbox session)
+          (should (equal (mevedel-agent-persistence-sanitize-mailbox (list captured) "/root")
+                         (plist-get (mevedel-session-checkpoint-project session nil)
+                                    :messages))))
+      (mevedel-session-persistence-cancel-deferred-agent-save session))))
 
 (mevedel-deftest mevedel-agent-control-notify ()
   ,test
