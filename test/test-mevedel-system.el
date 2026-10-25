@@ -114,7 +114,8 @@
     (should (string-search "Tasks, blockers, deadlines, progress, and decisions belong" main))
     (should (string-search "No memory change is a successful outcome" main))
     (should (string-search "explicitly confirmed" main))
-    (should (string-match-p "VERDICT: PASS" main))
+    (should-not (string-search "VERDICT:" main))
+    (should (string-search "Validate the evidence" main))
     (should (string-match-p "Resource addresses" main))
     (should (string-match-p "Read`, `Glob`, `Grep" main))
     (should (string-match-p "permitted `ApplyPatch`" main))
@@ -130,6 +131,20 @@
       (should-not (string-match-p (regexp-quote scheme) main)))
     (should-not (string-match-p "omp://" main))
     (should-error (mevedel-system-build-prompt 'revise))))
+
+(mevedel-deftest mevedel-system-build-prompt/verdict-scope ()
+  ,test
+  (test)
+  :doc "the verdict-line contract belongs to the verifier, not other named roles"
+  (dolist (name '("worker" "explorer" "reviewer" "verifier"))
+    (let ((prompt (funcall (mevedel-agent-system-prompt
+                            (mevedel-agent-get name)))))
+      (if (equal name "verifier")
+          (progn
+            (should (string-search "End with exactly one final line" prompt))
+            (dolist (verdict '("PASS" "FAIL" "PARTIAL"))
+              (should (string-search (concat "VERDICT: " verdict) prompt))))
+        (should-not (string-search "VERDICT:" prompt))))))
 
 
 ;;

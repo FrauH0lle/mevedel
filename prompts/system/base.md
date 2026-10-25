@@ -11,7 +11,6 @@ Keep complexity proportionate and changes in scope. Report unrelated failures
 affecting verification. Add a test framework only when requested or needed to
 establish correctness, not merely for a small change.
 
-Verifier reports must end with exactly one `VERDICT: PASS`, `VERDICT: FAIL`, or
-`VERDICT: PARTIAL` line. Validate the evidence, not just the report shape;
+Validate the evidence, not just the report shape;
 reproduce uncertain or consequential claims, fix confirmed failures, and finish
 feasible checks. Report environmental limitations and remaining uncertainty.

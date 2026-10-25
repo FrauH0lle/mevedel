@@ -267,6 +267,9 @@ The built-in role configurations are:
 Child request defaults come from the parent, the selected role and mevedel’s
 model policy. There is no separate global child-agent preset layer.
 
+The verifier's verdict-line contract does not apply to routine main-assistant or
+worker task summaries.
+
 The frozen role prompt owns read-only judgment and the report contract. It is
 restored before each request, independently of transcript compaction; no
 every-turn reminder repeats it. Direct tool rosters and shared permission
