@@ -1,47 +1,17 @@
 ---
-name: "Check graphical rendering from a worktree without the live Emacs"
-description: "Use `eask run script graphical-check` (since mevedel@982d9811) to render worktree view code in an isolated emacs -Q"
+name: "Check graphical rendering without replacing live Emacs modules"
+description: "Use isolated graphical checks for visual claims; follow maintained tooling rather than the superseded fixture recipe"
 type: feedback
 ---
 
-# Check graphical rendering from a worktree without the live Emacs
+# Check graphical rendering without replacing live Emacs modules
 
-Since `mevedel@982d9811` (2026-10-24) the maintained command is
-`npx @emacs-eask/cli run script graphical-check -- --grammar-dir
-~/.emacs.d/.local/etc/tree-sitter`; see `docs/development.md` (graphical
-check section). It isolates HOME, XDG and the native cache, checks for a
-display and both Markdown grammars, and saves PNG/PDF output under
-`.scratch/graphical-check/`. Prefer it over the hand-built recipe below.
-Extend `test/graphical-check.el` for new fixtures instead of writing ad-hoc
-drivers. It covers static rendering only, not hover or frame timing.
+**Rule:** verify view presentation in an isolated graphical Emacs before reporting a visual result. Batch tests and CSS mockups do not establish how Emacs renders faces. Do not load worktree modules into the user's running Emacs for this purpose: that would replace modules used by other sessions.
 
-The historical recipe below is superseded where the command applies.
-One correction from 2026-10-24: copying `font-lock-face` was a workaround.
-Font Lock skips buffers whose names start with a space, so rename the fixture
-buffer instead.
+**Why:** during turn-separator work on 2026-10-19, mockups and batch tests missed that tool rows inherited `default`'s background and that strike-through on an extended newline reached the window edge. These were observed rendering differences, not user-selected styling rules.
 
-Batch ERT cannot show overlines, strike-throughs, `:extend` or face blends, and
-loading worktree code into the user's running Emacs would replace modules that
-other sessions are using. On 2026-10-19 (turn separators work) this worked:
+**How to apply:** consult the graphical-check section of `docs/development.md` for the maintained worktree-rendering workflow and its fixture extension guidance. The captured topic records that this tooling superseded the hand-built recipe on 2026-10-24 (`mevedel@982d9811`). Static captures do not establish hover behavior or frame timing; use checks appropriate to the claim.
 
-- Run a separate `emacs -Q` (pgtk) with `HOME` and every `XDG_*_HOME` pointed at a
-  fresh temporary directory; `test/helpers.el` refuses to load otherwise ("Tests
-  require HOME and XDG roots under temporary-file-directory").
-- Add `.eask/31.1/elpa/*`, the worktree and its `test/` to `load-path`, require
-  `helpers`, build the transcript with `mevedel-view-test--with-buffers` /
-  `mevedel-view-test--insert-data`, then `mevedel-view--full-rerender`.
-- The fixture view buffer is not fontified, so copy `font-lock-face` to `face`
-  before capturing; otherwise every face is missing from the image.
-- Capture with `(x-export-frames frame 'png)` (needs a Cairo build), then
-  `kill-emacs`. Wrap the load in `condition-case` that prints the error and
-  exits, or an error leaves the window open and the command hangs.
+**Historical correction, 2026-10-24:** copying `font-lock-face` to `face` was a workaround, not the preferred fixture setup. The captured correction attributed missing fontification to fixture buffer names beginning with a space; rename such fixtures rather than retaining the face-copy recipe.
 
-The same `x-export-frames` call works in the live Emacs on a temporary frame for
-read-only prototypes built from a copy of a view buffer's text.
-
-**Why:** a CSS mock and batch tests both missed real rendering facts here: tool
-rows inherit `default`'s background, and strike-through on an extended newline
-reaches the window edge.
-**How to apply:** use this for view presentation changes before reporting a
-visual result. Keep probes and scripts under `.scratch/`. Bound live Eval
-output while doing it; dumping text properties of a view row returned 20 MB.
+Keep any live inspection bounded and non-perturbing. An earlier row-property dump returned 20 MB; a large dump is not needed to establish a visual result.

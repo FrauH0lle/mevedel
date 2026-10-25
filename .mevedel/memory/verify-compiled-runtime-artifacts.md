@@ -1,6 +1,6 @@
 ---
 name: "Verify the loaded runtime and dependency provenance"
-description: "Repository tests, installed artifacts, native units, and live event sequences establish different things"
+description: "Distinguish loaded artifacts, cold-start behavior, relevant readiness, dependency provenance, and live event sequences"
 type: feedback
 ---
 
@@ -20,6 +20,12 @@ When verifying a live change:
 Observed 2026-09-16: a startup callback could be undefined before its owning module loaded, although an already-used inspecting session reported both `featurep` and `fboundp` true. Preloaded test fixtures hid the gap.
 
 For loading, registration, and initialization changes, use a fresh process and exercise first use without preloading the owner. A later agent-spawn failure on 2026-10-14 provided another example: a declaration did not load the referenced handler, and a cold-load regression exposed the missing load boundary.
+
+## Readiness probes must target the relevant initialization boundary
+
+Observed 2026-10-20: an initial readiness probe timed out because it required `mevedel-session-codec-format-version` to be bound, although the daemon returned `:ready t`. Both restarted hosts reported `:codec-loaded nil :format nil`, yet returned `t` for `(and (featurep 'mevedel-collaboration-lobby) (fboundp 'mevedel-host-busy-p))`.
+
+Reusable inference from those probes: when checking host initialization, do not require an unrelated, lazily loaded module as a readiness prerequisite. Choose checks tied to the capability being tested, without forcing incidental module loads. This does not excuse a missing required load or replace a first-use test of the codec itself; the successful probe established the checked initialization boundary, not all host behavior.
 
 ## Verify dependency provenance as well as controller provenance
 

@@ -1,16 +1,20 @@
 ---
-name: "Reentrant view render corruption is ordering-dependent"
-description: "Settlement nested inside an older incremental render duplicates projection output; regress both nesting orders"
-type: project
+name: "Test both reentry orders and separate mechanism from incident attribution"
+description: "Reverse reentrant nesting in regressions; a matching injected failure does not establish the original event sequence"
+type: feedback
 ---
 
-# Reentrant view render corruption is ordering-dependent
+# Test both reentry orders and separate mechanism from incident attribution
 
-Observed 2026-09-16 (session `segment-0002.chat.org`, turn 3; `work://shared/view-render-investigation-20260916.md`, `artifact://executions/execution-95iYzf.log`, `.scratch/view-render-investigation-20260916/replay.el:63`): the deterministic scratch case `diagnosis-settlement-during-live-render` failed with expected `(:tail nil :copies 1)` and actual `(:tail t :copies 2)`. Ordinary chunks `(1 7 23 51)` and the reverse nesting order passed; the loaded native functions reproduced the failure, so it is not an artifact of the scratch harness.
+When testing code that can reenter through callbacks, fontification, or settlement, exercise both nesting orders. A passing case in one direction does not establish safety in the reverse direction: older work can resume after nested finalization and restore obsolete output or state.
 
-- **The ordering is decisive.** An older incremental render can resume after nested settlement and restore obsolete text and tail state. Regression tests should cover both orders: an incremental update nested inside settlement, and settlement nested inside an older incremental render.
-- **The corruption is in the projection, not the transcript.** Authoritative transcript lines 2747–2778 and the live data contain one fix heading/example, the affected view contained four headings and seven examples, and fresh rendering with the loaded native functions was correct. Do not distrust the transcript from a bad screenshot alone.
-- **Diagnosis kept the live state intact.** The corrupted live view was preserved and the reproduction carved out under `.scratch/`, without changing product source.
-- **Static findings, not reproduced:** shared fontification-buffer reuse, deferred request cleanup acting on replacement state, and same-key transport retries removing newer ownership (`mevedel-view-render.el:3322–3577`, `mevedel-view-fontify.el:106–178`, `mevedel-turn.el:613–632`, `mevedel-presets.el:593–662`, `mevedel-transport.el:248–276`, inherited summary). These paths were not runtime reproductions.
-- **Status at capture:** the "Fix Reentrant View Rendering and Stale Callback Ownership" plan (per-view mutation coordination, deferred disclosure/agent-refresh intent, nested Markdown fontification isolation, transport/request callback ownership) was emitted for approval and nothing more — no implementation, suite run, compilation, or deployed-runtime verification is established. Its listed workflow (`npx @emacs-eask/cli clean elc`, focused ERT for `test/test-mevedel-view*.el` plus turn/transport/chat suites, `python3 test/run_tests.py`, warning-free compilation) is proposed validation, not completed work. The original production interrupt sequence and the inherited `/root/async_audit` result remain unknown.
-- **Draft preservation still applies.** Any change here must keep the `view-composer-preservation-feedback` regression; the plan includes asserting that a multiline composer draft beginning with a literal `>` retains its text and point.
+The 2026-09-16 view-render investigation demonstrated this asymmetry:
+- Ordinary streaming and a live update nested inside settlement passed.
+- Settlement injected during fontification inside an older live update failed: the older update resumed, duplicated response text, and recreated retained-tail state.
+- The loaded native functions reproduced the same injected failure in temporary buffers, ruling out a scratch-harness-only explanation.
+
+Compare authoritative data with its rendered projection before attributing duplicated display content to duplicated model output. In this incident, the transcript contained one heading and HTML example, while the view contained multiple copies; fresh rendering was correct.
+
+**Causal limit:** a deterministic injected ordering can prove a defect with matching symptoms without proving the original production event sequence. Historical render tracing was unavailable here, and the full original corruption was not reproduced. Do not present the injected mechanism as a recorded trace of the original incident.
+
+The note's final checkpoint supersedes the earlier memories' “no implementation” status: fixes and rebuilt bytecode/native-runtime checks were completed. That does not resolve the historical causal limit. The original broken view was no longer open at final verification, so its final hash could not be checked.
