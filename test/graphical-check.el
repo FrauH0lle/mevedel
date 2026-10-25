@@ -117,7 +117,8 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
                                       treesit-extra-load-path ',grammars
                                       native-comp-jit-compilation nil
                                       treesit-auto-install-grammar 'never)
-                                (startup-redirect-eln-cache ,(file-name-concat home "eln"))
+                                (when (native-comp-available-p)
+                                  (startup-redirect-eln-cache ,(file-name-concat home "eln")))
                                 (load ,(file-name-concat mevedel-graphical-check--root
                                                          "test" "graphical-check.el") nil t)
                                 (mevedel-graphical-check--child ,output))

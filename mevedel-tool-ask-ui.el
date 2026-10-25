@@ -13,6 +13,9 @@
 (eval-when-compile
   (require 'mevedel-tool-registry))
 
+;; `C source code' (graphical builds only)
+(defvar overflow-newline-into-fringe)
+
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 (autoload 'mevedel-abort "mevedel-chat" nil t)

@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'bytecomp)
+
 (require 'helpers
          (file-name-concat
           (file-name-directory

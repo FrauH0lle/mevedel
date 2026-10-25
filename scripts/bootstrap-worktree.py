@@ -91,17 +91,20 @@ def prepare(root):
                            f"{error}") from error
     command = ([shutil.which("eask")] if shutil.which("eask") else
                ["npx", "--offline", "--silent", "--no-install", "@emacs-eask/cli"])
+    environment = os.environ.copy()
+    # A standalone Eask parent exports its own executable path.  A new Eask
+    # launch must resolve its entry point independently, including --version.
+    environment.pop("PKG_EXECPATH", None)
     print(f"Worktree: {root}", flush=True)
     print(f"HEAD: {run(['git', 'rev-parse', 'HEAD'], root)}", flush=True)
     print(f"Eask manifest sha256: {hashlib.sha256((root / 'Eask').read_bytes()).hexdigest()}",
           flush=True)
     print(f".eask: {cache.resolve()} ({'symlink reuse' if cache.is_symlink() else 'local'})",
           flush=True)
-    print(f"Eask: {run(command + ['--version'], root)}", flush=True)
+    print(f"Eask: {run(command + ['--version'], root, env=environment)}", flush=True)
     # npx needs its normal cache to find Eask offline.  Isolate Emacs itself,
     # before loading any dependency, including its startup native cache.
     with tempfile.TemporaryDirectory(prefix="mevedel-bootstrap-") as home:
-        environment = os.environ.copy()
         environment["MEVEDEL_BOOTSTRAP_HOME"] = home
         isolation = r'''
 (let ((home (getenv "MEVEDEL_BOOTSTRAP_HOME")))
@@ -109,7 +112,8 @@ def prepare(root):
   (dolist (name '("XDG_CACHE_HOME" "XDG_CONFIG_HOME" "XDG_DATA_HOME"
                   "XDG_STATE_HOME" "XDG_RUNTIME_DIR"))
     (setenv name (expand-file-name name home)))
-  (startup-redirect-eln-cache (expand-file-name "eln" home)))
+  (when (native-comp-available-p)
+    (startup-redirect-eln-cache (expand-file-name "eln" home))))
 '''
         checked_probe = (f"(condition-case error {PROBE} "
                          '(error (princ (format "Dependency probe failed: %s\\n" '

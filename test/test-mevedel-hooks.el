@@ -1911,6 +1911,33 @@
           (kill-buffer buffer)))
       (delete-directory root t)))
 
+  :doc "an exit before stdin preserves the child's exit status"
+  (let* ((root (make-temp-file "mevedel-hooks-early-exit" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hook-rules
+          '((PreToolUse
+             ((:matcher "Bash"
+               :hooks ((:type command :command "exit 1" :fail-closed t))))))))
+    (unwind-protect
+        (cl-letf* ((send (symbol-function 'process-send-string))
+                   ((symbol-function 'process-send-string)
+                    (lambda (process text)
+                      ;; Hold the sentinel until the write observes the exit.
+                      ;; This is the ordering a sufficiently fast child takes.
+                      (when (equal (process-name process) "mevedel-hook")
+                        (set-process-sentinel process #'ignore)
+                        (with-timeout (5 (ert-fail "Hook did not exit"))
+                          (while (process-live-p process)
+                            (accept-process-output process 0.01))))
+                      (funcall send process text))))
+          (should
+           (equal (mevedel-hooks-test--await
+                   (lambda (callback)
+                     (mevedel-hooks-run-event
+                      'PreToolUse '(:tool-name "Bash") callback session)))
+                  '(:continue nil :stop-reason "Hook exited with status 1"))))
+      (delete-directory root t)))
+
   :doc "a timeout reports itself rather than the signal that stopped the child"
   ;; A blocking timeout legitimately reports to the echo area.
   (let* ((decision nil)

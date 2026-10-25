@@ -4,6 +4,8 @@
 
 ;;; Code:
 
+(require 'bytecomp)
+
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
 (require 'gptel-request)

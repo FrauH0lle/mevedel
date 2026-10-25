@@ -1816,7 +1816,9 @@
             (mevedel-worktree-test--git-ok root "worktree" "add" "--detach" destination)
             (with-temp-buffer
               (let ((default-directory (file-name-as-directory destination)))
-                (should (eq 0 (process-file "python3" nil (list t t) nil script)))
+                (let ((status (process-file "python3" nil (list t t) nil script)))
+                  (ert-info ((buffer-string))
+                    (should (eq 0 status))))
                 (should (string-match-p "Worktree bootstrap: ready" (buffer-string)))
                 (erase-buffer)
                 (with-temp-buffer

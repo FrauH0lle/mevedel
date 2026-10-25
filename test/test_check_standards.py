@@ -377,14 +377,16 @@ class StandardsTests(unittest.TestCase):
     def test_ci_base_selection(self):
         workflow = (ROOT / '.github/workflows/test.yml').read_text()
         block = workflow.split('    - name: Select standards comparison base\n', 1)[1]
-        block = block.split('      run: |\n', 1)[1].split('\n    - ', 1)[0]
-        script = '\n'.join(line[8:] for line in block.splitlines())
+        block = block.split('\n    - ', 1)[0]
+        self.assertIn('      run: sh scripts/ci-check-base.sh', block)
+        current = self.git('rev-parse', 'HEAD')
         for base, expected in [('', 'origin/master'), ('0' * 40, 'origin/master'),
-                               ('a' * 40, 'a' * 40)]:
+                               (current, current)]:
             with self.subTest(base=base):
                 target = self.root / 'github-env'
                 target.write_text('')
-                subprocess.run(['sh', '-eu', '-c', script], check=True,
+                subprocess.run(['sh', str(ROOT / 'scripts/ci-check-base.sh')],
+                               check=True, cwd=self.root,
                                env={'EVENT_BASE': base, 'DEFAULT_BRANCH': 'master',
                                     'GITHUB_ENV': str(target)})
                 self.assertEqual(target.read_text(), f'CHECK_BASE={expected}\n')

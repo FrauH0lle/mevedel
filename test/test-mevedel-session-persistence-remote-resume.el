@@ -14,6 +14,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-workspace-identity)
 (require 'tramp)
+(require 'tramp-container)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -22,6 +23,7 @@
 
 ;; `tramp'
 (declare-function tramp-cleanup-all-connections "tramp")
+(defvar tramp-histfile-override)
 (defvar tramp-local-host-regexp)
 (defvar tramp-methods)
 
@@ -43,6 +45,7 @@
          (client-a (make-string 64 ?a))
          (client-b (make-string 64 ?b))
          (tramp-methods (copy-tree tramp-methods))
+         (tramp-histfile-override t)
          (tramp-local-host-regexp
           (concat "\\`" (regexp-quote host) "\\'"))
          (mevedel-session-durability--disclosed-targets

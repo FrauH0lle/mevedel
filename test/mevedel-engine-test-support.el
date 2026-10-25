@@ -5,6 +5,7 @@
 
 ;;; Code:
 
+(require 'acp)
 (require 'mevedel-session-test-support
          (file-name-concat
           (file-name-directory (or load-file-name buffer-file-name))
@@ -12,6 +13,9 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-claude-code)
 (require 'mevedel-readiness)
+
+;; `acp'
+(defvar acp--shutdown-grace-period)
 
 (defconst mevedel-engine-test--owned-timer-functions
   '(mevedel-goal--scheduled-continuation
@@ -33,7 +37,7 @@ fixture; a survivor would fire inside a later test."
     (let ((mevedel-execution-process--child-kill-delay 0.05))
       (mevedel-execution-teardown-session session)))
   ;; ACP can leave its final queued response on a zero-delay drain at shutdown.
-  (accept-process-output nil 0)
+  (accept-process-output nil 0.01)
   (dolist (timer (append timer-list timer-idle-list nil))
     (unless (memq timer timers)
       (when (or (memq (timer--function timer) mevedel-engine-test--owned-timer-functions)
@@ -41,6 +45,8 @@ fixture; a survivor would fire inside a later test."
                          (timer--args timer)))
         (cancel-timer timer))))
   (test-mevedel-session-persistence--release-and-kill buffer session)
+  ;; Killing the root buffer can close its retained ACP client too.
+  (accept-process-output nil 0.01)
   (mevedel-workspace-clear-registry)
   (mevedel-test--cancel-stray-lease-timers)
   (cl-remove-if (lambda (timer)
@@ -53,6 +59,8 @@ fixture; a survivor would fire inside a later test."
 Fail when BODY leaves a timer the fixture does not own."
   (declare (indent 0) (debug t))
   `(let* ((timers (append timer-list timer-idle-list nil))
+          ;; Fixture peers need no grace period for descendant cleanup.
+          (acp--shutdown-grace-period 0)
           (root (make-temp-file "mevedel-mcp-tools-" t))
           (workspace (test-mevedel-session-persistence--make-workspace root))
           (session (mevedel-session-create "mcp-tools" workspace))

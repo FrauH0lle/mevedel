@@ -24,6 +24,44 @@
                byte-compile-current-file))
           "helpers"))
 
+;; `C source code' (graphical builds only)
+(defvar overflow-newline-into-fringe)
+
+
+(mevedel-deftest mevedel-tool-ask-ui/cold-compile
+  (:doc "compiles without graphical variables and wraps rows in a terminal")
+  (let* ((directory (make-temp-file "mevedel-ask-compile-" t))
+         (source (file-name-concat directory "mevedel-tool-ask-ui.el")))
+    (unwind-protect
+        (progn
+          (copy-file (locate-library "mevedel-tool-ask-ui") source)
+          (with-temp-buffer
+            (let ((status
+                   (call-process
+                    (expand-file-name invocation-name invocation-directory)
+                    nil t nil "--batch" "-Q" "--eval"
+                    (prin1-to-string
+                     `(progn
+                        (setq load-path ',load-path)
+                        (require 'bytecomp)
+                        ;; Terminal-only builds never define this symbol.
+                        (unintern "overflow-newline-into-fringe" obarray)
+                        (let ((byte-compile-error-on-warn t)
+                              (byte-compile-verbose nil))
+                          (unless (byte-compile-file ,source)
+                            (error "Ask UI compilation failed")))
+                        (load ,(concat source "c") nil t)
+                        (with-temp-buffer
+                          (set-window-buffer (selected-window) (current-buffer))
+                          (let ((state (mevedel-tool-ask-ui--state-create
+                                        :chat-buffer (current-buffer))))
+                            (cl-assert (= (1- (window-body-width))
+                                          (mevedel-tool-ask-ui--wrap-width state))))))))))
+              (ert-info ((buffer-string))
+                (should (eql status 0))
+                (should (equal "" (buffer-string)))))))
+      (delete-directory directory t))))
+
 
 (defmacro test-mevedel-tool-ask-ui--with-form (&rest body)
   "Run BODY with native Ask buffers and captured rendering.
@@ -595,7 +633,8 @@ A panel row is a line whose text sits on the source block face."
   (test)
   :doc "a window without a right fringe loses the continuation column"
   (test-mevedel-tool-ask-ui--with-form
-    (let ((state (mevedel-tool-ask-ui--state-create :chat-buffer view-buffer)))
+    (let ((state (mevedel-tool-ask-ui--state-create :chat-buffer view-buffer))
+          (overflow-newline-into-fringe t))
       (should (= (1- (window-body-width))
                  (mevedel-tool-ask-ui--wrap-width state)))
       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
@@ -608,6 +647,7 @@ A panel row is a line whose text sits on the source block face."
   :doc "every displaying window's own fringe policy sets the minimum capacity"
   (test-mevedel-tool-ask-ui--with-form
     (let* ((state (mevedel-tool-ask-ui--state-create :chat-buffer view-buffer))
+           (overflow-newline-into-fringe t)
            (wide (selected-window))
            (narrow (split-window-right -30)))
       (set-window-buffer narrow view-buffer)
