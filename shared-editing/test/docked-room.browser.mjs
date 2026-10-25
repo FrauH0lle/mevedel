@@ -94,7 +94,7 @@ test('a wide room docks an editor, preserves its work through resize and keeps c
   assert.ok(drawer.x > panelBox.x && drawer.x + drawer.width <= 2560, JSON.stringify(drawer));
   await page.locator('#room-button').click();
   assert.equal(await page.locator('#session-box').isVisible(), false);
-  await page.locator('#filter').getByRole('button', {name:/^All/}).click();
+  await page.locator('#filter').getByRole('button', {name:/^Main chat/}).click();
   await editor.locator('.ds-item.general').click();
   await page.waitForFunction(() => document.activeElement?.id === 'composer-input');
   assert.equal(await page.locator('#filter button[aria-pressed=true]').innerText(), '◇ Wide board',

@@ -4,6 +4,28 @@ import { create, restore, encode, inspect, applyUpdate, patch, putElement, putFi
 import * as Y from 'yjs';
 const rect = (id, x, extra = {}) => ({ id, type: 'rectangle', x, y: 0, width: 100, height: 60, ...extra });
 
+test('document position history survives saves without admitting unrelated shared roots', async () => {
+  const { initializeDocument } = await import('../document.mjs');
+  const doc = create('document', 'Notes');
+  initializeDocument(doc);
+  const key = '__tiptap_position_migrations:root:document';
+  const history = {version:1, client:1, clock:0, seen:[], transfers:[]};
+  doc.getMap(key).set('1:0', history);
+  const saved = restore(encode(doc));
+  assert.deepEqual(saved.getMap(key).get('1:0'), history);
+  saved.destroy();
+  for (const root of ['unexpected', '__tiptap_position_migrations:root:other']) {
+    const candidate = restore(encode(doc));
+    candidate.getMap(root).set('entry', history);
+    assert.throws(() => restore(encode(candidate)), /Unknown shared content/);
+    candidate.destroy();
+  }
+  const board = create('whiteboard', 'Board');
+  board.getMap(key).set('1:0', history);
+  assert.throws(() => restore(encode(board)), /Unknown shared content/);
+  [doc, board].forEach(value => value.destroy());
+});
+
 test('two writers and an agent preserve independent edits and reject a stale target', () => {
   const host = create('whiteboard', 'Architecture');
   patch(host, [

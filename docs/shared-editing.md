@@ -144,6 +144,10 @@ with Excalifont, Nunito, Comic Shanns and Noto Sans for headless PNG rendering. 
 End users receive generated bundles, renderer resources, and third-party
 notices; they do not run npm installation.
 
+Document state also preserves Tiptap's position-history map for the `document`
+fragment. The binding uses it to keep relative positions through structural
+edits. It shares the item's size bound; unrelated shared roots remain invalid.
+
 To rebuild after changing browser/helper source or dependency versions:
 
 ```sh

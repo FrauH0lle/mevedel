@@ -1,6 +1,6 @@
 Third-party licenses for the bundled shared editor.
 
---- @tiptap/core 3.31.3 ---
+--- @tiptap/core 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -24,7 +24,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-blockquote 3.31.3 ---
+--- @tiptap/extension-blockquote 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -48,7 +48,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-bold 3.31.3 ---
+--- @tiptap/extension-bold 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -72,7 +72,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-code 3.31.3 ---
+--- @tiptap/extension-code 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -96,7 +96,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-code-block 3.31.3 ---
+--- @tiptap/extension-code-block 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -120,7 +120,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-collaboration 3.31.3 ---
+--- @tiptap/extension-collaboration 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -144,7 +144,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-collaboration-caret 3.31.3 ---
+--- @tiptap/extension-collaboration-caret 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -168,7 +168,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-document 3.31.3 ---
+--- @tiptap/extension-document 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -192,7 +192,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-hard-break 3.31.3 ---
+--- @tiptap/extension-hard-break 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -216,7 +216,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-heading 3.31.3 ---
+--- @tiptap/extension-heading 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -240,7 +240,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-horizontal-rule 3.31.3 ---
+--- @tiptap/extension-horizontal-rule 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -264,7 +264,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-image 3.31.3 ---
+--- @tiptap/extension-image 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -288,7 +288,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-italic 3.31.3 ---
+--- @tiptap/extension-italic 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -312,7 +312,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-link 3.31.3 ---
+--- @tiptap/extension-link 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -336,7 +336,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-list 3.31.3 ---
+--- @tiptap/extension-list 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -360,7 +360,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-paragraph 3.31.3 ---
+--- @tiptap/extension-paragraph 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -384,7 +384,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-strike 3.31.3 ---
+--- @tiptap/extension-strike 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -408,7 +408,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-table 3.31.3 ---
+--- @tiptap/extension-table 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -432,7 +432,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-text 3.31.3 ---
+--- @tiptap/extension-text 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -456,7 +456,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-underline 3.31.3 ---
+--- @tiptap/extension-underline 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -480,7 +480,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extension-unique-id 3.31.3 ---
+--- @tiptap/extension-unique-id 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -504,7 +504,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/extensions 3.31.3 ---
+--- @tiptap/extensions 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -528,7 +528,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/markdown 3.31.3 ---
+--- @tiptap/markdown 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -599,7 +599,7 @@ Redistribution and use in source and binary forms, with or without modification,
 This software is provided by the copyright holders and contributors “as is” and any express or implied warranties, including, but not limited to, the implied warranties of merchantability and fitness for a particular purpose are disclaimed. In no event shall the copyright owner or contributors be liable for any direct, indirect, incidental, special, exemplary, or consequential damages (including, but not limited to, procurement of substitute goods or services; loss of use, data, or profits; or business interruption) however caused and on any theory of liability, whether in contract, strict liability, or tort (including negligence or otherwise) arising in any way out of the use of this software, even if advised of the possibility of such damage.
 
 
---- @tiptap/pm 3.31.3 ---
+--- @tiptap/pm 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -623,7 +623,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/starter-kit 3.31.3 ---
+--- @tiptap/starter-kit 3.32.0 ---
 MIT License
 
 Copyright (c) 2025, Tiptap GmbH
@@ -647,7 +647,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- @tiptap/y-tiptap 3.0.9 ---
+--- @tiptap/y-tiptap 3.0.10 ---
 The MIT License (MIT)
 
 Copyright (c) 2019 Kevin Jahns <kevin.jahns@protonmail.com>.
@@ -796,7 +796,7 @@ express Statement of Purpose.
     this CC0 or use of the Work.
 
 
---- lib0 0.2.117 ---
+--- lib0 0.2.119 ---
 The MIT License (MIT)
 
 Copyright (c) 2019 Kevin Jahns <kevin.jahns@protonmail.com>.
@@ -864,7 +864,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 
---- perfect-freehand 1.2.0 ---
+--- perfect-freehand 1.2.3 ---
 MIT License
 
 Copyright (c) 2021 Stephen Ruiz Ltd
@@ -910,7 +910,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 
---- prosemirror-dropcursor 1.8.3 ---
+--- prosemirror-dropcursor 1.8.4 ---
 Copyright (C) 2015-2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -954,7 +954,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 
---- prosemirror-history 1.5.0 ---
+--- prosemirror-history 1.5.1 ---
 Copyright (C) 2015-2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -998,7 +998,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 
---- prosemirror-model 1.25.11 ---
+--- prosemirror-model 1.25.12 ---
 Copyright (C) 2015-2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -1086,7 +1086,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 
---- prosemirror-transform 1.12.1 ---
+--- prosemirror-transform 1.12.2 ---
 Copyright (C) 2015-2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -1108,7 +1108,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 
---- prosemirror-view 1.42.3 ---
+--- prosemirror-view 1.42.6 ---
 Copyright (C) 2015-2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -1234,7 +1234,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
---- yjs 13.6.32 ---
+--- yjs 13.6.33 ---
 The MIT License (MIT)
 
 Copyright (c) 2023

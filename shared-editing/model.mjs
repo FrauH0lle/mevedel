@@ -200,11 +200,14 @@ export function validateFile(id, file) {
   return validateImage(file.dataURL);
 }
 export function validate(doc) {
+  const meta = doc.getMap('meta');
   check(
-    [...doc.share.keys()].every((key) => ['meta', 'elements', 'files', 'document'].includes(key)),
+    [...doc.share.keys()].every((key) => ['meta', 'elements', 'files', 'document'].includes(key)
+      // Tiptap keeps relative positions across structural edits in this map.
+      // Preserve its opaque binding metadata within the item's size bound.
+      || (meta.get('kind') === 'document' && key === '__tiptap_position_migrations:root:document')),
     'Unknown shared content',
   );
-  const meta = doc.getMap('meta');
   check(
     [...meta.keys()].every((key) => ['kind', 'title', 'background'].includes(key)),
     'Unknown editor property',

@@ -41,14 +41,18 @@ jobs:
           node test/collaboration-viewer-content-links-test.js
       - name: Install Chromium
         run: shared-editing/node_modules/.bin/playwright install --with-deps chromium
-      - name: Test Markdown and viewer integration in Chromium
+      - name: Test editor and viewer integration in Chromium
         run: >-
-          node --test
+          node --test --test-concurrency=2
           test/collaboration-markdown.browser.mjs
           test/collaboration-activity.browser.mjs
           test/collaboration-viewer-requests.browser.mjs
           test/collaboration-viewer-agents.browser.mjs
           test/collaboration-discussions.browser.mjs
+          shared-editing/test/design.browser.mjs
+          shared-editing/test/docked-room.browser.mjs
+          shared-editing/test/editor.browser.mjs
+          shared-editing/test/image-tools.browser.mjs
 
   relay:
     runs-on: ubuntu-latest
