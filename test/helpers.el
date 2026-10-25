@@ -47,6 +47,9 @@
 (defvar treesit-auto-install-grammar)
 (setq treesit-auto-install-grammar 'never)
 
+;; `comp'
+(defvar native-comp-eln-load-path)
+
 ;; `gptel'
 (declare-function gptel-make-openai "gptel")
 (defvar gptel-backend)
@@ -624,7 +627,8 @@ Always restore unread events and close only connections created by BODY."
          (tramp-methods (cl-remove "mevedelmock" tramp-methods
                                    :key #'car :test #'equal))
          (native-comp-eln-load-path
-          (cons (file-name-concat root "eln-cache/") native-comp-eln-load-path))
+          (when (native-comp-available-p)
+            (cons (file-name-concat root "eln-cache/") native-comp-eln-load-path)))
          (mevedel-test--placeholder-root nil)
          (mevedel-test--write-roots
           (mapcar

@@ -1277,7 +1277,8 @@ QUEUED adds a second completion while the first job is unresolved."
             (prin1-to-string
              `(progn
                 (setq load-path ',load-path)
-                (startup-redirect-eln-cache (file-name-concat (getenv "HOME") ".cache" "eln"))
+                (when (native-comp-available-p)
+                  (startup-redirect-eln-cache (file-name-concat (getenv "HOME") ".cache" "eln")))
                 (require 'mevedel)
                 (load ,(symbol-file 'test-mevedel-publication-async--notification-cancel 'defun) nil t)
                 (let (diagnostics)

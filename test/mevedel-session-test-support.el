@@ -875,9 +875,9 @@ The result is a plist whose :tempdir owns every created file."
                        :fork-point-id "fixture-fork")))
                 (3 . ((:turn 1 :file-turn 1 :cum-turn 3)))))
         (setf (mevedel-session-file-snapshots session)
-              '((1 . (("/tmp/kept.el"
+              `((1 . ((,(file-name-concat tempdir "kept.el")
                        . (:backup-name "keep@v1" :version 1))))
-                (3 . (("/tmp/future.el"
+                (3 . ((,(file-name-concat tempdir "future.el")
                        . (:backup-name "future@v2" :version 2))))))
         (setf (mevedel-session-agent-transcripts session)
               '(("eligible--1" :agent-path "/root/eligible"

@@ -479,7 +479,7 @@ process deadline inside publication, so their complete maxima remain unknown.
 Retain the restart-safe interruption boundary, without claiming bounded callbacks
 or hardware/graphical keyboard latency. Non-quitting C primitives, setup and
 handoff, short state/cache commits, source restoration, publication and GC remain
-limits. The [benchmark ledger](../../benchmark/profiler-optimization-results.md#input-interruptible-preparation-2026-10-24)
+limits. The [benchmark ledger](https://github.com/FrauH0lle/mevedel/blob/master/benchmark/profiler-optimization-results.md#input-interruptible-preparation-2026-10-24)
 records the populations, raw-evidence locations and correctness checks.
 
 ### October 24, 2026: reject turn preparation plans after measuring reuse
@@ -512,7 +512,7 @@ backlog item with those local fixes (approximately 21–31% faster restored
 projections) and this negative result, rather than retaining a complex cache.
 Reopen only with evidence that identity can be proved substantially more cheaply
 or that source preparation again dominates. The
-[benchmark ledger](../../benchmark/profiler-optimization-results.md#rejected-turn-preparation-plans-2026-10-24)
+[benchmark ledger](https://github.com/FrauH0lle/mevedel/blob/master/benchmark/profiler-optimization-results.md#rejected-turn-preparation-plans-2026-10-24)
 records the complete warm/cold matrices, retained memory, independent correctness
 fix costs and measurement limits. Complete turns remain reconstructed on every
 projection; existing response, tool and reasoning caches remain in use.
@@ -536,7 +536,7 @@ second projections start zero Markdown jobs instead of 190. Stream and composer
 allocation budgets remain unchanged. The remaining uncached turn share is
 71.55% / 52.70% at default GC and 61.20% / 47.50% at 64 MiB, still above the
 25% materiality gate; it includes insertion and is not a predicted cache speedup.
-The [benchmark ledger](../../benchmark/profiler-optimization-results.md#targeted-full-projection-fixes-2026-10-24)
+The [benchmark ledger](https://github.com/FrauH0lle/mevedel/blob/master/benchmark/profiler-optimization-results.md#targeted-full-projection-fixes-2026-10-24)
 records the same-stage tables, cold-cache checks, verification and limitations.
 
 ### October 2026: failures and prepared results keep a run's grouping
@@ -2383,5 +2383,5 @@ the zone allocation budget at 1,832. Keep general draft, anchor, foreign-overlay
 and undo regressions, not implementation-specific minimal-edit assertions.
 Reopen this tradeoff if a C-level property-diff primitive becomes available or
 zones become large enough that whole-zone insertion dominates. The
-[measurement ledger](../../benchmark/profiler-optimization-results.md#partial-managed-zone-rewrites-2026-10-24)
+[measurement ledger](https://github.com/FrauH0lle/mevedel/blob/master/benchmark/profiler-optimization-results.md#partial-managed-zone-rewrites-2026-10-24)
 records the controlled comparisons and their limits.

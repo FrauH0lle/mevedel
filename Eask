@@ -88,7 +88,8 @@
     ;; HOME does not update the native cache captured during Emacs startup.
     ;; ERT redirects it only after loading test files, which is too late for
     ;; their dependencies.  Keep both native loads and writes test-local.
-    (startup-redirect-eln-cache (file-name-concat home ".cache" "eln"))
+    (when (native-comp-available-p)
+      (startup-redirect-eln-cache (file-name-concat home ".cache" "eln")))
     (add-hook 'kill-emacs-hook
               (lambda ()
                 (ignore-errors (delete-directory home t))))))

@@ -37,7 +37,8 @@
             (make-directory path t)
             (set-file-modes path #o700)
             (setenv name path)))
-        (startup-redirect-eln-cache (file-name-concat home "eln"))
+        (when (native-comp-available-p)
+          (startup-redirect-eln-cache (file-name-concat home "eln")))
         (add-to-list 'load-path (file-name-concat root "benchmark"))
         (cl-labels
             ((compile-build (destination)
@@ -64,8 +65,9 @@
                          "--eval" (prin1-to-string
                                    `(setq load-path ',(cons destination load-path)))
                          "--eval" (prin1-to-string
-                                   `(startup-redirect-eln-cache
-                                     ,(file-name-concat home "eln")))
+                                   `(when (native-comp-available-p)
+                                      (startup-redirect-eln-cache
+                                       ,(file-name-concat home "eln"))))
                          "-l" (file-name-concat destination (concat library ".elc"))
                          "--eval" expression)))
                    (princ (buffer-string))

@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'bytecomp)
+
 (require 'mevedel-tool-exec-registration)
 
 (require 'helpers

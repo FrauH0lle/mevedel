@@ -11,7 +11,8 @@
 (require 'ert)
 
 (defconst mevedel-test-eask--startup-state
-  (list (getenv "HOME") (copy-sequence native-comp-eln-load-path)
+  (list (getenv "HOME")
+        (when (native-comp-available-p) (copy-sequence native-comp-eln-load-path))
         (featurep 'gptel-request))
   "HOME, native cache paths, and dependency load state before ERT starts.")
 
@@ -19,9 +20,10 @@
   (pcase-let ((`(,home ,paths ,gptel-loaded)
                mevedel-test-eask--startup-state))
     (should-not gptel-loaded)
-    (should (file-in-directory-p (car paths) home))
-    (should (equal (cdr paths)
-                   (list (car (last native-comp-eln-load-path)))))
+    (when (native-comp-available-p)
+      (should (file-in-directory-p (car paths) home))
+      (should (equal (cdr paths)
+                     (list (car (last native-comp-eln-load-path))))))
     (should-not package-archives)
     ;; Disabling archives must not disable installed dependency activation.
     (should (require 'gptel-request))))

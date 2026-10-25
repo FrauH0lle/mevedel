@@ -168,6 +168,8 @@ committed changes, unstaged edits, and non-ignored new files, not just the index
 An unavailable base fails with recovery-visible Git errors; fetch the base and
 enough history first. CI fetches full history and uses the PR base SHA, the
 push's previous SHA, or the default remote branch on a new branch/manual run.
+CI fetches a missing comparison commit explicitly, including a previous tip
+removed from branch history by a force-push.
 
 Enforced invariants:
 
@@ -484,7 +486,7 @@ string characters, vector cells and GC count. Only conses gate acceptance;
 budgets are the recorded baseline plus 100 conses per operation. A breach
 signals an error and returns a nonzero process status. The baseline and
 repeatability evidence live in
-[`benchmark/profiler-optimization-results.md`](../benchmark/profiler-optimization-results.md).
+[`benchmark/profiler-optimization-results.md`](https://github.com/FrauH0lle/mevedel/blob/master/benchmark/profiler-optimization-results.md).
 ERT covers counter arithmetic and path guards, not absolute budgets.
 
 ### Minimal-edit twin report

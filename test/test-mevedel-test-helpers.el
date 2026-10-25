@@ -19,8 +19,38 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-engine-test-support"))
 
-(mevedel-deftest mevedel-eask--isolate-test-home
-  (:doc "isolates native caches and ignores an archive being refreshed by another worker")
+(mevedel-deftest mevedel-eask--isolate-test-home ()
+  ,test
+  (test)
+  :doc "isolates home without touching native caches when native compilation is unavailable"
+  (with-temp-buffer
+    (let* ((default-directory mevedel-test--worktree-root)
+           (status
+            (call-process
+             (expand-file-name invocation-name invocation-directory)
+             nil t nil "--batch" "-Q" "--eval"
+             (prin1-to-string
+              `(progn
+                 (require 'cl-lib)
+                 (with-temp-buffer
+                   (insert-file-contents "Eask")
+                   (goto-char (point-min))
+                   (search-forward "(defun mevedel-eask--isolate-test-home")
+                   (goto-char (match-beginning 0))
+                   (eval (read (current-buffer)) t))
+                 (cl-letf (((symbol-function 'native-comp-available-p) (lambda () nil))
+                           ((symbol-function 'startup-redirect-eln-cache)
+                            (lambda (&rest _) (error "Native cache is unavailable"))))
+                   (mevedel-eask--isolate-test-home))
+                 (cl-assert (file-directory-p (getenv "HOME")))
+                 (cl-assert (file-in-directory-p (getenv "XDG_RUNTIME_DIR")
+                                                 (getenv "HOME")))
+                 (cl-assert (null package-archives)))))))
+      (ert-info ((buffer-string))
+        (should (eql status 0))
+        (should (equal "" (buffer-string))))))
+
+  :doc "isolates native caches and ignores an archive being refreshed by another worker"
   (let* ((script (cadr (member "-scriptload" command-line-args)))
          (cache (make-temp-file "mevedel-test-inherited-eln-" t))
          (packages (make-temp-file "mevedel-test-archives-" t))
@@ -42,7 +72,9 @@
                       ;; Seed the inherited path at the boundary under test,
                       ;; after Eask has loaded its own startup dependencies.
                       (advice-add 'mevedel-eask--isolate-test-home :before
-                                  (lambda () (startup-redirect-eln-cache ,cache)))
+                                  (lambda ()
+                                    (when (native-comp-available-p)
+                                      (startup-redirect-eln-cache ,cache))))
                       (add-hook 'eask-before-test/ert-hook
                                 (lambda () (setq package-user-dir ,packages)) t)
                       (setcar (cdr (member "-scriptload" command-line-args)) ,script)

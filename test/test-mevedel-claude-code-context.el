@@ -9,6 +9,7 @@
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "mevedel-engine-test-support"))
 (require 'mevedel-claude-code-session)
+(require 'mevedel-view-render)
 
 (mevedel-deftest mevedel--send-request/claude-child-roster (:quiet t)
   (dolist (receipt '(t nil compact))

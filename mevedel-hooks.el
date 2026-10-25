@@ -1994,7 +1994,10 @@ record only that context was added, without duplicating the body."
                      (process-send-string process payload)
                      (unless (or remote settled completion-requested)
                        (process-send-eof process)))
-                 (error (finish 'error (error-message-string err)))))))
+                 (error
+                  (if (memq (process-status process) '(exit signal))
+                      (process-exited process "")
+                    (finish 'error (error-message-string err))))))))
          (receive-output (_proc chunk)
            (unless (or settled completion-requested (string-empty-p chunk))
              (if stdin-ready

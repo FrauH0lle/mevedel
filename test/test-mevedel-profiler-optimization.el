@@ -56,8 +56,9 @@
                                  (setq load-path ',load-path
                                        byte-compile-error-on-warn t
                                        mevedel-benchmark--no-main t)
-                                 (startup-redirect-eln-cache
-                                  ,(file-name-concat temporary "eln"))))
+                                 (when (native-comp-available-p)
+                                   (startup-redirect-eln-cache
+                                    ,(file-name-concat temporary "eln")))))
                     "-f" "batch-byte-compile" source)))
               (ert-info ((buffer-string))
                 (should (eql status 0))
@@ -71,8 +72,9 @@
                               `(progn
                                  (setq load-path ',load-path
                                        mevedel-benchmark--no-main t)
-                                 (startup-redirect-eln-cache
-                                  ,(file-name-concat temporary "eln"))))
+                                 (when (native-comp-available-p)
+                                   (startup-redirect-eln-cache
+                                    ,(file-name-concat temporary "eln")))))
                     "-l" compiled
                     "--eval" (prin1-to-string
                               `(progn

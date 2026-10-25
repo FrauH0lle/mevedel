@@ -181,7 +181,8 @@ and cancellation ownership; the internal acknowledgment is not hook output, and
 event payloads remain on stdin rather than in process arguments.
 Whatever settles a command handler — exit, timeout, request
 cancellation, or a failed stdin write — leaves no child running and writes
-one log entry.  A cancellation logs status `cancelled` and closes the
+one log entry. If the child exits before the stdin write, its exit status
+determines the decision. A cancellation logs status `cancelled` and closes the
 event's telemetry span without running the remaining handlers or the
 caller's continuation, because the request that owned them is being torn
 down. Cancellation also stops command startup before preparation or launch;
