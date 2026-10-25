@@ -1,0 +1,2614 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and architecture manual for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/development/">
+      
+      
+        <link rel="prev" href="../tools/execution/">
+      
+      
+        <link rel="next" href="../telemetry/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Development guide - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#development-guide" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Development guide
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using mevedel
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using mevedel
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation and workspace view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../collaboration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Browser collaboration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plans
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents and tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mentions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills and plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sessions and recovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory and journal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions and confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../module-map/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource addressing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Context delivery and reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tool reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Programmatic tool calls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files and search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/applypatch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#external-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        External dependencies
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#worktree-bootstrap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Worktree bootstrap
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependency-maintenance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency maintenance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gptel-source-rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        gptel source rule
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#development-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Development Commands
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Development Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#checks-before-committing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checks before committing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Checks before committing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#opt-in-pre-commit-hook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Opt-in pre-commit hook
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deterministic-standards-and-checkdoc-ratchet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deterministic standards and checkdoc ratchet
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#byte-compilation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Byte compilation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#graphical-view-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Graphical view checks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#view-allocation-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        View allocation gate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#minimal-edit-twin-report" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Minimal-edit twin report
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reloading-into-a-running-emacs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reloading into a running Emacs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Code style
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#loading-and-initialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Loading and initialization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing-conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing conventions
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry and diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#external-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        External dependencies
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#worktree-bootstrap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Worktree bootstrap
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependency-maintenance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency maintenance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gptel-source-rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        gptel source rule
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#development-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Development Commands
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Development Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#checks-before-committing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checks before committing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Checks before committing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#opt-in-pre-commit-hook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Opt-in pre-commit hook
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deterministic-standards-and-checkdoc-ratchet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deterministic standards and checkdoc ratchet
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#byte-compilation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Byte compilation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#graphical-view-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Graphical view checks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#view-allocation-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        View allocation gate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#minimal-edit-twin-report" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Minimal-edit twin report
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reloading-into-a-running-emacs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reloading into a running Emacs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Code style
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#loading-and-initialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Loading and initialization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing-conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing conventions
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/development.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="development-guide">Development guide<a class="headerlink" href="#development-guide" title="Permanent link">&para;</a></h1>
+<p>Read this guide before planning or implementing code changes, writing or running
+tests, compiling, or committing. These are repository requirements.</p>
+<h2 id="external-dependencies">External dependencies<a class="headerlink" href="#external-dependencies" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>gptel</strong>, <strong>acp &gt;=0.15.2</strong>, <strong>yaml</strong>, <strong>orderless</strong>, <strong>websocket</strong>, <strong>qrencode</strong>, <strong>Emacs &gt;=31.1</strong>,
+  <strong>org-mode</strong></li>
+</ul>
+<p>Eask dependency installs can get stale.
+Run <code>npx @emacs-eask/cli upgrade PACKAGE</code> to update. For example:</p>
+<div class="highlight"><pre><span></span><code>npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>upgrade<span class="w"> </span>gptel<span class="w"> </span>yaml<span class="w"> </span>orderless
+</code></pre></div>
+<p>Provider experiments intended to represent the user's configured setup must
+verify the dependencies actually loaded in that setup and in the isolated
+runner. A refreshed upstream checkout or matching model configuration does not
+establish equivalence when the user runs a local dependency branch. Record loaded
+library paths and source hashes; use a frozen copy of the intended dependency
+sources in the runner before loading mevedel. Before paid calls, check the native
+dry-run request for consequential controls such as reasoning effort and output
+limits in that same runner. A policy variable being set is insufficient if the
+loaded transport does not serialize it. Keep any intentionally different
+dependency configuration explicit in the protocol and conclusions.</p>
+<p>Preserve and check the configured backend's concrete type, not just its name,
+model and endpoint. Reconstructing a Codex OAuth backend as a generic Responses
+backend changes native request controls: OAuth omits unsupported server output
+limits while mevedel retains its client-side guards. Preflight must exercise the
+configured backend type through the native request path; matching an expected
+payload from a substituted type does not establish configuration equivalence.</p>
+<h2 id="worktree-bootstrap">Worktree bootstrap<a class="headerlink" href="#worktree-bootstrap" title="Permanent link">&para;</a></h2>
+<p>Run <code>python3 scripts/bootstrap-worktree.py [WORKTREE]</code> from a checkout root
+before tests. It reuses the primary checkout's <code>.eask</code>, validates this worktree's
+dependency versions and loading through Eask, and reports Emacs/Eask versions, paths and
+source hashes. It runs offline without installing or upgrading dependencies;
+failure prints recovery instructions. <code>.eask</code> is ignored as directory or symlink.
+This repo's <code>.dir-locals.el</code> configures creation-time setup, requiring Emacs
+approval. The separate <code>mevedel-worktree-setup-enabled</code> flag defaults off;
+<code>mevedel-worktree-setup-command</code> holds argv. Both creation paths and the skill
+honor that authorization; see <a href="../adr/0001-worktree-command-and-skill/">the worktree ADR</a>.
+Setup output stays in <code>*mevedel worktree setup*</code>; failure retains the checkout.</p>
+<h2 id="dependency-maintenance">Dependency maintenance<a class="headerlink" href="#dependency-maintenance" title="Permanent link">&para;</a></h2>
+<p><code>.github/dependabot.yml</code> schedules weekly update PRs for the exact npm pins
+and lockfile in <code>shared-editing/</code>, the Go module in <code>relay/</code>, and GitHub
+Actions references. Tiptap updates are grouped, including major releases;
+the dependency test checks that its schema packages remain synchronized.
+<code>@tiptap/y-tiptap</code> has its own version series. Updates are reviewed, not
+automatically merged. Dependabot security updates also depend on the
+repository's dependency graph, alerts, and security-update settings.</p>
+<p>The read-only <code>dependencies</code> workflow installs the lockfile, rebuilds the
+helper and viewer assets, and rejects tracked differences or unexpected
+generated files. It also runs helper/viewer tests, focused Chromium
+regressions, and Go checks on PRs. It does not replace the full shared-editor
+browser suite, which additionally needs the isolated Emacs/Eask environment.
+The workflow uses no secrets, disables checkout credentials, and never writes
+back to a PR or runs PR code through <code>pull_request_target</code>.</p>
+<p>Dependabot does not regenerate committed bundles, WASM, or license notices.
+For an npm update PR, check out that branch and use Node 26 to run:</p>
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span>ci<span class="w"> </span>--prefix<span class="w"> </span>shared-editing
+npm<span class="w"> </span>run<span class="w"> </span>build<span class="w"> </span>--prefix<span class="w"> </span>shared-editing
+</code></pre></div>
+<p>Review and commit all generated changes along with the manifest and lockfile,
+then run the checks in <a href="../shared-editing/#checks">shared editing</a>. A PR with
+stale generated assets intentionally fails CI; testing a rebuilt bundle is
+not proof that the packaged bundle was updated. New viewer assets enter the
+relay release when its binary is rebuilt.</p>
+<p>The bot does not maintain Eask/MELPA dependencies, the embedded tree-sitter
+grammar pin, manually ported Excalidraw code and fonts, system packages, or
+the unpinned documentation-site Python install. Actions using <code>@master</code> also
+remain floating; update PRs do not turn branch references into immutable pins.
+These still need explicit upstream/provenance review. Repository settings and
+required branch checks must be configured on GitHub; the workflow files do
+not establish them.</p>
+<h2 id="gptel-source-rule">gptel source rule<a class="headerlink" href="#gptel-source-rule" title="Permanent link">&para;</a></h2>
+<p>mevedel is tightly coupled to gptel. Before
+implementing or changing behavior that touches prompts, requests, callbacks,
+tool calls, presets, buffers, transcripts, session flow, agents, or
+coordination, consult gptel source and reuse its existing
+APIs or patterns instead of duplicating them.</p>
+<p>Ensure the repository is cloned:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># First time</span>
+mkdir<span class="w"> </span>-p<span class="w"> </span>.scratch/upstream
+git<span class="w"> </span>clone<span class="w"> </span>https://github.com/karthink/gptel<span class="w"> </span>.scratch/upstream/gptel
+</code></pre></div>
+<p>Prefer a refreshed upstream checkout, because Eask dependency installs can get
+stale:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Refresh before consulting</span>
+git<span class="w"> </span>-C<span class="w"> </span>.scratch/upstream/gptel<span class="w"> </span>pull<span class="w"> </span>--ff-only
+</code></pre></div>
+<h2 id="development-commands">Development Commands<a class="headerlink" href="#development-commands" title="Permanent link">&para;</a></h2>
+<h3 id="checks-before-committing">Checks before committing<a class="headerlink" href="#checks-before-committing" title="Permanent link">&para;</a></h3>
+<p>After installing the Eask development dependencies, run the same fail-fast
+check as GitHub CI:</p>
+<div class="highlight"><pre><span></span><code>npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>run<span class="w"> </span>script<span class="w"> </span>check
+<span class="c1"># With Eask on PATH:</span>
+eask<span class="w"> </span>run<span class="w"> </span>script<span class="w"> </span>check
+<span class="c1"># Limit test concurrency on smaller machines:</span>
+npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>run<span class="w"> </span>script<span class="w"> </span>check<span class="w"> </span>--<span class="w"> </span>--jobs<span class="w"> </span><span class="m">4</span>
+</code></pre></div>
+<p>The check first runs the deterministic standards checks below, cleans stale
+bytecode, compiles the package with <code>--strict</code> (warnings fail the command), then
+runs the complete isolated ERT suite through the existing
+<code>test</code> script. The test runner cleans bytecode again before loading sources, so
+compiled files cannot shadow edits. Each failed step stops the check and returns
+a nonzero status. Dependency installation remains a separate setup step.</p>
+<h4 id="opt-in-pre-commit-hook">Opt-in pre-commit hook<a class="headerlink" href="#opt-in-pre-commit-hook" title="Permanent link">&para;</a></h4>
+<p>To run that check automatically before local commits, from the repository root:</p>
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>config<span class="w"> </span>--local<span class="w"> </span>core.hooksPath<span class="w"> </span>.githooks
+</code></pre></div>
+<p>This replaces the repository's configured hooks path; inspect
+<code>git config --get core.hooksPath</code> first if you already use hooks. Installation is
+optional and is never performed by Eask or CI. To undo it, use
+<code>git config --local --unset core.hooksPath</code> (or restore your previous value).
+The hook requires Node/npx, Python 3, Emacs and installed Eask development
+dependencies, and runs the full check, not a focused subset. It checks the
+working tree, not a temporary copy of the index: when partially staging files,
+ensure the staged change passes independently too. CI runs the check even when
+the hook is not installed or is bypassed; required branch checks are a separate
+GitHub repository setting.</p>
+<h4 id="deterministic-standards-and-checkdoc-ratchet">Deterministic standards and checkdoc ratchet<a class="headerlink" href="#deterministic-standards-and-checkdoc-ratchet" title="Permanent link">&para;</a></h4>
+<p><code>scripts/check-standards.py</code> runs first in <code>check</code> and CI. Run it independently
+without Eask or dependencies (Python 3, Git and Emacs are sufficient):</p>
+<div class="highlight"><pre><span></span><code>python3<span class="w"> </span>scripts/check-standards.py
+python3<span class="w"> </span>scripts/check-standards.py<span class="w"> </span>--base<span class="w"> </span>origin/master
+<span class="nv">CHECK_BASE</span><span class="o">=</span>BASE<span class="w"> </span>npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>run<span class="w"> </span>script<span class="w"> </span>check
+</code></pre></div>
+<p>The default base is <code>master</code>, overridden by <code>CHECK_BASE</code> or <code>--base</code>. The script
+resolves <code>git merge-base BASE HEAD</code>; it checks the working tree, including
+committed changes, unstaged edits, and non-ignored new files, not just the index.
+An unavailable base fails with recovery-visible Git errors; fetch the base and
+enough history first. CI fetches full history and uses the PR base SHA, the
+push's previous SHA, or the default remote branch on a new branch/manual run.
+CI fetches a missing comparison commit explicitly, including a previous tip
+removed from branch history by a force-push.</p>
+<p>Enforced invariants:</p>
+<ul>
+<li>First-line <code>lexical-binding: t</code> and a matching final <code>;;; FILENAME.el ends
+  here</code> footer (optional final period) in root Lisp libraries and immediate
+  <code>test/</code>, <code>benchmark/</code>, and <code>scripts/</code> Lisp files. Dotfiles, data, and nested
+  executable fixtures are not libraries and are outside this layout check.</li>
+<li>Local inline/image and explicit reference Markdown links in <code>docs/</code> resolve
+  to files/directories and, for Markdown fragments, heading or explicit HTML
+  anchors. Fenced and inline code examples are ignored. This is not a full
+  Markdown renderer: shortcut reference links, setext headings and arbitrary HTML
+  links are outside the check; external URLs are not fetched.</li>
+<li>ADR index IDs are unique, base IDs remain present, every current ADR has its
+  own index destination, and consolidated IDs point to a valid decision-history
+  anchor. Both the original-ID table and additional-record list are checked.</li>
+<li>Checkdoc runs <strong>only on changed <code>.el</code> files</strong>, in clean batch Emacs without
+  evaluating sources or file locals. Git-detected renames retain their base
+  diagnostics; deleted files need no check. New diagnostics fail the command.
+  The ratchet compares message counts per top-level definition, ignoring line
+  shifts; fixing one definition cannot buy warnings in another. Existing
+  diagnostics in changed files are summarized as advisory, not repeated.</li>
+<li>Test function-cell stubs must explicitly require the defining feature before
+  installing the stub. <code>scripts/test-stubs-collect.el</code> reads definitions and
+  <code>provide</code> forms from repository libraries (the same root/immediate-directory
+  Lisp scope as the layout check), without loading them. It checks literal
+  <code>cl-letf</code>/<code>cl-letf*</code> bindings of <code>symbol-function</code>, <code>fset</code>, <code>defalias</code>, and
+  <code>setf</code>/<code>cl-setf</code> of <code>symbol-function</code> in immediate <code>test/</code> libraries. It accepts
+  unconditional top-level imports for deferred test/function bodies, or an
+  earlier unconditional import in the enclosing body or binding initializer.
+  A <code>require</code> in the stubbed body is too late; conditional and compile-only
+  imports do not establish readiness. Transitive imports through aggregators
+  do not substitute for the explicit owner import. External functions and
+  functions defined in the test library itself are outside this check. Quoted
+  data is ignored, while executable backquote unquotes are checked. Literal
+  <code>mevedel-deftest</code> templates and their setup, teardown and variable options are
+  checked per generated case, without evaluating template expressions. Other
+  macros are not expanded. Diagnostics point to the
+  containing top-level form. This is a literal-source check, not a proof of
+  arbitrary Lisp control flow or generated stubs.
+  Both complete snapshots are checked against their own definition maps, so a
+  changed defining feature also rechecks unchanged tests. New diagnostics fail
+  by per-file, per-test/function, per-message counts; line shifts and Git-detected
+  renames retain the baseline. Existing debt is summarized as advisory rather
+  than maintained in a hand-written allowlist.</li>
+</ul>
+<p>The checker regression suite exercises real temporary Git repos and Emacs,
+including injected violations, checkdoc negative controls, and a cold autoload
+that overwrites a test stub (with the preloaded-owner variant as its control):</p>
+<div class="highlight"><pre><span></span><code>python3<span class="w"> </span>-m<span class="w"> </span>unittest<span class="w"> </span>test/test_check_standards.py<span class="w"> </span>test/test_check.py
+</code></pre></div>
+<p>Full-tree checkdoc remains available as an advisory inventory:</p>
+<div class="highlight"><pre><span></span><code>npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>lint<span class="w"> </span>checkdoc<span class="w"> </span><span class="s1">'*.el'</span>
+</code></pre></div>
+<p>The 2026-10-24 baseline on Emacs 31.1/Eask 0.12.9 reports 528 diagnostics across
+146 of 261 root Lisp files, mostly undocumented arguments and sentence spacing.
+Those existing diagnostics do not block the ratchet. Both sides are measured
+with the same installed Emacs, not a frozen warning count. Use <code>--strict</code> with
+the advisory command when a nonzero exit status on all findings is needed.</p>
+<h3 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h3>
+<p>Use the runner for targeted runs by default. It accepts test files and quoted
+glob patterns, cleans stale bytecode through Eask itself, retains native logs,
+and returns a nonzero status when cleanup, loading, or a test fails. No output
+pipeline is needed: the console prints a bounded summary and up to 20 failing
+test names; reports retain every failure.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Single file</span>
+npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>run<span class="w"> </span>script<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--<span class="w"> </span>test/test-mevedel-compact.el
+<span class="c1"># Related files; quote patterns so the runner diagnoses unmatched patterns</span>
+python3<span class="w"> </span>test/run_tests.py<span class="w"> </span><span class="s1">'test/test-mevedel-compact*.el'</span>
+<span class="c1"># A cold-loading check: only one test file is loaded per Emacs</span>
+python3<span class="w"> </span>test/run_tests.py<span class="w"> </span>--fresh-files<span class="w"> </span><span class="s1">'test/test-mevedel-compact*.el'</span>
+<span class="c1"># Replay exactly one worker's saved file roster and test sequence</span>
+python3<span class="w"> </span>test/run_tests.py<span class="w"> </span>--replay<span class="w"> </span>.scratch/test-suite-performance/RUN/0-partition.json
+</code></pre></div>
+<p>For a faster complete ERT-only run, use the measured parallel runner after
+installing the Eask dependencies (the <code>check</code> script above also runs it):</p>
+<div class="highlight"><pre><span></span><code>eask<span class="w"> </span>run<span class="w"> </span>script<span class="w"> </span><span class="nb">test</span>
+<span class="c1"># Via npx:</span>
+npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>run<span class="w"> </span>script<span class="w"> </span><span class="nb">test</span>
+<span class="c1"># Limit concurrency on smaller machines:</span>
+npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>run<span class="w"> </span>script<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--<span class="w"> </span>--jobs<span class="w"> </span><span class="m">4</span>
+</code></pre></div>
+<p>This command performs the required Eask bytecode cleanup itself, discovers every
+case in <code>test/test-*.el</code>, and runs each exactly once across independent Eask/Emacs
+processes. Each worker gets Eask's temporary HOME and XDG roots and loads the
+selected file roster (the complete roster when no files are supplied).
+The default uses the CPUs available to the process
+(respecting Linux CPU affinity), capped at eight workers and the number of
+discovered tests. <code>--jobs</code> overrides the CPU-based limit. The runner prints the
+available CPU count and selected worker count. Tests must be
+independent of execution order; setup belongs inside the case or <code>:before-each</code>,
+not in a separate template form. Shared fixtures isolate tool registries and
+their lookup cache as well as cleaning up runtime state.</p>
+<p><code>--fresh-files</code> instead starts a separate Emacs for every selected file, with
+<code>--jobs</code> limiting concurrent files. It discovers and runs each file's cases in
+that same process; unrelated files cannot supply missing imports or initialize
+fixtures for it. CI enforces this as a separate parallel matrix job, alongside
+the ordinary strict compilation/partitioned-suite job.</p>
+<p>All ERT processes disable package archives in the Eask startup hook, after
+installed dependencies are activated and before Eask initializes package
+metadata. Workers neither read nor refresh the shared archive cache, so a
+parallel refresh cannot expose a partially written <code>archive-contents</code> file.
+Dependency installation remains a separate setup step for local and CI runs.</p>
+<p>Local validation on 2026-10-24 covered 440 files and 12,618 cases: the fresh-file
+lane took 426.83 seconds, versus 251.35 seconds for the partitioned suite (eight
+workers each, 32 CPUs available; both ran alongside provisioned remote checks).
+The extra process startup cost belongs in its own parallel job, not serially
+after the ordinary check; enforcing it catches dependencies the warm suite hides.</p>
+<p>Every worker saves <code>N-partition.json</code> containing its loaded file roster, complete
+inventory, and assigned test sequence. <code>--replay PATH</code> loads that exact roster
+and runs the assigned cases in their saved order in one worker; it does not
+rebalance or sort them. Inventory changes fail explicitly rather than silently
+changing the reproduction. Native logs and result reports remain available in
+the new run directory.</p>
+<p>Reports go under <code>.scratch/test-suite-performance/</code> in a new timestamped
+directory (<code>--output DIRECTORY</code> chooses another new directory). Native worker
+logs retain failures; missing, duplicate, or extra results fail the run.
+<code>summary.json</code> records cleanup, discovery, worker ERT, and full-suite wall times.
+<code>durations.csv</code> sorts cases slowest first with cumulative duration and shares of
+test time and wall time. Worker durations overlap, so wall-time shares are not
+additive. Startup, loading, and shutdown are included in wall time; the difference
+between worker wall and ERT time measures their combined overhead. Fixture setup
+and teardown are included in individual case durations.</p>
+<p>A successful complete partitioned run updates <code>latest-durations.csv</code>, used to
+balance later runs. Focused, fresh-file, and replay runs never replace it.
+<code>--durations CSV</code> supplies another report; without timing history, all discovered
+cases are distributed evenly. No test is omitted because a timing is missing.
+Provisioned SSH, Podman, or Docker acceptance environments force serial execution
+because their tests share target roots. Real transport acceptance remains
+<code>test/run-remote-acceptance.sh</code>; its provisioning and runtime are separate from
+the ordinary ERT command. Conditional skips remain visible in reports.</p>
+<p>The runner uses Python's standard library and Eask from <code>PATH</code>. Invoking it
+through <code>npx</code> makes that Eask executable available to its workers too. Direct
+<code>python3 test/run_tests.py</code> invocation falls back to cached <code>npx</code> Eask when
+<code>eask</code> is absent from <code>PATH</code>. Dependency installation is a separate setup step.
+GitHub CI also checks the runner itself and uploads the report directory,
+including worker logs on failure. A crashed worker or invalid result file fails
+the run with its worker log path; the summary and timings for other completed
+workers are still written. The summary distinguishes the reported count from
+the expected inventory, and incomplete runs never replace the balancing history.
+The runner's own checks are:</p>
+<div class="highlight"><pre><span></span><code>python3<span class="w"> </span>test/test_run_tests.py
+python3<span class="w"> </span>test/run_tests.py<span class="w"> </span>test/test-mevedel-test-helpers.el<span class="w"> </span>test/test-mevedel-test-runner.el
+</code></pre></div>
+<p>Test files mirror modules: <code>test/test-mevedel-MODULE.el</code>. Shared helpers
+(including the <code>mevedel-deftest</code> macro) are in <code>test/helpers.el</code>. Tests
+use real temp files/directories rather than mocking. Eask gives ERT a temporary
+<code>HOME</code> and XDG roots; the shared helper rejects unsafe test invocations that
+could reach real user state.</p>
+<p>Shared-helper cases use a private temporary working directory, so an accidental
+relative subprocess write such as <code>git init .</code> cannot create <code>/tmp/.git</code> or
+modify the checkout. The helpers assert that cases leave no unread keyboard
+events or newly live network/TRAMP connections, and reject Emacs file mutations
+outside test-owned temporary roots. They clean leaked events and connections
+after reporting them, so later cases do not inherit the leak. Provisioned remote
+fixtures must explicitly allow their own remote root. This is a Lisp assertion
+boundary, not an OS sandbox: an external subprocess using an arbitrary absolute
+path is not intercepted. Shared temporary-root Git/workspace contamination is
+still an error and is preserved rather than deleting potentially foreign state.</p>
+<p>The Eask startup hook also redirects the native compilation cache into that
+temporary HOME before loading test files or their dependencies.  ERT's own
+cache redirection happens after test-file loading and is not sufficient:
+changing HOME alone leaves Emacs's startup native-cache path pointing at the
+real home.  Both caches are removed when their owning test process exits.</p>
+<h3 id="byte-compilation">Byte compilation<a class="headerlink" href="#byte-compilation" title="Permanent link">&para;</a></h3>
+<p><div class="highlight"><pre><span></span><code>npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>compile<span class="w"> </span>--strict
+
+<span class="c1"># Afterwards, use the Eask cleanup command in Testing above.</span>
+</code></pre></div>
+Compile before committing. Keep the compiler silent: no free-variable or
+unknown-function warnings. Use <code>declare-function</code> and <code>defvar</code> for external
+symbols and <code>eval-when-compile</code> for compile-time-only dependencies.</p>
+<p>Compilation-order regressions need a fresh Emacs subprocess: preloaded test
+helpers can hide missing special-variable declarations and struct setter
+expanders. The agent observer, agent runtime, and Goal edit cold-compilation
+tests exercise compiled behavior before loading their ordinary test fixtures.
+Required dependencies loaded from source can also hide missing compile-time
+imports; use compiled dependency copies when testing that boundary.</p>
+<h3 id="graphical-view-checks">Graphical view checks<a class="headerlink" href="#graphical-view-checks" title="Permanent link">&para;</a></h3>
+<p>For view presentation changes, run the maintained graphical check from the
+checkout being tested, after the worktree bootstrap:</p>
+<div class="highlight"><pre><span></span><code>npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>run<span class="w"> </span>script<span class="w"> </span>graphical-check
+<span class="c1"># Grammars outside the system library path must be supplied explicitly:</span>
+npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>run<span class="w"> </span>script<span class="w"> </span>graphical-check<span class="w"> </span>--<span class="w"> </span>--grammar-dir<span class="w"> </span>/path/to/tree-sitter
+<span class="c1"># Optional new artifact directory and graphical-child deadline (default 120s):</span>
+npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>run<span class="w"> </span>script<span class="w"> </span>graphical-check<span class="w"> </span>--<span class="w"> </span>--grammar-dir<span class="w"> </span>/path/to/tree-sitter<span class="w"> </span>--output<span class="w"> </span>.scratch/view-check<span class="w"> </span>--timeout<span class="w"> </span><span class="m">90</span>
+</code></pre></div>
+<p>The command cleans stale bytecode itself, obtains dependency load paths from
+Eask, then starts a <strong>separate graphical <code>emacs -Q</code></strong>. It never loads checkout
+code into the running editor. The child has temporary HOME, all XDG roots
+(including runtime), and native cache; JIT native compilation is disabled to
+avoid fresh-cache background compilation. The parent removes this private
+state on success, failure, or timeout. Existing output directories are rejected.</p>
+<p>Prerequisites are a graphical Emacs build with Cairo PNG/PDF frame export,
+SVG image support, DejaVu Sans and DejaVu Sans Mono, and an accessible active
+Wayland or X display. The preflight reports missing display variables,
+unavailable Wayland sockets, inaccessible displays and missing export support;
+a bounded parent process terminates a hung graphical child. A relative Wayland
+socket is resolved against the original runtime directory before isolation;
+X authentication is preserved separately from HOME.</p>
+<p>Both <strong><code>markdown</code> and <code>markdown-inline</code> tree-sitter grammars</strong> must load in the
+isolated child. Missing grammars are a hard failure, not silently unfontified
+Markdown or a prompt to download code. Install them separately (for example
+with Emacs's <code>M-x treesit-install-language-grammar</code>), then pass the directory
+containing their shared libraries with <code>--grammar-dir</code>. Repeat the option for
+multiple directories. The runner does not read personal Emacs configuration
+or automatically search its custom grammar directories.</p>
+<p>The smoke fixture builds a real paired transcript/view through production
+setup and full rendering, including Markdown and a table, and checks an active
+multiline <code>&gt;</code> composer draft survives. It explicitly enables and forces font
+lock, checks the assistant's native Markdown bold face after redisplay, and
+exports the frame. Fixture buffers have visible names: Emacs refuses to enable font
+lock for internal names beginning with a space. No face-copying workaround is
+needed. The existing graphical table and native viewport geometry ERT suites
+and live mouse-event interleaving suites then run in that same graphical
+process. The mouse suite delivers press/release through <code>unread-command-events</code>
+and the command loop, with a tick or stream chunk between them; it checks queued
+and freshly resolved releases with and without explicit redisplay.
+Unexpected results <strong>or skipped
+tests</strong> fail the command, so missing fonts or image support cannot count as
+graphical coverage.</p>
+<p>Artifacts default to a fresh <code>.scratch/graphical-check/TIMESTAMP/</code> directory:
+<code>view.png</code> and <code>view.pdf</code> are actual Emacs frame exports; <code>view.txt</code> records the
+rendered fixture text; <code>ert.log</code> and <code>graphical.log</code> retain test/launch diagnostics;
+<code>summary.json</code> records the checkout and loaded view library,
+Emacs/window-system/font, required grammars, grammar search paths and test
+counts. The fixture rejects view code loaded from another checkout. Inspect
+the image when assessing a visual change: green
+geometry assertions alone do not establish visual quality.</p>
+<p>This is a static rendering/geometry check, <strong>not</strong> a frame-rate, CPU or compositor
+presentation benchmark. Exported frames and <code>redisplay</code> do not prove distinct
+presented ticks; do not use this command to claim latency gains or rule out
+coalesced redraws. Timing work needs a warmed fixture, evidence of actual
+presentation and a display that stays active. Desktop locks or powered-down
+outputs can suppress presentation; for unattended timing, use an isolated
+compositor with locking disabled and verify its frame delivery separately.
+OS pointer/hover automation remains outside this command. It is opt-in locally,
+not part of hosted CI or the ordinary <code>check</code> script.</p>
+<p>The batch-safe runner regression tests are included in the normal suite:</p>
+<div class="highlight"><pre><span></span><code>npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>clean<span class="w"> </span>elc
+npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span><span class="nb">test</span><span class="w"> </span>ert<span class="w"> </span>test/test-mevedel-graphical-check.el
+</code></pre></div>
+<h3 id="view-allocation-gate">View allocation gate<a class="headerlink" href="#view-allocation-gate" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>run<span class="w"> </span>script<span class="w"> </span>bench-gate
+</code></pre></div>
+<p>This standalone gate compiles the package and measurement helpers into a
+temporary directory, then measures in a fresh batch Emacs. It refuses
+interpreted hot paths and removes its bytecode, private HOME, XDG roots and
+native cache afterwards. No code is loaded into the running editor.</p>
+<p>Each scenario uses a fresh 1 MiB synthetic rendered history shared with the
+profiler harness, a selected 80-column, 25-line frame and a multiline composer
+draft beginning with <code>&gt;</code>. Five warmups precede each sample. Fixture setup and
+output assertions are outside the measured operation:</p>
+<ul>
+<li><code>stream-chunk</code>: append a fixed response chunk to a prepared in-flight turn,
+  then call <code>mevedel-view--render-stream-update</code> directly.</li>
+<li><code>composer-keystroke</code>: <code>self-insert-command</code> followed by the actual view's
+  <code>post-command-hook</code>, with window geometry primed before measurement.</li>
+<li><code>zone-tick</code>: cross a deterministic second boundary in
+  <code>mevedel-view--spinner-tick</code>, rewriting the progress rail from <code>12s</code> to <code>13s</code>.
+  Static spinner styles isolate the semantic elapsed-label update.</li>
+</ul>
+<p>The gate checks that each update modified the buffer and produced its intended
+output without corrupting the composer. The clock binding and reconciliation
+counter are included in the operation, consistently across runs. Every raw
+sample starts with <code>garbage-collect</code>; net counters subtract the componentwise
+minimum of three no-op measurements, clamped at zero. Output includes conses,
+string characters, vector cells and GC count. Only conses gate acceptance;
+budgets are the recorded baseline plus 100 conses per operation. A breach
+signals an error and returns a nonzero process status. The baseline and
+repeatability evidence live in
+<a href="https://github.com/FrauH0lle/mevedel/blob/master/benchmark/profiler-optimization-results.md"><code>benchmark/profiler-optimization-results.md</code></a>.
+ERT covers counter arithmetic and path guards, not absolute budgets.</p>
+<h3 id="minimal-edit-twin-report">Minimal-edit twin report<a class="headerlink" href="#minimal-edit-twin-report" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span>run<span class="w"> </span>script<span class="w"> </span>bench-twin
+</code></pre></div>
+<p>The twin reuses the allocation gate's stream-chunk and elapsed-zone fixtures.
+It reports, not gates. It snapshots the buffer including properties, runs the
+update, derives one contiguous character replacement from the longest common
+character prefix and a nonoverlapping suffix, and adds only differing property
+runs. Inserted text carries its final properties. Replaying on a snapshot copy
+must be <code>equal-including-properties</code> to the live result.</p>
+<p><code>normal-bytecode</code> lines report floor deleted/inserted characters and explicit
+property runs, plus five-sample median times for the unadvised whole update
+and the floor replay. Five warmups precede the samples, with GC before each
+sample. Snapshot creation, edit derivation and equality assertions are untimed.</p>
+<p><code>generic-call-counts</code> lines report observed real deleted/inserted characters
+and nonempty property primitive calls (including redundant writes). These
+come from a separate fresh-fixture process and count-only build: Emacs's
+normal <code>insert</code> and <code>delete-region</code> bytecode opcodes bypass advice, so this
+build temporarily disables those two byte-compile handlers to emit generic
+calls instead. Timings always use the ordinary, uninstrumented bytecode build.
+The runner restores the handlers and deletes both builds afterwards.</p>
+<p>The observer covers successful calls to <code>delete-region</code>, <code>insert</code>,
+<code>set-text-properties</code>, <code>add-text-properties</code> and <code>put-text-property</code> targeting
+the view, even with modification hooks inhibited. It excludes edits to other
+buffers/strings, properties carried by an inserted string, other mutation
+primitives and internal C work. A reported property "run" on the real side is
+one nonempty primitive call, not the number of internal interval splits.
+The floor side counts explicit differing-property assignments. These counters
+describe the observed writes, not a complete accounting of all renderer work.</p>
+<p>This is the minimal <em>single-span</em> character edit plus property corrections,
+not a globally minimal multi-edit script. The replay has the same text and
+text properties, not equivalent hooks, overlays, markers, mode state, layout
+or redisplay. Its time is a text-mutation floor, not an achievable UI latency
+target or a graphical redisplay measurement.</p>
+<h3 id="reloading-into-a-running-emacs">Reloading into a running Emacs<a class="headerlink" href="#reloading-into-a-running-emacs" title="Permanent link">&para;</a></h3>
+<p>Load compiled code into a live editor, never bare sources. Interpreted
+mevedel is several times slower and allocates on every call: on a large
+session the transcript parser took 67 ms and 6.4 MB interpreted against
+19 ms and 1.6 MB compiled, and garbage collection dominated interactive
+pauses. Compile into a temporary directory so no bytecode is left beside
+the sources or in a package build, where it could shadow later edits:</p>
+<div class="highlight"><pre><span></span><code><span class="p">(</span><span class="k">let*</span><span class="w"> </span><span class="p">((</span><span class="nv">dir</span><span class="w"> </span><span class="p">(</span><span class="nv">make-temp-file</span><span class="w"> </span><span class="s">"mevedel-reload-"</span><span class="w"> </span><span class="no">t</span><span class="p">))</span>
+<span class="w">       </span><span class="p">(</span><span class="nv">byte-compile-dest-file-function</span>
+<span class="w">        </span><span class="p">(</span><span class="nb">lambda</span><span class="w"> </span><span class="p">(</span><span class="nv">file</span><span class="p">)</span>
+<span class="w">          </span><span class="p">(</span><span class="nv">file-name-concat</span><span class="w"> </span><span class="nv">dir</span><span class="w"> </span><span class="p">(</span><span class="nf">concat</span><span class="w"> </span><span class="p">(</span><span class="nv">file-name-base</span><span class="w"> </span><span class="nv">file</span><span class="p">)</span><span class="w"> </span><span class="s">".elc"</span><span class="p">)))))</span>
+<span class="w">  </span><span class="p">(</span><span class="nb">dolist</span><span class="w"> </span><span class="p">(</span><span class="nv">file</span><span class="w"> </span><span class="o">'</span><span class="p">(</span><span class="s">"mevedel-view-composer.el"</span><span class="p">))</span>
+<span class="w">    </span><span class="p">(</span><span class="k">let</span><span class="w"> </span><span class="p">((</span><span class="nv">source</span><span class="w"> </span><span class="p">(</span><span class="nf">expand-file-name</span><span class="w"> </span><span class="nv">file</span><span class="w"> </span><span class="s">"~/Projekte/mevedel/"</span><span class="p">)))</span>
+<span class="w">      </span><span class="p">(</span><span class="nv">byte-compile-file</span><span class="w"> </span><span class="nv">source</span><span class="p">)</span>
+<span class="w">      </span><span class="p">(</span><span class="nf">load</span><span class="w"> </span><span class="p">(</span><span class="nf">funcall</span><span class="w"> </span><span class="nv">byte-compile-dest-file-function</span><span class="w"> </span><span class="nv">source</span><span class="p">)</span><span class="w"> </span><span class="no">nil</span><span class="w"> </span><span class="no">t</span><span class="p">))))</span>
+</code></pre></div>
+<p>A package build without <code>.elc</code> files loads every module from source. Check
+with <code>(interpreted-function-p (symbol-function 'mevedel-transcript-segments))</code>.</p>
+<h2 id="code-style">Code style<a class="headerlink" href="#code-style" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Lexical binding</strong>: <code>;;; file.el -- Description -*- lexical-binding: t -*-</code>
+  (first-line binding and final filename footer enforced by <code>check-standards.py</code>
+  in the library/test scope above).</li>
+<li><strong>Headers</strong>: standard <code>;;; Commentary:</code> / <code>;;; Code:</code> sections</li>
+<li><strong>Section headers</strong>: two blank lines above. Major: <code>;;</code> + blank + <code>;;;</code>.
+  Subsections add more semicolons: <code>;;;;</code>, <code>;;;;;</code>, ...</li>
+<li><strong>Forward declarations</strong>: grouped at file top by source package with
+  <code>;; \</code>gptel'<code>style comment headers. Sort source-package groups
+  alphabetically; within each group, put all</code>declare-function<code>forms first
+  alphabetically, then all</code>defvar` forms alphabetically.</li>
+<li><strong>Customization</strong>: <code>defcustom</code> uses <code>:group 'mevedel</code></li>
+<li><strong>Private symbols</strong>: double-dash <code>--</code> (e.g. <code>mevedel--workspace</code>,
+  <code>mevedel-tools--validate-params</code>)</li>
+<li><strong>Path construction</strong>: use <code>file-name-concat</code>, not <code>concat</code>, to join
+  filesystem path components.</li>
+<li><strong>Provide</strong>: each file ends with <code>(provide 'mevedel-MODNAME)</code> and
+  <code>;;; mevedel-MODNAME.el ends here</code></li>
+<li><strong>ASCII in code, unicode only in UI-facing strings</strong>: comments,
+  identifiers, and non-UI strings stay ASCII (use <code>-&gt;</code> not <code>→</code>,
+  <code>lambda</code>/<code>fn</code> not <code>λ</code>). Unicode is fine in <code>propertize</code>, overlays,
+  prompts, and other strings the user actually sees.</li>
+<li><strong>No spec references in code comments</strong>: don't write <code>(spec 13)</code> or
+  <code>(see spec 19)</code>. Specs are implementation-phase artifacts; code
+  comments must stand on their own. Describe what a slot/variable
+  holds, not where it was designed.</li>
+<li><strong><code>error</code> strings</strong>: capitalized, no package prefix —
+  <code>(error "Unknown tool: %s" name)</code>. The backtrace identifies the
+  source. The checkdoc ratchet gates new capitalization diagnostics. When the
+  first word is a literal binary, option, or parameter name that must stay
+  lowercase, quote it instead of changing its spelling: <code>(error "'pdftoppm' not
+  installed")</code>.</li>
+<li><strong><code>message</code> strings</strong>: lowercase <code>"mevedel: ..."</code> prefix is fine —
+  <code>(message "mevedel: stale request found, replacing")</code>. Output goes
+  to <code>*Messages*</code> where there's no backtrace, so the prefix earns its
+  keep.</li>
+</ul>
+<h2 id="loading-and-initialization">Loading and initialization<a class="headerlink" href="#loading-and-initialization" title="Permanent link">&para;</a></h2>
+<p>Prefer deferral at meaningful feature boundaries, not maximum laziness. Keep
+cheap, unconditional, acyclic dependencies eager when that makes ownership
+clearer. Loading and first-use setup belong to the implementation; callers
+must not need a load-order recipe.</p>
+<ul>
+<li><strong>Use real autoloaded entry points</strong>. <code>declare-function</code> and <code>defvar</code> are
+  byte-compiler declarations; they do not load libraries, and variable access
+  does not trigger autoloading. Use <code>eval-when-compile</code> only for compile-time
+  dependencies. A caller that may run before its callee's module loads pairs
+  the declaration with an <code>autoload</code> in the calling module; an <code>autoload</code> in a
+  module that is not loaded yet has no effect. Buffer-local state that
+  several owners read lives in an eagerly loaded module such as
+  <code>mevedel-structs</code>, not behind <code>boundp</code> guards.</li>
+<li><strong>Keep M-x entry points reachable</strong>. Top-level commands carry
+  <code>;;;###autoload</code> cookies for package installs and an <code>autoload</code> in
+  <code>mevedel.el</code> for source checkouts. Mode-local and transient suffix commands
+  load with the module that binds them.</li>
+<li><strong>Load dependencies at feature boundaries</strong>. When a runtime dependency is
+  not autoloaded or otherwise guaranteed to be loaded, <code>require</code> it once in a
+  cold command/setup entry point, or at top level when it is unconditional
+  and acyclic. Trace transitive loads through aggregators: an autoload gains
+  nothing if the package entry point already loads its implementation.</li>
+<li><strong>Defer optional runtime work with its feature</strong>. Start processes,
+  connections, watchers, scans, and expensive resource hydration when their
+  owning feature needs them. Keep discovery metadata available when needed
+  without unnecessarily initializing execution. Deferral must preserve
+  permission checks, recovery, visible failures, and teardown.</li>
+<li><strong>Never call <code>require</code> on a hot path</strong>. Code reached per segment, chunk,
+  redraw tick, or guest step must rely on an earlier load boundary. Avoid
+  circular dependencies through module direction rather than scattering
+  lazy <code>require</code>s through helpers.</li>
+<li><strong>Verify cold first use and the tradeoff</strong>. Exercise changed boundaries
+  through caller entry points in a fresh isolated Emacs, including code
+  byte-compiled in one process as package managers do; preloaded fixtures can
+  hide missing dependencies. <code>test/test-mevedel-loading.el</code> runs installation,
+  first composer send, session resume, directive commands and M-x
+  reachability this way. Check that optional
+  features remain unloaded or inactive until needed. Measure package load,
+  installation, first use, and steady-state work separately before claiming
+  performance gains. Moving a pause to the first interaction is not by itself
+  an improvement.</li>
+</ul>
+<h2 id="testing-conventions">Testing conventions<a class="headerlink" href="#testing-conventions" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Framework</strong>: ERT via <code>mevedel-deftest</code> macro (<code>test/helpers.el</code>)</li>
+<li><strong>Naming</strong>: the primary <code>test/test-mevedel-{module}.el</code> matches source.
+  Focused <code>test/test-mevedel-{module}-{subject}.el</code> supplements are allowed
+  when a single-function suite would make the primary file unwieldy.</li>
+<li><strong>One deftest per function</strong>: all cases in one macro call; label with
+  <code>:doc</code> strings. Rare exceptions are allowed where setup differs drastically.</li>
+<li><strong>Real files</strong>, not mocks. Clean up in teardown.</li>
+<li><strong>Helpers require</strong>:
+  <div class="highlight"><pre><span></span><code><span class="p">(</span><span class="nb">require</span><span class="w"> </span><span class="ss">'helpers</span>
+<span class="w">         </span><span class="p">(</span><span class="nv">file-name-concat</span>
+<span class="w">          </span><span class="p">(</span><span class="nf">file-name-directory</span>
+<span class="w">           </span><span class="p">(</span><span class="k">or</span><span class="w"> </span><span class="nf">buffer-file-name</span><span class="w"> </span><span class="nv">load-file-name</span><span class="w"> </span><span class="nv">byte-compile-current-file</span><span class="p">))</span>
+<span class="w">          </span><span class="s">"helpers"</span><span class="p">))</span>
+</code></pre></div></li>
+<li><strong>Generated test names</strong>: <code>FUNCTION/test</code> or <code>FUNCTION/test@N</code></li>
+<li><strong>Doc strings</strong>: describe what is tested, group with shared prefix</li>
+<li><strong>View/status redraws</strong>: when changing async view, status-zone, agent, or
+  task redraw paths, test that an active composer draft stays unchanged,
+  including a multiline draft whose first editable character is <code>&gt;</code>.</li>
+<li><strong>New functions need tests</strong>; modify tests when behavior changes</li>
+<li><strong>Silent output</strong>: a test run prints only ERT's own progress lines
+  (<code>passed N/M name (time)</code>) and its final summary. No <code>mevedel:</code> messages,
+  no <code>Warning</code>/<code>Error</code> lines, no Emacs notices such as <code>Making
+  gptel-org-branching-context buffer-local while locally let-bound!</code>, and
+  nothing at all during the loading phase. Noise hides real failures and is
+  treated as a defect in the test or in the code it exercises:</li>
+<li>A test that deliberately injects a failure must capture the resulting
+    message or warning instead of letting it reach the run log.</li>
+<li>Product code must not warn on a path a passing test takes; if the warning
+    is legitimate, the test must assert it rather than emit it.</li>
+<li>Loading a test file must have no side effects: no sessions, no requests,
+    no messages. Anything that runs belongs inside a test body.</li>
+<li><code>mevedel-test--with-captured-diagnostics</code> captures messages and warnings;
+    <code>mevedel-test--with-captured-messages</code> captures messages only, for a case
+    that still inspects the warnings it raises. Both take a place to bind the
+    captured text, or nil when the durable state the diagnostic echoes is what
+    the case asserts. A capture must not forward to the original function:
+    that re-prints what it just captured.</li>
+<li><code>mevedel-test--muted-message-regexps</code> in <code>test/helpers.el</code> drops the few
+    third-party progress messages mevedel cannot suppress at their source.
+    Nothing mevedel itself emits belongs there.</li>
+<li><code>mevedel-deftest</code>'s <code>:quiet t</code> captures the messages and warnings every
+    case of one deftest provokes. Use it when the function under test
+    correctly reports to the echo area on the paths its cases take and those
+    cases assert the durable state the diagnostic echoes. Prefer an explicit
+    capture with a place when the diagnostic text is itself the behaviour
+    under test.</li>
+<li>A notice Emacs raises from C, such as <code>Making VAR buffer-local while
+    locally let-bound!</code>, reaches the log through neither mechanism. Remove
+    its cause: let-binding a variable that product code then sets
+    buffer-locally is the test's mistake, not the code's.</li>
+<li><strong>Isolation</strong>: a test leaves no global state behind — no live session in the
+  execution registry, no workspace registry entry, no live timer, no target
+  connection, and no file outside its own temporary directory. Leaked state
+  makes later tests slow, noisy, and order-dependent.
+  Timer cleanup assertions across event-loop waits compare timer identities,
+  not global counts: pre-existing timers may fire while the test waits. Snapshot
+  the timer objects and assert that no newly pending timers remain.</li>
+<li><strong>Stub readiness</strong>: explicitly <code>require</code> a repository function's defining
+  feature before stubbing its function cell, either at file top level or before
+  the stubbing form in the test. A lazy load can overwrite a stub and its unwind
+  can then restore an obsolete autoload. A <code>require</code> inside the <code>cl-letf</code> body
+  does not fix this ordering. The standards checker ratchets existing violations
+  against the merge base; do not add new ones.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>
