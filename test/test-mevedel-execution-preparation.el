@@ -22,7 +22,7 @@
    (skip-unless (and (eq system-type 'gnu/linux) (executable-find "find")
                      (plist-get (mevedel-sandbox-probe) :available)))
   (dolist (managed '(nil t))
-    (dolist (action '(complete cancel owner-stop mode rule protected buffer-death root-replaced grants additional-roots))
+    (dolist (action '(complete cancel request-cancel request-cancelled owner-stop mode rule protected buffer-death root-replaced grants additional-roots))
       (let* ((root (make-temp-file "mevedel-discovery-" t))
              (session (test-mevedel-execution--session root))
              (buffer (generate-new-buffer " *discovery-owner*"))
@@ -47,10 +47,15 @@
               (setenv "PATH" (concat bin path-separator (getenv "PATH")))
               (setf (mevedel-session-sandbox-mode session) 'required)
               (with-current-buffer buffer
+                (setq-local mevedel--session session)
+                (setq-local mevedel--current-request
+                            (mevedel-request--create
+                             :session session :cancelled-p (eq action 'request-cancelled)))
                 (if managed
                     (mevedel-execution-start-bash
                      (lambda (value) (cl-incf calls) (setq result value))
                      :session session :data-buffer buffer :owner "main"
+                     :request mevedel--current-request
                      :command (list "sh" "-c" "touch ran; printf done")
                      :workdir root :writable-roots (list root)
                      :artifact-directory root :yield-time-ms nil)
@@ -60,10 +65,18 @@
                          :session session :owner "main" :name "discovery-test"
                          :command (list "sh" "-c" "touch ran; printf done")
                          :workdir root :writable-roots (list root)))))
-              ;; The gated find is still running: launch has returned to Lisp.
-              (should-not result)
+              ;; Managed admission rejects an already-cancelled request before
+              ;; discovery.  Otherwise the gated scan has returned to Lisp.
+              (if (and managed (eq action 'request-cancelled))
+                  (progn
+                    (should result)
+                    (should (eq 'aborted (plist-get (plist-get result :facts) :termination))))
+                (should-not result))
               (should-not (file-exists-p ran))
               (pcase action
+                ('request-cancel
+                 (setf (mevedel-request-cancelled-p
+                        (buffer-local-value 'mevedel--current-request buffer)) t))
                 ('cancel
                  (if managed
                      (mevedel-execution-stop-user
@@ -88,12 +101,13 @@
               (unless (and (eq action 'owner-stop) (not managed))
                 (test-mevedel-execution--wait (lambda () result))
                 (should (= 1 calls)))
-              (if (eq action 'complete)
-                  (progn
-                    (should-not (plist-get result :error))
-                    (should (file-exists-p ran))
-                    (should (= 0 (plist-get (or (plist-get result :facts) result) :exit-code))))
-                (should-not (file-exists-p ran)))
+              (ert-info ((format "managed: %S; action: %S" managed action))
+                (if (eq action 'complete)
+                    (progn
+                      (should-not (plist-get result :error))
+                      (should (file-exists-p ran))
+                      (should (= 0 (plist-get (or (plist-get result :facts) result) :exit-code))))
+                  (should-not (file-exists-p ran))))
               (mevedel-execution-teardown-session session)
               (should (= 0 (hash-table-count
                             (mevedel-execution--state-records

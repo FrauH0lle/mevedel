@@ -870,10 +870,12 @@ depend on the printer state of the context that takes it."
 
 (defun mevedel-execution--prepare
     (callback command workdir roots additional permissions session owner
-              &optional temporary-root teardown)
+              &optional temporary-root teardown settlement)
   "Prepare COMMAND under owned, cancellable discovery for SESSION and OWNER.
 CALLBACK receives preparation facts.  ROOTS, ADDITIONAL, PERMISSIONS and
-TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
+TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation.
+SETTLEMENT permits terminal snapshot work after producer cancellation; request
+identity, owner liveness, target and policy must still remain unchanged."
   (let* ((buffer (current-buffer))
          (request mevedel--current-request)
          (invocation (and (boundp 'mevedel--agent-invocation)
@@ -893,7 +895,7 @@ TEMPORARY-ROOT describe confinement.  TEARDOWN owns discarded preparation."
                (and (buffer-live-p buffer)
                     (mevedel-execution--owner-admissible-p invocation)
                     (or (null request)
-                        (and (not (mevedel-request-cancelled-p request))
+                        (and (or settlement (not (mevedel-request-cancelled-p request)))
                              (eq request (buffer-local-value
                                           'mevedel--current-request buffer))))
                     (eq target (and session (mevedel-session-execution-target session)))
@@ -2806,12 +2808,14 @@ foreground state.  Yielded terminal output still goes to its owner mailbox."
 (cl-defun mevedel-execution-start-one-shot
     (callback &key name command workdir writable-roots
               temporary-root timeout additional-permissions sandbox-permissions
-              session owner teardown-function)
+              session owner teardown-function settlement)
   "Start one confined COMMAND and call CALLBACK with terminal facts.
 Return an idempotent cancellation function covering discovery and execution.
 NAME, WORKDIR, WRITABLE-ROOTS, TEMPORARY-ROOT, TIMEOUT, ADDITIONAL-PERMISSIONS,
 SANDBOX-PERMISSIONS, SESSION and OWNER describe the authorized child.
-TEARDOWN-FUNCTION releases caller resources on lifecycle destruction."
+TEARDOWN-FUNCTION releases caller resources on lifecycle destruction.
+SETTLEMENT permits terminal snapshot work after producer cancellation, without
+relaxing request identity, owner, target or policy validation."
   (let (preparation-cancel child-cancel settled preparing)
     (setq preparing t)
     (cl-labels ((discard ()
@@ -2833,7 +2837,7 @@ TEARDOWN-FUNCTION releases caller resources on lifecycle destruction."
                               :workdir workdir :timeout timeout :session session
                               :owner owner :teardown-function #'discard))))
              command workdir writable-roots additional-permissions
-             sandbox-permissions session owner temporary-root #'discard))
+             sandbox-permissions session owner temporary-root #'discard settlement))
       (lambda ()
         (unless settled
           (if preparing
@@ -3002,7 +3006,7 @@ All keyword arguments follow `mevedel-execution-start-one-shot'."
 
 (cl-defun mevedel-execution-start-helper
     (callback name command read-paths writable-roots
-              &key timeout session owner teardown-callback)
+              &key timeout session owner teardown-callback settlement)
   "Start external helper COMMAND and call CALLBACK when it settles.
 Return the helper's idempotent cancellation function.
 
@@ -3011,7 +3015,8 @@ directories.  A private writable scratch directory is the helper's working
 directory and is removed before CALLBACK runs -- except on a busy remote
 transport, where removal waits for the connection rather than nesting
 inside the command already running on it.  Nothing reads the scratch after
-the helper exits."
+the helper exits.  SETTLEMENT permits terminal snapshot work after producer
+cancellation, retaining all other launch-authority checks."
   (let* ((target (and session
                       (mevedel-session-execution-target session)))
          (remote-root
@@ -3067,7 +3072,7 @@ the helper exits."
          :name name :command command :workdir scratch
          :writable-roots roots :timeout timeout
          :additional-permissions permissions :session session :owner owner
-         :teardown-function teardown)
+         :teardown-function teardown :settlement settlement)
       (error
        (funcall cleanup)
        (signal (car err) (cdr err))))))

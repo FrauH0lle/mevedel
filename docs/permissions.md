@@ -289,6 +289,10 @@ Git worktree pointer files. NUL framing preserves spaces and newlines in names.
 Managed Bash and one-shot helpers run native scans asynchronously under their
 execution owner. Cancellation, owner teardown or changed launch authority prevents
 the pending command from starting. Results are never reused across launches.
+Terminal review diffs are settlement work rather than producer commands: they
+can finish after request cancellation so an aborted turn still has a review
+patch. They retain request identity, owner liveness, target and policy checks;
+replacement requests or changed authority still refuse their pending launch.
 A failed or truncated native scan refuses preparation; it does not discard missing protection.
 A pattern below `**/.mevedel/`, mevedel's own state directory, which exists
 only at a workspace root, protects in the Bash sandbox the whole directory its

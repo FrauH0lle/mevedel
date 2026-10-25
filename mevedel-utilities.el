@@ -181,7 +181,7 @@ other process immediately.  The caller still owns its buffers."
     (delete-process process)))
 
 (defun mevedel-start-helper-capturing-output
-    (callback name command read-paths &optional writable-roots session)
+    (callback name command read-paths &optional writable-roots session settlement)
   "Start helper COMMAND as NAME and call CALLBACK with its settlement.
 CALLBACK receives EXIT-CODE, OUTPUT and ERROR; ERROR is condition data when
 the helper failed to run or its owner was torn down, and nil otherwise.
@@ -189,7 +189,8 @@ READ-PATHS and WRITABLE-ROOTS declare the helper's filesystem boundary.
 OUTPUT is passed unchanged so callers may interpret its whitespace.
 CALLBACK runs exactly once, and may run before this returns: a refused
 launch settles immediately.  Return the helper's idempotent cancellation
-function, or nil when it could not start.
+function, or nil when it could not start.  SETTLEMENT permits terminal snapshot
+work after producer cancellation while retaining the other authority checks.
 
 Callers continue from CALLBACK rather than waiting: a wait would re-enter
 the event loop from wherever it was called, including process callbacks
@@ -208,6 +209,7 @@ that inhibit quitting, and the helper's own settlement needs that loop."
                    #'settle name command read-paths writable-roots
                    :session (or session (bound-and-true-p mevedel--session))
                    :owner (mevedel-current-origin)
+                   :settlement settlement
                    :teardown-callback
                    (lambda ()
                      (settle '(:error (error "Helper owner was torn down"))))))
@@ -229,7 +231,7 @@ repository-relative path; prepending one to an absolute path spells it
     (concat side "/" filepath)))
 
 (defun mevedel-generate-diff
-    (original modified filepath callback &optional labels-real)
+    (original modified filepath callback &optional labels-real settlement)
   "Diff ORIGINAL against MODIFIED for FILEPATH, then call CALLBACK.
 CALLBACK receives the unified DIFF and ERROR: DIFF is a string, empty when
 the contents match, and nil exactly when ERROR carries the failure's
@@ -238,7 +240,8 @@ condition data.  When LABELS-REAL is nil, empty content is labelled
 when it is relative.  Spool Unicode as UTF-8 while preserving literal cache
 bytes, without interactive coding-system selection.  Failing to spool the
 snapshots signals instead.  Return the helper's cancellation function, or
-nil when it could not start."
+nil when it could not start.  SETTLEMENT marks a terminal snapshot diff, which
+must finish even after its producer request was cancelled."
   (let* ((orig-file (make-temp-file "mevedel-orig-"))
          (mod-file (make-temp-file "mevedel-mod-"))
          (remove (lambda ()
@@ -276,7 +279,7 @@ nil when it could not start."
                            (mevedel--diff-label "b" filepath)
                          "/dev/null")
              orig-file mod-file)
-       (list orig-file mod-file)))))
+       (list orig-file mod-file) nil nil settlement))))
 
 
 

@@ -154,7 +154,7 @@
                   "mevedel-utilities" (info))
 (declare-function mevedel-generate-diff
                   "mevedel-utilities"
-                  (original modified filepath callback &optional labels-real))
+                  (original modified filepath callback &optional labels-real settlement))
 (autoload 'mevedel--active-response-marker "mevedel-utilities")
 (autoload 'mevedel--plain-data-p "mevedel-utilities")
 (autoload 'mevedel--split-open-reasoning-before-user-input

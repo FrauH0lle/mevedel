@@ -27,6 +27,12 @@
 (require 'mevedel-workspace)
 (require 'mevedel-compact)
 (require 'mevedel-presets)
+(require 'mevedel-chat)
+(require 'mevedel-execution)
+(require 'mevedel-sandbox)
+(require 'mevedel-transport)
+(require 'mevedel-turn)
+(require 'mevedel-utilities)
 
 ;; `gptel'
 (defvar gptel--known-presets)
@@ -1456,6 +1462,84 @@
         (should continued)
         (should (equal "diff --git a/x b/x\n"
                        (plist-get (gptel-fsm-info fsm) :mevedel-directive-patch))))))
+
+  :doc "aborted terminal diffs retain policy and request ownership during real discovery"
+  (progn
+    (skip-unless (and (eq system-type 'gnu/linux) (executable-find "find")
+                      (plist-get (mevedel-sandbox-probe) :available)))
+    (dolist (change '(nil cancel permission sandbox request))
+      (let* ((root (make-temp-file "mevedel-terminal-diff-" t))
+             (workspace (mevedel-workspace--create :root root :id root :type 'project))
+             (session (mevedel-session--create
+                       :workspace workspace :working-directory root
+                       :permission-mode (if (eq change 'sandbox) 'ask 'edits)
+                       :sandbox-mode 'required))
+             (snapshots (make-hash-table :test #'equal))
+             (request (mevedel-request--create
+                       :id "terminal-diff" :session session :cancelled-p (not (eq change 'cancel))
+                       :file-snapshots snapshots))
+             (file (file-name-concat root "changed.txt"))
+             (bin (file-name-concat root "bin"))
+             (entered (file-name-concat root "entered"))
+             (gate (file-name-concat root "continue"))
+             (find (executable-find "find"))
+             (exec-path (cons bin exec-path))
+             (process-environment (copy-sequence process-environment))
+             (mevedel-protected-paths '(("**/.git/**" . read-only)))
+             (temporary-file-directory (file-name-as-directory root))
+             (continued 0) warnings shown)
+        (unwind-protect
+            (with-temp-buffer
+              (setq-local mevedel--session session)
+              (setq-local mevedel--current-request request)
+              (mevedel-session-set-root-buffer session (current-buffer))
+              (with-temp-file file (insert "after\n"))
+              (puthash file "before\n" snapshots)
+              (make-directory bin)
+              (with-temp-file (file-name-concat bin "find")
+                (insert "#!/bin/sh\ntouch " (shell-quote-argument entered)
+                        "\ncount=0\nwhile [ ! -e " (shell-quote-argument gate)
+                        " ]; do\n count=$((count+1)); [ $count -lt 500 ] || exit 1\n sleep .01\ndone\nexec "
+                        (shell-quote-argument find) " \"$@\"\n"))
+              (set-file-modes (file-name-concat bin "find") #o700)
+              (setenv "PATH" (concat bin path-separator (getenv "PATH")))
+              (let ((fsm (gptel-make-fsm
+                          :state 'ABRT
+                          :info (list :buffer (current-buffer)
+                                      :mevedel-request request
+                                      :mevedel-request-id "terminal-diff"))))
+                (cl-letf (((symbol-function 'mevedel--warn-once)
+                           (lambda (_key format-string &rest arguments)
+                             (push (apply #'format format-string arguments) warnings)))
+                          ((symbol-function 'mevedel--replace-patch-buffer)
+                           (lambda (patch) (setq shown patch))))
+                  (mevedel-preset--apply-final-patch
+                   fsm (current-buffer) workspace request
+                   (lambda (_) (cl-incf continued)))
+                  (mevedel-test--await 5 "terminal discovery entered" (file-exists-p entered))
+                  (should (zerop continued))
+                  (should (memq fsm mevedel--turn-settlements-pending))
+                  (pcase change
+                    ('cancel (setf (mevedel-request-cancelled-p request) t))
+                    ('permission (setf (mevedel-session-permission-mode session) 'full-auto))
+                    ('sandbox (setf (mevedel-session-sandbox-mode session) 'off))
+                    ('request (setq mevedel--current-request (mevedel-request--create))))
+                  (with-temp-file gate (insert "continue"))
+                  (mevedel-test--await 5 "terminal diff settlement" (> continued 0)))
+                (should (= 1 continued))
+                (should-not (memq fsm mevedel--turn-settlements-pending))
+                (ert-info ((format "terminal authority change: %S" change))
+                  (if (memq change '(permission sandbox request))
+                      (progn
+                        (should-not shown)
+                        (should (equal '("FSM handler #<function> failed: Execution authority changed during preparation; submit the operation again")
+                                       warnings)))
+                    (should-not warnings)
+                    (should (string-search "-before\n+after\n" shown))
+                    (should (equal shown (plist-get (gptel-fsm-info fsm)
+                                                   :mevedel-directive-patch)))))))
+          (mevedel-execution-teardown-all)
+          (delete-directory root t)))))
 
   :doc "a failed diff warns and still continues the turn"
   (let ((fsm (gptel-make-fsm))

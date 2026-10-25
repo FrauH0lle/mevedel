@@ -258,7 +258,7 @@
 		  "mevedel-utilities" nil)
 (declare-function mevedel--transcript-org-mode "mevedel-utilities" nil)
 (declare-function mevedel-generate-diff "mevedel-utilities"
-                  (original modified filepath callback &optional labels-real))
+                  (original modified filepath callback &optional labels-real settlement))
 (autoload 'mevedel--insert-user-turn "mevedel-utilities")
 (autoload 'mevedel--optimize-transcript-buffer "mevedel-utilities")
 (autoload 'mevedel--transcript-org-mode "mevedel-utilities")
@@ -1030,7 +1030,9 @@ One of those settles the turn and clears `mevedel--current-request\'."
                   (if error
                       (funcall callback nil error)
                     (push (concat header diff "\n") parts)
-                    (next))))))))
+                    (next)))
+                ;; Abort stops producers, not the final review of their effects.
+                nil t)))))
       (next))))
 
 (defun mevedel--directive-capture (request)

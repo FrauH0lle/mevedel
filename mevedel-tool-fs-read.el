@@ -119,7 +119,7 @@
 ;; `mevedel-utilities'
 (declare-function mevedel-start-helper-capturing-output
                   "mevedel-utilities"
-                  (callback name command read-paths &optional writable-roots session))
+                  (callback name command read-paths &optional writable-roots session settlement))
 
 (defvar mevedel-tool-fs-read--resource-address nil
   "Authored resource address for the current Read operation.")
