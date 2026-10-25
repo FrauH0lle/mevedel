@@ -164,7 +164,8 @@ content groups across all directories in one batch."
       (when (and (< groups 50) (mevedel-journal-gc--empty directory))
         (cl-incf groups)
         (cl-incf removed)))
-    (list :progress removed :remaining (- 50 groups))))
+    (list :progress removed :remaining (- 50 groups)
+          :more (or (zerop remaining) (= groups 50)))))
 
 (provide 'mevedel-journal-gc)
 ;;; mevedel-journal-gc.el ends here

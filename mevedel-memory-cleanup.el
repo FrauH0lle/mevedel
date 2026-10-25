@@ -79,7 +79,14 @@ dependencies; this function never deletes or publishes state."
                  (seq-some (lambda (other) (and (eq (plist-get other :kind) 'digest)
                                          (member (plist-get other :id) (plist-get entry :digests)))) entries))
       (condition-case nil
-          (let* ((accepted (mevedel-memory-store-accepted workspace id))
+          (let* (;; Public timestamps can rule out expiry, never authorize it.
+                 ;; The latest decision can only extend the review's lifetime.
+                 ;; Keep the authenticated history checks below for candidates.
+                 (created (float-time (date-to-time (plist-get entry :created))))
+                 (_ (when (> (+ created (* mevedel-memory-history-max-age-days 86400))
+                             (mevedel-session-control-fs-target-time (mevedel-workspace-root workspace)))
+                      (error "Memory history is still recent")))
+                 (accepted (mevedel-memory-store-accepted workspace id))
                  (review (plist-get accepted :review))
                  (prepared (plist-get accepted :prepared)))
             (when (and accepted

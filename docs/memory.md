@@ -1192,8 +1192,12 @@ workspaces, after completed, saved root turns and existing cleanup opportunities
 On local Linux workspaces with an open root session, the idle maintenance timer
 also offers cleanup. These opportunities are throttled to once an hour. Review/decision publication
 also schedules idle cleanup. Each batch selects at most 50 content groups and
-prunes at most 200 obsolete claim pairs. Progress queues another idle batch;
-no progress stops the drain. Scheduled cleanup returns to Emacs between ownership
+prunes at most 200 obsolete claim pairs. Progress queues another idle batch only
+when a content-group or claim-pair limit was reached. A shorter batch stops the
+drain, so collecting claims from earlier cleanup does not keep creating work.
+Reviews still within their history window skip private dependency scans; expiry
+candidates retain the complete acceptance and dependency checks.
+Scheduled cleanup returns to Emacs between ownership
 phases and coordination records. It rechecks acquired claims before resuming;
 expired or fenced ownership stops the batch and settles its remaining claims.
 Claim directories containing only the newest or referenced generations need only

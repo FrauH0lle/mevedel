@@ -109,10 +109,12 @@
                        (lambda (&rest _) (error "Interrupted before deletion"))))
               (should-not (mevedel-journal-cleanup-expired workspace t))))
           (should (= 50 (mevedel-journal-cleanup-expired workspace t)))
+          (should mevedel-journal-cleanup--more)
           (should (= 1 (length (mevedel-test-journal-cleanup--digests root))))
           (should-not (mevedel-journal-cleanup-expired workspace))
           (should (= 51 (length (mevedel-journal-store-covered-turns root))))
-          (should (= 1 (mevedel-journal-cleanup-expired workspace t))))
+          (should (= 1 (mevedel-journal-cleanup-expired workspace t)))
+          (should-not mevedel-journal-cleanup--more))
       (delete-directory root t)))
 
   :doc "preserves pending capture pins and review evidence while collecting retired payloads"
@@ -173,6 +175,22 @@
               (should (mevedel-journal-store-read root (plist-get entry :file)))
               (mevedel-journal-claim-settle claim 'completed "")
               (should (= 1 (mevedel-journal-cleanup-expired workspace t))))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-journal-cleanup--owned ()
+  ,test
+  (test)
+  :doc "a short batch clears a continuation flag left by another workspace"
+  (let* ((root (make-temp-file "mevedel-cleanup-local-budget-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (claim (mevedel-journal-claim-acquire
+                 (mevedel-journal-store-claim-directory (mevedel-journal-store-directory root) 'mutation) 120))
+         (mevedel-journal-cleanup--more t))
+    (unwind-protect
+        (progn
+          (should (= 0 (mevedel-journal-cleanup--owned workspace claim)))
+          (should-not mevedel-journal-cleanup--more))
+      (mevedel-journal-claim-settle claim 'completed "")
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-journal-cleanup-recover ()

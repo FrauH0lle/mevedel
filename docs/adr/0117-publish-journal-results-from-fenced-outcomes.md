@@ -143,7 +143,11 @@ Obsolete settled control pairs are pruned after their deadlines while preserving
 the newest generation and all retained references. Claim admission, settlement,
 and pruning share the target lock and verify the generation within it. Idle
 batches remove at most 200 pairs and 50 content groups, scheduling another batch
-only after progress. A fresh listing can rule out pruning in a directory that
+only after progress reaches either limit. A shorter batch stops rather than
+feeding another scan with cleanup's own claim generations. A review's public
+timestamp can rule out expiry while its history window remains open; candidates
+still require the complete authenticated dependency checks.
+A fresh listing can rule out pruning in a directory that
 contains only the newest or referenced generations. It cannot authorize a deletion;
 candidates still require fresh claim/deadline checks and locked byte verification.
 Minimal coverage and retirement identities remain. Interactive decisions wait
@@ -201,6 +205,16 @@ longer than ordinary recall when evidence or recovery still needs it; the recall
 limit is not an erasure guarantee.
 
 ## Decision history
+
+- **Cleanup no longer feeds its own continuation.** On 2026-10-25, a laptop
+  sustained roughly 10% total CPU while cleanup spawned about 1,060 processes
+  per second. Read-only selection over its journal took nearly two minutes:
+  each recent review scanned hundreds of private records before checking its
+  retention deadline. Recent reviews now skip those scans. Claim pruning had
+  also counted as progress sufficient to force another full pass, even below
+  every work limit; those passes created further claim generations. Immediate
+  continuation now requires progress reaching a batch limit. Target ownership,
+  accepted manifests, byte checks and history retention are unchanged.
 
 - **Size alone no longer blocks every shared-file cleanup path.** On
   2026-10-24, a 2.6 MB transcript copy made the reference scan incomplete and

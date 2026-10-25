@@ -16,7 +16,8 @@
   (let* ((root (make-temp-file "mevedel-coordination-gc-" t))
          (workspace (mevedel-workspace--create :root root))
          (directory (mevedel-journal-store-claim-directory (mevedel-journal-store-directory root) 'mutation))
-         (mevedel-journal-max-age-days nil))
+         (mevedel-journal-max-age-days nil)
+         (mevedel-journal-cleanup--more nil))
     (unwind-protect
         (progn
           (make-directory directory t)
@@ -27,10 +28,40 @@
               (write-region (json-serialize (append record '(:status "completed" :payload ""))) nil
                             (file-name-concat directory (format "%020d.outcome" (1+ index))) nil 'silent)))
           (mevedel-journal-cleanup-expired workspace t)
+          (should mevedel-journal-cleanup--more)
           (should (= 801 (length (directory-files directory nil "\\.claim\\'"))))
           (dotimes (_ 4) (mevedel-journal-cleanup-expired workspace t))
           (should (= 5 (length (directory-files directory nil "\\.claim\\'"))))
-          (should (= 1005 (plist-get (mevedel-journal-claim-current directory) :generation))))
+          (should (= 1005 (plist-get (mevedel-journal-claim-current directory) :generation)))
+          (setq mevedel-journal-cleanup--more nil)
+          (mevedel-journal-cleanup-expired workspace t)
+          (should-not mevedel-journal-cleanup--more))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-journal-cleanup-coordination-continuation ()
+  ,test
+  (test)
+  :doc "collecting previous cleanup claims does not force another full scan"
+  (let* ((root (make-temp-file "mevedel-cleanup-continuation-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (journal (mevedel-journal-store-directory root))
+         (mevedel-journal-cleanup--more nil))
+    (unwind-protect
+        (progn
+          (dolist (scope '(mutation digest-run consolidation))
+            (let* ((directory (mevedel-journal-store-claim-directory journal scope))
+                   (record (list :generation 1 :owner (make-string 64 ?a) :expires-at 1)))
+              (make-directory directory t)
+              (write-region (json-serialize record) nil
+                            (file-name-concat directory "00000000000000000001.claim") nil 'silent)
+              (write-region (json-serialize (append record '(:status "completed" :payload ""))) nil
+                            (file-name-concat directory "00000000000000000001.outcome") nil 'silent)))
+          (should (= 0 (mevedel-journal-cleanup-expired workspace t)))
+          (dolist (scope '(mutation digest-run consolidation))
+            (let ((directory (mevedel-journal-store-claim-directory journal scope)))
+              (should-not (file-exists-p (file-name-concat directory "00000000000000000001.claim")))
+              (should (= 2 (plist-get (mevedel-journal-claim-current directory) :generation)))))
+          (should-not mevedel-journal-cleanup--more))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-journal-cleanup-private-coordination
