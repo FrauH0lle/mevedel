@@ -54,18 +54,12 @@
                   "mevedel-instruction-registry" (buffer))
 (declare-function mevedel--instruction-id
                   "mevedel-instruction-registry" (instruction))
-(declare-function mevedel--instruction-inlinks
-                  "mevedel-instruction-registry" (instruction))
-(declare-function mevedel--instruction-outlinks
-                  "mevedel-instruction-registry" (instruction))
 (declare-function mevedel--instruction-with-uuid
                   "mevedel-instruction-registry"
                   (uuid &optional workspace))
 (declare-function mevedel--instruction-workspace-key
                   "mevedel-instruction-registry" (&optional workspace))
 (declare-function mevedel--retire-id "mevedel-instruction-registry" (id))
-(declare-function mevedel-unlink-instructions
-                  "mevedel-instruction-registry" (from-list to-list))
 (defvar mevedel--instruction-state-key-override)
 
 ;; `mevedel-overlay-ui'
@@ -707,6 +701,49 @@ be non-nil prevents the opening of a prompt buffer."
       (mevedel--read-directive ov))
     ov))
 
+(defun mevedel--retire-instruction-identity (id workspace)
+  "Retire ID and remove its live and durable links in WORKSPACE."
+  (when id
+    (let ((mevedel--instruction-state-key-override
+           (mevedel--instruction-workspace-key workspace)))
+      (cl-labels ((prune (links)
+                    (when (or (memq id (plist-get links :from))
+                              (memq id (plist-get links :to)))
+                      (list :from (remq id (plist-get links :from))
+                            :to (remq id (plist-get links :to))))))
+        (mevedel--retire-id id)
+        (mevedel--foreach-instruction instruction
+          when (overlay-buffer instruction)
+          do (when-let* ((links (prune (overlay-get instruction 'mevedel-links))))
+               (overlay-put instruction 'mevedel-links links)
+               (mevedel--update-instruction-overlay instruction)))
+        (when workspace
+          (dolist (record (mevedel-workspace-directives workspace))
+            (dolist (anchor (cons (mevedel-directive-anchor record)
+                                  (mapcar #'mevedel-subdirective-anchor
+                                          (mevedel-directive-subdirectives record))))
+              (let ((properties (plist-get anchor :properties)))
+                (when-let* ((links (prune (plist-get properties 'mevedel-links))))
+                  (setf (plist-get anchor :properties)
+                        (plist-put properties 'mevedel-links links)))))))))))
+
+(defun mevedel--delete-source-missing-directive (record workspace)
+  "Delete Source-missing directive RECORD from WORKSPACE.
+Like source-bound deletion, refuse records with activity."
+  (unless (eq 'source-missing
+              (plist-get (mevedel-directive-anchor record) :state))
+    (user-error "Directive source is not missing"))
+  (when (mevedel-directive-has-activity-p record)
+    (user-error "Archive directives with activity"))
+  (let ((mevedel--instruction-state-key-override
+         (mevedel--instruction-workspace-key workspace)))
+    (dolist (anchor (cons (mevedel-directive-anchor record)
+                          (mapcar #'mevedel-subdirective-anchor
+                                  (mevedel-directive-subdirectives record))))
+      (mevedel--retire-instruction-identity
+       (plist-get (plist-get anchor :properties) 'mevedel-id) workspace)))
+  (mevedel-workspace-remove-directive workspace record))
+
 (defun mevedel--delete-instruction (instruction &optional buffer)
   "Delete the INSTRUCTION overlay and return it.
 
@@ -738,6 +775,12 @@ BUFFER is required in order to perform cleanup on a dead instruction."
         (mevedel--delete-instruction nested instruction-buffer)))
     (cond
      (record
+      ;; Detached parents can retain details without live presentations.
+      (dolist (detail (mevedel-directive-subdirectives record))
+        (mevedel--retire-instruction-identity
+         (plist-get (plist-get (mevedel-subdirective-anchor detail) :properties)
+                    'mevedel-id)
+         workspace))
       (mevedel-workspace-remove-directive workspace record))
      (subdirective-owner
       (mevedel-directive-remove-subdirective
@@ -750,12 +793,8 @@ BUFFER is required in order to perform cleanup on a dead instruction."
           (dolist (child children)
             (mevedel--update-instruction-overlay child t)))))
     (let ((id (mevedel--instruction-id instruction)))
-      (mevedel--retire-id id)
       (with-current-buffer instruction-buffer
-        (mevedel-unlink-instructions
-         `(,id) (mevedel--instruction-outlinks instruction))
-        (mevedel-unlink-instructions
-         (mevedel--instruction-inlinks instruction) `(,id))))
+        (mevedel--retire-instruction-identity id workspace)))
     (setf (cdr (assoc instruction-buffer (mevedel--instruction-alist)))
           (delq instruction
                 (cdr (assoc instruction-buffer

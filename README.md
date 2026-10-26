@@ -329,7 +329,9 @@ memory roots, the configured plans directory, and manually configured roots.
 | `mevedel-create-directive`        | Create or resize a directive instruction at point or within a region. |
 | `mevedel-convert-instructions`    | Convert instructions between reference and directive type at point or within a region. |
 | `mevedel-delete-instructions`     | Remove instructions either at point or within the selected region.    |
-| `mevedel-delete-all-instructions` | Delete all mevedel instructions across all buffers.                   |
+| `mevedel-delete-all-instructions` | Confirm deletion of references and visible directives in the current workspace. |
+| `mevedel-delete-all-references`   | Confirm deletion of references in the current workspace; keep directives. |
+| `mevedel-delete-all-directives`   | Confirm deletion of visible directives and their subdirectives; keep references. |
 | `mevedel`                         | Start or switch to a chat session; prefix arg prompts for directory/session. |
 | `mevedel-in-directory`            | Start or switch to a chat session rooted in a workspace subdirectory. |
 | `mevedel-init`                    | Bootstrap or refresh project instruction files.                       |
@@ -337,6 +339,15 @@ memory roots, the configured plans directory, and manually configured roots.
 | `mevedel-process-directives`      | Batch initial implementations in source order (region, point, or buffer). |
 | `mevedel-abort`                   | Abort any active request in the current buffer.                       |
 | `mevedel-version`                 | Show (or insert with prefix arg) the current mevedel version.         |
+
+Bulk deletion includes all buffers in the current workspace, not other
+workspaces. Buffers without a workspace share one global instruction bucket;
+invoking a bulk command there affects that shared bucket. When deleting
+directives (including with `mevedel-delete-all-instructions`), a separate prompt
+offers to include Source-missing records, defaulting to no (RET). Archived
+directives remain intact, and directives with activity must be archived rather
+than deleted. Counts include visible subdirectives and any selected Source-missing
+records; records without a source presentation do not add to the buffer count.
 
 | Custom Variable               | Variable Description                                             |
 |-------------------------------|------------------------------------------------------------------|

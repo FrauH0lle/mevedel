@@ -183,6 +183,22 @@ partial edits use normal overlay resizing. Co-located detached rows are ordered
 by their former source positions. References keep their source-bound
 evaporation behavior.
 
+Bulk deletion follows the same source-owner cleanup and activity guard as
+single deletion. `mevedel-delete-all-references` and
+`mevedel-delete-all-directives` filter the current workspace's registry without
+resetting its other instruction state; `mevedel-delete-all-instructions` uses
+the same path for both types. Buffers without a workspace share the `:global`
+bucket. Interactive deletion confirms instruction and buffer counts, with a
+separate default-no question for Source-missing directive records. Archived
+records are not selected, and any selected directive with activity blocks the
+operation before deletion begins. Noninteractive calls delete only source
+presentations and their records, without confirmation or Source-missing inclusion.
+Closed sources retain their registry workspace when reopened for bulk deletion,
+including sources reattached outside that workspace's root. Deletion retires
+the removed numeric IDs and prunes their links from both live presentations and
+preserved directive/subdirective anchor properties, so ID reuse cannot redirect
+an old link to an unrelated instruction.
+
 Top-level directive presentations may persist an exact provider and
 reasoning-effort override. Nested directives are durable details owned by the
 topmost directive. Acting on any nested presentation resolves that owner, and

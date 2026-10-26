@@ -68,6 +68,8 @@
 (declare-function mevedel--delete-instruction
                   "mevedel-directive-source"
                   (instruction &optional buffer))
+(declare-function mevedel--delete-source-missing-directive
+                  "mevedel-directive-source" (record workspace))
 (declare-function mevedel--detached-directive-p
                   "mevedel-directive-source" (directive))
 (declare-function mevedel--directive-record
@@ -91,8 +93,6 @@
                   "mevedel-directive-source" (directive status))
 
 ;; `mevedel-instruction-registry'
-(declare-function mevedel--clear-instruction-state
-                  "mevedel-instruction-registry" (&optional workspace))
 (declare-function mevedel--instruction-activate-buffer
                   "mevedel-instruction-registry" (&optional buffer))
 (declare-function mevedel--instruction-activate-workspace
@@ -151,6 +151,7 @@
 (declare-function mevedel-directive-subdirectives
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-subdirective-request "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-view-composer'
@@ -342,37 +343,105 @@ deleted.  Throw a user error if no instructions to delete were found."
     (when (> deleted-count 0)
       (message "Deleted %d instruction%s" deleted-count (if (> deleted-count 1) "s" "")))))
 
+(defun mevedel--delete-all-instructions-of-type (type interactivep)
+  "Delete instructions of TYPE in the current workspace.
+TYPE is `reference', `directive', or nil for both.  INTERACTIVEP requests
+confirmation and offers inclusion of Source-missing directive records.
+Return the deleted count; Source-missing records count once each, without
+contributing to the buffer count.  Archived records are never deleted."
+  (let* ((workspace (mevedel--instruction-buffer-workspace (current-buffer)))
+         (mevedel--instruction-state-key-override
+          (mevedel--instruction-workspace-key workspace))
+         (instructions
+          (progn
+            ;; Reopened external sources must keep the registry's owner,
+            ;; rather than resolving a different workspace from their path.
+            (dolist (entry (copy-sequence (mevedel--instruction-alist)))
+              (when (stringp (car entry))
+                (mevedel--restore-file-instructions (car entry) nil workspace)))
+            (seq-filter
+             (lambda (instruction)
+               (or (null type)
+                   (eq type (overlay-get instruction 'mevedel-instruction-type))))
+             (mevedel--all-instructions))))
+         (missing
+          (when (and workspace (not (eq type 'reference)))
+            (seq-filter
+             (lambda (record)
+               (eq 'source-missing
+                   (plist-get (mevedel-directive-anchor record) :state)))
+             (mevedel-workspace-directives workspace))))
+         (noun (symbol-name (or type 'instruction)))
+         (buffer-count (length (delete-dups (mapcar #'overlay-buffer instructions)))))
+    (when missing
+      (setq missing
+            (when (and interactivep
+                       (let ((query-replace-map (copy-keymap query-replace-map)))
+                         (define-key query-replace-map (kbd "RET") 'skip)
+                         (define-key query-replace-map [return] 'skip)
+                         (y-or-n-p
+                          (format "Include %d Source-missing directive%s as well (default no)? "
+                                  (length missing)
+                                  (if (= 1 (length missing)) "" "s")))))
+              missing)))
+    (let* ((count (+ (length instructions) (length missing)))
+           (summary (format "%d %s%s in %d buffer%s"
+                            count noun (if (= count 1) "" "s")
+                            buffer-count (if (= buffer-count 1) "" "s"))))
+      ;; Match single deletion's activity guard before making any changes.
+      (dolist (record (append missing
+                              (delq nil (mapcar #'mevedel--directive-record
+                                                (seq-filter #'mevedel--directivep
+                                                            instructions)))))
+        (when (mevedel-directive-has-activity-p record)
+          (user-error "Archive directives with activity")))
+      (when interactivep
+        (when (zerop count)
+          (user-error "No %ss to delete" noun))
+        (unless (y-or-n-p (format "Delete %s in %s? " summary
+                                 (if workspace "the current workspace"
+                                   "the shared global bucket")))
+          (user-error "Aborted")))
+      (dolist (instruction instructions)
+        ;; Deleting a parent already deletes its nested directives.
+        (unless (overlay-get instruction 'mevedel-marked-for-deletion)
+          (mevedel--delete-instruction instruction)))
+      (dolist (record missing)
+        (mevedel--delete-source-missing-directive record workspace))
+      (when (memq mevedel--highlighted-instruction instructions)
+        (setq mevedel--highlighted-instruction nil))
+      (unless (zerop count)
+        (message "Deleted %s" summary))
+      count)))
+
+;;;###autoload
 (defun mevedel-delete-all-instructions ()
-  "Delete all mevedel instructions across all buffers."
+  "Delete references and visible directives in the current workspace.
+All buffers in that workspace are included.  Without a workspace, operate
+on the shared global bucket of all buffers without a workspace instead.
+Interactively, confirm counts and offer Source-missing directives too,
+defaulting to no.  Archived directives remain; activity requires archiving."
   (interactive)
-  (mevedel--instruction-activate-buffer)
-  (let ((instr-count (length (mevedel--all-instructions))))
-    (when (and (called-interactively-p 'any)
-               (zerop instr-count))
-      (user-error "No instructions to delete"))
-    (when (and (called-interactively-p 'any)
-               instr-count
-               (not (y-or-n-p "Are you sure you want to delete all instructions?")))
-      (user-error "Aborted")))
-  (let ((buffer-count 0)
-        (deleted-instr-count 0))
-    (mevedel--foreach-instruction instr
-      with buffer-hash = (make-hash-table)
-      unless (gethash (overlay-buffer instr) buffer-hash)
-      do (progn
-           (puthash (overlay-buffer instr) t buffer-hash)
-           (cl-incf buffer-count))
-      do (progn
-           (mevedel--delete-instruction instr)
-           (cl-incf deleted-instr-count)))
-    (when (not (zerop deleted-instr-count))
-      (message "Deleted %d mevedel instruction%s in %d buffer%s"
-               deleted-instr-count
-               (if (= 1 deleted-instr-count) "" "s")
-               buffer-count
-               (if (= 1 buffer-count) "" "s"))))
-  (mevedel--clear-instruction-state
-   (mevedel--instruction-buffer-workspace (current-buffer))))
+  (mevedel--delete-all-instructions-of-type nil (called-interactively-p 'any)))
+
+;;;###autoload
+(defun mevedel-delete-all-references ()
+  "Delete references in all buffers of the current workspace, with confirmation.
+Without a workspace, operate on the shared global bucket of all buffers
+without a workspace instead.  Leave directive records and presentations intact."
+  (interactive)
+  (mevedel--delete-all-instructions-of-type 'reference (called-interactively-p 'any)))
+
+;;;###autoload
+(defun mevedel-delete-all-directives ()
+  "Delete visible directives and their subdirectives in the current workspace.
+All buffers in that workspace are included.  Without a workspace, operate
+on the shared global bucket of all buffers without a workspace instead.
+Interactively, offer Source-missing records once (default no), then confirm
+counts.  Archived directives remain; activity requires archiving.
+Leave references intact."
+  (interactive)
+  (mevedel--delete-all-instructions-of-type 'directive (called-interactively-p 'any)))
 
 (defun mevedel-next-instruction ()
   "Cycle through instructions in the forward direction."
