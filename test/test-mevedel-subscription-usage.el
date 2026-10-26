@@ -25,6 +25,7 @@
           (insert "Retained transcript\n"))
         (with-current-buffer view-buf
           (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
+        (switch-to-buffer view-buf)
         (let ((transcript (with-current-buffer data-buf (buffer-string)))
               (state (copy-tree (with-current-buffer data-buf gptel--token-usage)))
               (goal (copy-sequence (mevedel-session-goal session))))

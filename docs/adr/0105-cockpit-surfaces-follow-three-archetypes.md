@@ -46,6 +46,18 @@ Memory proposals, journal captures and running consolidation expose their own
 content groups. The memory index moves above the reader in narrow windows.
 Opening and refreshing inspectors preserve the composer and table state.
 
+Temporary window ownership is shared by tables, information panels and menus.
+`mevedel-window.el` records the invoking window separately from session ownership
+and restores the frame actually used for display. Tables and reports use native
+`display-buffer` and `quit-window`, followed by exact configuration restoration
+only when the other windows still match their post-display buffers and geometry.
+Restoration preserves current point and scroll positions; changed frames rely
+on native quit restoration alone, so inspection cannot roll back unrelated
+editing. Menus restore before a suffix opens another surface. Menu-origin
+continuations are explicit, so direct opens never manufacture a menu on quit.
+Existing window buffers, including hidden view/data pairs and editing side
+windows, are not guessed from a session's owner context.
+
 Compact execution and pending-input rows in the chat are local disclosures,
 not implicit cockpit entry points. Named management links open their table
 cockpits. Pending input's Manage queue link explicitly says it pauses delivery;
@@ -98,3 +110,9 @@ reduce relearning across surfaces, while resource actions remain explicit.
   reports scannable. A separate index makes long memory sections directly
   reachable while preserving exact records. Resource collections retain their
   tabulated presentation and existing actions.
+- **Window return state was separated from session ownership.** Displaying an
+  owner before killing its table created new splits when that owner was hidden,
+  and direct table entry always opened a menu on quit. Shared temporary-window
+  restoration replaces those inferred return paths. Transient scope records
+  actual menu entry, while native popup teardown restores reused editing windows
+  before the suffix runs. The authoritative data/view separation remains intact.

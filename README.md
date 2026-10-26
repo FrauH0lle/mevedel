@@ -411,6 +411,17 @@ the raw data buffer for persistence and gptel state. mevedel data buffers are
 kept linear: `gptel-org-branching-context` is set buffer-locally to `nil`, so Org
 headings in transcripts do not change the request context.
 
+`M-x mevedel-menu` opens the session controls from either paired buffer.
+Cockpit tables and information panels are temporary: `q` restores the window
+layout and buffers from before they opened, without undoing buffer switches,
+window changes, or navigation made elsewhere while they were open. A table
+opened from the menu returns to that menu; a direct command or key, such as
+`C-c C-e` for Pending Inputs, returns directly to its caller. Dismiss the
+transient itself with `C-g`.
+The explicit Data view action still switches between the rendered view and
+authoritative transcript; ordinary menu and cockpit navigation never exposes
+the internal data buffer as a side effect.
+
 `Shift-TAB` cycles the session permission mode from the input prompt. During a
 running root turn, `C-c RET` sends steering at its next interaction boundary;
 `C-c TAB` queues a separate follow-up turn. `C-c C-w` retracts the newest pending
@@ -422,7 +433,8 @@ retracted or deleted. `C-c C-u` still clears the draft.
 After interrupting a turn, `C-c C-r` resumes leftover steering as one new user
 message, in order, then queued follow-ups drain normally. The same key clears
 the pending-input failure hold after a genuine failure; it explicitly retries
-retained input. Resume requires an idle session and an empty composer. Dropping a local file into the view
+retained input. Resume requires an idle session and an empty composer. Dropping
+a local file into the view
 inserts an `@file` mention and grants a one-shot exact-file `Read` permission for
 the next send.
 

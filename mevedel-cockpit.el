@@ -12,9 +12,8 @@
   (require 'cl-lib))
 
 (require 'tabulated-list)
-
-;; `mevedel-menu'
-(declare-function mevedel-menu "mevedel-menu" ())
+(require 'transient)
+(require 'mevedel-window)
 
 ;; `mevedel-report'
 (declare-function mevedel-report-show "mevedel-report" (buffer report &optional noselect))
@@ -44,6 +43,32 @@
 
 (defvar-local mevedel-cockpit--row-items nil
   "Hash table mapping rendered row ids to cached items.")
+
+(defconst mevedel-cockpit--menu-prefixes
+  '(mevedel-menu--top mevedel-menu--navigate mevedel-menu--mode
+    mevedel-menu--model-selection mevedel-menu--goal mevedel-menu--control
+    mevedel-menu--share mevedel-menu--share-item mevedel-menu--preset
+    mevedel-worktree-status)
+  "Transient prefixes that can explicitly own a cockpit opening.")
+
+(defun mevedel-cockpit-menu-context ()
+  "Return the explicit context of the invoking mevedel menu, or nil."
+  (when (memq transient-current-command mevedel-cockpit--menu-prefixes)
+    (plist-get (transient-scope) :mevedel-context)))
+
+(defun mevedel-cockpit-menu-return-function (&optional context)
+  "Return a menu continuation for CONTEXT, only when opened from a menu.
+Without CONTEXT, use the invoking transient's explicit context."
+  (let* ((context (or context (mevedel-cockpit-menu-context)))
+         (origin (plist-get context :origin-buffer))
+         (return (plist-get context :return-menu)))
+    (when (and return
+               (memq transient-current-command mevedel-cockpit--menu-prefixes))
+      (lambda ()
+        (when (and (buffer-live-p origin)
+                   (mevedel-cockpit--live-context-p context))
+          (with-current-buffer origin
+            (funcall return)))))))
 
 (defun mevedel-cockpit--buffer-session (buffer)
   "Return BUFFER's local session, or nil."
@@ -82,7 +107,8 @@
 
 (defun mevedel-cockpit-current-context ()
   "Return the cockpit context for the current command."
-  (or (mevedel-cockpit-context-for-buffer (current-buffer))
+  (or (mevedel-cockpit-menu-context)
+      (mevedel-cockpit-context-for-buffer (current-buffer))
       (and (boundp 'transient--original-buffer)
            (buffer-live-p transient--original-buffer)
            (mevedel-cockpit-context-for-buffer transient--original-buffer))
@@ -168,15 +194,6 @@ CONTEXT defaults to `mevedel-cockpit-current-context'."
       (user-error "No live mevedel session for this %s"
                   (or label "cockpit surface"))))
   t)
-
-(defun mevedel-cockpit--return-buffer ()
-  "Return the best live owner buffer for quitting this cockpit."
-  (let ((context (condition-case nil
-                     (mevedel-cockpit-current-context)
-                   (user-error nil))))
-    (or (and context (mevedel-cockpit-context-origin-buffer context))
-        (and context (mevedel-cockpit-context-view-buffer context))
-        (and context (mevedel-cockpit-context-data-buffer context)))))
 
 (defun mevedel-cockpit--require-open-context (context label)
   "Return CONTEXT when it has live view and data buffers.
@@ -457,7 +474,7 @@ a help label are still valid bindings, but are omitted from generated help."
                  (list "RET" (format "Show selected %s details" row-label))
                  '("g" "Refresh table")
                  '("?" "Show this help")
-                 '("q" "Back to the main session cockpit"))
+                 '("q" "Close and return to the previous layout"))
                 (plist-get surface :keys))))
     (mapconcat
      #'identity
@@ -498,27 +515,11 @@ a help label are still valid bindings, but are omitted from generated help."
   (hl-line-mode 1))
 
 (defun mevedel-cockpit-quit (&optional label)
-  "Kill the current cockpit and return to the main session cockpit.
-LABEL is a user-facing surface label used in the dead-owner error."
+  "Close the current cockpit and restore its invoking window layout.
+LABEL identifies the surface.  Return to the menu only for menu entry."
   (interactive)
-  (let* ((buffer (current-buffer))
-         (session-p (plist-member mevedel-cockpit--context :data-buffer))
-         (return-buffer (mevedel-cockpit--return-buffer)))
-    (when return-buffer
-      (when-let* ((window (display-buffer return-buffer)))
-        (select-window window)))
-    (when (buffer-live-p buffer)
-      (kill-buffer buffer))
-    (cond
-     ;; A workspace context has no session cockpit to return to.
-     ((not session-p))
-     ((not return-buffer)
-      (user-error "No live mevedel session for this %s"
-                  (or label "cockpit surface")))
-     (t
-      (with-current-buffer return-buffer
-        (require 'mevedel-menu)
-        (mevedel-menu))))))
+  (ignore label)
+  (mevedel-window-quit))
 
 (defun mevedel-cockpit-surface-quit ()
   "Quit the current cockpit surface."
@@ -553,8 +554,8 @@ LABEL is a user-facing surface label used in the dead-owner error."
       (when-let* ((setup (plist-get surface :setup)))
         (funcall setup context))
       (mevedel-cockpit-surface-refresh))
-    (when-let* ((window (display-buffer buffer)))
-      (select-window window))
+    (mevedel-window-display-buffer
+     buffer nil (mevedel-cockpit-menu-return-function context))
     buffer))
 
 (provide 'mevedel-cockpit)

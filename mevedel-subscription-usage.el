@@ -114,7 +114,8 @@
          (list :title "Subscription usage" :mode #'mevedel-subscription-usage-mode :sections nil)
          origin)
         (setq mevedel-cockpit--context context)))
-    (pop-to-buffer buffer)
+    (mevedel-window-display-buffer
+     buffer nil (mevedel-cockpit-menu-return-function context))
     (mevedel-subscription-usage-refresh)
     buffer))
 

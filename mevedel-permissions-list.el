@@ -250,7 +250,7 @@ An execution profile's remembered child grants follow the pattern."
     (message "mevedel: revoked %s" label)))
 
 (defun mevedel-permissions-list-quit ()
-  "Quit the permissions cockpit and return to the session cockpit."
+  "Close the permissions cockpit and restore the invoking layout."
   (interactive)
   (mevedel-cockpit-quit "permissions cockpit"))
 

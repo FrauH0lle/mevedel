@@ -360,6 +360,52 @@
       (user-error "No mevedel session cockpit here"))
     context))
 
+(defun mevedel-menu--display-buffer (buffer alist)
+  "Display menu BUFFER using ALIST without reusing an editing side window."
+  (let ((slot 0))
+    (dolist (window (window-list nil 'no-minibuf))
+      (when (eq (window-parameter window 'window-side) 'bottom)
+        (setq slot (max slot (1+ (or (window-parameter window 'window-slot) 0))))))
+    (display-buffer-in-side-window buffer (cons (cons 'slot slot) alist))))
+
+(defun mevedel-menu--setup (prefix &optional scope)
+  "Set up PREFIX with SCOPE and explicit session-menu origin.
+Use a disposable bottom side window, never an existing editing window."
+  (let ((return-scope scope)
+        (origin (selected-window))
+        (configurations
+         (mapcar (lambda (frame)
+                   (cons frame (current-window-configuration frame)))
+                 (frame-list)))
+        (context (condition-case nil
+                     (copy-sequence (mevedel-menu--context))
+                   (user-error nil))))
+    (when context
+      (setq context
+            (plist-put context :return-menu
+                       (lambda () (mevedel-menu--setup prefix return-scope))))
+      (setq scope (plist-put (copy-sequence scope) :mevedel-context context)))
+    (transient-setup
+     prefix nil nil :scope scope
+     :display-action `((mevedel-menu--display-buffer)
+                       (side . bottom)
+                       (dedicated . t)
+                       (inhibit-same-window . t)
+                       (body-function
+                        . ,(lambda (window)
+                             (let ((configuration
+                                    (alist-get (window-frame window) configurations)))
+                               ;; Native Transient kills its popup before the
+                               ;; suffix runs.  Restore even when a user display
+                               ;; rule reused an editing window or side slot.
+                               (with-current-buffer (window-buffer window)
+                                 (add-hook
+                                  'kill-buffer-hook
+                                  (lambda ()
+                                    (mevedel-window-restore configuration origin t))
+                                  nil t)))))
+                       (window-parameters . ((no-other-window . t)))))))
+
 
 ;;
 ;;; Labels
@@ -693,7 +739,7 @@ FULL-NAME keeps the complete label for completion candidates."
                          mevedel-menu--share-entries))))
     (unless entry
       (user-error "No share on that key"))
-    (transient-setup 'mevedel-menu--share-item nil nil :scope entry)))
+    (mevedel-menu--setup 'mevedel-menu--share-item entry)))
 
 (defun mevedel-menu--share-choose ()
   "Choose any share, including those beyond the compact digit-key rows."
@@ -719,7 +765,7 @@ FULL-NAME keeps the complete label for completion candidates."
     (let ((entry (cdr (assoc (completing-read "Share: " choices nil t)
                              choices))))
       (when entry
-        (transient-setup 'mevedel-menu--share-item nil nil :scope entry)))))
+        (mevedel-menu--setup 'mevedel-menu--share-item entry)))))
 
 (defun mevedel-menu--share-item-room-p ()
   "Return non-nil when the share surface shows a session room."
@@ -1378,9 +1424,9 @@ place instead of prompting."
 (cl-defun mevedel-menu-open-model-selection
     (&key title provider effort update reset inherited)
   "Open shared model selection for caller-owned state."
-  (transient-setup
-   'mevedel-menu--model-selection nil nil
-   :scope (list :title title
+  (mevedel-menu--setup
+   'mevedel-menu--model-selection
+   (list :title title
                 :model-provider provider
                 :reasoning-effort effort
                 :update update
@@ -1408,13 +1454,13 @@ asked, such as a collaboration guest's turn."
   (let ((context (mevedel-menu--context)))
     (pcase area
       ('top
-       (transient-setup 'mevedel-menu--top))
+       (mevedel-menu--setup 'mevedel-menu--top))
       ('navigate
-       (transient-setup 'mevedel-menu--navigate))
+       (mevedel-menu--setup 'mevedel-menu--navigate))
       ('session-info
        (mevedel-menu--open-session-info))
       ('mode
-       (transient-setup 'mevedel-menu--mode))
+       (mevedel-menu--setup 'mevedel-menu--mode))
       ('permissions
        (mevedel-cockpit-call-in-data
         context #'mevedel-permissions-list-open context))
@@ -1423,13 +1469,13 @@ asked, such as a collaboration guest's turn."
       ('model
        (mevedel-menu--open-model))
       ('goal
-       (transient-setup 'mevedel-menu--goal))
+       (mevedel-menu--setup 'mevedel-menu--goal))
       ('control
-       (transient-setup 'mevedel-menu--control))
+       (mevedel-menu--setup 'mevedel-menu--control))
       ('share
-       (transient-setup 'mevedel-menu--share))
+       (mevedel-menu--setup 'mevedel-menu--share))
       ('preset
-       (transient-setup 'mevedel-menu--preset))
+       (mevedel-menu--setup 'mevedel-menu--preset))
       ('skills
        (mevedel-cockpit-call-in-data
         context #'mevedel-skills-list-open context))
@@ -1964,7 +2010,7 @@ Every action goes through the same commands as `/collab'."
    :setup-children mevedel-menu--share-active-rows]
   (interactive)
   (mevedel-menu--context)
-  (transient-setup 'mevedel-menu--share))
+  (mevedel-menu--setup 'mevedel-menu--share))
 
 (transient-define-prefix mevedel-menu--share-item ()
   "One share or lobby chosen on the Share surface.
@@ -2015,7 +2061,7 @@ that is being asked for it are the same protocol seen from two ends."
     ("i" "Session info" mevedel-menu--open-session-info)]]
   (interactive)
   (mevedel-menu--context)
-  (transient-setup 'mevedel-menu--control))
+  (mevedel-menu--setup 'mevedel-menu--control))
 
 (transient-define-prefix mevedel-menu--navigate ()
   "Transcript navigation cockpit surface.
@@ -2069,7 +2115,7 @@ match the ones the view buffer itself binds."
     ("q" "Back" mevedel-menu)]]
   (interactive)
   (mevedel-menu--context)
-  (transient-setup 'mevedel-menu--navigate))
+  (mevedel-menu--setup 'mevedel-menu--navigate))
 
 (transient-define-prefix mevedel-menu--mode ()
   "Permission mode cockpit surface."
@@ -2089,7 +2135,7 @@ match the ones the view buffer itself binds."
     ("q" "Back" mevedel-menu)]]
   (interactive)
   (mevedel-menu--context)
-  (transient-setup 'mevedel-menu--mode))
+  (mevedel-menu--setup 'mevedel-menu--mode))
 
 (transient-define-prefix mevedel-menu--model-selection ()
   "Shared caller-owned model-selection surface."
@@ -2139,7 +2185,7 @@ match the ones the view buffer itself binds."
     ("q" "Back" mevedel-menu)]]
   (interactive)
   (mevedel-menu--context)
-  (transient-setup 'mevedel-menu--goal))
+  (mevedel-menu--setup 'mevedel-menu--goal))
 
 (transient-define-prefix mevedel-menu--preset ()
   "Preset and model-team cockpit surface."
@@ -2154,7 +2200,7 @@ match the ones the view buffer itself binds."
     ("q" "Back" mevedel-menu)]]
   (interactive)
   (mevedel-menu--context)
-  (transient-setup 'mevedel-menu--preset))
+  (mevedel-menu--setup 'mevedel-menu--preset))
 
 (provide 'mevedel-menu)
 

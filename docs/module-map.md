@@ -168,6 +168,7 @@ Chat / view
   mevedel-view-path.el        deferred target path verification and memoization
   mevedel-view-table.el       rendered pipe tables and window realignment
   mevedel-cockpit.el          shared tabulated cockpit surface plumbing
+  mevedel-window.el           temporary surface display, origin and exact frame restoration
   mevedel-report.el           read-only sections, memory navigation, report windows
   mevedel-subscription-usage.el session-owned quota report, freshness and cancellation
   mevedel-subscription-usage-provider.el isolated Codex HTTP and native Claude ACP quota retrieval
