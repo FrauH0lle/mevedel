@@ -1052,7 +1052,10 @@ hashed in Lisp."
         (setq local (nthcdr 200 local))
         (with-temp-buffer
           (set-buffer-multibyte nil)
-          (when (eq 0 (let ((coding-system-for-read 'no-conversion))
+          ;; Inputs are absolute local paths; a removed worktree must not
+          ;; prevent launching the hasher from an inherited directory.
+          (when (eq 0 (let ((coding-system-for-read 'no-conversion)
+                           (default-directory "/"))
                         (apply #'call-process "sha256sum" nil t nil
                                "--binary" "--zero" "--" chunk)))
             (goto-char (point-min))
