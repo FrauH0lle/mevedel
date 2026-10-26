@@ -496,15 +496,23 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
     new))
 
 (defun mevedel--instruction-before-change (beg end)
-  "Capture attached directive trees wholly covered between BEG and END."
-  (setq mevedel--pending-instruction-undo
-        (mevedel-instruction-undo-capture beg end))
-  (setq mevedel--pending-instruction-edit
-        (list beg (buffer-substring-no-properties beg end)
-              (mapcar (lambda (overlay)
-                        (list overlay (overlay-start overlay)
-                              (overlay-end overlay)))
-                      (mevedel--instructions-in (point-min) (point-max)))))
+  "Capture local geometry and directive trees wholly covered by BEG..END."
+  (let ((instructions
+         (cl-remove-if-not
+          (lambda (overlay)
+            (and (<= beg (overlay-end overlay))
+                 (<= (overlay-start overlay) end)))
+          (mevedel--instructions-in (max (point-min) (1- beg))
+                                    (min (point-max) (1+ end))))))
+    (setq mevedel--pending-instruction-undo
+          (mevedel-instruction-undo-capture beg end instructions))
+    (setq mevedel--pending-instruction-edit
+          (when instructions
+            (list beg (buffer-substring-no-properties beg end)
+                  (mapcar (lambda (overlay)
+                            (list overlay (overlay-start overlay)
+                                  (overlay-end overlay)))
+                          instructions)))))
   (setq mevedel--pending-directive-detachments nil)
   (when (< beg end)
     (dolist (directive (mevedel--instructions-in beg end 'directive))
@@ -558,8 +566,19 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
       (overlay-put directive 'priority priority)
       (setq priority (1- priority)))))
 
-(defun mevedel--instruction-normalize-lines (overlay)
-  "Expand live nonempty line OVERLAY to whole lines."
+(defun mevedel--instruction-move-after-edit (overlay start end &optional entry)
+  "Move OVERLAY to START and END only when native shifts did not do so.
+ENTRY holds its pre-edit geometry for lazily promoting presentation undo."
+  (unless (and (overlay-buffer overlay)
+               (= start (overlay-start overlay)) (= end (overlay-end overlay)))
+    (when entry
+      (mevedel-instruction-undo-extend mevedel--pending-instruction-undo
+                                       overlay (nth 1 entry) (nth 2 entry)))
+    (move-overlay overlay start end (current-buffer))))
+
+(defun mevedel--instruction-normalize-lines (overlay &optional entry)
+  "Expand live nonempty line OVERLAY to whole lines.
+ENTRY supplies pre-edit geometry when extra movement needs undo restoration."
   (when (and (overlay-buffer overlay)
              (eq (overlay-get overlay 'mevedel-span) 'line)
              (< (overlay-start overlay) (overlay-end overlay)))
@@ -569,8 +588,8 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
         (goto-char (overlay-start overlay))
         (let ((start (line-beginning-position)))
           (goto-char (overlay-end overlay))
-          (move-overlay overlay start
-                        (if (bolp) (point) (line-end-position))))))))
+          (mevedel--instruction-move-after-edit
+           overlay start (if (bolp) (point) (line-end-position)) entry))))))
 
 (defun mevedel--instruction-adjust-edit (beg end)
   "Grow intersected instructions and preserve line shape around BEG and END."
@@ -604,19 +623,21 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
                      (or (> new-end from)
                          (< start from) (> finish old-end)))
             (let ((live (overlay-buffer overlay)))
-              (move-overlay overlay
-                            (min from (if live (overlay-start overlay) from))
-                            (max new-end (if live (overlay-end overlay) new-end))
-                            (current-buffer)))))
-        (mevedel--instruction-normalize-lines (car entry))))))
+              (mevedel--instruction-move-after-edit
+               overlay
+               (min from (if live (overlay-start overlay) from))
+               (max new-end (if live (overlay-end overlay) new-end)) entry))))
+        (mevedel--instruction-normalize-lines (car entry) entry)))))
 
 (defun mevedel--instruction-after-change (beg end _old-length)
   "Detach captured directives, then redraw instructions affected by BEG and END."
-  (when mevedel--pending-instruction-edit
-    (mevedel--instruction-adjust-edit beg end))
-  (dolist (mapping mevedel--instruction-line-mapping)
-    (move-overlay (nth 0 mapping) (nth 1 mapping) (nth 2 mapping)
-                  (current-buffer)))
+  (let ((entries (nth 2 mevedel--pending-instruction-edit)))
+    (when mevedel--pending-instruction-edit
+      (mevedel--instruction-adjust-edit beg end))
+    (dolist (mapping mevedel--instruction-line-mapping)
+      (mevedel--instruction-move-after-edit
+       (nth 0 mapping) (nth 1 mapping) (nth 2 mapping)
+       (assq (nth 0 mapping) entries))))
   (let ((pending (prog1 mevedel--pending-directive-detachments
                    (setq mevedel--pending-directive-detachments nil))))
     (dolist (entry pending)
@@ -632,13 +653,14 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
             (mevedel--remove-directive-presentation
              overlay
              (plist-get entry :buffer)))))))
-  (let ((beg (max (point-min) (1- beg)))
-        (end (min (point-max) (1+ end))))
-    (dolist (instruction (mevedel--instructions-in beg end))
-      (mevedel--update-instruction-overlay instruction)))
-  (mevedel-instruction-undo-record
-   (prog1 mevedel--pending-instruction-undo
-     (setq mevedel--pending-instruction-undo nil))))
+  (let ((instructions (mevedel--instructions-in
+                       (max (point-min) (1- beg))
+                       (min (point-max) (1+ end)))))
+    (dolist (instruction instructions)
+      (mevedel--update-instruction-overlay instruction))
+    (mevedel-instruction-undo-record
+     (prog1 mevedel--pending-instruction-undo
+       (setq mevedel--pending-instruction-undo nil)) instructions)))
 
 (defun mevedel--register-directive (directive request)
   "Register DIRECTIVE and REQUEST under their top-level workspace owner."

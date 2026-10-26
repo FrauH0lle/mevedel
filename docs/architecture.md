@@ -222,9 +222,15 @@ avoiding character-minimal insertion drift and excluding unchanged hunk context.
 Session rewind's transcript-only replacement remains separate: its display
 hooks are intentionally inhibited, and its transcript presentation is rebuilt.
 
-`mevedel-instruction-undo.el` fences successful source edits with native undo
-function entries, installing saved geometry after text changes in both
-directions. Full-deletion undo/redo restores the original overlay identity,
+Source edit hooks capture and normalize only instructions touching the changed
+range, including its edges; ordinary typing does not scan the buffer's entire
+instruction registry. `mevedel-instruction-undo.el` fences edge-touching edits
+with native undo function entries, installing saved geometry after text changes
+in both directions. Strictly interior edits use native marker shifts and add
+no function entries unless normalization or explicit mapping actually moves an
+overlay beyond those shifts. A promoted edit can split a coalesced native
+insertion interval without adding an undo boundary. Full-deletion undo/redo
+restores the original overlay identity,
 source anchors, nested membership, and reciprocal links, without restoring old
 directive activity. If another instruction reused a deleted numeric ID, the
 restored instruction receives a fresh ID while retaining its UUID. Explicit

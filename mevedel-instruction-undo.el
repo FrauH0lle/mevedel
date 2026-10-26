@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Text undo does not restore overlays.  Fence successful source edits with
-;; paired entries that install presentation geometry after primitive text undo.
+;; Text undo does not restore overlays.  Fence edge edits and extra movements
+;; with paired entries that install geometry after primitive text undo.
 ;; Only anchors and presentations are restored, never directive activity.
 
 ;;; Code:
@@ -58,30 +58,49 @@
                            (overlay-get identity 'mevedel-uuid)))
                    (plist-get links :from))))))
 
-(defun mevedel-instruction-undo-capture (beg end)
-  "Capture instructions touching BEG and END for text undo."
+(defun mevedel-instruction-undo-capture (beg end instructions)
+  "Capture INSTRUCTIONS whose edges touch the edit between BEG and END.
+Strictly interior edits rely on ordinary marker shifts.  Keep their undo
+checkpoint available so an actual extra geometry change can promote it later."
   (unless (or undo-in-progress (eq buffer-undo-list t))
     (let (states)
-      (dolist (overlay (copy-sequence
-                        (alist-get (current-buffer) (mevedel--instruction-alist))))
-        (when (and (overlay-buffer overlay)
-                   (<= beg (overlay-end overlay))
+      (dolist (overlay instructions)
+        (when (and
                    (< (overlay-start overlay) (overlay-end overlay))
-                   (<= (overlay-start overlay) end))
+                   (not (and (< (overlay-start overlay) beg)
+                             (< end (overlay-end overlay)))))
           (push (mevedel-instruction-undo--state overlay) states)))
-      (when states (cons buffer-undo-list states)))))
+      (when instructions
+        ;; Native insert undo can extend this interval in place.  Retain only
+        ;; its two integers, not a copy of the buffer's undo history.
+        (let ((head (car buffer-undo-list)))
+          (vector buffer-undo-list states
+                  (when (and (consp head) (integerp (car head)) (integerp (cdr head)))
+                    (cons (car head) (cdr head)))))))))
 
-(defun mevedel-instruction-undo-record (token)
-  "Fence successful edits from TOKEN after edit hooks finish cleanup."
-  (when (and token (not (eq buffer-undo-list t)))
+(defun mevedel-instruction-undo-extend (token overlay start end)
+  "Promote TOKEN for an extra OVERLAY movement beyond native marker shifts.
+START and END are the original, pre-edit bounds.  Capture properties and
+anchors before adjustment, detachment, or redraw changes the presentation."
+  (when (and token
+             (not (cl-find overlay (aref token 1)
+                           :key (lambda (state) (plist-get state :overlay)))))
+    (let ((state (mevedel-instruction-undo--state overlay)))
+      (setf (plist-get state :start) start
+            (plist-get state :end) end)
+      (push state (aref token 1)))))
+
+(defun mevedel-instruction-undo-record (token instructions)
+  "Fence successful edits from TOKEN after cleanup of local INSTRUCTIONS."
+  (when (and token (aref token 1) (not (eq buffer-undo-list t)))
     (let (before after prefix (tail buffer-undo-list))
-      (dolist (state (cdr token))
+      (dolist (state (aref token 1))
         (let* ((old (plist-get state :overlay))
                (uuid (overlay-get old 'mevedel-uuid))
-               (live (cl-find uuid
-                              (alist-get (current-buffer) (mevedel--instruction-alist))
-                              :key (lambda (ov) (overlay-get ov 'mevedel-uuid))
-                              :test #'equal)))
+               (live (if (overlay-buffer old) old
+                       (cl-find uuid instructions
+                                :key (lambda (ov) (overlay-get ov 'mevedel-uuid))
+                                :test #'equal))))
           (push state before)
           (push (if (and live (overlay-buffer live))
                       (mevedel-instruction-undo--state live old)
@@ -93,15 +112,24 @@
                             (eq 'detached
                                 (plist-get (mevedel-directive-anchor owner) :state)))))
                 after)))
-      (while (and (consp tail) (not (eq tail (car token))))
+      (while (and (consp tail) (not (eq tail (aref token 0))))
         (push (car tail) prefix)
         (setq tail (cdr tail)))
-      (when (and before prefix (eq tail (car token)))
-        (setq buffer-undo-list
-              (append (list (list 'apply #'mevedel-instruction-undo--arm after))
-                      (nreverse prefix)
-                      (list (list 'apply #'mevedel-instruction-undo--install before))
-                      tail))))))
+      (when (eq tail (aref token 0))
+        (let ((old (aref token 2))
+              (head (car tail)))
+          (when (and old (consp head) (eql (car old) (car head))
+                     (integerp (cdr head)) (< (cdr old) (cdr head)))
+            ;; Split a coalesced append so the fence covers only this edit,
+            ;; without boundaries or changes to the preceding undo history.
+            (push (cons (cdr old) (cdr head)) prefix)
+            (setq tail (cons old (cdr tail)))))
+        (when (and before prefix)
+          (setq buffer-undo-list
+                (append (list (list 'apply #'mevedel-instruction-undo--arm after))
+                        (nreverse prefix)
+                        (list (list 'apply #'mevedel-instruction-undo--install before))
+                        tail)))))))
 
 (defun mevedel-instruction-undo--arm (states)
   "Queue installation of STATES after the inverse text operation.
