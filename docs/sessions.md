@@ -206,8 +206,11 @@ override from a transcript file's location. Save As copies the override with the
 and Worktree forks still discard retained-agent identities under
 [ADR 0062](adr/0062-do-not-clone-live-agents-into-session-forks.md).
 Queued follow-ups retain text, attribution, scope and attachment grants. Live
-submission objects are excluded. Undelivered steering reloads as requiring review,
-with automatic delivery paused; a restart never resurrects a submitted request.
+submission objects are excluded. Steering that still belongs to a request
+reloads as requiring review, with automatic delivery paused; a restart never
+resurrects a submitted request. Ordinary steering deliberately detached by an
+interrupt remains pending, and its interrupt pause survives restore. The host
+can resume it with `C-c C-r` instead of converting it in the cockpit.
 
 
 ## Persistence flow
@@ -717,8 +720,9 @@ at its next tool batch, or as a further prompt in the same turn when the native
 prompt ends first (see [Native context delivery](#native-context-delivery)). A
 native turn cannot wait at a held boundary: steering still held by the Pending
 Inputs cockpit or an unresolved interaction when the turn succeeds becomes the
-first follow-ups, in submission order. A failed or interrupted turn marks it
-`Needs review`, as on HTTP.
+first follow-ups, in submission order. A failed turn marks it `Needs review`,
+as on HTTP. A deliberate interrupt keeps it ordinary pending steering and holds
+delivery until Resume or another explicit user action.
 
 ### Native context delivery
 
@@ -1983,11 +1987,16 @@ interrupted input requiring review, so a submitted prompt is never replayed.
 Live submission objects and edit state are not persisted. There is no
 queue-size cap.
 
-A failed or aborted root turn pauses follow-up delivery only when steering for
-that turn was left undelivered or a queued follow-up's dispatch may have reached
-the transcript; those entries need review in the Pending Inputs cockpit. The
-next root request clears a pause that no reviewable entry still justifies, and
-the pause banner shows only while entries remain.
+A failed root turn marks leftover steering for review and sets the failure
+pause; uncertain queued dispatch likewise requires explicit retry. An aborted
+root turn instead detaches ordinary leftover steering and sets the user delivery
+pause whenever either pending category remains, without setting a failure latch.
+The hold prevents automatic follow-up, background-event and Goal turns.
+`C-c C-r` combines leftover steering into one first follow-up and clears both
+holds; subsequent queued follow-ups drain as usual. A new explicit root send
+rebinds only ordinary detached steering to the new request and releases the
+interrupt hold. A genuine failure's review entries are not implicitly rebound.
+The pause banner shows only while entries remain.
 
 A saved model selection that no longer resolves uses
 `mevedel-model-fallback-provider`, or the host default when that option is nil,

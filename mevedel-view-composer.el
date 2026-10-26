@@ -168,6 +168,8 @@
 (autoload 'mevedel--topmost-instruction "mevedel-overlays")
 
 ;; `mevedel-pending-inputs'
+(declare-function mevedel-pending-inputs-cancel-resume
+                  "mevedel-pending-inputs" ())
 (declare-function mevedel-view--queue-prepared-steering
                   "mevedel-pending-inputs"
                   (submission request &optional preserve-draft))
@@ -891,7 +893,9 @@ ALLOW-ARMED-FORK permits submission of an already armed session fork."
   "C-c C-e" #'mevedel-pending-inputs-open
   "C-c C-k" #'mevedel-view-cancel-composer-state
   "C-c C-l" #'mevedel-view-history-browse
+  "C-c C-r" #'mevedel-view-resume-pending
   "C-c C-u" #'mevedel-view-history-clear-input
+  "C-c C-w" #'mevedel-view-retract-pending
   "C-y" #'mevedel-view-yank-dwim
   "M-n" #'mevedel-view-history-next
   "M-p" #'mevedel-view-history-previous
@@ -962,6 +966,7 @@ This covers the interval before the prompt has been accepted and before
 
 (defun mevedel-view--cancel-pending-submission ()
   "Cancel this view's pending hook or skill preparation, if any."
+  (mevedel-pending-inputs-cancel-resume)
   (when mevedel-view--prompt-hook-pending
     (mevedel-prompt-submission-cancel mevedel-view--prompt-hook-pending)
     (setq mevedel-view--prompt-hook-pending nil))

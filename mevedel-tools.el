@@ -693,6 +693,23 @@ sync with what the model actually saw.  Return non-nil on successful insertion."
         (lambda (entry) (equal request-id (plist-get entry :request-id)))
         (mevedel-session-pending-steering session))))
 
+(defun mevedel-tools-steering-claim (session entries)
+  "Reserve SESSION's steering ENTRIES before expansion or native delivery.
+The whole snapshot is owned before any file read can process user input.
+Ownership ends at receipt/commit or dead-turn settlement, not at native send."
+  (dolist (entry entries)
+    (unless (and (memq entry (mevedel-session-pending-steering session))
+                 (not (plist-get entry :delivering)))
+      (user-error "Steering input is no longer available for dispatch")))
+  (dolist (entry entries)
+    (plist-put entry :delivering t)))
+
+(defun mevedel-tools--assert-steering-claim (session entry)
+  "Refuse a stale delivery of SESSION's claimed steering ENTRY."
+  (unless (and (memq entry (mevedel-session-pending-steering session))
+               (plist-get entry :delivering))
+    (user-error "Steering ownership changed before delivery")))
+
 (defun mevedel-tools-steering-held-p (session buffer)
   "Return non-nil while SESSION's steering delivery is held.
 The cockpit or a failure pauses delivery; an unresolved interaction in root
@@ -713,13 +730,18 @@ The caller delivers the
 expansion's `:media-contexts' with the prompt text."
   (mevedel-session-activate-dropped-file-grants
    session (plist-get entry :dropped-file-grants))
-  (mevedel-mentions-expand-user-input
-   (or (plist-get entry :model-input) (plist-get entry :input))
-   session fresh model))
+  (let ((claimed (plist-get entry :delivering))
+        (expansion (mevedel-mentions-expand-user-input
+                    (or (plist-get entry :model-input) (plist-get entry :input))
+                    session fresh model)))
+    ;; Expansion can process an abort, whose settlement replaces the entries.
+    (when claimed (mevedel-tools--assert-steering-claim session entry))
+    expansion))
 
 (defun mevedel-tools-steering-commit (session entry expansion &optional fresh)
   "Consume delivered steering ENTRY and commit its EXPANSION for SESSION.
 FRESH skips the mention deduplication a separate conversation never saw."
+  (mevedel-tools--assert-steering-claim session entry)
   (mevedel-session-set-pending-inputs
    session 'steering
    (cl-remove (plist-get entry :id) (mevedel-session-pending-steering session)
@@ -777,12 +799,13 @@ SKIP-COMPACTION-GATE avoids repeating a completed automatic compaction gate."
              backend data
              (car (gptel--parse-list
                    backend (list (cons 'response response)))))))
+        (mevedel-tools-steering-claim session snapshot)
         (dolist (entry snapshot)
           ;; The grant is provisional until the prompt reaches the request.
           (let ((restore
                  (copy-sequence
                   (mevedel-session-active-dropped-file-grants session)))
-                delivered)
+                delivered finished)
             (unwind-protect
                 (let* ((expansion
                         (with-current-buffer buffer
@@ -799,24 +822,32 @@ SKIP-COMPACTION-GATE avoids repeating a completed automatic compaction gate."
                            prompt media backend (plist-get info :model)
                            (buffer-local-value
                             'mevedel--current-request buffer))))
+                  (mevedel-tools--assert-steering-claim session entry)
                   (gptel--inject-prompt backend data prompt)
+                  (setq delivered t)
                   ;; Mention reminders ride the reminder injector,
                   ;; which runs later in this same WAIT.
                   (dolist (item (plist-get expansion :reminder-items))
                     (mevedel-reminders-stage-entry
                      fsm (or (plist-get item :key) 'mention)
                      (plist-get item :body)))
-                  (setq delivered t)
                   (mevedel-tools--insert-session-injected-prompt
                    session fsm entry
                    (or (plist-get entry :transcript-payload)
                        (plist-get entry :input)))
                   ;; The steering prompt is already in the payload, so
                   ;; the dedup commit may run directly.
-                  (mevedel-tools-steering-commit session entry expansion))
+                  (mevedel-tools-steering-commit session entry expansion)
+                  (setq finished t))
+              ;; An exception leaves later snapshot members unattempted.
+              ;; Release those claims, but never withdraw an injected prompt.
+              (unless finished
+                (dolist (unattempted (cdr (memq entry snapshot)))
+                  (plist-put unattempted :delivering nil)))
               ;; A delivered entry keeps its grant: the model can act on the
               ;; prompt even if a later commit step fails.
               (unless delivered
+                (plist-put entry :delivering nil)
                 (mevedel-session--set-active-dropped-file-grants
                  session restore)))))
         (when-let* ((marker

@@ -294,6 +294,7 @@ Return a plist of the model-visible :body, its ACP :images, the user-role
 :transcript, mention reminder :entries and the receipt :commits that consume
 each entry."
   (when-let* ((entries (mevedel-claude-code-context--steering-entries owner)))
+    (mevedel-tools-steering-claim (mevedel-request-session owner) entries)
     (let* ((info (mevedel-engine-info owner))
            (session (mevedel-request-session owner))
            (fresh (or (mevedel-request-directive-uuid owner)
@@ -318,6 +319,8 @@ each entry."
             (push (list :type (cons 'mention (plist-get item :key)) :body (plist-get item :body))
                   reminders))
           (push (lambda () (mevedel-tools-steering-commit session entry expansion fresh)) commits)))
+      (dolist (entry entries)
+        (mevedel-tools--assert-steering-claim session entry))
       (list :body body :images images :transcript transcript
             :entries (nreverse reminders) :commits (nreverse commits)))))
 

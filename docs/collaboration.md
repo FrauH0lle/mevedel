@@ -523,8 +523,12 @@ resumes when readiness clears the issue.
 
 Owners can choose a replacement provider or preset, complete provider login,
 recover a root or child native history, or explicitly retry retained input.
-Undelivered steering or an interrupted queued delivery pauses delivery and must
-be reviewed first. Recovery never resends a submitted prompt. Queue acceptance,
+Failed-turn steering or an uncertain queued delivery pauses delivery and requires
+explicit recovery. The host can use `C-c C-r` to retry pending input directly;
+the owner browser's individual failed-turn recovery actions remain available.
+A deliberate turn interrupt preserves ordinary unsent steering and holds queued
+input until Resume or another explicit host action, without labeling it failed.
+Recovery never automatically resends a submitted prompt. Queue acceptance,
 removal and pause state are persisted with the session.
 
 A failing observer or projection preserves the room and its last good snapshot.

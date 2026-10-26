@@ -400,9 +400,18 @@ the raw data buffer for persistence and gptel state. mevedel data buffers are
 kept linear: `gptel-org-branching-context` is set buffer-locally to `nil`, so Org
 headings in transcripts do not change the request context.
 
-`Shift-TAB` cycles the session permission mode from the input prompt. If you
-submit while a request is running, the prompt is queued for the next turn and can
-be edited or cleared before it is drained. Dropping a local file into the view
+`Shift-TAB` cycles the session permission mode from the input prompt. During a
+running root turn, `C-c RET` sends steering at its next interaction boundary;
+`C-c TAB` queues a separate follow-up turn. `C-c C-w` retracts the newest pending
+entry into an empty composer, including its mentions and attachment grants,
+without opening a cockpit or pausing delivery. `d` or `DEL` on a pending summary
+row drops that entry directly. Entries already being dispatched cannot be
+retracted or deleted. `C-c C-u` still clears the draft.
+
+After interrupting a turn, `C-c C-r` resumes leftover steering as one new user
+message, in order, then queued follow-ups drain normally. The same key clears
+the pending-input failure hold after a genuine failure; it explicitly retries
+retained input. Resume requires an idle session and an empty composer. Dropping a local file into the view
 inserts an `@file` mention and grants a one-shot exact-file `Read` permission for
 the next send.
 
@@ -410,6 +419,9 @@ the next send.
 |--------------------------------------|----------------------------------------------------------|
 | `mevedel-view-send`                  | Send the current view input to the backing data buffer.  |
 | `mevedel-view-abort`                 | Abort the active request from the view buffer.           |
+| `mevedel-view-retract-pending`       | Withdraw the newest pending entry into an empty composer (`C-c C-w`). |
+| `mevedel-view-resume-pending`        | Resume leftover steering in one turn, then queued follow-ups (`C-c C-r`). |
+| `mevedel-pending-inputs-drop-at-point` | Delete the pending summary row under point (`d` / `DEL`), without opening the cockpit. |
 | `mevedel-view-toggle-section`        | Expand or collapse the section or turn at point.         |
 | `mevedel-view-arm-conversation-fork` | Arm a Conversation Fork at the assistant turn at point.  |
 | `mevedel-view-arm-worktree-fork`     | Arm a Worktree Fork at the assistant turn at point.      |

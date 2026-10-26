@@ -28,6 +28,7 @@
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-tools)
+(require 'mevedel-pending-inputs)
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-goal)
 (require 'mevedel-tool-ui)
@@ -343,6 +344,13 @@
                                     (equal "first steering"
                                            (plist-get prompt :content)))
                            (setq late-enqueued t)
+                           ;; A nested command during expansion/injection must
+                           ;; not withdraw the rest of this snapshot.
+                           (dolist (entry (mevedel-session-pending-steering session))
+                             (should (plist-get entry :delivering))
+                             (should-error
+                              (mevedel-pending-inputs--assert-removable session entry)
+                              :type 'user-error))
                            (mevedel-session-enqueue-pending-input
                             session 'steering
                             '(:input "late steering"
