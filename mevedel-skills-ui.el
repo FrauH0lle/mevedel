@@ -739,7 +739,7 @@ Routes through the lifecycle-aware permission transition path."
    (mevedel-skills-list--help-report)))
 
 (defun mevedel-skills-list-quit ()
-  "Quit the skills cockpit and return to the main session cockpit."
+  "Close the skills cockpit and restore the invoking layout."
   (interactive)
   (mevedel-cockpit-quit "skills cockpit"))
 

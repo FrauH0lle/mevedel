@@ -396,7 +396,7 @@
   ,test
   (test)
 
-  :doc "kills the tools cockpit and reopens the main session cockpit"
+  :doc "kills a directly opened tools cockpit without opening the menu"
   (let* ((session (mevedel-tools-list-test--make-session))
          (view-buffer (generate-new-buffer " *mt-tools-quit-view*"))
          (data-buffer (generate-new-buffer " *mt-tools-quit-data*"))
@@ -411,7 +411,7 @@
             (with-current-buffer buffer
               (mevedel-tools-list-quit)))
           (should-not (buffer-live-p buffer))
-          (should (eq called-buffer data-buffer)))
+          (should-not called-buffer))
       (mevedel-tools-list-test--cleanup-list view-buffer data-buffer))))
 
 

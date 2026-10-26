@@ -291,7 +291,7 @@ Return the row's tabulated id."
 		 (let ((text (mevedel-report-test-text (mevedel-permissions-list--help-report))))
 		   (should (string-match-p "Permissions help" text))
     (should (string-match-p "d +Revoke the selected authority" text))
-    (should (string-match-p "q +Back to the main session cockpit" text))
+    (should (string-match-p "q +Close and return to the previous layout" text))
     (dolist (needle '("operation" "network" "resource"
                       "session" "workspace" "global"))
       (should (string-match-p needle text)))))

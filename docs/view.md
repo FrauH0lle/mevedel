@@ -1417,7 +1417,38 @@ variables; the five lookups that did so cost 26 µs per redisplay, and
 reading the bindings directly costs under 2 µs with no string allocation.
 
 The session cockpit is the normal control surface from the view. It resolves
-the live view/data pair once and routes each action to the owner buffer. The
+the live view/data pair once and routes each action to the owner buffer.
+Session ownership and window return state are separate: calling an action in
+the data buffer does not display that buffer or change where quitting returns.
+
+Tables and information panels use `mevedel-window.el` for their temporary
+display lifecycle. Opening records the invoking window and the configuration
+of the frame actually used by `display-buffer`; this also handles directive
+composers whose child frame redirects popups into its parent. Quitting uses
+`quit-window`, releases the disposable buffer, and restores the original frame's
+window layout, buffers, and selected invoking window. Refreshing or reopening a
+visible surface retains its original return state. Report section indexes close
+with their reader, before the layout is restored. An original buffer or frame
+that was killed in the meantime cannot be restored; quitting does not display
+an arbitrary session owner as a replacement.
+
+Only a surface opened by an actual session-menu suffix returns to a menu.
+The opening command records that continuation from the transient's explicit
+session context and prefix identity. Direct commands, slash commands and keys
+such as `C-c C-e` return straight to their caller, without opening a menu.
+Nested information panels return to the table or menu that opened them;
+Worktree status retains its own parent-menu continuation.
+
+Transient menus use disposable bottom side windows, leaving existing editing
+side windows alone when a slot is available. On dismissal they restore their
+pre-popup layout even if a user display rule or side-window slot limit forced
+reuse of an existing window. Restoration runs before a selected suffix opens
+its own surface, not from a late transient exit hook that would erase that
+surface. Intentional navigation in surviving windows is preserved. `C-g`
+dismisses the transient; explicit action keys such as Data view still perform
+their documented buffer switch.
+
+The
 explicit `g gptel menu` cockpit row is the advanced bridge into gptel's menu
 from the paired data buffer. One bridge restores at a time: the pending
 view, its data buffer, and the window state to return to are single, because

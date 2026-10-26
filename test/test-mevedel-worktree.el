@@ -1056,7 +1056,7 @@
                                   (buffer-string)))
           (should (string-match-p "i  Show full repository status"
                                   (buffer-string)))
-          (should (string-match-p "q  Back to the main session cockpit"
+          (should (string-match-p "q  Close, or return to the invoking menu"
                                   (buffer-string)))
           (should (string-match-p "RET  Show selected worktree details"
                                   (buffer-string)))
@@ -1068,22 +1068,17 @@
   ,test
   (test)
 
-  :doc "returns to the main menu from the data buffer"
-  (let* ((root (make-temp-file "mevedel-worktree-status-back-" t))
-         (status (mevedel-worktree-test--status root))
-         (data-buffer (generate-new-buffer " *mwt-status-back*"))
-         called-buffer)
-    (unwind-protect
-        (progn
-          (mevedel-worktree-test--install-context status data-buffer)
-          (with-current-buffer data-buffer
-            (let ((transient--original-buffer data-buffer))
-              (cl-letf (((symbol-function 'mevedel-menu)
-                         (lambda () (setq called-buffer (current-buffer)))))
-                (mevedel-worktree-status-back)))))
-      (mevedel-worktree-test--cleanup-surfaces data-buffer)
-      (delete-directory root t))
-    (should (eq called-buffer data-buffer))))
+  :doc "returns only to an explicitly recorded parent menu"
+  (let (called)
+    (cl-letf (((symbol-function 'transient-scope)
+               (lambda (&rest _) nil)))
+      (mevedel-worktree-status-back))
+    (should-not called)
+    (cl-letf (((symbol-function 'transient-scope)
+               (lambda (&rest _)
+                 (list :parent-menu (lambda () (setq called t))))))
+      (mevedel-worktree-status-back))
+    (should called)))
 
 (mevedel-deftest mevedel-worktree-status-open ()
   ,test
