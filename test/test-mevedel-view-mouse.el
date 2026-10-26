@@ -481,5 +481,85 @@ With MOTION, deliver a movement event before the release."
   :doc "batched background catch-up with motion before macro-requeued release"
   'batch 'macro-requeue-motion "Focus background target")
 
+(mevedel-deftest mevedel-view-mouse-history-focus ()
+  (progn
+    (skip-unless (display-graphic-p))
+    (save-window-excursion
+      (delete-other-windows)
+      (mevedel-view-test--with-buffers
+        (mevedel-view-test--insert-data data-buf "History focus prompt\n\n" nil)
+        (mevedel-view-test--insert-data
+         data-buf
+         (mapconcat (lambda (n) (format "History line %d.\n" n))
+                    (number-sequence 0 99) "")
+         'response)
+        (switch-to-buffer view-buf)
+        (let ((focused t)
+              (kind ,kind)
+              (mevedel-view-rerender-debounce 0.015)
+              (draft "> active draft\nsecond line"))
+          (mevedel-view-test--insert-composer-draft draft)
+          (cl-letf (((symbol-function 'frame-focus-state)
+                     (lambda (&optional _) focused)))
+            (mevedel-view--full-rerender)
+            (when (eq kind 'incremental)
+              ;; A new live turn starts after its user prompt, not inside the
+              ;; preceding response's contiguous gptel property run.
+              (mevedel-view-test--insert-data
+               data-buf "Continue with a live response.\n\n" nil)
+              (mevedel-view--full-rerender)
+              (mevedel-view-stream-begin-turn
+               (mevedel-view--history-insertion-marker)
+               (with-current-buffer data-buf (point-max)))
+              (mevedel-view-test--insert-data data-buf "Live initial.\n\n" 'response)
+              (mevedel-view--render-stream-update data-buf))
+            (goto-char (mevedel-view--input-start))
+            (let* ((window (selected-window))
+                   (input (point))
+                   (y (- (cdr (mevedel-view--window-body-geometry window))
+                         (* 3 (frame-char-height)))))
+              (mevedel-view--set-viewport
+               window (mevedel-view--viewport-at-y window input y))
+              (set-window-vscroll window 7 t)
+              (redisplay t)
+              (let* ((start (window-start window))
+                     (clicked (save-excursion
+                                (goto-char (point-min))
+                                (search-forward "History line 95.")
+                                (- (point) 3)))
+                     (reading-y (mevedel-view--position-screen-y clicked window)))
+                (ert-info ((format "Kind %S start=%d clicked=%d input=%d end=%d"
+                                   kind start clicked input (point-max)))
+                  (should reading-y))
+                (should (mevedel-view--position-screen-y input window))
+                (should (= 7 (window-vscroll window t)))
+                (setq focused nil)
+                (mevedel-view-test--insert-data
+                 data-buf
+                 (mapconcat (lambda (n) (format "Catch-up line %d.\n" n))
+                            (number-sequence 0 7) "")
+                 'response)
+                (mevedel-view--schedule-render kind data-buf 0.015)
+                (should-not mevedel-view--render-timer)
+                (mevedel-view-mouse-test--focus-click
+                 clicked 'between
+                 (lambda (_)
+                   (setq focused t)
+                   (mevedel-view--resume-attended-views)
+                   (mevedel-view-mouse-test--wait
+                    (lambda () (null mevedel-view--render-timer)))))
+                (mevedel-view-mouse-test--wait
+                 (lambda () (null mevedel-view-render--batch)))
+                (redisplay t)
+                (should (string-search "Catch-up line 7." (buffer-string)))
+                (should (= clicked (point)))
+                (should (= start (window-start window)))
+                (should (= 7 (window-vscroll window t)))
+                (should (= reading-y (mevedel-view--position-screen-y (point) window)))
+                (should (equal draft (mevedel-view--input-text))))))))))
+  (kind)
+  :doc "A history focus click retains its pixel viewport across full catch-up" 'full
+  :doc "A history focus click retains its pixel viewport across incremental catch-up" 'incremental)
+
 (provide 'test-mevedel-view-mouse)
 ;;; test-mevedel-view-mouse.el ends here

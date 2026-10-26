@@ -26,6 +26,7 @@
 (require 'mevedel-turn)
 (require 'mevedel-tool-ui)
 (require 'mevedel-permission-queue)
+(require 'mevedel-permission-prompt)
 (require 'mevedel-goal)
 (require 'mevedel-agents)
 (require 'mevedel-agent-control)

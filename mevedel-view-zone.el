@@ -30,6 +30,7 @@
 (declare-function mevedel-view--clamp-window-starts "mevedel-view-composer"
                   (tails &optional force))
 (declare-function mevedel-view--composer-anchors "mevedel-view-composer" ())
+(declare-function mevedel-view--history-reader-windows "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--position-screen-y
                   "mevedel-view-composer" (position window &optional fully))
@@ -957,6 +958,7 @@ live zone text keeps its current bounds until reconciliation finishes."
             region
           (let* ((composer-anchors (and (mevedel-view-zone--composer-live-p)
 					(mevedel-view--composer-anchors)))
+		 (readers (mevedel-view--history-reader-windows))
 		 (logical-state (mevedel-view-zone--capture-logical-state
 				 zone region composer-anchors))
 		 (window-tails (mevedel-view--window-tail-lengths))
@@ -1006,7 +1008,8 @@ live zone text keeps its current bounds until reconciliation finishes."
               ;; exposes longer lines and therefore increases the character tail.
               (mevedel-view--clamp-window-starts
                (seq-remove (lambda (tail)
-                             (or (and (assq (car tail) composer-anchors)
+                             (or (and (or (assq (car tail) composer-anchors)
+                                          (memq (car tail) readers))
                                       (not (memq (car tail) lost-starts)))
 				 (memq (car tail) visited-windows)))
 			   window-tails)

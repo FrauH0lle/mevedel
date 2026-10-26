@@ -70,6 +70,83 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (when (and (= (point) (point-max)) (< rows height))
           (max 0 (- height rows 1)))))))
 
+(mevedel-deftest mevedel-view--composer-anchors ()
+  ,test
+  (test)
+  :doc "A visible composer anchors only the window whose caret is editing it"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (forward-line 1)
+        (dotimes (n 100) (insert (format "transcript %d\n" n))))
+      (goto-char (point-max))
+      (insert "> draft\nsecond line")
+      (let* ((reader (selected-window))
+             (editor (split-window-right))
+             (input (mevedel-view--input-start))
+             (start (save-excursion
+                      (goto-char input) (forward-line -10) (point))))
+        (dolist (window (list reader editor))
+          (set-window-start window start t))
+        (set-window-point editor input)
+        (goto-char start)
+        (forward-line 2)
+        (should (mevedel-view-test--composer-screen-y reader))
+        (should (mevedel-view-test--composer-screen-y editor))
+        (let ((anchors (mevedel-view--composer-anchors)))
+          (should-not (assq reader anchors))
+          (should (assq editor anchors)))
+        ;; Selecting the editor must not make the other window follow it.
+        (with-selected-window editor
+          (let ((anchors (mevedel-view--composer-anchors)))
+            (should-not (assq reader anchors))
+            (should (assq editor anchors)))))))
+  :doc "A history reader keeps its viewport through status growth and shrink"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (forward-line 1)
+        (dotimes (n 100) (insert (format "transcript %d\n" n))))
+      (goto-char (point-max))
+      (insert "> draft\nsecond line")
+      (let ((start (save-excursion
+                     (goto-char (mevedel-view--input-start))
+                     (forward-line -10) (point))))
+        (set-window-start nil start t)
+        (goto-char start)
+        (forward-line 2)
+        (let ((reading (point))
+              (y (mevedel-view-test--position-screen-y (point) (selected-window))))
+          (should (mevedel-view-test--composer-screen-y (selected-window)))
+          (dolist (count '(4 1 0))
+            (mevedel-view-composer-test--status-rows count)
+            (should (= reading (point)))
+            (should (= start (window-start)))
+            (should (= y (mevedel-view-test--position-screen-y
+                          (point) (selected-window)))))
+          (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))))
+
+(mevedel-deftest mevedel-view--history-reader-windows ()
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (insert "history\n"))
+      (goto-char ,position)
+      (should (equal ,expected (mevedel-view--history-reader-windows)))))
+  (position expected)
+  :doc "Transcript point is captured before mutation" (point-min) (list (selected-window))
+  :doc "The composer is not a history reader" (mevedel-view--input-start) nil
+  :doc "Status and interaction chrome are not history readers" mevedel-view--status-marker nil)
+
 (mevedel-deftest mevedel-view--restore-composer-anchors ()
   ,test
   (test)

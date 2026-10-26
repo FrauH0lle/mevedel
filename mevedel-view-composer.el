@@ -1298,18 +1298,30 @@ On terminals the same API uses character cells as pixels."
     (set-window-vscroll window (cdr viewport) t)))
 
 (defun mevedel-view--composer-anchors ()
-  "Return (WINDOW . Y) for each window showing the current composer.
+  "Return (WINDOW . Y) for each window editing the visible composer.
 Y is a pixel coordinate relative to the window body.
-Windows scrolled away from the composer are omitted: they keep their
-own start, so reading history is never disturbed."
+Windows with point outside the composer or scrolled away from it keep
+their own reading position, even when the composer is still visible."
   (let (anchors)
     (when (and (markerp mevedel-view--input-marker)
                (eq (marker-buffer mevedel-view--input-marker) (current-buffer)))
       (dolist (window (get-buffer-window-list (current-buffer) nil t))
-        (when-let* ((y (mevedel-view--position-screen-y
+        (when-let* (((mevedel-view--position-in-input-region-p
+                     (window-point window)))
+                    (y (mevedel-view--position-screen-y
                        (mevedel-view--input-start) window)))
           (push (cons window y) anchors))))
     anchors))
+
+(defun mevedel-view--history-reader-windows ()
+  "Return displayed windows whose caret is in the current transcript.
+Capture this before mutation: a disappearing interaction must not become
+a history reader just because its fallback point lands in the transcript."
+  (when (and (markerp mevedel-view--status-marker)
+             (eq (marker-buffer mevedel-view--status-marker) (current-buffer)))
+    (seq-filter
+     (lambda (window) (< (window-point window) mevedel-view--status-marker))
+     (get-buffer-window-list (current-buffer) nil t))))
 
 (defun mevedel-view--restore-composer-anchors (anchors)
   "Put the composer back at its pixel Y in each window of ANCHORS.
@@ -1588,6 +1600,7 @@ found without scanning the rest of the buffer."
   (let* ((region (and region (cons (copy-marker (car region))
                                    (copy-marker (cdr region) t))))
          (anchors (mevedel-view--composer-anchors))
+         (readers (mevedel-view--history-reader-windows))
          (tails (mevedel-view--window-tail-lengths))
          (mevedel-view--draft-window-state 'preserving)
          lost-starts visited-windows
@@ -1710,7 +1723,8 @@ found without scanning the rest of the buffer."
 		       (mevedel-view--clamp-window-starts
 			(seq-remove (lambda (tail)
 				      (or (memq (car tail) visited-windows)
-					  (and (assq (car tail) anchors)
+						  (and (or (assq (car tail) anchors)
+                                                           (memq (car tail) readers))
 					       (not (memq (car tail) lost-starts)))))
 				    tails)
 			lost-starts)))

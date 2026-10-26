@@ -8,7 +8,9 @@ The view keeps the user's active surface at its screen position. Zone reconcilia
 and its enclosing full-render transaction
 choose one viewport anchor per window: point inside a surviving visited
 interaction card takes priority; otherwise a previously visible composer keeps
-its position regardless of point. Logical positions are restored before applying
+its position only when that window's caret is in the composer. A history reader
+keeps its reading position even if the composer is still visible. Logical
+positions are restored before applying
 that anchor. A visited card retains its screen position unless its shrink creates
 new blank space below the buffer; repairing only that excess takes priority over
 the visited row. Existing blank space is retained.
@@ -29,9 +31,10 @@ and its character tail. After logical restoration, they apply this policy:
 | Window context before mutation | Viewport policy | Discriminating case |
 | --- | --- | --- |
 | Point visits a surviving interaction card | Retain the visited row, then fill only newly created blank pixels | Shrinking a visited card below point must not leave a newly empty viewport |
-| Composer visible, saved logical start survives | Retain the composer position and pre-existing blank space, except when growth overflows the window | Shorter status text must not erase intentional blank space; oversized incoming growth fills the last page |
-| Composer visible, saved logical start removed or truncated | Fill the last page, bypassing the character-tail guard | Ask submission can expose longer history lines and increase the tail despite losing rows |
-| Neither a composer nor visited-card anchor | Clamp backward only when the character tail shrank | An offscreen composer returns to a full last page after an interaction disappears |
+| Caret in visible composer, saved logical start survives | Retain the composer position and pre-existing blank space, except when growth overflows the window | Shorter status text must not erase intentional blank space; oversized incoming growth fills the last page |
+| Saved logical start removed or truncated | Fill the last page, bypassing the character-tail guard | Ask submission can expose longer history lines and increase the tail despite losing rows |
+| Caret in transcript history, saved logical start survives | Retain the reading viewport through growth and shrinkage below it | A focus click into history must not move it when deferred rendering catches up |
+| Neither a composer, history-reader nor visited-card anchor | Clamp backward only when the character tail shrank | An offscreen composer returns to a full last page after an interaction disappears |
 
 Earlier history views do not move toward the bottom, and shrink repair leaves a
 window already starting at `point-min` there. Strict logical-anchor resolution distinguishes
@@ -193,6 +196,16 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **The caret chooses the active surface (2026-10-26).** A focus click into
+  history left the viewport unchanged, but the deferred catch-up redraw then
+  restored a composer anchor and moved the transcript. Previously, merely
+  showing the composer made it take priority regardless of point. Composer
+  anchors now require that window's caret in the input; history readers retain
+  their surviving logical starts, including when status rows shrink. Ownership
+  is captured before mutation so a disappearing interaction's fallback point
+  cannot become a protected history reader. Lost-start recovery and the
+  composer's native pixel anchoring retain their existing policies.
 
 - **Bound passive pointer protection (2026-10-19).** The user reported many
   hours-old completed rows after returning from a locked screen. Previously,

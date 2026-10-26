@@ -1075,8 +1075,11 @@ Rebuilding the prompt is also chrome: undoing a draft never restores an older
 permission badge or prompt prefix inside the composer.
 
 Zone changes and re-renders preserve one active surface per window: point in a
-surviving visited interaction takes priority, then a visible composer, then the
-logical reading position. Anchors use body-relative pixels and native display
+surviving visited interaction takes priority, then a visible composer with that
+window's caret in it, then the logical reading position. Clicking or moving into
+history keeps the reading viewport even when the composer remains visible;
+another window editing the same composer keeps its independent composer anchor.
+Anchors use body-relative pixels and native display
 geometry, including wrapping, remapped faces, inline images and partial vertical
 scrolling. Bounded fresh chrome measurements keep body coordinates and usable
 height consistent before redisplay, even when header or tab-line heights change.
@@ -1085,9 +1088,12 @@ composer anchor retains intentional blank space. A lost or truncated logical
 window start instead permits filling the last page, even if anchoring exposes
 longer history lines and grows the character tail. Visiting windows repair only
 new blank pixels created below the buffer, retaining their prior blank area.
-For unanchored windows, a smaller character tail also permits clamping a start
-later than the last page backward; unchanged or growing tails retain their
-reading position. Equal-length reflow alone does not trigger that fallback.
+Surviving history readers keep their viewport through both growth and shrinkage
+below them. For other unanchored windows, a smaller character tail also permits
+clamping a start later than the last page backward; unchanged or growing tails
+retain their position. Equal-length reflow alone does not trigger that fallback.
+Reader ownership is captured before mutation, so removing a visited interaction
+does not mistake its fallback point for a surviving history reader.
 
 Spinner start, update, and stop leave logical-position restoration to zone
 reconciliation. They do not restore raw saved markers over it: a selection

@@ -472,7 +472,7 @@
         (should (= (+ 4 (mevedel-view--input-start)) (point)))
         (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
 
-  :doc "removed tall cards still fill the last page without a surviving row anchor"
+  :doc "removed cards fill a lost start but preserve a surviving history reader"
   (dolist (start-in-card '(t nil))
     (mevedel-view-test--with-buffers
       (save-window-excursion
@@ -496,12 +496,15 @@
         (should-not (mevedel-view-test--composer-screen-y (selected-window)))
         (should (eq (not (null (mevedel-view-zone-bounds-at (window-start))))
                     start-in-card))
-        (mevedel-view-zone-clear 'interaction)
-        (should (= (window-start)
-                   (save-excursion
-                     (goto-char (point-max))
-                     (vertical-motion (- (1- (window-body-height))))
-                     (point))))
+        (let ((reading-start (window-start)))
+          (mevedel-view-zone-clear 'interaction)
+          (should (= (if start-in-card
+                         (save-excursion
+                           (goto-char (point-max))
+                           (vertical-motion (- (1- (window-body-height))))
+                           (point))
+                       reading-start)
+                     (window-start))))
         (should (equal "> draft\nsecond line" (mevedel-view--input-text))))))
 
   :doc "a line's own activation wins over the fragment default in rendered text"

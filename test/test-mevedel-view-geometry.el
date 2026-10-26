@@ -13,6 +13,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-zone)
 
@@ -62,6 +63,58 @@
       (redisplay t)
       (should-not (mevedel-view--composer-anchors))
       (should-not (mevedel-view--window-shows-end-p window)))))
+
+(mevedel-deftest mevedel-view-geometry-reading-anchor ()
+  (progn
+    (skip-unless (display-graphic-p))
+    (mevedel-view-test--with-buffers
+      (save-window-excursion
+        (switch-to-buffer view-buf)
+        (delete-other-windows)
+        (let ((inhibit-read-only t))
+          (goto-char (point-min))
+          (forward-line 1)
+          (dotimes (n 100) (insert (format "History line %d\n" n))))
+        (goto-char (point-max))
+        (insert "> draft\nsecond line")
+        (let* ((window (selected-window))
+               (start (save-excursion
+                        (goto-char (mevedel-view--input-start))
+                        (forward-line -12) (point)))
+               (clicked (save-excursion
+                          (goto-char start) (forward-line 4) (point))))
+          (set-window-start window start t)
+          (set-window-vscroll window 7 t)
+          (redisplay t)
+          (should (mevedel-view--position-screen-y
+                   (mevedel-view--input-start) window))
+          (mouse-set-point (list 'mouse-1 (posn-at-point clicked window)))
+          (let ((y (mevedel-view--position-screen-y clicked window)))
+            (should y)
+            (should (= 7 (window-vscroll window t)))
+            (dolist (count '(4 1 0))
+              (let ((update
+                     (lambda ()
+                       (mevedel-view-zone-reconcile
+                        'status (mevedel-view--status-anchor)
+                        (mevedel-view--status-anchor)
+                        (when (> count 0)
+                          (list (list :namespace 'status :id 'reader-test :priority 1
+                                      :body (mapconcat
+                                             (lambda (n) (format "status row %d\n" n))
+                                             (number-sequence 1 count) ""))))))))
+                (if ,outer
+                    (mevedel-view--call-preserving-window-state update)
+                  (funcall update)))
+              (redisplay t)
+              (should (= clicked (point)))
+              (should (= start (window-start window)))
+              (should (= 7 (window-vscroll window t)))
+              (should (= y (mevedel-view--position-screen-y clicked window)))
+              (should (equal "> draft\nsecond line" (mevedel-view--input-text)))))))))
+  (outer)
+  :doc "Native history click keeps pixel scrolling through status growth and shrink" nil
+  :doc "An outer render transaction retains the clicked history viewport too" t)
 
 (mevedel-deftest mevedel-view--position-screen-y ()
   (mevedel-view-geometry-test--with-window
