@@ -124,12 +124,15 @@
 (autoload 'mevedel-memory-pass-schedule "mevedel-memory-pass")
 
 ;; `mevedel-pending-inputs'
+(declare-function mevedel-pending-inputs-cockpit-holds-p
+                  "mevedel-pending-inputs" (session))
 (declare-function mevedel-pending-inputs-offer-event-after-turn
                   "mevedel-pending-inputs" (fsm))
 (declare-function mevedel-pending-inputs-requeue-steering
                   "mevedel-pending-inputs" (session request-id))
 (declare-function mevedel-view--schedule-follow-up-drain
                   "mevedel-pending-inputs" (fsm))
+(autoload 'mevedel-pending-inputs-cockpit-holds-p "mevedel-pending-inputs")
 (autoload 'mevedel-pending-inputs-offer-event-after-turn "mevedel-pending-inputs")
 (autoload 'mevedel-pending-inputs-requeue-steering "mevedel-pending-inputs")
 (autoload 'mevedel-view--schedule-follow-up-drain "mevedel-pending-inputs")
@@ -418,6 +421,29 @@ caller for telemetry.  Return non-nil when this call made the request."
   t)
 
 
+(defun mevedel--turn-resume-pending-input (request)
+  "Rebind ordinary detached steering to an admitted root REQUEST.
+A fresh root send releases an interruption hold, but never takes input
+from another session, a failed turn, or an open Pending Inputs cockpit."
+  (let ((session (mevedel-request-session request)))
+    (when (and session
+               (eq session mevedel--session)
+               (eq (current-buffer) (mevedel-session-root-buffer session))
+               (not mevedel--agent-invocation)
+               (not (mevedel-request-directive-uuid request))
+               (not (and (mevedel-session-pending-input-paused session)
+                         (mevedel-pending-inputs-cockpit-holds-p session))))
+      (mevedel-session-set-pending-inputs
+       session 'steering
+       (mapcar (lambda (entry)
+                 (if (or (plist-get entry :request-id)
+                         (eq 'failed-turn (plist-get entry :state)))
+                     entry
+                   (plist-put (copy-sequence entry) :request-id
+                              (mevedel-request-id request))))
+               (mevedel-session-pending-steering session)))
+      (mevedel-session-set-pending-input-paused session nil))))
+
 (defun mevedel-request-begin (session &optional directive-uuid options)
   "Create a new request for SESSION, guarding against stale requests.
 
@@ -515,6 +541,7 @@ recovery state alone."
           (list :buffer (current-buffer) :mevedel-request-id id
                 :mevedel-request request))
     (setq mevedel--current-request request)
+    (mevedel--turn-resume-pending-input request)
     (unless directive-uuid
       (setq mevedel--pending-implementation-policy nil))
     (unless (plist-member options :permission-mode)
@@ -915,14 +942,17 @@ cannot wait at a held boundary, so its held steering starts the next turns."
         (with-current-buffer mevedel--view-buffer
           (mevedel-view--interaction-rebuild))))))
 
-(defun mevedel--turn-fail-pending-input (fsm)
-  "Mark undelivered steering for FSM's dead turn as requiring review."
+(defun mevedel--turn-fail-pending-input (fsm &optional status)
+  "Retain undelivered steering for FSM's dead turn.
+An intentional `aborted' STATUS detaches normal pending input and pauses its
+delivery; other dead turns leave their steering requiring failure review."
   (when-let* ((info (mevedel-engine-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
       (when mevedel--session
         (let* ((request-id (mevedel--turn-request-id info))
+               (interrupted (eq status 'aborted))
                (entries (mevedel-session-pending-steering mevedel--session))
                (failed nil)
                (updated
@@ -931,15 +961,21 @@ cannot wait at a held boundary, so its held steering starts the next turns."
                    (if (and request-id (equal request-id (plist-get entry :request-id)))
                        (progn
                          (setq failed t)
-                         (plist-put (copy-sequence entry)
-                                    :state 'failed-turn))
+                         (let ((copy (plist-put (copy-sequence entry) :delivering nil)))
+                           (if interrupted
+                               (plist-put copy :request-id nil)
+                             (plist-put copy :state 'failed-turn))))
                      entry))
                  entries)))
           (when failed
             (mevedel-session-set-pending-inputs
              mevedel--session 'steering updated)
-            (mevedel-session-set-pending-input-failure-paused
-             mevedel--session t)
+            (unless interrupted
+              (mevedel-session-set-pending-input-failure-paused
+               mevedel--session t)))
+          (when (and interrupted (mevedel-session-pending-input-p mevedel--session))
+            (mevedel-session-set-pending-input-paused mevedel--session t))
+          (when (or failed interrupted)
             (when (buffer-live-p mevedel--view-buffer)
               (with-current-buffer mevedel--view-buffer
                 (mevedel-view--interaction-rebuild)))))))))
@@ -1284,7 +1320,9 @@ also autosaves, and it reaches here from the same process sentinel."
                 (mevedel-goal-settle-failure machine status)))
         (and (eq status 'error)
              (list #'mevedel--turn-record-request-failure))
-        (list #'mevedel--turn-fail-pending-input #'mevedel--turn-save #'mevedel--turn-checkpoint)
+        (list (lambda (machine)
+                (mevedel--turn-fail-pending-input machine status))
+              #'mevedel--turn-save #'mevedel--turn-checkpoint)
         (list (lambda (machine)
                 (mevedel--run-turn-terminal-hook
                  machine 'StopFailure status)))
@@ -1297,7 +1335,9 @@ also autosaves, and it reaches here from the same process sentinel."
                  #'mevedel-goal-dispatch-after-turn machine))))
        (lambda ()
          (mevedel--run-turn-steps
-          fsm (cons #'mevedel--turn-fail-pending-input admission-cleanup))))))))
+          fsm (cons (lambda (machine)
+                      (mevedel--turn-fail-pending-input machine status))
+                    admission-cleanup))))))))
 
 
 (defun mevedel--handler-name (handler)

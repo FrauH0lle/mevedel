@@ -233,6 +233,9 @@
                   "mevedel-view-composer"
                   (input &optional before-send on-block dispatch after-insert
                          inert-skills selected-skills))
+(declare-function mevedel-view--switch-composer-scope
+                  "mevedel-view-composer" (scope))
+(declare-function mevedel-view--visible-draft "mevedel-view-composer" ())
 (declare-function mevedel-view-composer-scope-label
                   "mevedel-view-composer" (&optional scope))
 (declare-function mevedel-view-refresh-input-prompt
@@ -240,6 +243,7 @@
 (declare-function mevedel-view-run-invocation
                   "mevedel-view-composer" (name args &rest keys))
 (declare-function mevedel-view-send "mevedel-view-composer" ())
+(defvar mevedel-view--composer-drafts)
 (defvar mevedel-view--composer-scope)
 (defvar mevedel-view--input-marker)
 (defvar mevedel-view--pending-skill-submission)
@@ -275,6 +279,15 @@
 
 (defvar-local mevedel-view--pending-input-edit nil
   "Queue edit state active in this composer, or nil.")
+
+(defvar-local mevedel-view--pending-resume-entry nil
+  "Steering entry owned by this composer's unfinished Resume preparation.")
+
+(defun mevedel-pending-inputs-cancel-resume ()
+  "Release this composer's unfinished Resume preparation, if any."
+  (when mevedel-view--pending-resume-entry
+    (plist-put mevedel-view--pending-resume-entry :delivering nil)
+    (setq mevedel-view--pending-resume-entry nil)))
 
 (defvar-local mevedel-view--pending-guest-attribution nil
   "Guest attribution audit record for the follow-up being submitted, or nil.
@@ -351,6 +364,7 @@ follow-ups retain their queue order.  Delivery holds are checked separately."
 With IGNORE-FAILURE-LATCH, the failure-recovery latch alone does not hold."
   (when-let* ((sess (or session (mevedel-view--session))))
     (or (mevedel-recovery-blocker sess)
+        (mevedel-session-pending-steering sess)
         (mevedel-permission-absence-held-p sess)
         (cl-find 'failed-turn (mevedel-session-pending-follow-ups sess)
                  :key (lambda (entry) (plist-get entry :state)))
@@ -388,6 +402,9 @@ With IGNORE-FAILURE-LATCH, the failure-recovery latch alone does not hold."
 (defvar-keymap mevedel-view--pending-inputs-map
   :doc "Keymap on the pending-input summary."
   "RET" #'mevedel-pending-inputs-preview-activate
+  "d" #'mevedel-pending-inputs-drop-at-point
+  "DEL" #'mevedel-pending-inputs-drop-at-point
+  "<delete>" #'mevedel-pending-inputs-drop-at-point
   "<return>" #'mevedel-pending-inputs-preview-activate
   "<mouse-1>" #'mevedel-pending-inputs-preview-activate
   "<mouse-2>" #'mevedel-pending-inputs-preview-activate)
@@ -501,6 +518,10 @@ because the detail body already shows it."
                       (format " [◆ %s]"
                               (mevedel-view-composer-scope-label scope)))
                     (unless expanded (concat " " preview)))))
+        (when (and session id)
+          (add-text-properties
+           0 (length text)
+           (list 'mevedel-pending-input-row (cons session id)) text))
         (when (and session id partial)
           (add-text-properties
            0 (length text)
@@ -526,10 +547,18 @@ because the detail body already shows it."
           session (append (seq-take (mevedel-session-pending-steering session) 3)
                           (seq-take (mevedel-session-pending-follow-ups session) 3)))))
     (concat
+     "\nC-c C-w retract newest"
+     (when (and (buffer-live-p mevedel--data-buffer)
+                (not (mevedel-turn-busy-p mevedel--data-buffer)))
+       " · C-c C-r resume")
+     " · d/DEL drop row\n"
      (when (mevedel-session-pending-input-failure-paused session)
        "\nPending-input delivery stopped after turn failure; review required\n")
      (when (mevedel-session-pending-input-paused session)
-       "\nPending-input delivery paused\n")
+       (if (and (not (mevedel-turn-busy-p mevedel--data-buffer))
+                (not (mevedel-pending-inputs-cockpit-holds-p session)))
+           "\nPending input waiting for Resume (C-c C-r)\n"
+         "\nPending-input delivery paused\n"))
      (when-let* ((entries (mevedel-session-pending-steering session)))
        (mevedel-view--pending-input-category-body "Steering" entries session selected))
      (when-let* ((entries (mevedel-session-pending-follow-ups session)))
@@ -752,6 +781,267 @@ When PRESERVE-DRAFT is non-nil, leave the composer untouched."
         (mevedel-agent-control-wake-root-user session))
       (message "mevedel: queued steering for this turn")
       entry)))
+
+(defun mevedel-pending-inputs--assert-removable (session entry)
+  "Refuse removal of SESSION's ENTRY when delivery or editing owns it."
+  (unless (memq entry (append (mevedel-session-pending-steering session)
+                             (mevedel-session-pending-follow-ups session)))
+    (user-error "Pending input is no longer queued"))
+  (when (or (eq (plist-get entry :state) 'dispatching)
+            (plist-get entry :delivering))
+    (user-error "Pending input is being dispatched; it can no longer be retracted or deleted"))
+  (when-let* ((data (mevedel-session-root-buffer session))
+              ((buffer-live-p data))
+              (view (buffer-local-value 'mevedel--view-buffer data))
+              ((buffer-live-p view))
+              (edit (buffer-local-value 'mevedel-view--pending-input-edit view))
+              ((equal (plist-get edit :id) (plist-get entry :id))))
+    (user-error "Save or cancel the pending-input edit first"))
+  (when-let* ((cockpit (get-buffer mevedel-pending-inputs-buffer-name))
+              ((mevedel-pending-inputs-cockpit-holds-p session))
+              ((equal (buffer-local-value 'mevedel-pending-inputs--converting-id cockpit)
+                      (plist-get entry :id))))
+    (user-error "Pending input conversion is still running")))
+
+(defun mevedel-pending-inputs--remove (session entry &optional validate)
+  "Remove SESSION's ENTRY after checking authority and delivery ownership.
+Call VALIDATE, when non-nil, immediately before removal, after yielding checks."
+  (mevedel-session-artifacts-assert-new-mutation-authority session)
+  ;; Authority checks can yield to a transport.  Recheck the live entry last.
+  (mevedel-pending-inputs--assert-removable session entry)
+  (when validate (funcall validate))
+  (let ((category (plist-get entry :category)))
+    (mevedel-pending-inputs--set-queues
+     session category (remq entry (mevedel-session-pending-inputs session category))))
+  (mevedel-pending-inputs--discard (list entry)))
+
+;;;###autoload
+(defun mevedel-pending-inputs-drop-at-point ()
+  "Delete the pending entry on this summary row without pausing delivery."
+  (interactive)
+  (require 'mevedel-view-composer)
+  (mevedel-view--ensure-interactive-chat-view)
+  (let* ((row (text-property-not-all (line-beginning-position) (line-end-position)
+                                     'mevedel-pending-input-row nil))
+         (target (and row (get-text-property row 'mevedel-pending-input-row)))
+         (session (mevedel-view--session))
+         (entry (and (eq (car-safe target) session)
+                     (cl-find (cdr target)
+                              (append (mevedel-session-pending-steering session)
+                                      (mevedel-session-pending-follow-ups session))
+                              :key (lambda (item) (plist-get item :id))
+                              :test #'equal))))
+    (unless entry (user-error "No queued pending input on this row"))
+    (mevedel-view--assert-live-tip)
+    (mevedel-pending-inputs--remove session entry)
+    (mevedel-view--interaction-rebuild)))
+
+(defun mevedel-pending-inputs--assert-retract-composer (scope)
+  "Refuse withdrawal into a busy composer or a saved draft for SCOPE."
+  (when (or mevedel-view--pending-input-edit
+            mevedel-view--prompt-hook-pending mevedel-view--pending-skill-submission)
+    (user-error "Finish the current composer submission or edit first"))
+  (unless (string-empty-p (or (mevedel-view--visible-draft) ""))
+    (user-error "Composer holds a draft; clear or send it before retracting"))
+  (unless (equal scope mevedel-view--composer-scope)
+    (when-let* ((saved (gethash (if scope
+                                  (list (plist-get scope :directive-id)
+                                        (plist-get scope :action)
+                                        (plist-get scope :attempt-index))
+                                'chat)
+                              mevedel-view--composer-drafts))
+                ((not (string-empty-p (plist-get saved :text)))))
+      (user-error "The input's composer scope holds a draft; clear or send it first"))))
+
+;;;###autoload
+(defun mevedel-view-retract-pending ()
+  "Withdraw the newest pending input into an empty composer.
+Restore its bound mentions, attachment grants, scope and reserved context.
+Delivery is not paused; an entry already being dispatched cannot be withdrawn."
+  (interactive)
+  (require 'mevedel-view-composer)
+  (mevedel-view--ensure-interactive-chat-view)
+  (mevedel-view--assert-live-tip)
+  (when mevedel-view--side-conversation-p
+    (user-error "/btw has no pending input queue"))
+  (let* ((session (mevedel-view--session))
+         ;; Ids record acceptance order even after reordering or conversion.
+         (entry (cl-reduce (lambda (a b)
+                             (if (or (null a) (> (plist-get b :id) (plist-get a :id))) b a))
+                           (append (mevedel-session-pending-steering session)
+                                   (mevedel-session-pending-follow-ups session))
+                           :initial-value nil))
+         (scope (plist-get entry :scope))
+         (composer-scope mevedel-view--composer-scope)
+         (text (and entry (mevedel-mention-bindings-copy-text (plist-get entry :input)))))
+    (unless entry (user-error "No pending input to retract"))
+    (mevedel-pending-inputs--assert-retract-composer scope)
+    (mevedel-pending-inputs--remove
+     session entry
+     (lambda ()
+       (mevedel-pending-inputs--assert-retract-composer scope)
+       (unless (equal composer-scope mevedel-view--composer-scope)
+         (user-error "Composer scope changed; pending input was not retracted"))))
+    (unless (equal scope mevedel-view--composer-scope)
+      (mevedel-view--switch-composer-scope scope))
+    (mevedel-view--restore-composer-snapshot
+     (list :text text :point-offset (length text)
+           :dropped-file-grants
+           (delete-dups (append (plist-get entry :dropped-file-grants)
+                                (mevedel-session-dropped-file-grants session))))
+     session t)
+    (mevedel-view-refresh-input-prompt)
+    (mevedel-view--interaction-rebuild)
+    (message "mevedel: retracted pending input into the composer")))
+
+(defun mevedel-pending-inputs--resume-entry (session entries)
+  "Combine SESSION's steering ENTRIES into one ordered follow-up.
+Live preparations retain their accepted outcomes without rerunning hooks.
+After restore only authored text remains, so normal submission prepares it."
+  (let* ((input (mapconcat #'mevedel-pending-inputs--copy-input entries "\n\n"))
+         (submissions (mapcar (lambda (entry) (plist-get entry :submission)) entries))
+         (prepared (cl-every #'identity submissions))
+         (entry (list :id (apply #'max (mapcar (lambda (item) (plist-get item :id)) entries))
+                      :category 'follow-up :input input :state 'pending
+                      :queued-at-time (plist-get (car entries) :queued-at-time)
+                      :dropped-file-grants
+                      (delete-dups
+                       (cl-loop for item in entries append
+                                (copy-sequence (plist-get item :dropped-file-grants)))))))
+    (if prepared
+        (let* ((audits (cl-loop for item in entries append (plist-get item :hook-audits)))
+               (skills (cl-loop for item in entries append
+                                (plist-get (plist-get item :request-context) :invoked-skills)))
+               (submission
+                (mevedel-prompt-submission-create
+                 :session session :state 'reserved :input input :display-text input
+                 :context-entries
+                 (cl-loop for item in submissions append
+                          (mevedel-prompt-submission-context-entries item))
+                 :audits audits
+                 :outcome
+                 (list :hook-input input :hook-audits audits
+                       :model-input (mapconcat (lambda (item) (plist-get item :model-input))
+                                               entries "\n\n")
+                       :transcript-input (mapconcat (lambda (item) (plist-get item :transcript-payload))
+                                                    entries "\n\n")
+                       :request-context (list :invoked-skills skills)))))
+          (setq entry (plist-put entry :submission submission)))
+      (when (cl-some #'identity submissions)
+        (error "Prepare restored steering before combining it with live submissions")))
+    entry))
+
+(defun mevedel-pending-inputs--prepare-restored-steering (session entry)
+  "Prepare restored ENTRY in SESSION without rerunning live submissions.
+Continue Resume after accepting this part.  Until then ENTRY remains queued
+and claimed, and every existing failure or interruption hold stays intact."
+  (let* ((view (current-buffer))
+         (release (lambda ()
+                    (when (buffer-live-p view)
+                      (with-current-buffer view
+                        (when (eq entry mevedel-view--pending-resume-entry)
+                          (mevedel-pending-inputs-cancel-resume)))))))
+    (setq mevedel-view--pending-resume-entry entry)
+    (plist-put entry :delivering t)
+    (condition-case err
+        (mevedel-view--submit-planned-input
+         (mevedel-pending-inputs--copy-input entry) nil release
+         (lambda (submission)
+           (with-current-buffer view
+             (mevedel-session-artifacts-assert-new-mutation-authority session)
+             (unless (memq entry (mevedel-session-pending-steering session))
+               (user-error "Pending steering changed while Resume was preparing it"))
+             (let* ((outcome (mevedel-prompt-submission-outcome submission))
+                    (context (plist-get outcome :request-context))
+                    (prepared (copy-sequence entry)))
+               (when (or (plist-get outcome :fork-outcome)
+                         (not (mevedel-view--steering-request-context-supported-p context)))
+                 (user-error "Restored skill policy cannot combine with live steering; edit the input first"))
+               (mevedel-prompt-submission-reserve submission)
+               (dolist (pair (list (cons :submission submission)
+                                   (cons :model-input (plist-get outcome :model-input))
+                                   (cons :transcript-payload
+                                         (concat (plist-get outcome :transcript-input)
+                                                 (plist-get outcome :render-data)))
+                                   (cons :hook-audits (plist-get outcome :hook-audits))
+                                   (cons :request-context context)
+                                   (cons :delivering nil)))
+                 (setq prepared (plist-put prepared (car pair) (cdr pair))))
+               (mevedel-pending-inputs--replace
+                session 'steering (plist-get entry :id) prepared))
+             (funcall release)
+             (mevedel-view-resume-pending))))
+      ((error quit)
+       (funcall release)
+       (signal (car err) (cdr err))))))
+
+(defun mevedel-pending-inputs-cockpit-holds-p (session)
+  "Return non-nil when SESSION's Pending Inputs cockpit is open."
+  (when-let* ((cockpit (get-buffer mevedel-pending-inputs-buffer-name)))
+    (eq session (mevedel-cockpit-context-session
+                 (buffer-local-value 'mevedel-cockpit--context cockpit)))))
+
+;;;###autoload
+(defun mevedel-view-resume-pending ()
+  "Resume idle pending input, starting one turn for leftover steering.
+Steering is combined in queue order into the first follow-up.  Clear the
+interrupt and failure holds, then let ordinary queued follow-ups drain.
+An unaccepted dispatch retains the combined entry for retry or retraction."
+  (interactive)
+  (require 'mevedel-view-composer)
+  (mevedel-view--ensure-interactive-chat-view)
+  (mevedel-view--assert-live-tip)
+  (when mevedel-view--side-conversation-p
+    (user-error "/btw has no pending input queue"))
+  (when (or (mevedel-turn-busy-p mevedel--data-buffer)
+            mevedel-view--prompt-hook-pending mevedel-view--pending-skill-submission
+            mevedel-view--pending-input-edit
+            (buffer-local-value 'mevedel-compact-run-in-flight mevedel--data-buffer))
+    (user-error "Wait for or interrupt the active turn or composer submission first"))
+  (unless (string-empty-p (or (mevedel-view--visible-draft) ""))
+    (user-error "Composer holds a draft; clear or send it before resuming"))
+  (let* ((session (mevedel-view--session))
+         (steering (mevedel-session-pending-steering session))
+         (follow-ups (mevedel-session-pending-follow-ups session)))
+    (unless (or steering follow-ups) (user-error "No pending input to resume"))
+    (when (mevedel-pending-inputs-cockpit-holds-p session)
+      (user-error "Close the Pending Inputs cockpit before resuming"))
+    (mevedel-session-artifacts-assert-new-mutation-authority session)
+    (mevedel-recovery-assert-ready session)
+    ;; Authority checks can process callbacks or new composer input.
+    (when (or (mevedel-turn-busy-p mevedel--data-buffer)
+              (not (string-empty-p (or (mevedel-view--visible-draft) "")))
+              mevedel-view--prompt-hook-pending mevedel-view--pending-skill-submission
+              mevedel-view--pending-input-edit)
+      (user-error "Session or composer changed before Resume; pending input remains queued"))
+    (when (mevedel-pending-inputs-cockpit-holds-p session)
+      (user-error "Close the Pending Inputs cockpit before resuming"))
+    (setq steering (mevedel-session-pending-steering session)
+          follow-ups (mevedel-session-pending-follow-ups session))
+    (unless (or steering follow-ups) (user-error "No pending input to resume"))
+    (dolist (entry (append steering follow-ups))
+      (mevedel-pending-inputs--assert-removable session entry))
+    (if (and (cl-some (lambda (entry) (plist-get entry :submission)) steering)
+             (cl-some (lambda (entry) (not (plist-get entry :submission))) steering))
+        (mevedel-pending-inputs--prepare-restored-steering
+         session (cl-find-if (lambda (entry) (not (plist-get entry :submission))) steering))
+      ;; Keep the existing drain's durable dispatch intent and commit fence.
+      ;; Resume is explicit consent to retry failed follow-ups as well.
+      (mevedel-pending-inputs--set-queues
+       session 'steering nil
+       'follow-up (append (when steering
+                            (list (mevedel-pending-inputs--resume-entry session steering)))
+                          (mapcar (lambda (entry)
+                                    (if (eq (plist-get entry :state) 'failed-turn)
+                                        (plist-put (copy-sequence entry) :state 'pending)
+                                      entry))
+                                  follow-ups)))
+      (mevedel-session-set-pending-input-failure-paused session nil)
+      (mevedel-session-set-pending-input-paused session nil)
+      (mevedel-permission-absence-clear session)
+      (mevedel-recovery-save session)
+      (mevedel-view--interaction-rebuild)
+      (mevedel-view--drain-follow-up mevedel--data-buffer))))
 
 (defun mevedel-view-send-follow-up ()
   "Queue the composer as a follow-up, or send normally while idle."
@@ -1201,6 +1491,10 @@ VIEW-BUFFER is the live root view.  Gates are checked in admission order."
           mevedel-view--pending-skill-submission))
     'prompt-hook)
    ((mevedel-recovery-blocker session) 'recovery)
+   ((mevedel-session-pending-steering session)
+    (if (mevedel-session-pending-input-failure-paused session)
+        'drain-blocked-latch
+      'drain-blocked-queued))
    ;; Background mail is not user input: a failure latch that holds no
    ;; queued input must not strand it.
    ((with-current-buffer view-buffer
@@ -1551,6 +1845,7 @@ a real draft."
 (defun mevedel-pending-inputs--save-follow-up (state input session)
   "Save follow-up edit STATE using bound INPUT in SESSION."
   (let* ((original (copy-sequence (plist-get state :entry)))
+         (submission (plist-get original :submission))
          (grants
           (mevedel-view--pop-dropped-file-grants-for-input input session))
          (replacement (plist-put original :input input)))
@@ -1568,6 +1863,7 @@ a real draft."
     (setq replacement
           (plist-put replacement :dropped-file-grants grants)
           replacement (plist-put replacement :submission nil))
+    (when submission (mevedel-prompt-submission-restore submission))
     (mevedel-pending-inputs--finish-replacement state replacement)))
 
 (defun mevedel-pending-inputs--save-failed-steering (state input session)
@@ -1922,6 +2218,8 @@ input it could not take becomes the next turns, in submission order."
                        ""
                      "s")))
       (mevedel-session-artifacts-assert-new-mutation-authority session)
+      (dolist (entry (append steering follow-ups))
+        (mevedel-pending-inputs--assert-removable session entry))
       (mevedel-pending-inputs--discard (append steering follow-ups))
       (mevedel-pending-inputs--set-queues
        session
@@ -1954,6 +2252,8 @@ input it could not take becomes the next turns, in submission order."
                        ""
                      "s")))
       (mevedel-session-artifacts-assert-new-mutation-authority session)
+      (dolist (entry (append steering follow-ups))
+        (mevedel-pending-inputs--assert-removable session entry))
       (mevedel-pending-inputs--discard (append steering follow-ups))
       (mevedel-pending-inputs--set-queues
        session 'steering nil 'follow-up nil)

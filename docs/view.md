@@ -2708,6 +2708,8 @@ related input bindings are:
 - `C-y`: yank text or insert a clipboard image
 - `C-c C-e`: open the Pending Inputs cockpit
 - `C-c C-q`: confirm and clear all pending input
+- `C-c C-w`: retract the newest pending entry into an empty composer
+- `C-c C-r`: resume idle pending steering in one turn, then queued follow-ups
 - `M-p` / `M-n`: previous / next input
 - `M-r`: search history
 - `C-c C-l`: browse history
@@ -2819,6 +2821,11 @@ Slash commands cannot become pending input.
 
 The interaction zone shows up to three compact previews per category. Click or
 `RET` on an entry expands its input locally, with one entry open at a time.
+`d` or `DEL` on an entry's header row drops only that entry without a cockpit or
+delivery pause. Full one-line entries support deletion too. A stale row, an
+entry being edited or converted, or input already claimed for dispatch refuses
+deletion. All deletion paths recheck session mutation authority and release
+reserved submission context; attachment files themselves are not deleted.
 Inputs already shown in full have no expansion control. An expanded row keeps
 only its number, collapse control and optional directive scope in the header;
 the input appears once in the body, not again as an abbreviated header preview.
@@ -2831,6 +2838,16 @@ become spaces in that preview. Summaries use display-column limits, and both
 collapsed and expanded previews process only bounded input prefixes rather than
 rescanning an arbitrarily large queued paste on each asynchronous refresh. These
 presentation limits never change the complete queued input.
+
+`C-c C-w` withdraws the newest accepted pending entry across both categories,
+even after queue reordering or conversion. It restores bound mention text,
+attachment grants, reserved hook context, and the entry's composer scope. It
+refuses an existing draft (including whitespace), a draft already saved in the
+destination scope, or a running composer submission/edit. Clear or send the
+restored draft before withdrawing the next entry. This command does not pause
+delivery. Steering snapshots are claimed before expansion, and native steering
+remains claimed until its receipt or terminal settlement; withdrawal cannot
+race with attachment reads or delete an already dispatched prompt.
 
 **Manage queue…** or `C-c C-e` opens the Pending Inputs cockpit and pauses
 automatic delivery; the link labels that consequence. Blank summary space is
@@ -2849,7 +2866,22 @@ restoring reserved submission context or changing session state, so stale,
 foreign, and quiescing surfaces fail closed.
 
 After a failed turn or an interrupted queued dispatch, entries marked
-`Needs review` require an explicit decision. Select `f` to convert failed
+`Needs review` require an explicit decision. From an idle, empty composer,
+`C-c C-r` is the direct retry: it combines leftover steering in queue order
+into one user message, clears the interrupt/failure holds, and starts that turn
+through the ordinary durable follow-up dispatcher. Queued follow-ups, including
+failed follow-ups explicitly retried by Resume, remain behind it and drain as
+usual. Live steering retains its already accepted hook/skill preparation;
+cold-restored text prepares normally. A blocked dispatch retains the combined
+message at the queue head, available for retry, editing or retraction. Resume
+does not bypass readiness, permission or Plan holds and requires closing
+an open Pending Inputs cockpit first. Its steering turn is an explicit user
+turn, like a manual send: Resume does not change the Goal's state. Goal-owned
+queued follow-ups remain held while that Goal is paused, blocked or
+budget-limited. The pending summary advertises Resume
+while idle and retract at all times.
+
+The cockpit remains available for individual recovery decisions. Select `f` to convert failed
 steering or requeue a failed follow-up at the follow-up tail, preserving its
 attachments, guest attribution, and scope, or delete the entry. `R` clears the
 failure pause only after both categories contain no unresolved failed entries;
@@ -2895,10 +2927,18 @@ failed steering awaiting review, a pending Plan approval, directive planning
 or Goal handoff, and a paused, blocked, or budget-limited Goal that owns the
 next entry.
 
-If a turn fails with undelivered steering, those entries
-remain steering, become `Needs review`, and pause all automatic pending-input
-delivery. The user must edit, delete, or recategorize the failed entries, then
-resume delivery from the cockpit. Later follow-ups remain intact.
+If a turn fails with undelivered steering, those entries remain steering,
+become `Needs review`, and pause automatic pending-input delivery. Resume is
+explicit consent to retry them; individual edit, delete and conversion actions
+remain available in the cockpit. Later follow-ups remain intact.
+
+A deliberate interrupt (`C-c C-k` or abort) instead leaves unsent steering as
+ordinary pending input, detached from the stopped request, not `Needs review`.
+Steering and queued follow-ups wait for Resume or explicit user action; the
+interrupt hold survives saving and reopening the session. Background events and
+Goal continuation cannot dispatch past that hold. A fresh root send rebinds
+ordinary detached steering to its newly admitted request in the same order and
+releases the interrupt hold; failed-turn entries are never rebound implicitly.
 
 Entries retain atomically bound mention text and dropped-file grants; a grant remains active in memory only after its entry is delivered. It is not
 persisted in the session sidecar.

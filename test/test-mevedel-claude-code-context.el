@@ -5,6 +5,8 @@
 
 ;;; Code:
 
+(require 'mevedel-pending-inputs)
+
 (require 'mevedel-engine-test-support
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "mevedel-engine-test-support"))
@@ -497,6 +499,10 @@
       (should-not (string-search "OTHER-STEER" body))
       ;; Sending is not delivery: the entry stays queued and tools wait.
       (should (= 2 (length (mevedel-session-pending-steering session))))
+      (let ((entry (car (mevedel-session-pending-steering session))))
+        (should (plist-get entry :delivering))
+        (should-error (mevedel-pending-inputs--assert-removable session entry)
+                      :type 'user-error))
       (should-error (mevedel-claude-code-context-check request))
       (mevedel-claude-code-context-observe
        request (mevedel-claude-code-context-test--hook-receipt body)))
