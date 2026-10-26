@@ -169,7 +169,19 @@ redo, so surviving overlay coordinates are never installed in the wrong text."
               (or (not record)
                   (and (memq (or owner record) (mevedel-workspace-directives workspace))
                        (not (memq (plist-get (mevedel-directive-anchor (or owner record)) :state)
-                                  '(archived source-missing)))))))
+                                  '(archived source-missing)))
+                       ;; Source undo cannot make successfully submitted
+                       ;; details current again.  Rewind removes the owning
+                       ;; attempt, so its restored details remain eligible.
+                       (not (and owner
+                                 (cl-some
+                                  (lambda (attempt)
+                                    (cl-find
+                                     uuid
+                                     (mevedel-directive-attempt-consumed-subdirectives
+                                      attempt)
+                                     :key #'mevedel-subdirective-id :test #'equal))
+                                  (mevedel-directive-attempts owner))))))))
         ;; An explicit archive/removal after the edit wins over old text undo.
         (when eligible
           (mevedel--instruction-replacement-forget overlay)

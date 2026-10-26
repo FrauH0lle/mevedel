@@ -10,6 +10,7 @@
 (require 'mevedel-overlays)
 (require 'mevedel-instruction-undo)
 (require 'mevedel-directive)
+(require 'mevedel-directive-request)
 (require 'mevedel-persistence)
 (require 'helpers
          (file-name-concat
@@ -111,6 +112,108 @@
           (should (= mapped-start (overlay-start overlay)))
           (should (= mapped-end (overlay-end overlay))))))))
 
+(defun mevedel-instruction-test--undo-settled-details (ordering outcome)
+  "Probe source undo across terminal OUTCOME in ORDERING."
+  (let* ((mevedel--instruction-states (make-hash-table :test #'equal))
+         (mevedel--instruction-current-state-key :global)
+         (workspace (mevedel-workspace--create
+                     :type 'file :id "consumed-undo" :root "/tmp" :name "undo"))
+         (cell (mevedel-instruction-test--make-directive
+                "outer child tail\n" "Parent" workspace))
+         (parent (cdr cell))
+         (record (mevedel--directive-record parent)))
+    (unwind-protect
+        (with-current-buffer (car cell)
+          (let* ((child (mevedel--create-directive-in
+                         (current-buffer) 7 12 nil "Submitted detail"))
+                 (child-id (overlay-get child 'mevedel-uuid))
+                 (submitted (mevedel--submitted-subdirectives parent))
+                 ;; A detail authored after dispatch must remain pending.
+                 (later (mevedel--create-directive-in
+                         (current-buffer) 13 16 nil "Later detail"))
+                 (later-record (mevedel--subdirective-record later))
+                 (text (buffer-string)))
+            (mevedel--record-directive-terminal-activity
+             record 'discuss "Parent" "question" "answer" 'success
+             '(:session-id "session" :turn 1) nil nil nil)
+            (buffer-enable-undo)
+            (setq buffer-undo-list nil)
+            ;; An older geometry snapshot must not revive consumed details
+            ;; either, even when the deletion itself happens after success.
+            (when (eq ordering 'edit-complete-delete)
+              (goto-char 7)
+              (insert "x")
+              (undo-boundary))
+            (cl-labels
+                ((complete ()
+                   (mevedel--record-directive-terminal-activity
+                    record 'implement "Parent" "prompt" "result" outcome
+                    '(:session-id "session" :turn 2)
+                    '(:mevedel-directive-capture complete) nil submitted)
+                   (mevedel--settle-directive-presentation
+                    (mevedel--instruction-with-uuid
+                     (mevedel-directive-id record) workspace)
+                    record workspace t submitted
+                    (unless (eq outcome 'success) outcome))))
+              (unless (eq ordering 'delete-complete) (complete))
+              (delete-region (overlay-start parent) (overlay-end parent))
+              (mevedel--all-instructions)
+              (when (eq ordering 'delete-complete) (complete)))
+            (let* ((attempts (mevedel-directive-attempts record))
+                   (discussion (mevedel-directive-discussion record))
+                   (history (copy-tree (list attempts discussion
+                                            (mevedel-directive-planning record)) t))
+                   (attempt (car attempts))
+                   (consumed (eq outcome 'success)))
+              (should (eq outcome (mevedel-directive-attempt-outcome attempt)))
+              (should (equal (and consumed (list child-id))
+                             (mapcar #'mevedel-subdirective-id
+                                     (mevedel-directive-attempt-consumed-subdirectives
+                                      attempt))))
+              (should (eq (not consumed)
+                          (not (null (cl-find child-id
+                                              (mevedel-directive-subdirectives record)
+                                              :key #'mevedel-subdirective-id
+                                              :test #'equal)))))
+              (dotimes (_ 2)
+                (undo-boundary)
+                (undo-only 1)
+                (should (eq parent (mevedel--instruction-with-uuid
+                                   (mevedel-directive-id record) workspace)))
+                (should (eq 'attached
+                            (plist-get (mevedel-directive-anchor record) :state)))
+                (should (eq (current-buffer) (overlay-buffer later)))
+                (should (memq later-record (mevedel-directive-subdirectives record)))
+                (should (equal (if consumed (list (mevedel-subdirective-id later-record))
+                                 (list child-id (mevedel-subdirective-id later-record)))
+                               (mapcar #'mevedel-subdirective-id
+                                       (mevedel--submitted-subdirectives parent))))
+                (should (eq (not consumed) (not (null (overlay-buffer child)))))
+                (should (= 1 (overlay-start parent)))
+                (should (= (1- (point-max)) (overlay-end parent)))
+                (should (= (if (eq ordering 'edit-complete-delete) 14 13)
+                           (overlay-start later)))
+                (unless consumed
+                  (should (= 7 (overlay-start child)))
+                  (should (= 12 (overlay-end child))))
+                (should (eq attempts (mevedel-directive-attempts record)))
+                (should (eq discussion (mevedel-directive-discussion record)))
+                (should (equal history (list attempts discussion
+                                             (mevedel-directive-planning record))))
+                (undo-boundary)
+                (undo-redo 1))
+              (undo-boundary)
+              (undo-only 1)
+              (when (eq ordering 'edit-complete-delete)
+                (undo-boundary)
+                (undo-only 1)
+                (should-not (overlay-buffer child))
+                (should (equal history (list (mevedel-directive-attempts record)
+                                             (mevedel-directive-discussion record)
+                                             (mevedel-directive-planning record))))))
+            (should (equal text (buffer-string)))))
+      (mevedel-instruction-test--discard cell))))
+
 (mevedel-deftest mevedel-instruction-undo--install
   (:vars ((mevedel--instruction-states (make-hash-table :test #'equal))
           (mevedel--instruction-current-state-key :global)
@@ -118,6 +221,14 @@
    :quiet t)
   ,test
   (test)
+  :doc "does not resurrect details consumed after deletion; failure and abort restore them"
+  (dolist (outcome '(error aborted success))
+    (mevedel-instruction-test--undo-settled-details 'delete-complete outcome))
+  :doc "completion before deletion keeps consumed details absent and later details pending"
+  (dolist (outcome '(error aborted success))
+    (mevedel-instruction-test--undo-settled-details 'complete-delete outcome))
+  :doc "older geometry undo cannot resurrect a detail consumed before deletion"
+  (mevedel-instruction-test--undo-settled-details 'edit-complete-delete 'success)
   :doc "full reference deletion survives cleanup, undo, redo and another undo"
   (with-temp-buffer
     (insert "before\nselected\nafter\n")
