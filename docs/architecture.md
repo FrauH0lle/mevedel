@@ -232,8 +232,10 @@ overlay beyond those shifts. A promoted edit can split a coalesced native
 insertion interval without adding an undo boundary. Full-deletion undo/redo
 restores the original overlay identity,
 source anchors, nested membership, and reciprocal links, without restoring old
-directive activity. If another instruction reused a deleted numeric ID, the
-restored instruction receives a fresh ID while retaining its UUID. Explicit
+directive activity. Details consumed by a surviving successful implementation
+attempt stay consumed, even when undo restores source from before settlement;
+unconsumed details restore normally. If another instruction reused a deleted
+numeric ID, the restored instruction receives a fresh ID while retaining its UUID. Explicit
 archive/removal takes precedence over an old source undo. Selective undo is not
 supported: Emacs currently drops custom function entries when filtering undo
 history to a region.
