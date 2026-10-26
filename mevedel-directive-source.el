@@ -149,6 +149,124 @@ context only."
 (defvar mevedel--instruction-line-mapping nil
   "Explicit replacement bounds for line instructions during source sync.")
 
+(defvar mevedel--instruction-command-active nil
+  "Outermost active command's recursion depth, or nil outside commands.")
+
+(defvar mevedel--instruction-replacement-buffers nil
+  "Buffers with replacement entries awaiting scope completion.")
+
+(defvar-local mevedel--instruction-replacement-held nil
+  "Non-nil while an editing integration holds the replacement scope open.")
+
+(defvar-local mevedel--instruction-replacements nil
+  "Full-deletion and partial-edge intents in the current replacement scope.")
+
+(defun mevedel-instruction-replacement-hold (&optional buffer)
+  "Hold BUFFER's deletion replacement scope across commands.
+BUFFER defaults to the current buffer.  Calls are idempotent, not nested.
+The caller must end the scope on completion, cancellation, and teardown."
+  (with-current-buffer (or buffer (current-buffer))
+    (setq mevedel--instruction-replacement-held t)))
+
+(defun mevedel--instruction-replacement-restore (overlay entry)
+  "Restore OVERLAY's pending replacement ENTRY during source undo."
+  (overlay-put overlay 'mevedel-replacement-pending entry)
+  (cl-pushnew entry mevedel--instruction-replacements)
+  (cl-pushnew (current-buffer) mevedel--instruction-replacement-buffers))
+
+(defun mevedel--instruction-replacement-forget (overlay)
+  "Remove OVERLAY's pending presentation during source undo.
+Keep its provenance in the scope ledger until end, even when undo removes
+the last pending presentation: redo must never reopen a finished scope."
+  (overlay-put overlay 'mevedel-replacement-pending nil)
+  (overlay-put overlay 'mevedel-replacement-growing nil))
+
+(defun mevedel--instruction-replacement-finish (entry)
+  "Finalize the unrecovered full deletion described by ENTRY."
+  (let ((overlay (plist-get entry :overlay)))
+    (when (eq entry (overlay-get overlay 'mevedel-replacement-growing))
+      (overlay-put overlay 'mevedel-replacement-growing nil))
+    (when (eq entry (overlay-get overlay 'mevedel-replacement-pending))
+      (overlay-put overlay 'mevedel-replacement-pending nil)
+      (when (overlay-buffer overlay)
+        (if (< (overlay-start overlay) (overlay-end overlay))
+            ;; A later before-change hook may have rejected the deletion.
+            (progn
+              (overlay-put overlay 'evaporate (plist-get entry :evaporate))
+              overlay)
+          (if-let* ((detachment (plist-get entry :detachment)))
+              (if (plist-get detachment :record)
+                  (let ((copy (copy-sequence detachment)))
+                    (setf (plist-get copy :marker)
+                          (copy-marker (overlay-start overlay)))
+                    (mevedel--detach-directive copy))
+                (mevedel--remove-directive-presentation overlay))
+            (mevedel--delete-instruction overlay)))))))
+
+(defun mevedel--instruction-replacement-settle-undo ()
+  "Finalize pending undo states whose original replacement scope has ended."
+  (let (redraw)
+    (dolist (entry (copy-sequence mevedel--instruction-replacements))
+      (when (plist-get entry :closed)
+        (push (mevedel--instruction-replacement-finish entry) redraw)
+        (setq mevedel--instruction-replacements
+              (delq entry mevedel--instruction-replacements))))
+    (dolist (overlay redraw)
+      (when (and (overlayp overlay) (overlay-buffer overlay))
+        (mevedel--update-instruction-overlay overlay)))))
+
+(defun mevedel--instruction-replacement-close (&optional depth)
+  "Finalize current buffer's replacement scopes at DEPTH or deeper.
+When DEPTH is nil, close every scope, including explicitly held entries."
+  (let (entries retained redraw)
+    (dolist (entry mevedel--instruction-replacements)
+      (if (or (null depth) (>= (plist-get entry :depth) depth))
+          (push entry entries)
+        (push entry retained)))
+    (setq entries (nreverse entries)
+          mevedel--instruction-replacements (nreverse retained))
+    ;; Close recovered entries too: undo must not reopen a finished scope.
+    (dolist (entry entries)
+      (setf (plist-get entry :closed) t))
+    (dolist (entry entries)
+      (push (mevedel--instruction-replacement-finish entry) redraw))
+    ;; Settle the whole tree before any redraw can inspect its neighbors.
+    (dolist (overlay redraw)
+      (when (and (overlayp overlay) (overlay-buffer overlay))
+        (mevedel--update-instruction-overlay overlay))))
+  (unless mevedel--instruction-replacements
+    (setq mevedel--instruction-replacement-buffers
+          (delq (current-buffer) mevedel--instruction-replacement-buffers))))
+
+(defun mevedel-instruction-replacement-end (&optional buffer)
+  "End BUFFER's replacement scope, finalizing any still-empty instructions.
+BUFFER defaults to the current buffer.  Recovered spans retain their identity,
+shape, links, and directive activity.  Calls are idempotent."
+  (with-current-buffer (or buffer (current-buffer))
+    (setq mevedel--instruction-replacement-held nil)
+    (mevedel--instruction-replacement-close)))
+
+(defun mevedel--instruction-command-begin ()
+  "Open replacement inference for the command about to execute."
+  (let ((depth (recursion-depth)))
+    (when (or (null mevedel--instruction-command-active)
+              (< depth mevedel--instruction-command-active))
+      (setq mevedel--instruction-command-active depth))))
+
+(defun mevedel--instruction-command-end ()
+  "Finish unheld replacement scopes, including commands that switched buffers."
+  (let ((depth (recursion-depth)))
+    (when (and mevedel--instruction-command-active
+               (<= depth mevedel--instruction-command-active))
+      (setq mevedel--instruction-command-active nil))
+    (dolist (buffer mevedel--instruction-replacement-buffers)
+      (if (buffer-live-p buffer)
+          (unless (buffer-local-value 'mevedel--instruction-replacement-held buffer)
+            (with-current-buffer buffer
+              (mevedel--instruction-replacement-close depth)))
+        (setq mevedel--instruction-replacement-buffers
+              (delq buffer mevedel--instruction-replacement-buffers))))))
+
 (defconst mevedel--persisted-instruction-properties
   '(mevedel-instruction
     mevedel-id
@@ -286,6 +404,7 @@ overlay is restored.")
   "Refresh the durable anchor presented by DIRECTIVE."
   (when-let* (((not (overlay-get directive
                                  'mevedel-transient-source-missing)))
+              ((not (overlay-get directive 'mevedel-replacement-pending)))
               (record (mevedel--directive-source-record directive)))
     (let ((anchor (if (mevedel-directive-p record)
                       (mevedel-directive-anchor record)
@@ -419,9 +538,9 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
                            (overlay-get instruction 'mevedel-uuid))
                     :test #'equal))))
     (unless (and parent
-                 (< (overlay-start parent) start)
+                 (<= (overlay-start parent) start)
                  (<= start end)
-                 (< end (overlay-end parent)))
+                 (<= end (overlay-end parent)))
       (user-error "Nested directive is outside its parent"))
     (let ((overlay
            (mevedel--reattach-directive-overlay
@@ -536,7 +655,34 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
                        (<= beg (overlay-start owner))
                        (<= (overlay-end owner) end))
               (push (list :overlay directive :buffer (current-buffer))
-                    mevedel--pending-directive-detachments))))))))
+                    mevedel--pending-directive-detachments)))))))
+  (when (and (< beg end) (not undo-in-progress)
+             (or mevedel--instruction-command-active
+                 mevedel--instruction-replacement-held))
+    (dolist (geometry (nth 2 mevedel--pending-instruction-edit))
+      (pcase-let ((`(,overlay ,start ,finish) geometry))
+        (when (and (< start finish) (<= beg start) (<= finish end))
+          (let* ((detachment
+                  (cl-find overlay mevedel--pending-directive-detachments
+                           :key (lambda (entry) (plist-get entry :overlay))))
+                 (entry (list :overlay overlay
+                              :evaporate (overlay-get overlay 'evaporate)
+                              :depth (recursion-depth)
+                              :detachment detachment :closed nil
+                              :covered-by
+                              (cl-some
+                               (lambda (other)
+                                 (and (not (eq overlay (car other)))
+                                      (<= beg (nth 1 other) start)
+                                      (<= finish (nth 2 other) end)
+                                      (or (< (nth 1 other) start)
+                                          (< finish (nth 2 other)))))
+                               (nth 2 mevedel--pending-instruction-edit)))))
+            (when-let* ((marker (plist-get detachment :marker)))
+              (set-marker marker nil)
+              (setf (plist-get detachment :marker) nil))
+            (overlay-put overlay 'evaporate nil)
+            (mevedel--instruction-replacement-restore overlay entry)))))))
 
 (defun mevedel--order-detached-directives-at (position)
   "Give detached directives at POSITION stable source-order priorities."
@@ -615,6 +761,47 @@ ENTRY supplies pre-edit geometry when extra movement needs undo restoration."
           (new-end (+ beg new-length (- suffix))))
       (dolist (entry entries)
         (pcase-let ((`(,overlay ,start ,finish) entry))
+          (when (and (< from old-end) (= from new-end)
+                     (not undo-in-progress)
+                     (or mevedel--instruction-command-active
+                         mevedel--instruction-replacement-held)
+                     (or (and (<= from start) (< start old-end finish))
+                         (and (< start from finish) (<= finish old-end))))
+            (let* ((edge (if (<= from start) 'front 'rear))
+                   (old (overlay-get overlay 'mevedel-replacement-growing))
+                   (intent (list :overlay overlay :depth (recursion-depth)
+                                 :edge (if (and old (not (plist-get old :closed))
+                                                (not (eq edge (plist-get old :edge))))
+                                           'both edge)
+                                 :closed nil)))
+              ;; Only a successful effective edge deletion arms replacement;
+              ;; rejected edits and unchanged announced context cannot do so.
+              (overlay-put overlay 'mevedel-replacement-growing intent)
+              (push intent mevedel--instruction-replacements)
+              (cl-pushnew (current-buffer)
+                          mevedel--instruction-replacement-buffers)))
+          (when-let* ((pending (overlay-get overlay 'mevedel-replacement-pending))
+                      ((not (plist-get pending :covered-by)))
+                      ((> new-end from))
+                      ((or (and (= start finish from old-end))
+                           (and (<= from start) (<= finish old-end)))))
+            (mevedel--instruction-move-after-edit overlay from new-end entry)
+            (overlay-put overlay 'mevedel-replacement-pending nil)
+            (overlay-put overlay 'evaporate (plist-get pending :evaporate))
+            (when (or mevedel--instruction-command-active
+                      mevedel--instruction-replacement-held)
+              (overlay-put overlay 'mevedel-replacement-growing pending)))
+          (when-let* (((or mevedel--instruction-command-active
+                           mevedel--instruction-replacement-held))
+                      (growing (overlay-get overlay 'mevedel-replacement-growing))
+                      ((= from old-end))
+                      ((> new-end from))
+                      ((pcase (plist-get growing :edge)
+                         ('front (= from start))
+                         ('rear (= from finish))
+                         (_ (or (= from start) (= from finish))))))
+            (mevedel--instruction-move-after-edit
+             overlay start (max new-end (overlay-end overlay)) entry))
           (when (and (< start finish)
                      (if (= from old-end)
                          (< start from finish)
@@ -627,10 +814,31 @@ ENTRY supplies pre-edit geometry when extra movement needs undo restoration."
                overlay
                (min from (if live (overlay-start overlay) from))
                (max new-end (if live (overlay-end overlay) new-end)) entry))))
+        ;; Opening a line just before a selected trailing newline splits its
+        ;; boundary, rather than adding that new line to the instruction.
+        (pcase-let ((`(,overlay ,start ,finish) entry))
+          (when (and (eq (overlay-get overlay 'mevedel-span) 'line)
+                     (= from old-end (1- finish))
+                     (< start finish) (> new-end from)
+                     (eq (char-after from) ?\n)
+                     (eq (char-after (1- (+ finish (- new-length old-length)))) ?\n))
+            (mevedel--instruction-move-after-edit overlay start (1+ from) entry)))
         (mevedel--instruction-normalize-lines (car entry) entry)))))
 
-(defun mevedel--instruction-after-change (beg end _old-length)
-  "Detach captured directives, then redraw instructions affected by BEG and END."
+(defun mevedel--instruction-after-change (beg end old-length)
+  "Detach captured directives, then redraw instructions affected by BEG and END.
+OLD-LENGTH is the actual replaced character count reported by Emacs."
+  (when (and mevedel--pending-instruction-edit
+             (not (and (= beg (car mevedel--pending-instruction-edit))
+                       (= old-length (length (nth 1 mevedel--pending-instruction-edit))))))
+    ;; A rejected before-change hook can suppress the next before notification.
+    ;; Its old capture must not turn an unrelated insertion into replacement.
+    (dolist (entry mevedel--pending-directive-detachments)
+      (when-let* ((marker (plist-get entry :marker)))
+        (set-marker marker nil)))
+    (setq mevedel--pending-instruction-edit nil
+          mevedel--pending-instruction-undo nil
+          mevedel--pending-directive-detachments nil))
   (let ((entries (nth 2 mevedel--pending-instruction-edit)))
     (when mevedel--pending-instruction-edit
       (mevedel--instruction-adjust-edit beg end))
@@ -646,8 +854,9 @@ ENTRY supplies pre-edit geometry when extra movement needs undo restoration."
       ;; the parts that differ.  The directive is gone only when its overlay
       ;; evaporated or collapsed to zero width.
       (let ((overlay (plist-get entry :overlay)))
-        (when (or (null (overlay-buffer overlay))
-                  (= (overlay-start overlay) (overlay-end overlay)))
+        (when (and (not (overlay-get overlay 'mevedel-replacement-pending))
+                   (or (null (overlay-buffer overlay))
+                       (= (overlay-start overlay) (overlay-end overlay))))
           (if (plist-get entry :record)
               (mevedel--detach-directive entry)
             (mevedel--remove-directive-presentation
@@ -657,7 +866,8 @@ ENTRY supplies pre-edit geometry when extra movement needs undo restoration."
                        (max (point-min) (1- beg))
                        (min (point-max) (1+ end)))))
     (dolist (instruction instructions)
-      (mevedel--update-instruction-overlay instruction))
+      (unless (overlay-get instruction 'mevedel-replacement-pending)
+        (mevedel--update-instruction-overlay instruction)))
     (mevedel-instruction-undo-record
      (prog1 mevedel--pending-instruction-undo
        (setq mevedel--pending-instruction-undo nil)) instructions)))
@@ -738,6 +948,12 @@ ENTRY supplies pre-edit geometry when extra movement needs undo restoration."
     (mevedel--instruction-normalize-lines overlay)
     (unless (bound-and-true-p mevedel--after-change-functions-hooked)
       (setq-local mevedel--after-change-functions-hooked t)
+      ;; Run before delete-selection's pre-command deletion.  The global end
+      ;; hook also settles source edits made by a command in another buffer.
+      (add-hook 'pre-command-hook #'mevedel--instruction-command-begin -90)
+      (add-hook 'post-command-hook #'mevedel--instruction-command-end 90)
+      (add-hook 'change-major-mode-hook #'mevedel-instruction-replacement-end -90 t)
+      (add-hook 'kill-buffer-hook #'mevedel-instruction-replacement-end -90 t)
       (add-hook 'before-change-functions #'mevedel--instruction-before-change nil t)
       (add-hook 'after-change-functions #'mevedel--instruction-after-change nil t))
     overlay))
@@ -962,7 +1178,9 @@ Returns an empty string if there is no directive text."
                                            (overlay-get instruction
                                                         'mevedel-uuid))
                                     :test #'equal)))
-                    (when (mevedel--subinstruction-of-p overlay parent)
+                    (when (and (eq (overlay-buffer overlay) (overlay-buffer parent))
+                               (<= (overlay-start parent) (overlay-start overlay)
+                                   (overlay-end overlay) (overlay-end parent)))
                       (mevedel--refresh-directive-anchor overlay))
                   (with-current-buffer buffer
                     (when-let* ((bounds

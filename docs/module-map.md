@@ -3,6 +3,7 @@
 ```
 Entry point
   mevedel.el                  foundational data, command autoloads, install/uninstall, directives
+  mevedel-evil.el             opt-in Evil states, surface bindings, visual selection and replacement scope bridge
 
 Data model
   mevedel-structs.el          passive workspace/session/request/task data shapes, invariants and shared buffer-local state
@@ -182,7 +183,7 @@ Chat / view
   mevedel-worktree.el         Git worktrees, status/list surfaces, fork plumbing
   mevedel-instruction-registry.el workspace instruction buckets, IDs, links
   mevedel-overlays.el         instruction geometry, tags, context, prompts
-  mevedel-directive-source.el directive anchor/presentation lifecycle
+  mevedel-directive-source.el directive anchor/presentation lifecycle and command-scoped instruction replacement
   mevedel-overlay-ui.el       instruction overlay actions and rendering
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-directive-persistence.el  workspace directive record codec

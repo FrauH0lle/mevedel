@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare compiled interior instruction edits with a git-archive master snapshot.
+"""Compare compiled interior instruction edits with a git-archive baseline snapshot.
 
 Uses installed .eask dependencies without launching Eask or altering its cache.
 All source copies, bytecode, HOME/XDG roots and native caches are temporary.
@@ -197,6 +197,8 @@ def positive_ratio(value):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--emacs", default="emacs")
+    parser.add_argument("--base", default="master", metavar="REV",
+                        help="Baseline Git revision (default: master)")
     parser.add_argument("--elpa", type=Path, help="Installed ELPA package directory")
     parser.add_argument("--max-ratio", type=positive_ratio,
                         help="Fail if any current/master median exceeds this ratio")
@@ -206,7 +208,7 @@ def main(argv=None):
     try:
         if args.output and args.output.exists():
             raise RuntimeError(f"Output already exists: {args.output}")
-        baseline = run(["git", "rev-parse", "master^{commit}"], root,
+        baseline = run(["git", "rev-parse", "--verify", f"{args.base}^{{commit}}"], root,
                        stdout=subprocess.PIPE).stdout.decode().strip()
         head = run(["git", "rev-parse", "HEAD"], root,
                    stdout=subprocess.PIPE).stdout.decode().strip()

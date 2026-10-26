@@ -4,6 +4,7 @@
 import argparse
 import copy
 import importlib.util
+import io
 import os
 from pathlib import Path
 import shutil
@@ -21,6 +22,15 @@ SPEC.loader.exec_module(BENCH)
 
 
 class RunnerTests(unittest.TestCase):
+    def test_base_option_resolves_selected_revision_before_benchmarking(self):
+        for arguments, revision in (([], "master"), (["--base", "5900a624"], "5900a624")):
+            with self.subTest(arguments=arguments):
+                with patch.object(BENCH, "run", side_effect=RuntimeError("Stopped before measurement")) as run:
+                    with patch("sys.stderr", new_callable=io.StringIO):
+                        self.assertEqual(BENCH.main(arguments), 2)
+                self.assertEqual(run.call_args.args[0],
+                                 ["git", "rev-parse", "--verify", f"{revision}^{{commit}}"])
+
     def test_archive_and_current_are_independent_source_snapshots(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name) / "repository"
@@ -41,11 +51,15 @@ class RunnerTests(unittest.TestCase):
             fixture.write_text("fixture")
             git("add", ".")
             git("-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+            baseline = git("rev-parse", "HEAD").stdout.decode().strip()
+            (root / "mevedel.el").write_text("new master")
+            git("add", ".")
+            git("-c", "commit.gpgsign=false", "commit", "-qm", "advance master")
             (root / "mevedel.el").write_text("working edit")
             (root / "mevedel.elc").write_text("stale bytecode")
             destination = Path(name) / "snapshot"
             destination.mkdir()
-            sources = BENCH.snapshot_sources(root, destination, "master")
+            sources = BENCH.snapshot_sources(root, destination, baseline)
             self.assertEqual((sources["master"] / "mevedel.el").read_text(), "baseline")
             self.assertEqual((sources["current"] / "mevedel.el").read_text(), "working edit")
             self.assertFalse((sources["current"] / "mevedel.elc").exists())

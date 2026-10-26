@@ -62,9 +62,9 @@
 ;; `mevedel-directive-source'
 (declare-function mevedel--create-directive-in
                   "mevedel-directive-source"
-                  (buffer start end &optional bodyless directive-text))
+                  (buffer start end &optional bodyless directive-text span))
 (declare-function mevedel--create-reference-in
-                  "mevedel-directive-source" (buffer start end))
+                  "mevedel-directive-source" (buffer start end &optional span))
 (declare-function mevedel--delete-instruction
                   "mevedel-directive-source"
                   (instruction &optional buffer))
@@ -91,6 +91,8 @@
                   "mevedel-directive-source" (directive request))
 (declare-function mevedel--set-directive-status
                   "mevedel-directive-source" (directive status))
+(declare-function mevedel--subdirective-owner
+                  "mevedel-directive-source" (directive &optional workspace))
 
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-activate-buffer
@@ -932,12 +934,13 @@ A directive is empty if it does not have a body or secondary directives."
                     (not (string-empty-p request)))
                   requests))))
 
-(defun mevedel--create-instruction (type)
+(defun mevedel--create-instruction (type &optional span)
   "Create or scale an instruction of the given TYPE within the region.
 
 If a region is selected but partially covers an existing instruction,
 then the function will resize it.  See either `mevedel-create-reference'
-or `mevedel-create-directive' for details on how the resizing works."
+or `mevedel-create-directive' for details on how the resizing works.
+SPAN, when non-nil, explicitly selects `line' or `char' geometry."
   ;; A directive's durable record is anchored to a file: without one it
   ;; can never be reattached after a load, and archiving or detaching it
   ;; would write a record that no longer loads at all.
@@ -964,6 +967,7 @@ or `mevedel-create-directive' for details on how the resizing works."
                   (if (> (mark) (point))
                       (setf (overlay-start instruction) (point))
                     (setf (overlay-end instruction) (point))))
+                (when span (overlay-put instruction 'mevedel-span span))
                 (mevedel--update-instruction-overlay instruction))
               (when instructions
                 (deactivate-mark)))
@@ -981,7 +985,7 @@ or `mevedel-create-directive' for details on how the resizing works."
                  (instruction (if (eq type 'reference)
                                   (mevedel--create-reference-in buffer
                                                                 (region-beginning)
-                                                                (region-end))
+                                                                (region-end) span)
                                 (mevedel-view-call-preserving-window-configuration
                                  (lambda ()
                                    ;; Minibuffer input can yield to chat redraws.
@@ -994,7 +998,8 @@ or `mevedel-create-directive' for details on how the resizing works."
                                                                  (- (window-end) (window-start))))))
                                      (mevedel--create-directive-in buffer
                                                                    (region-beginning)
-                                                                   (region-end))))))))
+                                                                   (region-end)
+                                                                   nil nil span)))))))
             (with-current-buffer buffer
               (deactivate-mark)
               (when (eq type 'reference)
@@ -1150,7 +1155,11 @@ If OF-TYPE is non-nil, returns the parent with the given type."
                                  (and (mevedel--detached-directive-p instruction)
                                       (mevedel--detached-directive-p instr)))
                                 (<= (overlay-start instr) beg
-                                    end (overlay-end instr))))
+                                    end (overlay-end instr))
+                                ;; Equal ranges can result from replacement.
+                                ;; Neither is the other's geometric parent.
+                                (or (< (overlay-start instr) beg)
+                                    (< end (overlay-end instr)))))
                          (mevedel--instructions-in beg end))))))
 
 (defun mevedel--bodyless-instruction-p (instr)
@@ -1204,20 +1213,6 @@ itself."
                        (string-lessp (overlay-get a 'mevedel-uuid)
                                      (overlay-get b 'mevedel-uuid)))))))))
 
-
-(defun mevedel--instructions-congruent-p (a b)
-  "Return t if instruction overlays A and B are congruent.
-Two overlays are considered congruent if they are in the same buffer and
-have identical start and end positions.
-
-A, B: Two overlays to compare for congruence.
-
-Returns: t if A and B are congruent, nil otherwise."
-  (and (eq (overlay-buffer a) (overlay-buffer b))
-       (= (overlay-start a) (overlay-start b))
-       (= (overlay-end a) (overlay-end b))
-       (not (and (mevedel--detached-directive-p a)
-                 (mevedel--detached-directive-p b)))))
 
 (defun mevedel--instruction-bufferlevel-p (instruction)
   "Return t if INSTRUCTION spans the entirety of its buffer."
@@ -1289,6 +1284,23 @@ If PRED is non-nil, then the best instruction must also satisfy it.  The
 PRED must be a function which accepts an instruction."
   (unless instruction
     (cl-return-from mevedel--topmost-instruction nil))
+  ;; Durable directive ownership outlives source geometry.  Replacements can
+  ;; make parent and detail presentations coextensive without changing owner.
+  (when (eq of-type 'directive)
+    (when-let* ((owner (mevedel--subdirective-owner instruction))
+                (parent
+                 (with-current-buffer (overlay-buffer instruction)
+                   ;; Registry lookup can hydrate this file recursively while
+                   ;; its restored presentations are still being rendered.
+                   (save-restriction
+                     (widen)
+                     (cl-find (mevedel-directive-id (car owner))
+                              (overlays-in (point-min) (point-max))
+                              :key (lambda (overlay)
+                                     (overlay-get overlay 'mevedel-uuid))
+                              :test #'equal)))))
+      (cl-return-from mevedel--topmost-instruction
+        (and (or (null pred) (funcall pred parent)) parent))))
   (with-current-buffer (overlay-buffer instruction)
     (let ((best-instruction instruction))
       (cl-labels ((parent-instr (instr)

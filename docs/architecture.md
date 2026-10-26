@@ -236,12 +236,54 @@ directive activity. If another instruction reused a deleted numeric ID, the
 restored instruction receives a fresh ID while retaining its UUID. Explicit
 archive/removal takes precedence over an old source undo. Selective undo is not
 supported: Emacs currently drops custom function entries when filtering undo
-history to a region. Replacement growth applies when Emacs reports a single
-replacement (`replace-match`, `replace-region-contents`, or a
-`combine-change-calls` group). Separate `delete-region` and `insert` calls,
-including delete-selection-mode typing over an entire instruction, perform a
-full deletion before insertion; source undo restores the original instruction.
-The source hooks do not infer command-level replacement intent.
+history to a region.
+
+Replacement growth applies both to a single replacement notification
+(`replace-match`, `replace-region-contents`, or a `combine-change-calls` group)
+and to a full deletion followed by insertion at its collapsed position within
+one replacement scope. The vanilla scope is one command, ending at
+`post-command-hook`, including commands that switch buffers. Recursive minibuffer
+commands finish their own scopes without settling an enclosing command's pending
+replacement; the outer command can still insert its prompted text. Full-deletion
+candidates keep their original overlay identity collapsed at the deletion point
+until resolution. A same-position insertion recovers the span over the new text;
+line spans normalize to complete lines. Pending directives keep their activity,
+state, and attached anchor evidence rather than temporarily detaching. With no
+replacement, scope completion removes references or detaches directives using
+the existing source-owner semantics. Undo records retain the original scope's
+resolution so undo/redo cannot reopen an already completed replacement session.
+Noninteractive primitive edits outside a command or explicit held scope retain
+immediate full-deletion behavior.
+
+Partial deletion through an instruction edge also retains replacement intent for
+that edge within the same scope. Inserting at the surviving edge includes the new
+text together with the surviving instruction, even if native front-advance would
+otherwise move its start past the insertion. An untouched opposite edge remains
+adjacent, not intersecting; deleting both edges permits replacement at both,
+without narrowing an earlier full replacement's growth. Only successful effective
+deletions create intent: rejected edits and unchanged announced context cannot
+authorize growth. Ordinary adjacent insertions without an earlier edge deletion
+do not grow the instruction. Scope completion clears this partial-edge intent.
+
+When separate deletion/insertion replaces an entire parent together with nested
+instructions, only the outermost replaced instruction recovers over the new
+text. Nested directive details keep their durable records and history without
+source presentations, as when their parent fully detaches; nested references
+are removed. Arbitrary typed text does not supply a meaningful nested mapping.
+Undo restores the nested presentations, identities, geometry, and links.
+Single-notification replacements can still produce coextensive presentations;
+equal ranges are never each other's geometric parents, and presentation redraw
+does not delete either instruction merely because their bounds coincide.
+
+`mevedel-instruction-replacement-hold` and
+`mevedel-instruction-replacement-end` let an editing integration extend that
+scope across commands in one buffer; ending, cancellation, and teardown belong
+to the integration. `mevedel-evil.el` installs this bridge only through explicit
+`mevedel-evil-setup`, holding Evil change operators through their following insert
+session. Loading the optional module does not load Evil or change bindings,
+hooks, or initial states. Setup owns normal-state bindings and visual range/type
+translation; the generic source owner remains independent of Evil. Neither
+replacement resolution nor undo rewinds durable directive activity.
 
 Top-level directive presentations may persist an exact provider and
 reasoning-effort override. Nested directives are durable details owned by the
