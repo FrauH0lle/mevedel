@@ -89,11 +89,30 @@ Their viewport transaction must not replace that exact mapping with a source-run
 character offset or mistake the changed offset for a lost start. They therefore
 reuse the same viewport policy while retaining the splice's position mapping.
 
-Height-only window growth repairs newly exposed blank space using the height
+History readers keep their native viewport when a window changes height,
+including growth caused by a shrinking echo area. For other windows,
+height-only growth repairs newly exposed blank space using the height
 delta, provided the same buffer and width were displayed previously. This
 inference covers popup closure with an unchanged start, not arbitrary simultaneous
-scrolling, reflow or buffer replacement. The buffer-local window-size-change hook
-requires no continuous geometry recording. Text scaling uses one guarded advice
+scrolling, reflow or buffer replacement. The first size change also remembers
+the original height and viewport. While the buffer and width remain unchanged
+and nothing else moves the viewport, returning to that height restores that
+viewport, in either order: a shrink then growth exposes nothing new, and a
+growth then shrink undoes its repair. Only growth beyond both the original
+height and any height already repaired exposes new blank space, so successive
+growth steps never charge the same pixels twice. This prevents repeated popup,
+focus-related chrome or
+transient frame size round trips from consuming deliberate blank space or
+drifting the transcript. A viewport changed by anything else discards the
+snapshot and retains the ordinary growth inference. Growth repair also skips
+pending command input: a queued mouse click
+already carries a resolved position, and changing its viewport before consuming
+the event would shift the clicked text. Skipping leaves only extra blank space
+and queues no deferred repair. Returning to the original height respects
+pending input the same way, except when the repair being undone is younger
+than 0.1 seconds: that is below human reaction time, so a queued click was
+aimed at the original viewport. The buffer-local window-size-change hook requires
+no continuous geometry recording. Text scaling uses one guarded advice
 around `text-scale-mode`: capture actual blank pixels before face remapping and
 fill only the new excess afterward. Other buffers take the direct path. Both
 repairs preserve deliberate pre-existing blank space.
@@ -196,6 +215,44 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Size round trips retain their blank-space baseline (2026-10-26).** A live
+  focus trace showed focus returning to one frame repeatedly invoking window
+  growth repair on another frame showing the same view. That inactive window's
+  start moved backward from 199478 to 199348 and later to 199214, making its
+  transcript drift downward. Native header and popup round-trip tests reproduced
+  blank-space erosion: the previous growth-only inference forgot when a shrink
+  had consumed existing blank space without moving the viewport, so growth then
+  filled that intentional space again. A short-lived per-window shrink snapshot
+  retains the original height through an
+  unchanged viewport's size round trip. Native graphical regressions cover
+  repeated header-height changes and real popup opening/closing with two frames
+  displaying the same view. Buffer/width changes or scrolling invalidate the
+  snapshot; genuine newly exposed blank space retains its prior repair policy.
+  Transcript readers now skip height-growth repair entirely, consistent with
+  their existing priority over shrink clamping. Composer and chrome windows retain ordinary
+  unmatched-growth recovery and the shrink snapshot above.
+  The mouse-command-loop regression exposed an earlier interleaving too: the
+  minibuffer shrank from 40 to 20 pixels while the body grew from 622 to 642
+  pixels. Point was still in the composer but a resolved history click was
+  already queued, and growth repair moved the viewport backward by one line.
+  Growth repair now leaves pending input alone. The nil-argument
+  `input-pending-p` query returns immediately without running
+  timers, so this guard does not reenter redisplay from its size hook.
+  A later live size trace showed the actual focus trigger arriving in the
+  other order: on focus return the whole frame grew by 12 pixels (body 1102 to
+  1114, minibuffer unchanged) and shrank back 16 milliseconds later. Growth
+  repair filled the 12 pixels (vertical scroll 14 to 2) and the shrink left
+  them filled, so each focus return drifted the transcript. The snapshot
+  therefore records the original viewport on the first size change in either
+  direction and restores it when that height returns, undoing a transient
+  growth's repair as well as ignoring a transient shrink.
+  Review then found that successive growth steps charged earlier repaired
+  pixels again, and that an unconditional restore could move a click aimed at
+  a long-shown repair. The snapshot now tracks the tallest height already
+  repaired, and restoration under pending input is limited to sequences whose
+  first repair is younger than 0.1 seconds, which covers the 16-millisecond
+  focus transient; a later repair cannot renew that window.
 
 - **The caret chooses the active surface (2026-10-26).** A focus click into
   history left the viewport unchanged, but the deferred catch-up redraw then
