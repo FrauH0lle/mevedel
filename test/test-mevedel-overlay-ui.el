@@ -312,23 +312,21 @@
       (should-not
        (overlay-get child 'mevedel-subdirective-typename)))))
 
-(mevedel-deftest mevedel--update-instruction-overlay ()
+(mevedel-deftest mevedel--update-instruction-overlay
+  (:vars ((mevedel--instruction-states (make-hash-table :test #'equal))
+          (mevedel--instruction-current-state-key :global)))
   ,test
   (test)
-  :doc "deletes a congruent conflicting instruction"
+  :doc "renders coextensive instructions without deleting either identity"
   (with-temp-buffer
     (insert "abc")
-    (let ((instruction (make-overlay 1 2))
-          (other (make-overlay 1 2))
-          deleted)
-      (cl-letf (((symbol-function 'mevedel--instructions-at)
-                 (lambda (_point) (list instruction other)))
-                ((symbol-function 'mevedel--instructions-congruent-p)
-                 (lambda (&rest _) t))
-                ((symbol-function 'mevedel--delete-instruction)
-                 (lambda (value &rest _) (setq deleted value))))
-        (mevedel--update-instruction-overlay instruction))
-      (should (eq deleted instruction))))
+    (let ((instruction (mevedel--create-reference-in (current-buffer) 1 2))
+          (other (mevedel--create-reference-in (current-buffer) 1 2)))
+      (mevedel--update-instruction-overlay instruction t)
+      (mevedel--update-instruction-overlay other t)
+      (should (overlay-buffer instruction))
+      (should (overlay-buffer other))
+      (should (= 2 (length (mevedel--instructions-in 1 2))))))
   :doc "renders a non-conflicting root at the default priority"
   (with-temp-buffer
     (insert "abc")

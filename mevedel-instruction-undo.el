@@ -25,6 +25,12 @@
                   "mevedel-directive-source" (directive))
 (declare-function mevedel--instruction-persisted-properties
                   "mevedel-directive-source" (instruction))
+(declare-function mevedel--instruction-replacement-forget
+                  "mevedel-directive-source" (overlay))
+(declare-function mevedel--instruction-replacement-restore
+                  "mevedel-directive-source" (overlay entry))
+(declare-function mevedel--instruction-replacement-settle-undo
+                  "mevedel-directive-source" ())
 (declare-function mevedel--subdirective-owner
                   "mevedel-directive-source" (directive &optional workspace))
 
@@ -41,6 +47,8 @@
     (list :overlay identity
           :start (overlay-start overlay) :end (overlay-end overlay)
           :properties (mevedel--instruction-persisted-properties overlay)
+          :replacement (overlay-get overlay 'mevedel-replacement-pending)
+          :replacement-growing (overlay-get overlay 'mevedel-replacement-growing)
           :record record :owner (car owner)
           :anchor (copy-tree
                    (cond ((mevedel-directive-p record) (mevedel-directive-anchor record))
@@ -66,7 +74,8 @@ checkpoint available so an actual extra geometry change can promote it later."
     (let (states)
       (dolist (overlay instructions)
         (when (and
-                   (< (overlay-start overlay) (overlay-end overlay))
+                   (or (< (overlay-start overlay) (overlay-end overlay))
+                       (overlay-get overlay 'mevedel-replacement-pending))
                    (not (and (< (overlay-start overlay) beg)
                              (< end (overlay-end overlay)))))
           (push (mevedel-instruction-undo--state overlay) states)))
@@ -163,6 +172,7 @@ redo, so surviving overlay coordinates are never installed in the wrong text."
                                   '(archived source-missing)))))))
         ;; An explicit archive/removal after the edit wins over old text undo.
         (when eligible
+          (mevedel--instruction-replacement-forget overlay)
           (dolist (live (copy-sequence (alist-get buffer (mevedel--instruction-alist))))
             (when (equal uuid (overlay-get live 'mevedel-uuid))
               (setq owned-id (overlay-get live 'mevedel-id))
@@ -189,6 +199,13 @@ redo, so surviving overlay coordinates are never installed in the wrong text."
                       (delq id (mevedel--instruction-retired-ids)))))
             (overlay-put overlay 'mevedel-links nil)
             (push overlay (alist-get buffer (mevedel--instruction-alist)))
+            (when-let* ((replacement (plist-get state :replacement)))
+              (mevedel--instruction-replacement-restore overlay replacement))
+            (when-let* ((growing (plist-get state :replacement-growing))
+                        ((not (plist-get growing :closed))))
+              (mevedel--instruction-replacement-restore overlay growing)
+              (overlay-put overlay 'mevedel-replacement-pending nil)
+              (overlay-put overlay 'mevedel-replacement-growing growing))
             (when record
               (if owner
                   (progn
@@ -215,7 +232,9 @@ redo, so surviving overlay coordinates are never installed in the wrong text."
             (cl-pushnew from redraw)
             (cl-pushnew to redraw)))))
     (dolist (overlay redraw)
-      (mevedel--update-instruction-overlay overlay t))
+      (unless (overlay-get overlay 'mevedel-replacement-pending)
+        (mevedel--update-instruction-overlay overlay t)))
+    (mevedel--instruction-replacement-settle-undo)
     (push (list 'apply #'mevedel-instruction-undo--arm states) buffer-undo-list)))
 
 (provide 'mevedel-instruction-undo)

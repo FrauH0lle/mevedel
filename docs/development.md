@@ -457,11 +457,13 @@ npx @emacs-eask/cli test ert test/test-mevedel-graphical-check.el
 
 ```bash
 python3 scripts/bench-instruction-edits.py --max-ratio 1.15
+# Pin the comparison when master can move during a worktree task:
+python3 scripts/bench-instruction-edits.py --base 5900a624 --max-ratio 1.15
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_bench_instruction_edits.py
 ```
 
 After worktree bootstrap, this runner freezes installed `.eask` dependencies,
-archives the resolved `master` commit, and copies current worktree sources and
+archives the resolved `--base` revision (`master` by default), and copies current worktree sources and
 compile-time prompts into temporary snapshots. It strictly compiles both full
 packages and the same fixture, then measures each in a separate batch Emacs with
 private HOME, XDG roots and native cache. Loaded product libraries must come

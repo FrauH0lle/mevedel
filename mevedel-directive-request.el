@@ -685,7 +685,8 @@ settling."
             (mevedel-directive-remove-subdirective record current)))))
     (save-excursion
       (goto-char (overlay-start live-directive))
-      (unless (mevedel--detached-directive-p live-directive)
+      (unless (or (mevedel--detached-directive-p live-directive)
+                  (overlay-get live-directive 'mevedel-replacement-pending))
         (overlay-put live-directive 'evaporate t)))))
 
 (defun mevedel--settle-directive-presentation

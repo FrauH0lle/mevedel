@@ -280,39 +280,94 @@ including references and detached directives, without rewinding directive
 history. Emacs selective undo (`undo-in-region`) does not replay these custom
 overlay undo records, so it only restores text.
 
-Replacement edits must arrive as one buffer change. A separate deletion and
-insertion (including typing over a whole instruction with
-`delete-selection-mode`) fully deletes the instruction before inserting new
-text; undo brings its original presentation back.
+Typing over a complete instruction with `delete-selection-mode` preserves its
+identity and covers the replacement text. A full deletion remains pending until
+the current command finishes: inserting at the deletion point in that command
+recovers the instruction, while leaving it empty removes a reference or detaches
+a directive. Line selections stay line selections. Separate noninteractive
+delete/insert calls need a single replacement notification or an explicit held
+replacement scope; unrelated later commands do not resurrect deleted instructions.
+Replacing a whole parent and its nested instructions recovers only the outermost
+span: nested directive details/history remain on the parent without source
+presentations, and nested references are removed. Undo restores the nested
+instructions too.
 
 ![Directive Overlay](.assets/images/ov-actions-menu.png)
-
-> [!NOTE]
-> A note for [evil](https://github.com/emacs-evil/evil) users:
-
-If you want to customize the dispatch keybind such that it uses a key only in
-`normal-mode`, you will need to add something like this to your config:
-
-``` emacs-lisp
-;; Unbind default key
-(setopt mevedel-ov-dispatch-key nil)
-;; Use RET in normal mode to open the overlay menu
-;; See https://github.com/emacs-evil/evil/issues/1477
-(dolist (map mevedel--actions-maps)
-  (define-key (symbol-value map)
-              [return]
-              `(menu-item "" mevedel--ov-actions-dispatch
-                :filter ,(lambda (cmd) (when (evil-normal-state-p) cmd))))
-  (define-key (symbol-value map)
-              "RET"
-              `(menu-item "" mevedel--ov-actions-dispatch
-                :filter ,(lambda (cmd) (when (evil-normal-state-p) cmd)))))
-```
 
 | Custom Variable                      | Variable Description                                                      |
 |--------------------------------------|---------------------------------------------------------------------------|
 | `mevedel-ov-dispatch-key`            | Keybind to open overlay actions.                                          |
 | `mevedel-instructions-truncated-max` | Maximum display length for truncated directive text.                      |
+
+### Evil
+
+[Evil](https://github.com/emacs-evil/evil) integration is optional and never
+enabled by loading mevedel or `mevedel-evil.el`. Install and enable Evil yourself,
+then opt in once (repeated calls are safe):
+
+```emacs-lisp
+(mevedel-evil-setup)
+```
+
+Setup requires Evil at call time and reports a clear error if it is missing.
+Evil is not a runtime dependency, and evil-collection is not required. The
+integration follows its special-buffer conventions: the session view, read-only
+tables, and reports start in normal state; editable `mevedel-surface-mode`
+buffers start in insert state. Directive/prompt minibuffers retain your configured
+minibuffer state (Emacs state by default). Use `i` or `a` to type in the composer
+and Escape to return to normal-state navigation. In the session view,
+normal-state `RET` activates a row, `TAB` toggles it, `n`/`p` navigate displays,
+`t` opens the transcript, and `q` closes agent inspection. Ordinary Evil
+`h j k l`, `gg`, and `G` remain navigation.
+
+The composer retains its Emacs control and history keys in both normal and insert
+states, including `C-c C-c` (save a pending-input edit), `C-c RET` (send or steer),
+`C-c TAB` (follow-up),
+`C-c C-w` (retract), `C-c C-r` (resume), `C-c C-e` (Pending Inputs),
+`C-c C-u` (clear), and `M-p`/`M-n`/`M-r` (input history). On a pending summary
+row, normal-state `RET` inspects the entry (`RET` on the manage row opens
+Pending Inputs) and `d` drops the selected entry.
+Source instruction overlays gain normal-only `RET` for their action menu;
+insert-state Return still inserts a newline. Existing control bindings remain.
+
+All nine cockpit tables use normal-state `q` to quit, `gr` to refresh,
+`?` for help, and `RET` for details (Pending Inputs edits instead).
+Their existing action letters remain available, including `d`/`u`/`x` deletion
+marks in Pending Inputs. The following conflicts move explicitly rather than
+shadowing Evil navigation:
+
+| Surface | Normal-state key | Action (original key) |
+| --- | --- | --- |
+| All cockpit tables and reports | `gr` | Refresh (`g`) |
+| Plugins | `H` | Toggle plugin hooks (`h`) |
+| Memory | `J` | Inspect journal jobs (`j`) |
+| Memory | `K` | Kill consolidation (`k`) |
+| Background work | `K` | Stop execution or interrupt agent (`k`) |
+| Tools | `gG` | Open gptel menu (`G`) |
+
+Generated cockpit key help uses these normal-state keys. Some existing header
+and interaction-card prose still shows vanilla keys; the same conflict mapping
+applies there (`g` actions use `gr`, and `h`/`j`/`k`/`l` actions use uppercase).
+
+Other table action keys intentionally override normal-state editing commands
+only in those read-only tables. In source buffers, invoke the ordinary
+`mevedel-create-reference`, `mevedel-create-directive`, and
+`mevedel-delete-instructions` commands from visual state using your own bindings
+or `M-x`: `V` creates an explicit line span, `v` an explicit character span.
+Block selections are rejected rather than silently flattened. Commands leave
+visual state cleanly; vanilla Emacs region commands keep their existing behavior.
+
+Evil change operators keep a fully deleted instruction pending across the
+following insert session (or replace session for `R`), so `cc`, `c`, `s`, and
+visual changes can replace it without losing its identity or directive history.
+Leaving the session without
+inserted text performs a full deletion. `cc`/`S` themselves insert a placeholder
+newline: it counts as replacement text, including for character spans, and can
+keep a blank instruction even if you type nothing. Normal deletion such as `dd`
+resolves at command end. The integration leaves your undo backend and
+`evil-want-fine-undo` setting
+unchanged; ordinary source undo/redo restores presentations without rewinding
+directive activity. Selective region undo remains text-only.
 
 ### Workspaces
 

@@ -56,6 +56,7 @@
 (depends-on "qrencode")
 
 (development
+ (depends-on "evil")
  (depends-on "mcp"))
 
 (defun mevedel-eask--isolate-test-home ()

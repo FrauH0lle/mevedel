@@ -80,6 +80,7 @@
 (autoload 'mevedel-delete-all-instructions "mevedel-overlays" nil t)
 (autoload 'mevedel-delete-all-references "mevedel-overlays" nil t)
 (autoload 'mevedel-diff-apply-buffer "mevedel-diff-apply" nil t)
+(autoload 'mevedel-evil-setup "mevedel-evil" nil t)
 (autoload 'mevedel-gptel-bridge-open "mevedel-gptel-bridge" nil t)
 (autoload 'mevedel-hooks-list "mevedel-hooks" nil t)
 (autoload 'mevedel-hooks-reload "mevedel-hooks" nil t)
