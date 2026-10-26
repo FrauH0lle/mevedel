@@ -1425,8 +1425,12 @@ Tables and information panels use `mevedel-window.el` for their temporary
 display lifecycle. Opening records the invoking window and the configuration
 of the frame actually used by `display-buffer`; this also handles directive
 composers whose child frame redirects popups into its parent. Quitting uses
-`quit-window`, releases the disposable buffer, and restores the original frame's
-window layout, buffers, and selected invoking window. Refreshing or reopening a
+`quit-window` and releases the disposable buffer. If the frame's other windows
+still match their post-display layout and buffers, it restores the original
+layout and buffers while retaining current point and scroll positions in
+surviving windows. Otherwise native quit restoration alone closes the surface,
+preserving buffer switches and window changes made elsewhere while it was open.
+Both paths select the live invoking window. Refreshing or reopening a
 visible surface retains its original return state. Report section indexes close
 with their reader, before the layout is restored. An original buffer or frame
 that was killed in the meantime cannot be restored; quitting does not display

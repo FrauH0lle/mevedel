@@ -9,6 +9,9 @@
 (defvar-local mevedel-window--configuration nil
   "Window configuration preceding this temporary surface.")
 
+(defvar-local mevedel-window--layout nil
+  "Other windows' layout immediately after displaying this surface.")
+
 (defvar-local mevedel-window--return nil
   "Function to call after closing this temporary surface.")
 
@@ -16,8 +19,16 @@
   "Window that invoked this temporary surface, possibly on another frame.")
 
 (put 'mevedel-window--configuration 'permanent-local t)
+(put 'mevedel-window--layout 'permanent-local t)
 (put 'mevedel-window--origin-window 'permanent-local t)
 (put 'mevedel-window--return 'permanent-local t)
+
+(defun mevedel-window--layout-signature (frame surface-window)
+  "Return FRAME's ordered windows, buffers and edges except SURFACE-WINDOW."
+  (mapcar (lambda (window)
+            (list window (window-buffer window) (window-edges window)))
+          (remq surface-window
+                (window-list frame 'no-minibuf (frame-first-window frame)))))
 
 (defun mevedel-window-display-buffer (buffer &optional noselect return)
   "Display temporary BUFFER and remember the invoking window configuration.
@@ -38,6 +49,8 @@ Redisplaying an already visible surface retains its original return state."
         (with-current-buffer buffer
           (setq mevedel-window--configuration
                 (alist-get (window-frame window) configurations)
+                mevedel-window--layout
+                (mevedel-window--layout-signature (window-frame window) window)
                 mevedel-window--origin-window origin
                 mevedel-window--return return)))
       (when window
@@ -74,17 +87,26 @@ PRESERVE-POSITIONS keeps navigation in windows still showing the same buffer."
     (select-window origin)))
 
 (defun mevedel-window-quit (&optional buffer)
-  "Close temporary BUFFER and restore its invoking frame exactly.
-BUFFER defaults to the current buffer.  Dead original buffers cannot be
-restored; Emacs chooses their replacement without displaying an owner."
+  "Close temporary BUFFER without undoing changes to other windows.
+BUFFER defaults to the current buffer.  Restore its invoking frame exactly
+only if the other windows are unchanged, preserving their point and scroll
+positions.  Otherwise rely on native `quit-window' restoration alone.
+Dead original buffers cannot be restored; Emacs chooses their replacement."
   (let* ((buffer (or buffer (current-buffer)))
          (configuration (buffer-local-value 'mevedel-window--configuration buffer))
          (origin (buffer-local-value 'mevedel-window--origin-window buffer))
-         (return (buffer-local-value 'mevedel-window--return buffer)))
-    (when-let* ((window (get-buffer-window buffer)))
+         (return (buffer-local-value 'mevedel-window--return buffer))
+         (window (get-buffer-window buffer t))
+         (restore
+          (and configuration
+               (frame-live-p (window-configuration-frame configuration))
+               (equal (buffer-local-value 'mevedel-window--layout buffer)
+                      (mevedel-window--layout-signature
+                       (window-configuration-frame configuration) window)))))
+    (when window
       (quit-window nil window))
     (when (kill-buffer buffer)
-      (mevedel-window-restore configuration origin)
+      (mevedel-window-restore (and restore configuration) origin t)
       (when return (funcall return)))))
 
 (provide 'mevedel-window)

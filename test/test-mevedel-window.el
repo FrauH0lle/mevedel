@@ -82,5 +82,64 @@
           (should (eq origin (selected-window)))
           (should (= position (window-point origin))))))))
 
+(mevedel-deftest mevedel-window-quit-preserves-other-windows
+  ()
+  (save-window-excursion
+    (let ((left-buffer (generate-new-buffer " *window-edit-left*"))
+          (right-buffer (generate-new-buffer " *window-edit-right*"))
+          (replacement (generate-new-buffer " *window-edit-replacement*"))
+          (surface (generate-new-buffer " *window-edit-surface*"))
+          (split-height-threshold 0)
+          (split-width-threshold nil)
+          (display-buffer-alist nil))
+      (unwind-protect
+          (progn
+            (with-current-buffer right-buffer
+              (dotimes (line 500) (insert (format "line %d\n" line))))
+            (delete-other-windows)
+            (switch-to-buffer left-buffer)
+            (let ((origin (selected-window))
+                  (right (split-window-right)))
+              (set-window-buffer right right-buffer)
+              (set-window-configuration (current-window-configuration))
+              (let ((before (window-state-get)))
+                (mevedel-window-display-buffer surface)
+                (should (eq right-buffer (window-buffer right)))
+                (pcase ',change
+                  ('buffer (set-window-buffer right replacement))
+                  ('resize (window-resize right -3 t))
+                  ('navigation
+                   (with-current-buffer right-buffer
+                     (goto-char (point-min))
+                     (forward-line 300)
+                     (set-window-point right (point))
+                     (forward-line -10)
+                     (set-window-start right (point) t))))
+                (let ((position (window-point right))
+                      (start (window-start right))
+                      (width (window-total-width right)))
+                  (mevedel-window-quit surface)
+                  (should (eq origin (selected-window)))
+                  (should (eq left-buffer (window-buffer origin)))
+                  (should (eq (if (eq ',change 'buffer)
+                                  replacement right-buffer)
+                              (window-buffer right)))
+                  (should (= position (window-point right)))
+                  (should (= start (window-start right)))
+                  (should (= width (window-total-width right)))
+                  (when (eq ',change 'none)
+                    (should (equal before (window-state-get))))))))
+        (dolist (buffer (list left-buffer right-buffer replacement surface))
+          (when (buffer-live-p buffer) (kill-buffer buffer))))))
+  (change)
+  :doc "a buffer switched elsewhere while the surface is open survives quit"
+  buffer
+  :doc "point and scrolling in another window survive surface quit"
+  navigation
+  :doc "deliberate resizing of another window survives surface quit"
+  resize
+  :doc "an unchanged frame still restores its exact original layout"
+  none)
+
 (provide 'test-mevedel-window)
 ;;; test-mevedel-window.el ends here

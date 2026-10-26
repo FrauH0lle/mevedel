@@ -49,11 +49,14 @@ Opening and refreshing inspectors preserve the composer and table state.
 Temporary window ownership is shared by tables, information panels and menus.
 `mevedel-window.el` records the invoking window separately from session ownership
 and restores the frame actually used for display. Tables and reports use native
-`display-buffer` and `quit-window`, followed by exact configuration restoration;
-menus restore before a suffix opens another surface. Menu-origin continuations
-are explicit, so direct opens never manufacture a menu on quit. Existing window
-buffers, including hidden view/data pairs and editing side windows, are not
-guessed from a session's owner context.
+`display-buffer` and `quit-window`, followed by exact configuration restoration
+only when the other windows still match their post-display buffers and geometry.
+Restoration preserves current point and scroll positions; changed frames rely
+on native quit restoration alone, so inspection cannot roll back unrelated
+editing. Menus restore before a suffix opens another surface. Menu-origin
+continuations are explicit, so direct opens never manufacture a menu on quit.
+Existing window buffers, including hidden view/data pairs and editing side
+windows, are not guessed from a session's owner context.
 
 Compact execution and pending-input rows in the chat are local disclosures,
 not implicit cockpit entry points. Named management links open their table

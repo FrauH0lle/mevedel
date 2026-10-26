@@ -413,9 +413,11 @@ headings in transcripts do not change the request context.
 
 `M-x mevedel-menu` opens the session controls from either paired buffer.
 Cockpit tables and information panels are temporary: `q` restores the window
-layout and buffers from before they opened. A table opened from the menu returns
-to that menu; a direct command or key, such as `C-c C-e` for Pending Inputs,
-returns directly to its caller. Dismiss the transient itself with `C-g`.
+layout and buffers from before they opened, without undoing buffer switches,
+window changes, or navigation made elsewhere while they were open. A table
+opened from the menu returns to that menu; a direct command or key, such as
+`C-c C-e` for Pending Inputs, returns directly to its caller. Dismiss the
+transient itself with `C-g`.
 The explicit Data view action still switches between the rendered view and
 authoritative transcript; ordinary menu and cockpit navigation never exposes
 the internal data buffer as a side effect.
