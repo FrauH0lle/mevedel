@@ -259,6 +259,13 @@ All instructions, references or directives, are highlighted in the buffer via an
 overlay. The overlay contains an action menu which can be toggled via
 `mevedel-ov-dispatch-key` and grants access to common operations.
 
+Selections starting at the beginning of a line and ending at its end (or the
+beginning of the next line) remain whole-line instructions while you edit.
+Intersecting edits expand the instruction to cover replacement text; inserting
+whole lines immediately above or below does not include those lines. Deleting
+part of the selection shrinks it, and joining across an edge includes the
+joined line. Character selections retain their character boundaries.
+
 Deleting all source text covered by a directive leaves a compact, zero-width
 detached row at that position. Its request, attempts, discussions, state, and
 actions remain available. If the file disappears, the workspace record remains
@@ -267,6 +274,16 @@ Deleting a complete reference still removes it. Nested directives remain
 current details of their topmost parent rather than owning separate activity;
 if the parent detaches, prompts and submissions still consume those durable
 details after their source presentations disappear.
+
+Ordinary undo and redo restore source presentations after complete deletion,
+including references and detached directives, without rewinding directive
+history. Emacs selective undo (`undo-in-region`) does not replay these custom
+overlay undo records, so it only restores text.
+
+Replacement edits must arrive as one buffer change. A separate deletion and
+insertion (including typing over a whole instruction with
+`delete-selection-mode`) fully deletes the instruction before inserting new
+text; undo brings its original presentation back.
 
 ![Directive Overlay](.assets/images/ov-actions-menu.png)
 
