@@ -287,6 +287,8 @@ recovers the instruction, while leaving it empty removes a reference or detaches
 a directive. Line selections stay line selections. Separate noninteractive
 delete/insert calls need a single replacement notification or an explicit held
 replacement scope; unrelated later commands do not resurrect deleted instructions.
+Replacing only an instruction's first or last covered line keeps the replacement
+alongside its surviving lines; unrelated adjacent insertions still stay outside.
 Replacing a whole parent and its nested instructions recovers only the outermost
 span: nested directive details/history remain on the parent without source
 presentations, and nested references are removed. Undo restores the nested

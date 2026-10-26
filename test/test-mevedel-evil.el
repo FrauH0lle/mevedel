@@ -126,6 +126,55 @@
        (unlock-file file)
        (delete-file file))))
 
+(defun mevedel-evil-test--partial-change (span edge command)
+  "Check real COMMAND at EDGE of a multiline reference of shape SPAN.
+Compute expected text and geometry from the aggregate text replacement,
+independently of the product's primitive change hooks."
+  (ert-info ((format "span=%S operator=%S line=%S" span command edge))
+    (mevedel-evil-test--buffer
+      (let* ((original "before\ntwo\nthree\nfour\nafter\n")
+             (start (if (eq span 'line) 8 9))
+             (finish (if (eq span 'line) 23 21)))
+        (insert original)
+        (let ((overlay (mevedel--create-reference-in
+                        (current-buffer) start finish span)))
+          (goto-char 8)
+          (forward-line (pcase edge ('first 0) ('middle 1) ('last 2)))
+          (when (and (eq span 'char) (eq edge 'first)) (forward-char))
+          (let* ((position (point))
+                 (whole-line (member command '("c c" "S")))
+                 (beg (if whole-line (line-beginning-position) position))
+                 (end (cond
+                       (whole-line (line-beginning-position 2))
+                       ((member command '("c $" "C")) (line-end-position))
+                       ((equal command "R") (min (+ position 3) (line-end-position)))
+                       (t (1+ position))))
+                 (replacement (if whole-line "NEW\n" "NEW"))
+                 (expected (concat (substring original 0 (1- beg))
+                                   replacement (substring original (1- end))))
+                 (expected-start (min start beg))
+                 (expected-end (max (+ beg (length replacement))
+                                    (+ finish (- (length replacement) (- end beg))))))
+            (cl-labels
+                ((assert-state
+                  (text from to)
+                  (should (eq (overlay-buffer overlay) (current-buffer)))
+                  (should (equal (buffer-string) text))
+                  (should (equal (list (overlay-start overlay) (overlay-end overlay)
+                                      (overlay-get overlay 'mevedel-span))
+                                 (list from to span)))
+                  (should (equal (buffer-substring-no-properties
+                                  (overlay-start overlay) (overlay-end overlay))
+                                 (substring text (1- from) (1- to))))))
+              (assert-state original start finish)
+              (setq buffer-undo-list nil)
+              (mevedel-evil-test--keys (concat command " N E W <escape>"))
+              (assert-state expected expected-start expected-end)
+              (mevedel-evil-test--keys "u")
+              (assert-state original start finish)
+              (mevedel-evil-test--keys "C-r")
+              (assert-state expected expected-start expected-end))))))))
+
 (mevedel-deftest mevedel-evil-setup
   (:before-each (mevedel-evil-test--setup)
    :after-each (mevedel-evil-test--teardown)
@@ -443,6 +492,36 @@
    :quiet t)
   ,test
   (test)
+  :doc "cc retains the first line of a real V-j-created two-line reference"
+  (mevedel-evil-test--buffer
+    (insert "one\ntwo\nthree\nfour\n")
+    (goto-char 5)
+    (local-set-key (kbd "C-c r") #'mevedel-create-reference)
+    (mevedel-evil-test--keys "V j C-c r RET")
+    (let ((overlay (car (mevedel--instructions-in 1 (point-max)))))
+      (should (equal (buffer-substring-no-properties
+                      (overlay-start overlay) (overlay-end overlay))
+                     "two\nthree\n"))
+      (goto-char 5)
+      (setq buffer-undo-list nil)
+      (mevedel-evil-test--keys "c c T W O <escape>")
+      (should (equal (buffer-string) "one\nTWO\nthree\nfour\n"))
+      (should (equal (list (overlay-start overlay) (overlay-end overlay)
+                           (overlay-get overlay 'mevedel-span))
+                     '(5 15 line)))
+      (should (equal (buffer-substring-no-properties
+                      (overlay-start overlay) (overlay-end overlay))
+                     "TWO\nthree\n"))
+      (mevedel-evil-test--keys "u")
+      (should (equal (buffer-string) "one\ntwo\nthree\nfour\n"))
+      (should (equal (list (overlay-start overlay) (overlay-end overlay)
+                           (overlay-get overlay 'mevedel-span))
+                     '(5 15 line)))
+      (mevedel-evil-test--keys "C-r")
+      (should (equal (buffer-string) "one\nTWO\nthree\nfour\n"))
+      (should (equal (list (overlay-start overlay) (overlay-end overlay)
+                           (overlay-get overlay 'mevedel-span))
+                     '(5 15 line)))))
   :doc "c cc s S C and R preserve complete replacements in both span shapes"
   (dolist (span '(char line))
     (dolist (command '("c l" "c c" "s" "S" "C" "R" "v c"))
@@ -600,6 +679,58 @@
             (should (equal (buffer-substring-no-properties
                             (overlay-start overlay) (overlay-end overlay))
                            (if (eq span 'line) "NEW\n" "NEW")))))))))
+
+(mevedel-deftest mevedel-evil--partial-replacement
+  (:before-each (mevedel-evil-test--setup)
+   :after-each (mevedel-evil-test--teardown)
+   :vars ((mevedel--instruction-states (make-hash-table :test #'equal))
+          (mevedel--instruction-current-state-key :global))
+   :quiet t
+   :doc "multiline partial replacement keeps exact text and span through undo/redo")
+  (mevedel-evil-test--partial-change ,span ,edge ,command)
+  (span edge command)
+  'line 'first "c c"
+  'line 'middle "c c"
+  'line 'last "c c"
+  'line 'first "S"
+  'line 'middle "S"
+  'line 'last "S"
+  'line 'first "c $"
+  'line 'middle "c $"
+  'line 'last "c $"
+  'line 'first "C"
+  'line 'middle "C"
+  'line 'last "C"
+  'line 'first "s"
+  'line 'middle "s"
+  'line 'last "s"
+  'line 'first "R"
+  'line 'middle "R"
+  'line 'last "R"
+  'line 'first "c l"
+  'line 'middle "c l"
+  'line 'last "c l"
+  'char 'first "c c"
+  'char 'middle "c c"
+  'char 'last "c c"
+  'char 'first "S"
+  'char 'middle "S"
+  'char 'last "S"
+  'char 'first "c $"
+  'char 'middle "c $"
+  'char 'last "c $"
+  'char 'first "C"
+  'char 'middle "C"
+  'char 'last "C"
+  'char 'first "s"
+  'char 'middle "s"
+  'char 'last "s"
+  'char 'first "R"
+  'char 'middle "R"
+  'char 'last "R"
+  'char 'first "c l"
+  'char 'middle "c l"
+  'char 'last "c l")
 
 (mevedel-deftest mevedel-evil--cold-loading ()
   ,test

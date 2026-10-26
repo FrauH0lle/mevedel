@@ -255,6 +255,16 @@ resolution so undo/redo cannot reopen an already completed replacement session.
 Noninteractive primitive edits outside a command or explicit held scope retain
 immediate full-deletion behavior.
 
+Partial deletion through an instruction edge also retains replacement intent for
+that edge within the same scope. Inserting at the surviving edge includes the new
+text together with the surviving instruction, even if native front-advance would
+otherwise move its start past the insertion. An untouched opposite edge remains
+adjacent, not intersecting; deleting both edges permits replacement at both,
+without narrowing an earlier full replacement's growth. Only successful effective
+deletions create intent: rejected edits and unchanged announced context cannot
+authorize growth. Ordinary adjacent insertions without an earlier edge deletion
+do not grow the instruction. Scope completion clears this partial-edge intent.
+
 When separate deletion/insertion replaces an entire parent together with nested
 instructions, only the outermost replaced instruction recovers over the new
 text. Nested directive details keep their durable records and history without
