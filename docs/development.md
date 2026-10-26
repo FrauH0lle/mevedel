@@ -453,6 +453,37 @@ npx @emacs-eask/cli clean elc
 npx @emacs-eask/cli test ert test/test-mevedel-graphical-check.el
 ```
 
+### Instruction edit benchmark
+
+```bash
+python3 scripts/bench-instruction-edits.py --max-ratio 1.15
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_bench_instruction_edits.py
+```
+
+After worktree bootstrap, this runner freezes installed `.eask` dependencies,
+archives the resolved `master` commit, and copies current worktree sources and
+compile-time prompts into temporary snapshots. It strictly compiles both full
+packages and the same fixture, then measures each in a separate batch Emacs with
+private HOME, XDG roots and native cache. Loaded product libraries must come
+from that snapshot's bytecode; the report records source/dependency hashes,
+loaded hot paths, baseline commit and working-tree status. No checkout bytecode
+or Git worktree is created. Temporary state is removed on completion.
+
+The fixed fixture has 2,000 lines and N three-line references spaced ten lines
+apart, for N=1, 50 and 200. Each sample inserts 2,000 single characters strictly
+inside the first reference, with an undo boundary after each insertion. Five
+fresh-fixture warmups precede five fresh-fixture measured samples per N/build.
+Setup, garbage collection, and exact text/overlay assertions are untimed. Output
+includes median microseconds per key, all samples' function-undo-entry counts,
+and current/master ratios. Interior edits must add no function undo entries.
+The optional `--max-ratio` fails if any median ratio exceeds the supplied limit;
+`--output PATH` preserves raw samples and provenance in a new JSON file.
+
+Report each N separately with baseline/current median, units, sample count and
+baseline commit. These are compiled batch mutation/hook timings, not interactive
+redisplay latency. Run timing comparisons without concurrent test/compile work;
+small differences between passing runs do not establish a reliable speedup.
+
 ### View allocation gate
 
 ```bash

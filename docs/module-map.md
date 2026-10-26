@@ -7,6 +7,8 @@ Entry point
 Data model
   mevedel-structs.el          passive workspace/session/request/task data shapes, invariants and shared buffer-local state
   mevedel-directive.el        directive mutation, lifecycle, plan invalidation, rewind
+  mevedel-instruction-edit.el line-mapped visited source buffer synchronization
+  mevedel-instruction-undo.el source geometry and deletion undo/redo without activity rewind
   mevedel-turn.el             request admission/cancellation and terminal settlement
   mevedel-workspace.el        workspace detection, registry, and state lookup
   mevedel-workspace-identity.el project-owned durable workspace identity

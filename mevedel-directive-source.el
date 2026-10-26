@@ -16,6 +16,7 @@
 
 (require 'mevedel-directive)
 (require 'mevedel-instruction-registry)
+(require 'mevedel-instruction-undo)
 (require 'mevedel-structs)
 
 ;; `mevedel-directive'
@@ -139,11 +140,21 @@ context only."
 (defvar-local mevedel--pending-directive-detachments nil
   "Directives wholly covered by the current buffer edit.")
 
+(defvar-local mevedel--pending-instruction-edit nil
+  "Instruction geometry and old text captured before a buffer edit.")
+
+(defvar-local mevedel--pending-instruction-undo nil
+  "Presentation undo token captured before the current edit.")
+
+(defvar mevedel--instruction-line-mapping nil
+  "Explicit replacement bounds for line instructions during source sync.")
+
 (defconst mevedel--persisted-instruction-properties
   '(mevedel-instruction
     mevedel-id
     mevedel-uuid
     mevedel-instruction-type
+    mevedel-span
     mevedel-instruction-collapse-p
     mevedel-links
     mevedel-reference-tags
@@ -485,7 +496,23 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
     new))
 
 (defun mevedel--instruction-before-change (beg end)
-  "Capture attached directive trees wholly covered between BEG and END."
+  "Capture local geometry and directive trees wholly covered by BEG..END."
+  (let ((instructions
+         (cl-remove-if-not
+          (lambda (overlay)
+            (and (<= beg (overlay-end overlay))
+                 (<= (overlay-start overlay) end)))
+          (mevedel--instructions-in (max (point-min) (1- beg))
+                                    (min (point-max) (1+ end))))))
+    (setq mevedel--pending-instruction-undo
+          (mevedel-instruction-undo-capture beg end instructions))
+    (setq mevedel--pending-instruction-edit
+          (when instructions
+            (list beg (buffer-substring-no-properties beg end)
+                  (mapcar (lambda (overlay)
+                            (list overlay (overlay-start overlay)
+                                  (overlay-end overlay)))
+                          instructions)))))
   (setq mevedel--pending-directive-detachments nil)
   (when (< beg end)
     (dolist (directive (mevedel--instructions-in beg end 'directive))
@@ -539,8 +566,78 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
       (overlay-put directive 'priority priority)
       (setq priority (1- priority)))))
 
+(defun mevedel--instruction-move-after-edit (overlay start end &optional entry)
+  "Move OVERLAY to START and END only when native shifts did not do so.
+ENTRY holds its pre-edit geometry for lazily promoting presentation undo."
+  (unless (and (overlay-buffer overlay)
+               (= start (overlay-start overlay)) (= end (overlay-end overlay)))
+    (when entry
+      (mevedel-instruction-undo-extend mevedel--pending-instruction-undo
+                                       overlay (nth 1 entry) (nth 2 entry)))
+    (move-overlay overlay start end (current-buffer))))
+
+(defun mevedel--instruction-normalize-lines (overlay &optional entry)
+  "Expand live nonempty line OVERLAY to whole lines.
+ENTRY supplies pre-edit geometry when extra movement needs undo restoration."
+  (when (and (overlay-buffer overlay)
+             (eq (overlay-get overlay 'mevedel-span) 'line)
+             (< (overlay-start overlay) (overlay-end overlay)))
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char (overlay-start overlay))
+        (let ((start (line-beginning-position)))
+          (goto-char (overlay-end overlay))
+          (mevedel--instruction-move-after-edit
+           overlay start (if (bolp) (point) (line-end-position)) entry))))))
+
+(defun mevedel--instruction-adjust-edit (beg end)
+  "Grow intersected instructions and preserve line shape around BEG and END."
+  (pcase-let* ((`(,old-beg ,old-text ,entries)
+                (prog1 mevedel--pending-instruction-edit
+                  (setq mevedel--pending-instruction-edit nil)))
+               (new-text (buffer-substring-no-properties beg end))
+               (prefix 0)
+               (old-length (length old-text))
+               (new-length (length new-text))
+               (suffix 0))
+    ;; Some primitives announce a larger region than they actually change.
+    ;; Ignore unchanged boundary context, rather than absorbing that context.
+    (while (and (< prefix (min old-length new-length))
+                (= (aref old-text prefix) (aref new-text prefix)))
+      (setq prefix (1+ prefix)))
+    (while (and (< suffix (- (min old-length new-length) prefix))
+                (= (aref old-text (- old-length suffix 1))
+                   (aref new-text (- new-length suffix 1))))
+      (setq suffix (1+ suffix)))
+    (let ((from (+ old-beg prefix))
+          (old-end (+ old-beg old-length (- suffix)))
+          (new-end (+ beg new-length (- suffix))))
+      (dolist (entry entries)
+        (pcase-let ((`(,overlay ,start ,finish) entry))
+          (when (and (< start finish)
+                     (if (= from old-end)
+                         (< start from finish)
+                       (and (< from finish) (< start old-end)))
+                     ;; A pure full deletion still evaporates or detaches.
+                     (or (> new-end from)
+                         (< start from) (> finish old-end)))
+            (let ((live (overlay-buffer overlay)))
+              (mevedel--instruction-move-after-edit
+               overlay
+               (min from (if live (overlay-start overlay) from))
+               (max new-end (if live (overlay-end overlay) new-end)) entry))))
+        (mevedel--instruction-normalize-lines (car entry) entry)))))
+
 (defun mevedel--instruction-after-change (beg end _old-length)
   "Detach captured directives, then redraw instructions affected by BEG and END."
+  (let ((entries (nth 2 mevedel--pending-instruction-edit)))
+    (when mevedel--pending-instruction-edit
+      (mevedel--instruction-adjust-edit beg end))
+    (dolist (mapping mevedel--instruction-line-mapping)
+      (mevedel--instruction-move-after-edit
+       (nth 0 mapping) (nth 1 mapping) (nth 2 mapping)
+       (assq (nth 0 mapping) entries))))
   (let ((pending (prog1 mevedel--pending-directive-detachments
                    (setq mevedel--pending-directive-detachments nil))))
     (dolist (entry pending)
@@ -556,10 +653,14 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
             (mevedel--remove-directive-presentation
              overlay
              (plist-get entry :buffer)))))))
-  (let ((beg (max (point-min) (1- beg)))
-        (end (min (point-max) (1+ end))))
-    (dolist (instruction (mevedel--instructions-in beg end))
-      (mevedel--update-instruction-overlay instruction))))
+  (let ((instructions (mevedel--instructions-in
+                       (max (point-min) (1- beg))
+                       (min (point-max) (1+ end)))))
+    (dolist (instruction instructions)
+      (mevedel--update-instruction-overlay instruction))
+    (mevedel-instruction-undo-record
+     (prog1 mevedel--pending-instruction-undo
+       (setq mevedel--pending-instruction-undo nil)) instructions)))
 
 (defun mevedel--register-directive (directive request)
   "Register DIRECTIVE and REQUEST under their top-level workspace owner."
@@ -622,32 +723,41 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
     (mevedel-directive-set-state record status))
   status)
 
-(defun mevedel--create-instruction-overlay-in (buffer start end)
-  "Create an overlay in BUFFER from START to END of the lines."
+(defun mevedel--instruction-initialize-overlay (overlay)
+  "Initialize edit tracking and inferred shape for restored OVERLAY."
+  (with-current-buffer (overlay-buffer overlay)
+    (unless (overlay-get overlay 'mevedel-span)
+      (overlay-put
+       overlay 'mevedel-span
+       (save-excursion
+         (goto-char (overlay-start overlay))
+         (if (and (< (overlay-start overlay) (overlay-end overlay))
+                  (bolp)
+                  (progn (goto-char (overlay-end overlay)) (or (bolp) (eolp))))
+             'line 'char))))
+    (mevedel--instruction-normalize-lines overlay)
+    (unless (bound-and-true-p mevedel--after-change-functions-hooked)
+      (setq-local mevedel--after-change-functions-hooked t)
+      (add-hook 'before-change-functions #'mevedel--instruction-before-change nil t)
+      (add-hook 'after-change-functions #'mevedel--instruction-after-change nil t))
+    overlay))
+
+(defun mevedel--create-instruction-overlay-in (buffer start end &optional span)
+  "Create an instruction in BUFFER from START to END.
+SPAN is `line' or `char'; when nil, infer it from the selection bounds."
   (make-local-variable 'mevedel--after-change-functions-hooked)
   (mevedel--instruction-activate-buffer buffer)
   (with-current-buffer buffer
-    (let ((is-bufferlevel
-           ;; Check if the overlay spans the start and end of the buffer. If it
-           ;; does, make it sticky so that additions to edges of the buffer will
-           ;; cause it to expand there. This is useful for when we want to
-           ;; append new text to the end of the buffer but don't want to
-           ;; "invalidate" the buffer-level status of the instruction.
-           (and (= start (point-min)) (= end (point-max)))))
-      (let ((overlay (make-overlay start end (current-buffer) (not is-bufferlevel) is-bufferlevel)))
-        (overlay-put overlay 'mevedel-instruction t)
-        (overlay-put overlay 'mevedel-id (mevedel--create-id))
-        (unless (overlay-get overlay 'mevedel-uuid)
-          (overlay-put overlay 'mevedel-uuid (mevedel--create-uuid)))
-        (push overlay (alist-get buffer (mevedel--instruction-alist)))
-        (unless (bound-and-true-p mevedel--after-change-functions-hooked)
-          (setq-local mevedel--after-change-functions-hooked t)
-          (add-hook 'before-change-functions
-                    #'mevedel--instruction-before-change nil t)
-          (add-hook 'after-change-functions
-                    #'mevedel--instruction-after-change nil t))
-        (mevedel--setup-buffer-hooks buffer)
-        overlay))))
+    (let ((overlay (make-overlay start end (current-buffer) t nil)))
+      (overlay-put overlay 'mevedel-span span)
+      (mevedel--instruction-initialize-overlay overlay)
+      (overlay-put overlay 'mevedel-instruction t)
+      (overlay-put overlay 'mevedel-id (mevedel--create-id))
+      (unless (overlay-get overlay 'mevedel-uuid)
+        (overlay-put overlay 'mevedel-uuid (mevedel--create-uuid)))
+      (push overlay (alist-get buffer (mevedel--instruction-alist)))
+      (mevedel--setup-buffer-hooks buffer)
+      overlay)))
 
 (defun mevedel--create-uuid ()
   "Generate a random UUID."
@@ -674,23 +784,24 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
            (or (mevedel--directive-record directive)
                (error "Directive record not found")))))
 
-(defun mevedel--create-reference-in (buffer start end)
-  "Create a region reference from START to END in BUFFER."
-  (let ((ov (mevedel--create-instruction-overlay-in buffer start end)))
+(defun mevedel--create-reference-in (buffer start end &optional span)
+  "Create a region reference from START to END in BUFFER with optional SPAN."
+  (let ((ov (mevedel--create-instruction-overlay-in buffer start end span)))
     (overlay-put ov 'mevedel-instruction-type 'reference)
     (overlay-put ov 'evaporate t)
     (mevedel--update-instruction-overlay ov t)
     ov))
 
-(defun mevedel--create-directive-in (buffer start end &optional bodyless directive-text)
+(defun mevedel--create-directive-in (buffer start end &optional bodyless directive-text span)
   "Create a region directive from START to END in BUFFER.
 
 This function switches to another buffer midway of execution.  BODYLESS
 controls special formatting if non-nil.
 
 DIRECTIVE-TEXT is used as the default directive.  Having DIRECTIVE-TEXT
-be non-nil prevents the opening of a prompt buffer."
-  (let ((ov (mevedel--create-instruction-overlay-in buffer start end)))
+be non-nil prevents the opening of a prompt buffer.  SPAN explicitly selects
+`line' or `char' shape, otherwise inferred from the bounds."
+  (let ((ov (mevedel--create-instruction-overlay-in buffer start end span)))
     (unless bodyless
       (overlay-put ov 'evaporate t))
     (overlay-put ov 'mevedel-instruction-type 'directive)

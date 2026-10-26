@@ -29,6 +29,9 @@
 (declare-function mevedel-acp-turn--close-reasoning "mevedel-acp-turn" (request))
 (autoload 'mevedel-acp-turn--close-reasoning "mevedel-acp-turn")
 
+;; `mevedel-directive-source'
+(autoload 'mevedel--instruction-initialize-overlay "mevedel-directive-source")
+
 ;; `mevedel-engine'
 (declare-function mevedel-engine-info "mevedel-engine" (owner))
 (declare-function mevedel-engine-owner "mevedel-engine" (request))
@@ -1417,9 +1420,10 @@ STRING."
   "Helper function to restore an instruction overlay in BUFFER.
 
 Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
-  (let ((new-ov (make-overlay overlay-start overlay-end buffer)))
+  (let ((new-ov (make-overlay overlay-start overlay-end buffer t nil)))
     (cl-loop for (prop value) on properties by #'cddr
              do (overlay-put new-ov prop value))
+    (mevedel--instruction-initialize-overlay new-ov)
     new-ov))
 
 (defun mevedel--delimiting-markdown-backticks (string)

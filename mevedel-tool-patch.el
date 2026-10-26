@@ -55,6 +55,9 @@
 (declare-function mevedel-session-record-file-access
                   "mevedel-file-state" (session path kind &optional offset limit))
 
+;; `mevedel-instruction-edit'
+(autoload 'mevedel-instruction-replace-buffer-contents "mevedel-instruction-edit")
+
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-alist-value
                   "mevedel-instruction-registry" ())
@@ -1197,7 +1200,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                               (with-current-buffer source
                                 (insert (plist-get change :content)))
                               (set-visited-file-modtime)
-                              (replace-region-contents (point-min) (point-max) source)
+                              (mevedel-instruction-replace-buffer-contents source)
                               (unless (equal (buffer-substring-no-properties (point-min) (point-max))
                                              (plist-get change :content))
                                 (error "Buffer changed during the transaction: %s" (plist-get change :path)))

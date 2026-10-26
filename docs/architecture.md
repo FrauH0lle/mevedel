@@ -178,8 +178,8 @@ of those states, and the codec rejects one that does not. Creating a directive
 therefore requires a file-visiting buffer: without a file nothing could
 reattach it, and detaching or archiving it would freeze a fileless anchor into
 a record that no longer loads. Deleting an entire directive range preserves its durable
-record and replaces the evaporated range overlay with a compact detached row;
-partial edits use normal overlay resizing. Co-located detached rows are ordered
+record and replaces the evaporated range overlay with a compact detached row.
+Co-located detached rows are ordered
 by their former source positions. References keep their source-bound
 evaporation behavior.
 
@@ -198,6 +198,50 @@ including sources reattached outside that workspace's root. Deletion retires
 the removed numeric IDs and prunes their links from both live presentations and
 preserved directive/subdirective anchor properties, so ID reuse cannot redirect
 an old link to an unrelated instruction.
+
+Instruction overlays persist `mevedel-span` as `line` or `char`. Creation
+infers line shape from a beginning-of-line start and an end-of-line or
+next-beginning-of-line end; the source creation helpers also accept an explicit
+shape for linewise selection integrations. Restored records lacking this
+property use the same inference. Empty instructions default to character shape.
+Line instructions keep whole surviving edge lines after edits. Intersecting
+replacements grow both shapes; adjacent insertions do not grow character spans,
+and adjacent whole lines do not grow line spans. Deleting a boundary newline
+joins the neighboring text into the line instruction. Full deletion still
+evaporates references and detaches directives.
+
+`mevedel-instruction-edit.el` synchronizes visited source buffers by zero-context
+line-diff runs. Equal-sized changed runs map each old line to its corresponding
+new line. For an unequal-sized run, each instruction reserves the first new
+lines for the old run's lines before it and the last new lines for the old
+run's lines after it, covering the remaining middle. If fewer than one middle
+line remains, it covers the whole replacement instead. An instruction covering
+the entire old run covers the entire new run. This shared
+path serves diff application, ApplyPatch, and outdated-instruction restoration,
+avoiding character-minimal insertion drift and excluding unchanged hunk context.
+Session rewind's transcript-only replacement remains separate: its display
+hooks are intentionally inhibited, and its transcript presentation is rebuilt.
+
+Source edit hooks capture and normalize only instructions touching the changed
+range, including its edges; ordinary typing does not scan the buffer's entire
+instruction registry. `mevedel-instruction-undo.el` fences edge-touching edits
+with native undo function entries, installing saved geometry after text changes
+in both directions. Strictly interior edits use native marker shifts and add
+no function entries unless normalization or explicit mapping actually moves an
+overlay beyond those shifts. A promoted edit can split a coalesced native
+insertion interval without adding an undo boundary. Full-deletion undo/redo
+restores the original overlay identity,
+source anchors, nested membership, and reciprocal links, without restoring old
+directive activity. If another instruction reused a deleted numeric ID, the
+restored instruction receives a fresh ID while retaining its UUID. Explicit
+archive/removal takes precedence over an old source undo. Selective undo is not
+supported: Emacs currently drops custom function entries when filtering undo
+history to a region. Replacement growth applies when Emacs reports a single
+replacement (`replace-match`, `replace-region-contents`, or a
+`combine-change-calls` group). Separate `delete-region` and `insert` calls,
+including delete-selection-mode typing over an entire instruction, perform a
+full deletion before insertion; source undo restores the original instruction.
+The source hooks do not infer command-level replacement intent.
 
 Top-level directive presentations may persist an exact provider and
 reasoning-effort override. Nested directives are durable details owned by the
