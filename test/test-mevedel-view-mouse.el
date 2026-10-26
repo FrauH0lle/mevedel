@@ -202,6 +202,7 @@ UPDATE, like input already queued by the display backend."
 (defvar mevedel-view-mouse-test--macro-resume nil)
 (defvar mevedel-view-mouse-test--macro-observations nil)
 (defvar mevedel-view-mouse-test--macro-requeue nil)
+(defvar mevedel-view-mouse-test--macro-motion nil)
 
 (defun mevedel-view-mouse-test--macro-press (event)
   "Track EVENT's release inside one command, like macro-based mouse clients."
@@ -216,7 +217,13 @@ UPDATE, like input already queued by the display backend."
                   (buffer-modified-tick)
                   (string-search "Deferred response 5" (buffer-string)))
             mevedel-view-mouse-test--macro-observations)
-      (setq release (read-key))
+      (when mevedel-view-mouse-test--macro-motion
+        (push (list 'mouse-movement (copy-tree (event-start event)))
+              unread-command-events))
+      ;; Tracking reports pointer motion as well as release.  Treating motion
+      ;; as release could leave before the scheduled catch-up even started.
+      (while (eq (car-safe (setq release (read-key))) 'mouse-movement))
+      (should (eq (car-safe release) 'mouse-1))
       (push (list 'after track-mouse (car-safe last-command-event)
                   (eq last-command-event event)
                   (not (null (terminal-parameter nil 'mouse-drag-start)))
@@ -227,13 +234,15 @@ UPDATE, like input already queued by the display backend."
         (push release unread-command-events)
       (mouse-set-point release))))
 
-(defun mevedel-view-mouse-test--macro-click (position resume &optional requeue)
+(defun mevedel-view-mouse-test--macro-click (position resume &optional requeue motion)
   "Click POSITION while RESUME runs timers inside macro-based tracking.
-With REQUEUE, hand the release back to the ordinary command loop."
+With REQUEUE, hand the release back to the ordinary command loop.
+With MOTION, deliver a movement event before the release."
   (let* ((start (posn-at-point position))
          (release (list 'mouse-1 (copy-tree start)))
          (mevedel-view-mouse-test--macro-resume resume)
          (mevedel-view-mouse-test--macro-requeue requeue)
+         (mevedel-view-mouse-test--macro-motion motion)
          (map (copy-keymap (current-local-map)))
          timer exit-timer deadline)
     ;; Preserve the real release binding from the clicked fragment.  The
@@ -376,10 +385,11 @@ With REQUEUE, hand the release back to the ordinary command loop."
               (should-not mevedel-view--render-timer)
               (should mevedel-view--pending-render-kind)
               (funcall
-               (if (memq ordering '(macro-between macro-requeue))
+               (if (memq ordering '(macro-between macro-requeue macro-requeue-motion))
                    (lambda (pos _order callback)
                      (mevedel-view-mouse-test--macro-click
-                      pos callback (eq ordering 'macro-requeue)))
+                      pos callback (memq ordering '(macro-requeue macro-requeue-motion))
+                      (eq ordering 'macro-requeue-motion)))
                  #'mevedel-view-mouse-test--focus-click)
                clicked ordering
                (lambda (complete)
@@ -467,7 +477,9 @@ With REQUEUE, hand the release back to the ordinary command loop."
   :doc "incremental Manage button click with macro-requeued release"
   'incremental 'macro-requeue "[Manage]"
   :doc "batched Manage button click with macro-requeued release"
-  'batch 'macro-requeue "[Manage]")
+  'batch 'macro-requeue "[Manage]"
+  :doc "batched background catch-up with motion before macro-requeued release"
+  'batch 'macro-requeue-motion "Focus background target")
 
 (provide 'test-mevedel-view-mouse)
 ;;; test-mevedel-view-mouse.el ends here
