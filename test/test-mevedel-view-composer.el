@@ -686,19 +686,119 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                       (point))))
         (set-window-start window start t)
         (should (= blank (mevedel-view-composer-test--blank-rows window)))
+        (goto-char (if (eq case 'reader) start (point-max)))
+        (when (eq case 'reader)
+          (should (memq window (mevedel-view--history-reader-windows)))
+          (should (mevedel-view--window-shows-end-p window)))
+        (when (memq case '(roundtrip stale-start stale-scroll stale-width stale-buffer beyond nested))
+          (cl-letf (((symbol-function 'window-old-body-pixel-height)
+                     (lambda (_) (+ height 8)))
+                    ((symbol-function 'window-old-body-pixel-width) (lambda (_) width))
+                    ((symbol-function 'window-old-buffer) (lambda (_) view-buf)))
+            (run-hook-with-args 'window-size-change-functions window)
+            (let ((state (window-parameter window 'mevedel-view--size-baseline)))
+              (should state)
+              (should (= (+ height 8) (plist-get state :height)))
+              (should (plist-get state :viewport))
+              (when (eq case 'nested)
+                (cl-letf (((symbol-function 'window-old-body-pixel-height)
+                           (lambda (_) (+ height 4))))
+                  (run-hook-with-args 'window-size-change-functions window))
+                (should (eq state (window-parameter window 'mevedel-view--size-baseline))))))
+          (when (eq case 'stale-start)
+            (set-window-start window (save-excursion (goto-char start) (forward-line 1) (point)) t)))
         (cl-letf (((symbol-function 'window-old-body-pixel-height)
                    (lambda (_) (pcase case ('uninitialized 0)
                                  ('shrink (+ height 8)) (_ (- height 8)))))
                   ((symbol-function 'window-old-body-pixel-width)
-                   (lambda (_) (if (eq case 'width) (1+ width) width)))
+                   (lambda (_) (if (memq case '(width stale-width)) (1+ width) width)))
                   ((symbol-function 'window-old-buffer)
-                   (lambda (_) (if (eq case 'buffer) data-buf view-buf))))
+                   (lambda (_) (if (memq case '(buffer stale-buffer)) data-buf view-buf)))
+                  ((symbol-function 'input-pending-p) (lambda (&optional _) (eq case 'pending))))
           ;; Dispatch through the same buffer-local hook as redisplay.  A
           ;; missing installation must fail on geometry, not hook membership.
-          (run-hook-with-args 'window-size-change-functions window))
-        (should (= (if (eq case 'grow) (max 0 (- blank 8)) blank)
-                   (mevedel-view-composer-test--blank-rows window)))
-        (unless (eq case 'grow) (should (= start (window-start window)))))))
+          (let ((geometry (symbol-function 'mevedel-view--window-body-geometry))
+                (restore (symbol-function 'mevedel-view--restore-window-blank-pixels))
+                (vscroll (symbol-function 'window-vscroll))
+                (previous (mevedel-view--window-blank-pixels window))
+                restored-blank)
+            (cl-letf (((symbol-function 'mevedel-view--window-body-geometry)
+                       (lambda (target)
+                         (if (eq case 'beyond) (cons 0 (+ height 16))
+                           (funcall geometry target))))
+                      ((symbol-function 'window-vscroll)
+                       (lambda (target &optional pixels)
+                         ;; Batch terminal frames ignore set-window-vscroll.
+                         (if (eq case 'stale-scroll) 1
+                           (funcall vscroll target pixels))))
+                      ((symbol-function 'mevedel-view--restore-window-blank-pixels)
+                       (lambda (target saved-blank)
+                         (setq restored-blank saved-blank)
+                         (funcall restore target saved-blank))))
+              (run-hook-with-args 'window-size-change-functions window))
+            (when (memq case '(stale-start stale-scroll))
+              (should (= (max 0 (- previous 8)) restored-blank)))
+            (let ((state (window-parameter window 'mevedel-view--size-baseline)))
+              (pcase case
+                ;; A stale baseline is replaced by this growth's own height.
+                ((or 'stale-start 'stale-scroll)
+                 (should (= (- height 8) (plist-get state :height))))
+                ((or 'stale-width 'stale-buffer) (should-not state))
+                ;; Growth beyond the original height keeps it as the baseline.
+                ('beyond (should (= (+ height 8) (plist-get state :height))))))
+            (when (eq case 'grow-twice)
+              ;; The first growth's repair is already part of the viewport, so
+              ;; four more pixels expose only four new ones.  A later repair
+              ;; keeps the date of the first departure from the original view.
+              (set-window-parameter
+               window 'mevedel-view--size-baseline
+               (plist-put (window-parameter window 'mevedel-view--size-baseline)
+                          :repaired 42.0))
+              (let (second)
+                (cl-letf (((symbol-function 'window-old-body-pixel-height)
+                           (lambda (_) height))
+                          ((symbol-function 'window-old-body-pixel-width)
+                           (lambda (_) width))
+                          ((symbol-function 'window-old-buffer) (lambda (_) view-buf))
+                          ((symbol-function 'input-pending-p) #'ignore)
+                          ((symbol-function 'mevedel-view--window-body-geometry)
+                           (lambda (target)
+                             (cons (car (funcall geometry target)) (+ height 4))))
+                          ((symbol-function 'mevedel-view--restore-window-blank-pixels)
+                           (lambda (target saved-blank)
+                             (setq second saved-blank)
+                             (set-window-start target (1+ (window-start target)) t))))
+                  (run-hook-with-args 'window-size-change-functions window))
+                (should (= (max 0 (- blank 8)) second))
+                (should (eql 42.0 (plist-get (window-parameter
+                                              window 'mevedel-view--size-baseline)
+                                             :repaired)))))
+            (when (memq case '(grow-shrink grow-shrink-pending grow-shrink-late))
+              ;; Growth filled new blank space; shrinking back undoes it unless
+              ;; queued input could have targeted a long-shown repair.
+              (should-not (= start (window-start window)))
+              (when (eq case 'grow-shrink-late)
+                (let ((state (window-parameter window 'mevedel-view--size-baseline)))
+                  (set-window-parameter window 'mevedel-view--size-baseline
+                                        (plist-put state :repaired (- (float-time) 1)))))
+              (cl-letf (((symbol-function 'window-old-body-pixel-height)
+                         (lambda (_) height))
+                        ((symbol-function 'window-old-body-pixel-width)
+                         (lambda (_) width))
+                        ((symbol-function 'window-old-buffer) (lambda (_) view-buf))
+                        ((symbol-function 'input-pending-p)
+                         (lambda (&optional _) (not (eq case 'grow-shrink))))
+                        ((symbol-function 'mevedel-view--window-body-geometry)
+                         (lambda (_) (cons 0 (- height 8)))))
+                (run-hook-with-args 'window-size-change-functions window))
+              (should-not (window-parameter window 'mevedel-view--size-baseline))
+              (when (eq case 'grow-shrink-late)
+                (should-not (= start (window-start window)))))))
+        (unless (memq case '(stale-start stale-scroll beyond grow-shrink-late))
+          (should (= (if (memq case '(grow grow-twice)) (max 0 (- blank 8)) blank)
+                     (mevedel-view-composer-test--blank-rows window)))
+          (unless (memq case '(grow grow-twice))
+            (should (= start (window-start window))))))))
   (blank case)
   :doc "fills only newly exposed blank space" 8 'grow
   :doc "does not move a full window" 0 'grow
@@ -706,7 +806,20 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   :doc "does not infer geometry across width changes" 8 'width
   :doc "does not infer geometry across buffer changes" 8 'buffer
   :doc "does not infer geometry before the first redisplay" 8 'uninitialized
-  :doc "does not repair a shrinking window" 8 'shrink)
+  :doc "does not repair a shrinking window" 8 'shrink
+  :doc "a shrink/growth round trip retains existing blank space" 13 'roundtrip
+  :doc "scrolling the start invalidates the size baseline" 13 'stale-start
+  :doc "changing partial scroll invalidates the size baseline" 13 'stale-scroll
+  :doc "a width change clears the size baseline" 13 'stale-width
+  :doc "a buffer change clears the size baseline" 13 'stale-buffer
+  :doc "growth beyond the original height keeps that baseline" 13 'beyond
+  :doc "nested shrinks retain the first blank-space baseline" 13 'nested
+  :doc "a history reader with visible end keeps its start through unmatched growth" 13 'reader
+  :doc "pending input retains the viewport until its resolved event is consumed" 13 'pending
+  :doc "a growth/shrink round trip restores the viewport its repair moved" 13 'grow-shrink
+  :doc "consecutive growth counts only space beyond the repaired height" 13 'grow-twice
+  :doc "a transient repair is undone even with a queued click" 13 'grow-shrink-pending
+  :doc "a long-shown repair stays while a queued click may target it" 13 'grow-shrink-late)
 
 (mevedel-deftest mevedel-view--preserve-text-scale-blanks ()
   (let ((view ,view))

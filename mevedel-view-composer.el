@@ -1429,20 +1429,80 @@ last row separately because an empty EOF has no text pixel size."
              window (point-max)
              (+ (car row) (- current blank))))))
 
+(defconst mevedel-view--transient-repair-seconds 0.1
+  "Seconds within which a growth repair is too recent for a click to target.
+Below human reaction time: input already queued when a transient growth is
+reversed this soon was aimed at the viewport before the repair.")
+
 (defun mevedel-view--repair-window-growth (window)
   "Fill space newly exposed by a height increase of WINDOW.
 Equal widths and the same buffer let the previous blank area be inferred
-from the height delta, without recording geometry on ordinary redisplays."
-  (let ((old-height (window-old-body-pixel-height window)))
-    (when (and (eq (window-old-buffer window) (current-buffer))
-               (> old-height 0)
-               (= (window-body-width window t)
-                  (window-old-body-pixel-width window)))
-      (when-let* ((height (cdr (mevedel-view--window-body-geometry window)))
-                  ((> height old-height))
-                  (blank (mevedel-view--window-blank-pixels window)))
-        (mevedel-view--restore-window-blank-pixels
-         window (max 0 (- blank (- height old-height))))))))
+from the height delta.  The first size change also remembers its original
+height and viewport.  While nothing else moves the viewport, returning to
+that height restores it, in either order: a shrink then growth exposes
+nothing new, and a growth then shrink undoes its repair.  Only growth
+beyond both the original height and any height already repaired counts as
+newly exposed.
+Transcript readers keep their native viewport instead of filling new space.
+Pending input keeps the viewport, except when undoing a repair made within
+`mevedel-view--transient-repair-seconds'.
+Record geometry only on size changes, not on ordinary redisplays."
+  (let* ((old-height (window-old-body-pixel-height window))
+         (height (cdr (mevedel-view--window-body-geometry window)))
+         (width (window-body-width window t))
+         (viewport (cons (window-start window) (window-vscroll window t)))
+         (reader (and (markerp mevedel-view--status-marker)
+                      (eq (marker-buffer mevedel-view--status-marker) (current-buffer))
+                      (< (window-point window) mevedel-view--status-marker)))
+         ;; :height and :viewport are the original geometry, :shown the
+         ;; viewport last observed or set here, :accounted the tallest height
+         ;; whose blank space is already settled, :repaired the last repair time.
+         (state (window-parameter window 'mevedel-view--size-baseline)))
+    (unless (and state
+                 (eq (plist-get state :buffer) (current-buffer))
+                 (= (plist-get state :width) width)
+                 (equal (plist-get state :shown) viewport))
+      (setq state nil))
+    (if (or reader
+            (not (and (eq (window-old-buffer window) (current-buffer))
+                      (> old-height 0)
+                      (= width (window-old-body-pixel-width window)))))
+        (setq state nil)
+      (unless (or state (= height old-height))
+        (setq state (list :buffer (current-buffer) :width width
+                          :height old-height :viewport viewport :shown viewport
+                          :accounted old-height :repaired nil)))
+      (cond
+       ((not state))
+       ((= height (plist-get state :height))
+        ;; A round trip: the window shows its original height again.  A
+        ;; queued click can target a long-shown repair, but not one reversed
+        ;; faster than anyone could aim at it.
+        (let ((repaired (plist-get state :repaired)))
+          (unless (or (equal viewport (plist-get state :viewport))
+                      (and (input-pending-p)
+                           (not (and repaired
+                                     (< (- (float-time) repaired)
+                                        mevedel-view--transient-repair-seconds)))))
+            (mevedel-view--set-viewport window (plist-get state :viewport))))
+        (setq state nil))
+       ((> height old-height)
+        (let ((accounted (plist-get state :accounted)))
+          ;; A queued click already carries a resolved position.  Do not move
+          ;; its viewport before the command loop consumes it.  Nil
+          ;; CHECK-TIMERS keeps this observation safe inside redisplay's hook.
+          (unless (input-pending-p)
+            (when-let* ((blank (mevedel-view--window-blank-pixels window)))
+              (mevedel-view--restore-window-blank-pixels
+               window (max 0 (- blank (max 0 (- height accounted)))))))
+          (let ((after (cons (window-start window) (window-vscroll window t))))
+            ;; Date the first departure from the original viewport: restoring
+            ;; undoes every repair since then, not just the latest.
+            (unless (or (equal after viewport) (plist-get state :repaired))
+              (setq state (plist-put state :repaired (float-time))))
+            (setq state (plist-put state :shown after)
+                  state (plist-put state :accounted (max accounted height))))))))
+    (set-window-parameter window 'mevedel-view--size-baseline state)))
 
 (defun mevedel-view--preserve-text-scale-blanks (function &rest arguments)
   "Call text-scale FUNCTION with ARGUMENTS, repairing only new view blanks.

@@ -1117,10 +1117,21 @@ command switches buffers. Commandless mutations repair immediately despite a
 stale `this-command` value. History/snapshot replacement and sending a folded draft are
 single transactions, not independent insertion/deletion viewport states. Only
 an actual increase in blank pixels triggers backward traversal. Height-only
-window growth infers the old blank area from the height delta when the buffer
-and width are unchanged; width changes
-and newly displayed buffers are not inferred. Text scaling captures actual blank
-pixels around `text-scale-mode`, including programmatic calls, without adding
+window growth leaves transcript readers at their native reading viewport;
+for other windows it infers the old blank area from the height delta when the
+buffer and width are unchanged. Width changes and newly displayed buffers are
+not inferred. The first size change remembers the original height and viewport;
+returning to that height restores the viewport while the buffer and width are
+unchanged and nothing else moved it. Shrink-then-grow therefore exposes nothing
+new, grow-then-shrink undoes its repair, and only growth beyond both the
+original height and any height already repaired exposes new blank space. Popup, chrome and transient frame size round
+trips thus neither erode intentional blank space nor drift the transcript.
+Any other viewport change discards that snapshot. Growth repair also skips pending input so
+an already-resolved focus click cannot have its text moved before it is read;
+undoing repairs under pending input is allowed only within 0.1 seconds of the first,
+too soon for the click to have targeted the repaired view.
+Text scaling captures actual blank pixels around `text-scale-mode`, including
+programmatic calls, without adding
 work to ordinary commands or redisplay. Both repairs retain pre-existing blank
 space.
 
