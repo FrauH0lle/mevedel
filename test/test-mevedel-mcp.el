@@ -509,7 +509,7 @@ once `connect' returns."
          (command (mevedel-mcp-hook-command server)))
     (unwind-protect
         (cl-labels
-            ((invoke ()
+            ((invoke (&optional exit-before-read)
                (let ((output (generate-new-buffer " *mcp-hook-output*"))
                      (errors (generate-new-buffer " *mcp-hook-errors*")) process)
                  (unwind-protect
@@ -521,9 +521,19 @@ once `connect' returns."
                                            :command (list "sh" "-c" command)))
                        (process-send-string process "{\"hook_event_name\":\"PostToolBatch\"}\n")
                        (process-send-eof process)
+                       (when exit-before-read
+                         ;; Do not yield to process I/O until the child exits:
+                         ;; its stdout must still be queued in the pipe.
+                         (let ((deadline (+ (float-time) 5)))
+                           (while (and (process-live-p process)
+                                       (< (float-time) deadline))))
+                         (should-not (process-live-p process))
+                         (should (equal "" (with-current-buffer output (buffer-string)))))
                        (mevedel-test--await 5 "Hook bridge did not return"
                          (not (process-live-p process)))
                        (should (= 0 (process-exit-status process)))
+                       ;; Exit status can arrive before the final stdout read.
+                       (while (accept-process-output process))
                        (with-current-buffer output
                          (json-parse-string (buffer-string) :object-type 'plist
                                             :false-object :json-false)))
@@ -534,7 +544,7 @@ once `connect' returns."
           (setq stop t)
           (should (equal '(:continue :json-false :stopReason "Goal paused") (invoke)))
           (mevedel-mcp-stop server)
-          (should (eq :json-false (plist-get (invoke) :continue))))
+          (should (eq :json-false (plist-get (invoke t) :continue))))
       (when timer (cancel-timer timer))
       (mevedel-mcp-stop server))))
 
