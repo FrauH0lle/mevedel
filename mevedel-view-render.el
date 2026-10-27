@@ -255,6 +255,7 @@
 (defvar mevedel-view--display-map)
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-marker)
+(defvar mevedel-view--transcript-start)
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view--insert-attribution
@@ -4299,13 +4300,21 @@ the render so user toggles survive streaming ticks."
          (data-to
           (or end
               (with-current-buffer data-buf (point-max))))
+         (transcript-start mevedel-view--transcript-start)
          (segments (when (and data-from data-to)
                      (with-current-buffer data-buf
-                       (if retained-p
-                           (save-restriction
-                             (narrow-to-region data-from data-to)
-                             (mevedel-transcript-segments
-                              (point-min) (point-max)))
+                       (save-restriction
+                         ;; Segmentation may expand to the preceding property
+                         ;; boundary.  In a side conversation that run can
+                         ;; include inherited reminders, even when DATA-FROM
+                         ;; already follows the newly submitted prompt.
+                         (when (and (markerp transcript-start)
+                                    (eq (marker-buffer transcript-start) data-buf))
+                           (narrow-to-region
+                            (max (point-min) (marker-position transcript-start))
+                            (point-max)))
+                         (when retained-p
+                           (narrow-to-region data-from data-to))
                          (mevedel-transcript-segments data-from data-to)))))
          (segments (if settle-p
                        segments
