@@ -14,14 +14,19 @@
 (require 'mevedel-memory-store)
 (require 'mevedel-memory-write)
 (require 'mevedel-transport)
+(require 'mevedel-workspace-identity)
 
 ;; `mevedel-journal-cleanup'
 (declare-function mevedel-journal-cleanup-wait "mevedel-journal-cleanup" (workspace))
 (autoload 'mevedel-journal-cleanup-wait "mevedel-journal-cleanup")
 
 ;; `mevedel-memory-notes'
+(declare-function mevedel-memory-notes-passes "mevedel-memory-notes" (workspace entries))
 (declare-function mevedel-memory-notes-recheck "mevedel-memory-notes" (root relative))
+(declare-function mevedel-memory-notes-workspace-busy-p "mevedel-memory-notes" (workspace))
+(autoload 'mevedel-memory-notes-passes "mevedel-memory-notes")
 (autoload 'mevedel-memory-notes-recheck "mevedel-memory-notes")
+(autoload 'mevedel-memory-notes-workspace-busy-p "mevedel-memory-notes")
 
 (defun mevedel-memory-decision-terminal-status-p (status)
   "Return non-nil when decision STATUS ends its proposal's lifecycle."
@@ -42,11 +47,17 @@
 (defvar mevedel-memory-decision--inhibit-recovery nil
   "Non-nil suppresses deferred recovery during exit or isolated tests.")
 
+(defvar mevedel-memory-decision--recovery-dispatching (make-hash-table :test #'equal)
+  "Observation-only tokens spanning scheduled recovery admission IO.")
+
 (defvar mevedel-memory-decision--recovery-pending (make-hash-table :test #'equal)
   "Coalesced activation recovery timers, keyed by workspace claim directory.")
 
 (defvar mevedel-memory-decision--recovery-workers (make-hash-table :test #'equal)
   "Active publication recovery and live-write checks, keyed by claim directory.")
+
+(defvar mevedel-memory-decision--operations (make-hash-table :test #'equal)
+  "Parent-owned async decision operations, keyed by workspace claim directory.")
 
 (defun mevedel-memory-decision--directory (workspace)
   "Return the private decision directory for WORKSPACE."
@@ -127,7 +138,7 @@ must discard the table after mutations and never retain it between operations."
                              (puthash pass bundle passes))
                            bundle)))
            (intent (and (plist-get data :write-id)
-                        (mevedel-memory-write-read workspace (plist-get data :write-id) (plist-get metadata :state-hash)))))
+                        (mevedel-memory-write-read workspace (plist-get data :write-id) (plist-get metadata :state-hash) accepted))))
       (unless (and (equal (plist-get claim :owner) (plist-get metadata :decision-id))
                    (equal (plist-get metadata :workspace) (plist-get (plist-get accepted :review) :workspace))
                    (if intent
@@ -146,7 +157,8 @@ must discard the table after mutations and never retain it between operations."
 Read the public journal once for the whole pass."
   (let ((entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
         (passes (make-hash-table :test #'equal)))
-    (puthash (plist-get (plist-get accepted :prepared) :id) accepted passes)
+    ;; This check can follow publication.  Read its pass proof afresh rather
+    ;; than seeding from the bundle supplied before that mutation.
     (cl-every (lambda (id)
                 (mevedel-memory-decision-terminal-status-p
                  (plist-get (mevedel-memory-decision-status workspace id entries passes) :status)))
@@ -175,37 +187,47 @@ their pass can release its remaining digest pins."
   "Publish all accepted pending decisions in WORKSPACE without inference.
 Malformed accepted state remains an error, preserving evidence for inspection.
 Reuse one public observation; already published history needs only one pending
-evidence-release check per pass, not repeated republication per decision."
+evidence-release check per pass, not repeated republication per decision.
+Group metadata by pass so the bounded single-bundle observation
+does not reread large proposal bodies for interleaved decision filenames."
   (let ((published (make-hash-table :test #'equal)) (checked (make-hash-table :test #'equal))
-        (passes (make-hash-table :test #'equal)))
+        (passes (make-hash-table :test #'equal)) (groups (make-hash-table :test #'equal)))
     (dolist (entry (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
       (puthash (plist-get entry :file) (plist-get entry :text) published))
     (dolist (path (mevedel-session-control-fs-list-directory
-                  (mevedel-memory-decision--directory workspace) mevedel-memory-write-intent-file-regexp))
-      (when-let* ((decision (mevedel-memory-decision--read workspace path passes)))
-        (let* ((metadata (plist-get decision :metadata))
-               (prepared (plist-get (plist-get decision :accepted) :prepared))
-               (review (plist-get (plist-get decision :accepted) :review))
-               (review-file (mevedel-journal-store--filename review 'consolidation))
-               (review-text (mevedel-journal-store--encode review nil 'consolidation))
-               (pass (plist-get prepared :id))
-               (file (mevedel-journal-store--filename metadata 'decision))
-               (expected (mevedel-journal-store--encode metadata nil 'decision))
-               ;; Pins outlive the pass until all its proposals are terminal;
-               ;; republishing earlier cannot release them.
-               (release (and (not (gethash pass checked))
-                             (seq-some (lambda (entry)
-                                         (mevedel-session-control-fs-path-exists-p
-                                          (mevedel-memory-store--pin workspace pass (plist-get entry :id))))
-                                       (plist-get prepared :entries))
-                             (mevedel-memory-decision--settled-p workspace (plist-get decision :accepted)))))
-          (puthash pass t checked)
-          (when (or release (not (equal expected (gethash file published)))
-                    (not (equal review-text (gethash review-file published))))
-            (mevedel-memory-decision--publish workspace decision)
-            (clrhash passes)
-            (puthash file expected published)
-            (puthash review-file review-text published)))))))
+                   (mevedel-memory-decision--directory workspace) mevedel-memory-write-intent-file-regexp))
+      ;; This untrusted hint chooses only read order.  The full reader below
+      ;; freshly authenticates every record, including after publication.
+      (let ((record (car (mevedel-memory-store--read-lisp path))))
+        (push path (gethash (plist-get (plist-get record :metadata) :pass-id) groups))))
+    (maphash
+     (lambda (_pass records)
+       (dolist (path records)
+         (when-let* ((decision (mevedel-memory-decision--read workspace path passes)))
+           (let* ((metadata (plist-get decision :metadata))
+                  (prepared (plist-get (plist-get decision :accepted) :prepared))
+                  (review (plist-get (plist-get decision :accepted) :review))
+                  (review-file (mevedel-journal-store--filename review 'consolidation))
+                  (review-text (mevedel-journal-store--encode review nil 'consolidation))
+                  (pass (plist-get prepared :id))
+                  (file (mevedel-journal-store--filename metadata 'decision))
+                  (expected (mevedel-journal-store--encode metadata nil 'decision))
+                  ;; Pins outlive the pass until all its proposals are terminal;
+                  ;; republishing earlier cannot release them.
+                  (release (and (not (gethash pass checked))
+                                (seq-some (lambda (entry)
+                                            (mevedel-session-control-fs-path-exists-p
+                                             (mevedel-memory-store--pin workspace pass (plist-get entry :id))))
+                                          (plist-get prepared :entries))
+                                (mevedel-memory-decision--settled-p workspace (plist-get decision :accepted)))))
+             (puthash pass t checked)
+             (when (or release (not (equal expected (gethash file published)))
+                       (not (equal review-text (gethash review-file published))))
+               (mevedel-memory-decision--publish workspace decision)
+               (clrhash passes)
+               (puthash file expected published)
+               (puthash review-file review-text published))))))
+     groups)))
 
 (defun mevedel-memory-decision--accept (workspace claim accepted proposal status reason &optional intent)
   "Accept STATUS and REASON for PROPOSAL from ACCEPTED under WORKSPACE CLAIM.
@@ -381,42 +403,335 @@ With WORKSPACE, a note disposal also checks its required extractions."
       (error (setq check (list :status 'unavailable :reason (error-message-string err)))))
     (append check (list :scope scope :proposal item))))
 
+(cl-defun mevedel-memory-decision--apply-owned (workspace claim pass proposal on-applied &optional currentp pending)
+  "Apply PASS's PROPOSAL in WORKSPACE under an already recovered CLAIM.
+ON-APPLIED receives newly confirmed paths.  CURRENTP guards automatic
+forward writes; note decisions also recheck active turns.  PENDING skips any
+existing decision.  No observation crosses recovery or a previous attempt."
+  (cl-labels ((live (item)
+		(and (or (null currentp) (funcall currentp))
+		     (or (null currentp)
+			 (not (mevedel-memory-proposal-note-action-p (plist-get item :action)))
+			 (not (mevedel-memory-notes-workspace-busy-p workspace))))))
+    (let* ((accepted (mevedel-memory-store-accepted workspace pass))
+	   (item (seq-find (lambda (item) (equal proposal (plist-get item :id))) (plist-get accepted :proposals)))
+	   (scope (plist-get (plist-get accepted :prepared) :scope))
+	   (previous (mevedel-memory-decision-status workspace proposal)))
+      (unless item (error "Unknown accepted proposal"))
+      (mevedel-memory-scope--root scope (plist-get item :root))
+      (when (and pending previous)
+	(cl-return-from mevedel-memory-decision--apply-owned '(:status skipped)))
+      (if (mevedel-memory-decision-terminal-status-p (plist-get previous :status)) previous
+	(unless (live item)
+	  (cl-return-from mevedel-memory-decision--apply-owned '(:status held)))
+	(mevedel-memory-write-call
+	 scope (plist-get item :root)
+	 (lambda (target)
+	   (let* ((input (mevedel-memory-decision--application-input accepted item workspace))
+		  (scope (plist-get input :scope)) (effective (plist-get input :proposal)))
+	     (when (eq (plist-get input :status) 'waiting)
+	       (user-error "%s" (plist-get input :reason)))
+	     (unless (live item)
+	       (cl-return-from mevedel-memory-decision--apply-owned '(:status held)))
+	     (if (not (eq (plist-get input :status) 'fresh))
+		 (mevedel-memory-decision--publish
+		  workspace (mevedel-memory-decision--accept workspace claim accepted item (plist-get input :status)
+							     (mevedel--truncate-bytes (plist-get input :reason) 4096 "...")))
+	       (let ((intent (condition-case err
+                                 (mevedel-memory-write-prepare workspace claim target accepted effective scope)
+                               (quit (if currentp (signal 'mevedel-memory-decision-interrupted
+                                                          (list nil "Quit" "Interrupted memory write preparation: Quit"))
+                                       (signal (car err) (cdr err))))))
+                     failure original)
+		 (condition-case err
+		     (mevedel-memory-write-run
+		      workspace claim target intent
+		      (lambda () (unless (live item) (signal 'mevedel-memory-decision-held nil))))
+		   ((error quit) (setq failure err)))
+                 (setq original (if (eq (car-safe failure) 'mevedel-tool-patch-partial-rollback)
+                                    (cadr failure) failure))
+                 (when (and currentp failure (memq (car failure) '(mevedel-memory-decision-held quit))
+                            (condition-case nil
+                                (eq (mevedel-memory-write-state intent) 'before)
+                              (quit (signal 'mevedel-memory-decision-interrupted
+                                            (list nil "Quit" "Interrupted memory write observation: Quit")))))
+                   (condition-case err
+                       (mevedel-memory-write-abandon workspace claim target intent)
+                     ((error quit)
+                      (let ((message (format "Held memory write retirement failed: %s" (error-message-string err))))
+                        (if (or (eq (car err) 'quit) (eq (car-safe original) 'quit))
+                            (signal 'mevedel-memory-decision-interrupted (list nil "Quit" message))
+                          (error "%s" message)))))
+                   (signal (car failure) (cdr failure)))
+		 (let ((decision
+                        (condition-case err
+                            (mevedel-memory-decision--finish-write workspace claim target intent failure)
+                          ((error quit)
+                           (if (and currentp (or (eq (car err) 'quit) (eq (car-safe original) 'quit)))
+                               (signal 'mevedel-memory-decision-interrupted
+                                       (list nil "Quit" (format "Interrupted memory write accounting: %s" (error-message-string err))))
+                             (signal (car err) (cdr err)))))))
+                   (when (and (not currentp) (eq (car-safe failure) 'quit))
+                     (signal (car failure) (cdr failure)))
+		   (when (and on-applied (eq (plist-get decision :status) 'applied))
+		     (funcall on-applied (mapcar (lambda (change) (plist-get change :path))
+						 (plist-get intent :changes))))
+                   ;; Fully account reached or uncertain writes before cancellation.
+                   ;; Manual synchronous callers keep their original quit condition.
+                   (when (and currentp (eq (car-safe original) 'quit))
+                     (signal 'mevedel-memory-decision-interrupted (list decision "Quit")))
+		   decision))))))))))
+
 (defun mevedel-memory-decision-apply (workspace pass proposal &optional on-applied)
   "Apply accepted PROPOSAL from PASS in WORKSPACE with durable write intent.
 Acquire both workspace and original-root ownership. Stale targets produce an
-immutable decision without writes. A partial or changed result retains its
-root marker and before/after evidence for explicit checked recovery.
-ON-APPLIED, when non-nil, receives the changed paths only for a newly confirmed
-application by this call. Repeated terminal decisions do not notify it."
+immutable decision without writes. Partial results retain checked recovery.
+ON-APPLIED receives changed paths only for a newly confirmed application.
+Manual and unsupported-target callers retain this synchronous API."
   (mevedel-memory-decision--with-claim
    workspace t
    (lambda (claim)
-     (let* ((accepted (mevedel-memory-store-accepted workspace pass))
-            (item (seq-find (lambda (item) (equal proposal (plist-get item :id))) (plist-get accepted :proposals)))
-            (scope (plist-get (plist-get accepted :prepared) :scope))
-            (previous (mevedel-memory-decision-status workspace proposal)))
-       (unless item (error "Unknown accepted proposal"))
-       (mevedel-memory-scope--root scope (plist-get item :root))
-       (if (mevedel-memory-decision-terminal-status-p (plist-get previous :status)) previous
-         (mevedel-memory-write-call
-          scope (plist-get item :root)
-          (lambda (target)
-            (let* ((input (mevedel-memory-decision--application-input accepted item workspace))
-                   (scope (plist-get input :scope)) (effective (plist-get input :proposal)))
-              (when (eq (plist-get input :status) 'waiting)
-                (user-error "%s" (plist-get input :reason)))
-              (if (not (eq (plist-get input :status) 'fresh))
-                  (mevedel-memory-decision--publish
-                   workspace (mevedel-memory-decision--accept workspace claim accepted item (plist-get input :status)
-                                                               (mevedel--truncate-bytes (plist-get input :reason) 4096 "...")))
-                (let ((intent (mevedel-memory-write-prepare workspace claim target accepted effective scope)) failed)
-                  (condition-case nil (mevedel-memory-write-run workspace claim target intent)
-                    ((error quit) (setq failed t)))
-                  (let ((decision (mevedel-memory-decision--finish-write workspace claim target intent failed)))
-                    (when (and on-applied (eq (plist-get decision :status) 'applied))
-                      (funcall on-applied (mapcar (lambda (change) (plist-get change :path))
-                                                 (plist-get intent :changes))))
-                    decision)))))))))))
+     (mevedel-memory-decision--apply-owned workspace claim pass proposal on-applied))))
+
+(defun mevedel-memory-decision--worker-local-p (workspace)
+  "Whether WORKSPACE's authenticated retained scopes need no remote target IO.
+Current configuration alone cannot classify historical original-root authority.
+Read only local acceptance metadata here, before target-sensitive recovery."
+  (condition-case nil
+      (not (cl-some
+            (lambda (accepted)
+              (cl-some (lambda (root) (file-remote-p (plist-get (cdr root) :dir)))
+                       (plist-get (plist-get (plist-get accepted :prepared) :scope) :roots)))
+            (mevedel-memory-notes-passes
+             workspace (mevedel-journal-store-entries (mevedel-workspace-root workspace)))))
+    ;; Recovery, not this metadata preflight, owns interrupted accepted expiry
+    ;; and incomplete state.  Uncertainty selects the checked native path.
+    (error nil)))
+
+(define-error 'mevedel-memory-decision-held "Memory application is held")
+(define-error 'mevedel-memory-decision-interrupted "Memory application interrupted" 'quit)
+
+(defun mevedel-memory-decision--operation-context (workspace origin)
+  "Capture WORKSPACE and ORIGIN's expected context, not filesystem authority."
+  (let* ((session (buffer-local-value 'mevedel--session origin))
+         (other (and session (mevedel-session-workspace session))))
+    (list :workspace workspace :root (mevedel-workspace-root workspace) :origin origin
+          :workspace-id (mevedel-workspace-identity-read (mevedel-workspace-root workspace))
+          :origin-session session :origin-workspace other
+          :origin-root (and other (mevedel-workspace-root other)))))
+
+(defun mevedel-memory-decision--operation-origin-current-p (job)
+  "Return non-nil while JOB's live origin and workspace still match its context."
+  (let ((origin (plist-get job :origin)) (other (plist-get job :origin-workspace)))
+    (and (buffer-live-p origin)
+         (equal (plist-get job :root) (mevedel-workspace-root (plist-get job :workspace)))
+         (eq (plist-get job :origin-session) (buffer-local-value 'mevedel--session origin))
+         (or (null (plist-get job :origin-session))
+             (and (eq other (mevedel-session-workspace (plist-get job :origin-session)))
+                  (equal (plist-get job :origin-root) (and other (mevedel-workspace-root other))))))))
+
+(defun mevedel-memory-decision--operation-live-p (job)
+  "Return non-nil while JOB can admit its next forward editor operation."
+  (and (not (plist-get job :done)) (not (plist-get job :stopped))
+       (not mevedel-journal-worker--stopping)
+       (eq job (gethash (plist-get (plist-get job :claim) :directory)
+			mevedel-memory-decision--operations))
+       (mevedel-memory-decision--operation-origin-current-p job)
+       ;; The durable identity API caches immutable IDs for ordinary saves.
+       ;; Recovery may yield across a replaced workspace: compare its expected
+       ;; identity with a fresh read, never that process-wide cache.
+       (let ((mevedel-workspace-identity--cache (make-hash-table :test #'equal)))
+         (equal (plist-get job :workspace-id)
+                (mevedel-workspace-identity-read (plist-get job :root))))
+       (or (null (plist-get job :currentp)) (funcall (plist-get job :currentp)))))
+
+(defun mevedel-memory-decision--operation-fence (claim)
+  "Establish a durable cancellation, competing outcome or expiry for CLAIM.
+A nil settlement is not proof.  Authenticate an existing outcome, or elect
+expiry only after freshly observing CLAIM's original target-clock deadline."
+  (or (mevedel-journal-claim-settle claim 'cancelled "")
+      (mevedel-journal-claim-outcome claim)
+      (when (>= (mevedel-session-control-fs-target-time (plist-get claim :directory))
+                (plist-get claim :expires-at))
+        (mevedel-journal-claim--finish claim 'expired "")
+        (mevedel-journal-claim-outcome claim))
+      (error "No durable memory operation fence")))
+
+(defun mevedel-memory-decision--operation-finish (job result)
+  "Release JOB and deliver RESULT exactly once, after any editor work unwinds."
+  (unless (plist-get job :done)
+    (plist-put job :done t)
+    (when (plist-get job :cancelled)
+      (plist-put result :cancelled t)
+      (plist-put result :reason (or (plist-get result :reason) (plist-get job :stopped))))
+    (when-let* ((failure (plist-get job :stop-error)))
+      (plist-put result :error (if-let* ((prior (plist-get result :error))) (concat prior "; " failure) failure)))
+    (let ((cancelled (plist-get result :cancelled)) failure fenced)
+      (condition-case err
+          (setq fenced (mevedel-memory-decision--operation-fence (plist-get job :claim)))
+        ((error quit)
+         (when (eq (car err) 'quit) (setq cancelled t))
+         (setq failure (error-message-string err))
+         ;; Settlement is an idempotent outcome election.  One bounded retry
+         ;; may establish the fence after transient IO; still report the error.
+         (condition-case retry
+             (setq fenced (mevedel-memory-decision--operation-fence (plist-get job :claim)))
+           ((error quit)
+            (when (eq (car retry) 'quit) (setq cancelled t))
+            (setq failure (concat failure "; " (error-message-string retry)))))))
+      (unwind-protect
+          (condition-case err
+              ;; Never delete an unfenced child.  On persistent storage failure
+              ;; it stays tracked until the original deadline's final fencing
+              ;; attempt.  Persistent inability to prove a fence stays visible.
+              (when fenced
+                (when-let* ((worker (plist-get job :worker)) ((process-live-p worker)))
+                  (delete-process worker)))
+            ((error quit)
+             (when (eq (car err) 'quit) (setq cancelled t))
+             (setq failure (concat failure "; " (error-message-string err)))))
+        (let ((key (plist-get (plist-get job :claim) :directory)))
+          (when (eq job (gethash key mevedel-memory-decision--operations))
+            (remhash key mevedel-memory-decision--operations))))
+      (when failure
+        (plist-put job :cleanup-error failure)
+        (plist-put result :error (format "%sMemory operation cleanup failed: %s%s"
+                                         (if (plist-get result :error) (concat (plist-get result :error) "; ") "") failure
+                                         (if fenced "" "; unsettled child remains tracked under its fixed deadline")))
+        (plist-put result :cancelled cancelled)
+        (plist-put result :unsettled (not fenced))))
+    (plist-put job :unsettled (plist-get result :unsettled))
+    (unless (plist-get job :unsettled)
+      (when (timerp (plist-get job :timer)) (cancel-timer (plist-get job :timer))))
+    (if (mevedel-memory-decision--operation-origin-current-p job)
+        (with-current-buffer (plist-get job :origin) (funcall (plist-get job :callback) result))
+      (with-temp-buffer (funcall (plist-get job :callback) result)))))
+
+(defun mevedel-memory-decision--operation-retire (job)
+  "Try terminal fencing and child retirement at JOB's original fixed deadline."
+  (when (plist-get job :unsettled)
+    (condition-case err
+        (progn
+          ;; Nil settlement is not proof either: authenticate the exact token's
+          ;; durable outcome before deleting any still-live child.
+          (mevedel-memory-decision--operation-fence (plist-get job :claim))
+          (plist-put job :unsettled nil)
+          (when-let* ((worker (plist-get job :worker)) ((process-live-p worker)))
+            (delete-process worker)))
+      ((error quit)
+       (plist-put job :cleanup-error (error-message-string err))
+       (display-warning 'mevedel
+                        (format "Memory worker retirement remains unresolved: %s" (error-message-string err))
+                        :warning)))))
+
+(defun mevedel-memory-decision--operation-deadline (job)
+  "Stop JOB or retire an unresolved child at its original unrenewed deadline."
+  (unwind-protect
+      (unless (plist-get job :done)
+        (mevedel-memory-decision--operation-stop job "Memory operation timed out"))
+    (when (plist-get job :done) (mevedel-memory-decision--operation-retire job))))
+
+(defun mevedel-memory-decision--operation-stop (job &optional reason)
+  "Fence JOB before stopping its child; nil REASON requests normal cancellation.
+Non-nil REASON describes an actionable failure, such as a timeout.
+An executing editor transaction unwinds before delivering the final callback."
+  (unless (plist-get job :done)
+    (plist-put job :stopped (or reason "Memory operation cancelled"))
+    (if reason
+        (plist-put job :stop-error (or (plist-get job :stop-error) reason))
+      (plist-put job :cancelled t))
+    ;; The child has finished before editor execution starts.  Keep the fixed
+    ;; claim through that transaction's unwind so checked rollback stays owned;
+    ;; :stopped independently refuses every new forward write.
+    (unless (plist-get job :executing)
+      (mevedel-memory-decision--operation-finish job
+						 (list :reason (plist-get job :stopped))))))
+
+(defun mevedel-memory-decision--operation-ready (job reply)
+  "Continue JOB from worker REPLY with fresh ownership and live editor checks."
+  (when (and (not (plist-get job :done)) (not (plist-get job :executing))
+             (not (plist-get job :stopped))
+             (eq job (gethash (plist-get (plist-get job :claim) :directory)
+                              mevedel-memory-decision--operations)))
+    (plist-put job :worker nil)
+    (plist-put job :executing t)
+    (let ((result
+           (condition-case err
+               (progn
+                 (when (plist-get reply :error) (error "%s" (plist-get reply :error)))
+                 (unless (plist-get reply :ok) (error "Invalid memory recovery reply"))
+                 (unless (equal (plist-get reply :operation-id) (plist-get (plist-get job :claim) :owner))
+                   (error "Memory recovery reply belongs to another operation"))
+                 (unless (mevedel-memory-decision--operation-live-p job)
+                   (signal 'mevedel-memory-decision-held '("Memory operation context changed")))
+                 (mevedel-memory-store--assert-owned (plist-get job :claim))
+                 (with-current-buffer (plist-get job :origin)
+                   (when (plist-get reply :synchronous)
+                     ;; Historical remote roots retain their original authority
+                     ;; even after configuration changes.  Keep their recovery
+                     ;; in the editor, under this same continuously held claim.
+                     (mevedel-memory-decision-recover (plist-get job :workspace))
+                     (unless (plist-get job :decisions-only)
+                       (mevedel-memory-store-recover (plist-get job :workspace)))
+                     (unless (mevedel-memory-decision--operation-live-p job)
+                       (signal 'mevedel-memory-decision-held '("Memory operation context changed")))
+                     (mevedel-memory-store--assert-owned (plist-get job :claim)))
+                   (list :ok t :value
+                         (funcall (plist-get job :function) (plist-get job :claim)
+                                  (lambda () (mevedel-memory-decision--operation-live-p job)) reply))))
+             (mevedel-memory-decision-held (list :held t :reason (error-message-string err)))
+             (mevedel-memory-decision-interrupted
+              (append (when (cadr err) (list :ok t :value (cadr err)))
+                      (list :cancelled t :reason (caddr err))
+                      (cond ((cadddr err) (list :error (cadddr err)))
+                            ((and (cadr err) (not (mevedel-memory-decision-terminal-status-p (plist-get (cadr err) :status))))
+                             (list :error "Interrupted memory write requires checked recovery")))))
+             (quit (list :cancelled t :reason (error-message-string err)))
+             (error (list :error (error-message-string err))))))
+      (plist-put job :executing nil)
+      (mevedel-memory-decision--operation-finish job result))))
+
+(defun mevedel-memory-decision--start-operation (workspace function callback &optional currentp decisions-only payload)
+  "Recover WORKSPACE in a child, then call FUNCTION under the same owned claim.
+FUNCTION receives the fresh claim, a live forward-admission predicate and reply.
+CALLBACK receives a successful :value, a normal :held or :cancelled result,
+or an actionable :error, once.  Actual results survive later cancellation
+or cleanup failure, with additional metadata.  CURRENTP is an additional
+live admission gate.  DECISIONS-ONLY omits store recovery.
+PAYLOAD supplies additional read-only selection inputs, never accepted proofs.
+The fixed 180-second claim covers worker and editor phases; no target ownership
+crosses the child.  Unsupported targets recover synchronously in the editor."
+  (let* ((context (mevedel-memory-decision--operation-context workspace (current-buffer)))
+         (key (mevedel-memory-store--claim-directory workspace))
+         (claim (or (mevedel-journal-claim-acquire key 180) (user-error "Memory consolidation is busy")))
+         (job (append (list :claim claim :function function :callback callback :currentp currentp
+                            :decisions-only decisions-only)
+                      context)))
+    (puthash key job mevedel-memory-decision--operations)
+    (condition-case err
+        (progn
+          (plist-put job :timer
+                     (run-at-time
+                      (max 0 (- (plist-get claim :expires-at)
+                                (mevedel-session-control-fs-target-time key))) nil
+                      #'mevedel-memory-decision--operation-deadline job))
+          (if (mevedel-journal-worker-supported-p workspace)
+              (mevedel-journal-worker-start
+               workspace 'memory-recover
+               (lambda (reply) (mevedel-memory-decision--operation-ready job reply))
+               nil (append (list :claim claim :operation-id (plist-get claim :owner)
+				 :decisions-only decisions-only) payload)
+               job)
+            (mevedel-memory-decision--operation-ready
+             job (list :ok t :operation-id (plist-get claim :owner) :synchronous t))))
+      ((error quit)
+       ;; Synchronous fallback also delivers the consumer callback here.  Once
+       ;; released, its condition is not a second operation result to swallow.
+       (if (plist-get job :done) (signal (car err) (cdr err))
+         (mevedel-memory-decision--operation-finish
+          job (if (eq (car err) 'quit) (list :cancelled t :reason (error-message-string err))
+                (list :error (error-message-string err)))))))
+    job))
 
 (defun mevedel-memory-decision-reverse (workspace pass proposal)
   "Reverse the accepted application of PROPOSAL from PASS in WORKSPACE.
@@ -464,41 +779,46 @@ so its extracted knowledge and its source are never both removed."
                       (plist-get item :file)
                       (or (plist-get result :reason) (plist-get result :status))))))))
 
+(defun mevedel-memory-decision--recover-write-owned (workspace claim id hash &optional rollback)
+  "Reconcile WORKSPACE write ID and HASH under recovered CLAIM.
+ROLLBACK permits checked restoration of this unresolved attempt only."
+  (let* ((intent (mevedel-memory-write-read workspace id hash))
+         (previous (mevedel-memory-decision-status workspace (plist-get intent :proposal))))
+    (mevedel-memory-write-call
+     (mevedel-memory-write-scope intent) (plist-get (plist-get intent :item) :root)
+     (lambda (target)
+       (if (and previous (equal hash (plist-get previous :state-hash))
+                (mevedel-memory-decision-resolved-write-status-p (plist-get previous :status)))
+           (progn (mevedel-memory-write-retire target intent) previous)
+         (unless (equal hash (mevedel-session-control-fs-read-file (mevedel-memory-write--pin intent)))
+           (error "Memory root marker changed"))
+         (if (and (not rollback) previous (equal hash (plist-get previous :state-hash))
+                  (eq (plist-get previous :status) 'recovery-required)
+                  (memq (mevedel-memory-write-state intent) '(mixed changed unavailable)))
+             previous
+           (let (failed)
+             (when rollback
+               (condition-case nil (mevedel-memory-write-rollback workspace claim target intent)
+                 ((error quit) (setq failed t))))
+             (mevedel-memory-decision--finish-write workspace claim target intent failed)))))
+     id)))
+
 (defun mevedel-memory-decision-recover-write (workspace id hash &optional rollback)
   "Reconcile WORKSPACE write ID against HASH without repeating its file writes.
 Completed writes become applied decisions; untouched targets become unavailable
-attempts. Mixed or intervening changes remain recovery-required and fenced.
-Optional ROLLBACK explicitly restores an unresolved attempt's captured originals
-only when every dependency still matches its recorded before or after state."
+attempts.  Mixed or intervening changes remain recovery-required and fenced.
+Optional ROLLBACK restores only checked captured originals."
   (mevedel-memory-decision--with-claim
    workspace nil
    (lambda (claim)
-     (let* ((intent (mevedel-memory-write-read workspace id hash))
-            (previous (mevedel-memory-decision-status workspace (plist-get intent :proposal))))
-       (mevedel-memory-write-call
-        (mevedel-memory-write-scope intent) (plist-get (plist-get intent :item) :root)
-        (lambda (target)
-          (if (and previous (equal hash (plist-get previous :state-hash))
-                   (mevedel-memory-decision-resolved-write-status-p (plist-get previous :status)))
-              (progn (mevedel-memory-write-retire target intent) previous)
-            (unless (equal hash (mevedel-session-control-fs-read-file (mevedel-memory-write--pin intent)))
-              (error "Memory root marker changed"))
-            (if (and (not rollback) previous (equal hash (plist-get previous :state-hash))
-                     (eq (plist-get previous :status) 'recovery-required)
-                     (memq (mevedel-memory-write-state intent) '(mixed changed unavailable)))
-                previous
-              (let (failed)
-                (when rollback
-                  (condition-case nil (mevedel-memory-write-rollback workspace claim target intent)
-                    ((error quit) (setq failed t))))
-                (mevedel-memory-decision--finish-write workspace claim target intent failed)))))
-        id)))))
+     (mevedel-memory-decision--recover-write-owned workspace claim id hash rollback))))
 
-(defun mevedel-memory-decision--recover-writes (workspace &optional ids)
+(defun mevedel-memory-decision--recover-writes (workspace &optional ids claim)
   "Reconcile WORKSPACE's marked writes against current roots and live buffers.
 This phase stays in the editor; publication recovery must precede it.
 IDS restricts reconciliation to those write identities; without IDS, only
-`mevedel-memory-write-recovery-candidates' are inspected."
+`mevedel-memory-write-recovery-candidates' are inspected.  CLAIM, when supplied,
+already owns this operation's completed publication recovery."
   (let ((ids (or ids (mevedel-memory-write-recovery-candidates workspace)))
         results)
     (dolist (row (and ids (mevedel-memory-write-list workspace ids)))
@@ -507,7 +827,9 @@ IDS restricts reconciliation to those write identities; without IDS, only
         (push (list :write-id (plist-get row :id) :status 'unavailable :reason (plist-get row :error)) results))
        ((plist-get row :marked)
         (push (condition-case err
-                  (mevedel-memory-decision-recover-write workspace (plist-get row :id) (plist-get row :hash))
+                  (if claim
+                      (mevedel-memory-decision--recover-write-owned workspace claim (plist-get row :id) (plist-get row :hash))
+                    (mevedel-memory-decision-recover-write workspace (plist-get row :id) (plist-get row :hash)))
                 (error (list :write-id (plist-get row :id) :status 'unavailable :reason (error-message-string err))))
               results))))
     (nreverse results)))
@@ -534,20 +856,68 @@ and unsaved buffers.  JOB remains registered until all inspections finish."
                 (when (>= (float-time) (plist-get (plist-get job :claim) :expires-at))
                   (error "Memory recovery timed out"))
                 (if (plist-get job :writes)
-                    (progn
-                      (mevedel-memory-decision--recover-writes workspace (list (pop (plist-get job :writes))))
-                      (when (eq job (gethash key mevedel-memory-decision--recovery-workers))
-                        (plist-put job :timer
-                                   (run-at-time .01 nil #'mevedel-memory-decision--recover-next-write workspace job))
-                        (setq continued t)))
+                    (let* ((ids (list (pop (plist-get job :writes))))
+                           (row (car (mevedel-memory-write-list workspace ids))))
+                      (when-let* ((failure (plist-get row :error)))
+                        (display-warning 'mevedel (format "Memory write %s is unavailable: %s" (car ids) failure) :warning))
+                      ;; This is selection, never authority.  Only marked work
+                      ;; needs a new owned recovery operation, which rereads it.
+                      (if (not (plist-get row :marked))
+                          (plist-put job :timer (run-at-time .01 nil #'mevedel-memory-decision--recover-next-write workspace job))
+                        (setq row nil)
+			(with-current-buffer (plist-get job :origin)
+                          (plist-put job :operation
+                                     (mevedel-memory-decision--start-operation
+                                      workspace
+                                      (lambda (claim _live _reply)
+					(mevedel-memory-decision--recover-writes workspace ids claim))
+                                      (lambda (reply)
+					(plist-put job :operation nil)
+					(when (eq job (gethash key mevedel-memory-decision--recovery-workers))
+                                          (cond
+                                           ((plist-get reply :error)
+                                            (remhash key mevedel-memory-decision--recovery-workers)
+                                            (display-warning 'mevedel (plist-get reply :error) :warning))
+                                           ((or (plist-get reply :held) (plist-get reply :cancelled))
+                                            (remhash key mevedel-memory-decision--recovery-workers))
+                                           (t (plist-put job :timer
+							 (run-at-time .01 nil #'mevedel-memory-decision--recover-next-write workspace job))))))
+                                      (lambda ()
+					(and (eq job (gethash key mevedel-memory-decision--recovery-workers))
+                                             (< (float-time) (plist-get (plist-get job :claim) :expires-at)))) t))))
+                      (setq continued t))
                   (remhash key mevedel-memory-decision--recovery-workers)
                   (when-let* ((callback (plist-get job :callback))
                               (origin (plist-get job :origin))
                               ((buffer-live-p origin)))
                     (with-current-buffer origin (funcall callback)))))
-            (error (display-warning 'mevedel (format "Memory recovery failed: %s" (error-message-string err)) :warning)))
+            ((error quit) (display-warning 'mevedel (format "Memory recovery failed: %s" (error-message-string err)) :warning)))
         (when (and (not continued) (eq job (gethash key mevedel-memory-decision--recovery-workers)))
           (remhash key mevedel-memory-decision--recovery-workers))))))
+
+(defun mevedel-memory-decision--recovery-release (job)
+  "Release JOB's publication claim before retiring its child.
+An unproved fence leaves the original deadline and tracked child intact."
+  (unless (plist-get job :released)
+    (condition-case err
+        (progn
+          (mevedel-memory-decision--operation-fence (plist-get job :claim))
+          (plist-put job :released t)
+          (plist-put job :unsettled nil))
+      ((error quit)
+       (plist-put job :unsettled t)
+       (signal (car err) (cdr err)))))
+  (when (timerp (plist-get job :timer)) (cancel-timer (plist-get job :timer)))
+  (when-let* ((worker (plist-get job :worker)) ((process-live-p worker)))
+    (delete-process worker)))
+
+(defun mevedel-memory-decision--recovery-deadline (workspace job)
+  "Finish or retire publication recovery JOB at WORKSPACE's original deadline."
+  (unwind-protect
+      (unless (plist-get job :result-handled)
+        (mevedel-memory-decision--recovered workspace job '(:error "Memory recovery timed out")))
+    (when (plist-get job :unsettled)
+      (mevedel-memory-decision--operation-retire job))))
 
 (defun mevedel-memory-decision--recovered (workspace job result)
   "Finish JOB's publication recovery from RESULT, then schedule live checks."
@@ -557,17 +927,17 @@ and unsaved buffers.  JOB remains registered until all inspections finish."
     (when (and (eq job (gethash key mevedel-memory-decision--recovery-workers))
                (not (plist-get job :result-handled)))
       (plist-put job :result-handled t)
-      (when (timerp (plist-get job :timer)) (cancel-timer (plist-get job :timer)))
-      (when-let* ((worker (plist-get job :worker)))
-        (when (process-live-p worker) (delete-process worker)))
       (unwind-protect
           (unless mevedel-journal-worker--stopping
             (condition-case err
                 (progn
                   (when (plist-get result :error) (error "%s" (plist-get result :error)))
                   (mevedel-memory-store--assert-owned claim)
-                  (mevedel-journal-claim-settle claim 'cancelled "")
-                  (plist-put job :released t)
+                  (when (plist-get result :synchronous)
+                    (mevedel-memory-decision-recover workspace)
+                    (mevedel-memory-store-recover workspace)
+                    (mevedel-memory-store--assert-owned claim))
+                  (mevedel-memory-decision--recovery-release job)
                   (setf (mevedel-workspace-journal-observation workspace) nil
                         (mevedel-workspace-memory-observation workspace) nil)
                   (plist-put job :writes
@@ -576,12 +946,17 @@ and unsaved buffers.  JOB remains registered until all inspections finish."
                     (plist-put job :timer
                                (run-at-time .01 nil #'mevedel-memory-decision--recover-next-write workspace job))
                     (setq continued t)))
-              (error (display-warning 'mevedel
+              ((error quit) (display-warning 'mevedel
                                       (format "Memory recovery failed: %s" (error-message-string err))
                                       :warning))))
         (when (and (not continued) (eq job (gethash key mevedel-memory-decision--recovery-workers)))
           (remhash key mevedel-memory-decision--recovery-workers))
-        (unless (plist-get job :released) (mevedel-journal-claim-settle claim 'cancelled ""))))))
+        (unless (plist-get job :released)
+          (condition-case err
+              (mevedel-memory-decision--recovery-release job)
+            ((error quit) (display-warning 'mevedel
+                                    (format "Memory recovery release remains unresolved: %s" (error-message-string err))
+                                    :warning))))))))
 
 (defun mevedel-memory-decision--start-recovery (workspace callback origin)
   "Start local publication recovery for WORKSPACE, CALLBACK and ORIGIN buffer."
@@ -592,16 +967,26 @@ and unsaved buffers.  JOB remains registered until all inspections finish."
         (condition-case err
             (progn
               (plist-put job :timer
-                         (run-at-time 180 nil #'mevedel-memory-decision--recovered workspace job
-                                      '(:error "Memory recovery timed out")))
-              (plist-put job :worker
-                         (mevedel-journal-worker-start
-                          workspace 'memory-recover
-                          (lambda (result) (mevedel-memory-decision--recovered workspace job result))
-                          nil (list :claim claim))))
-          (error (mevedel-memory-decision--recovered workspace job
-                                                     (list :error (error-message-string err)))))
+                         (run-at-time
+                          (max 0 (- (plist-get claim :expires-at)
+                                    (mevedel-session-control-fs-target-time key))) nil
+                          #'mevedel-memory-decision--recovery-deadline workspace job))
+              (mevedel-journal-worker-start
+               workspace 'memory-recover
+               (lambda (result) (mevedel-memory-decision--recovered workspace job result))
+               nil (list :claim claim)
+               job))
+          ((error quit) (mevedel-memory-decision--recovered workspace job
+							    (list :error (error-message-string err)))))
         job))))
+
+(defun mevedel-memory-decision-recovering-p (workspace)
+  "Return non-nil while WORKSPACE has queued, dispatching or active recovery.
+This is an observation for presentation, never ownership or write admission."
+  (let ((key (mevedel-memory-store--claim-directory workspace)))
+    (and (or (gethash key mevedel-memory-decision--recovery-pending)
+             (gethash key mevedel-memory-decision--recovery-dispatching)
+             (gethash key mevedel-memory-decision--recovery-workers)) t)))
 
 ;;;###autoload
 (defun mevedel-memory-decision-schedule-recovery (workspace &optional callback)
@@ -612,25 +997,31 @@ review admission to follow recovery instead of racing its workspace claim."
   (unless mevedel-memory-decision--inhibit-recovery
     (let ((key (mevedel-memory-store--claim-directory workspace))
           (origin (current-buffer)))
-      (unless (gethash key mevedel-memory-decision--recovery-workers)
+      (unless (or (gethash key mevedel-memory-decision--recovery-workers)
+                  (gethash key mevedel-memory-decision--recovery-dispatching))
         (mevedel-transport-schedule-idle
          mevedel-memory-decision--recovery-pending key 'memory-recovery key
          (lambda ()
            (unless mevedel-memory-decision--inhibit-recovery
-             (condition-case err
-                 (cond
-                  ((not (mevedel-session-control-fs-path-exists-p key))
-                   (when (and callback (buffer-live-p origin))
-                     (with-current-buffer origin (funcall callback))))
-                  ((mevedel-journal-worker-supported-p workspace)
-                   (mevedel-memory-decision--start-recovery workspace callback origin))
-                  (t
-                   (mevedel-memory-decision-recover-pending workspace)
-                   (when (and callback (buffer-live-p origin))
-                     (with-current-buffer origin (funcall callback)))))
-               (error (display-warning 'mevedel
-                                       (format "Memory recovery failed: %s" (error-message-string err))
-                                       :warning))))))))))
+             (let ((token (list :origin origin)))
+               (puthash key token mevedel-memory-decision--recovery-dispatching)
+               (unwind-protect
+                   (condition-case err
+                       (cond
+			((not (mevedel-session-control-fs-path-exists-p key))
+			 (when (and callback (buffer-live-p origin))
+			   (with-current-buffer origin (funcall callback))))
+			((mevedel-journal-worker-supported-p workspace)
+			 (mevedel-memory-decision--start-recovery workspace callback origin))
+			(t
+			 (mevedel-memory-decision-recover-pending workspace)
+			 (when (and callback (buffer-live-p origin))
+			   (with-current-buffer origin (funcall callback)))))
+		     (error (display-warning 'mevedel
+					     (format "Memory recovery failed: %s" (error-message-string err))
+					     :warning)))
+                 (when (eq token (gethash key mevedel-memory-decision--recovery-dispatching))
+                   (remhash key mevedel-memory-decision--recovery-dispatching)))))))))))
 
 (defun mevedel-memory-decision-stop-recovery ()
   "Cancel pending recovery and live checks, fence claims, and stop children."
@@ -639,12 +1030,13 @@ review admission to follow recovery instead of racing its workspace claim."
     (maphash (lambda (_key job) (push job jobs)) mevedel-memory-decision--recovery-workers)
     (clrhash mevedel-memory-decision--recovery-workers)
     (dolist (job jobs)
-      (when (timerp (plist-get job :timer)) (cancel-timer (plist-get job :timer)))
-      (unwind-protect
-          (unless (plist-get job :released)
-            (mevedel-journal-claim-settle (plist-get job :claim) 'cancelled ""))
-        (when-let* ((worker (plist-get job :worker)))
-          (when (process-live-p worker) (delete-process worker)))))))
+      (when-let* ((operation (plist-get job :operation)))
+        (mevedel-memory-decision--operation-stop operation))
+      (condition-case err
+          (mevedel-memory-decision--recovery-release job)
+        ((error quit) (display-warning 'mevedel
+                                (format "Memory recovery release remains unresolved: %s" (error-message-string err))
+                                :warning))))))
 
 (provide 'mevedel-memory-decision)
 ;;; mevedel-memory-decision.el ends here

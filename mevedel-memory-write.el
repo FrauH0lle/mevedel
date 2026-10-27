@@ -25,7 +25,7 @@
 (autoload 'mevedel-tool-patch-commit "mevedel-tool-patch")
 
 ;; `mevedel-memory-notes'
-(declare-function mevedel-memory-notes-commit "mevedel-memory-notes" (workspace root target changes currentp))
+(declare-function mevedel-memory-notes-commit "mevedel-memory-notes" (workspace root target changes currentp &optional before-write))
 (declare-function mevedel-memory-notes-control-directory "mevedel-memory-notes" (directory))
 (declare-function mevedel-memory-notes-observe "mevedel-memory-notes" (snapshot))
 (declare-function mevedel-memory-notes-same-p "mevedel-memory-notes" (left right))
@@ -125,20 +125,33 @@ A change carrying an exact :after snapshot supplies it directly."
       (mevedel-memory-notes-same-p left right)
     (mevedel-tool-patch--same-snapshot-p left right)))
 
-(defun mevedel-memory-write--commit (workspace target intent changes currentp)
+(defun mevedel-memory-write--commit (workspace target intent changes currentp &optional before-write)
   "Commit CHANGES for INTENT in WORKSPACE under TARGET, rechecking CURRENTP.
 Memory roots use the shared patch transaction; shared notes use their own
-byte-preserving checked mutation."
+byte-preserving checked mutation.  BEFORE-WRITE guards forward writes only;
+checked rollback retains CURRENTP's ownership without a cancelled forward gate."
   (if-let* ((root (mevedel-memory-write--notes-root intent)))
-      (mevedel-memory-notes-commit workspace root target changes currentp)
+      (mevedel-memory-notes-commit workspace root target changes currentp before-write)
     (mevedel-tool-patch-commit
-     changes currentp (lambda (before after) (mevedel-memory-write--mutate target before after)))))
+     changes currentp
+     (lambda (before after)
+       (mevedel-memory-write--mutate
+        target before after
+        ;; Patch rollback supplies the original before-state as AFTER.  Do not
+        ;; block that checked restoration with a forward-admission gate.
+        (and before-write
+             (not (mevedel-tool-patch--same-snapshot-p
+                   after (cdr (seq-find (lambda (row) (equal (plist-get after :path) (plist-get (cdr row) :path)))
+                                        (plist-get intent :before)))))
+             before-write))))))
 
-(cl-defun mevedel-memory-write-read (workspace id hash)
+(cl-defun mevedel-memory-write-read (workspace id hash &optional accepted)
   "Read WORKSPACE write ID only when its bytes match expected HASH.
 Validate its source pass and closed affected-file states. Private scope remains
 bound to the originating client; reading does not authorize target access.
-Return nil for an intent whose source pass has been retired."
+Return nil for an intent whose source pass has been retired.
+ACCEPTED may supply this operation's authenticated source bundle.  Callers
+must discard it after mutation and never retain it between operations."
   (unless (and (mevedel-journal-store-id-p id) (mevedel-journal-store-id-p hash)) (error "Invalid memory write identity"))
   (let* ((record (mevedel-memory-store--read-lisp
                   (file-name-concat (mevedel-memory-write--directory workspace) (concat id ".el"))))
@@ -151,17 +164,18 @@ Return nil for an intent whose source pass has been retired."
                  (mevedel-journal-cleanup-pass-retired-p (mevedel-workspace-root workspace) (plist-get data :pass)))
         (cl-return-from mevedel-memory-write-read nil))
       (let* ((claim (append (list :directory (mevedel-memory-store--claim-directory workspace)) (plist-get data :claim)))
-             (accepted (mevedel-memory-store-accepted workspace (plist-get data :pass)))
+             (accepted (or accepted (mevedel-memory-store-accepted workspace (plist-get data :pass))))
              (proposal (seq-find (lambda (item) (equal (plist-get data :proposal) (plist-get item :id))) (plist-get accepted :proposals))))
 	(unless (and (proper-list-p data) (= (length data) 20)
                      (cl-every (lambda (key) (plist-member data key))
                                '(:id :claim :target-claim :pass :proposal :source-hash :changes :before :after :reverse-of))
                      (equal id (plist-get data :id)) (equal id (plist-get claim :owner))
                      (equal (mevedel-journal-claim--record claim) (mevedel-journal-claim--read (mevedel-journal-claim--path claim nil) nil))
+                     (equal (plist-get data :pass) (plist-get (plist-get accepted :prepared) :id))
                      proposal
                      (if-let* ((source (plist-get data :reverse-of)))
 			 (and (proper-list-p source) (= (length source) 2) (not (equal id (car source)))
-                              (let ((original (mevedel-memory-write-read workspace (car source) (cadr source))))
+                              (let ((original (mevedel-memory-write-read workspace (car source) (cadr source) accepted)))
 				(and (not (plist-get original :reverse-of))
                                      (equal (plist-get data :pass) (plist-get original :pass))
                                      (equal (plist-get data :proposal) (plist-get original :proposal))
@@ -297,17 +311,19 @@ The decision owner must verify an accepted application before calling this."
                                                         (mevedel-memory-write--notes-root intent))
    (list (plist-get intent :id) (plist-get intent :hash))))
 
-(defun mevedel-memory-write--mutate (target before after)
+(defun mevedel-memory-write--mutate (target before after &optional before-write)
   "Replace BEFORE with AFTER while fencing TARGET on its execution host.
 Claim settlement and this whole check/write program lock the same directory.
 A paused old mutation therefore finishes before takeover, or sees the settled
-claim and writes nothing. The lock also protects checked rollback."
+claim and writes nothing. The lock also protects checked rollback.
+BEFORE-WRITE, when non-nil, rechecks editor-only forward-write admission."
   (let ((path (plist-get before :path))
         (directory (plist-get target :directory)))
     (unless (equal path (plist-get after :path))
       (error "Memory mutation paths differ"))
     (when (plist-get after :exists)
       (mevedel-session-control-fs-make-directory (file-name-directory path) t))
+    (when before-write (funcall before-write))
     (dolist (result
              (mevedel-session-control-fs-run-program
               (append
@@ -328,8 +344,9 @@ claim and writes nothing. The lock also protects checked rollback."
               directory))
       (mevedel-session-control-fs-program-value result))))
 
-(defun mevedel-memory-write-run (workspace claim target intent)
-  "Commit retained INTENT under WORKSPACE CLAIM and TARGET through ApplyPatch."
+(defun mevedel-memory-write-run (workspace claim target intent &optional before-write)
+  "Commit retained INTENT under WORKSPACE CLAIM and TARGET through ApplyPatch.
+BEFORE-WRITE guards each forward mutation, but never disables checked rollback."
   (unless (equal intent (mevedel-memory-write-read workspace (plist-get intent :id) (plist-get intent :hash)))
     (error "Memory write intent changed"))
   (unless (equal (plist-get intent :hash) (mevedel-session-control-fs-read-file (mevedel-memory-write--pin intent)))
@@ -339,7 +356,7 @@ claim and writes nothing. The lock also protects checked rollback."
                (equal (plist-get target :directory)
                       (file-name-concat
                        (mevedel-memory-write--target (mevedel-memory-write-scope intent)
-                                                    (plist-get (plist-get intent :item) :root)) "claims"))
+                                                     (plist-get (plist-get intent :item) :root)) "claims"))
                (eq (mevedel-memory-write-state intent) 'before))
     (error "Memory dependencies or write owner changed"))
   (mevedel-tool-patch--assert-buffers-unmodified (plist-get intent :changes))
@@ -349,8 +366,14 @@ claim and writes nothing. The lock also protects checked rollback."
      (mevedel-memory-store--assert-owned claim)
      (mevedel-memory-store--assert-owned target)
      (mevedel-memory-scope--root (mevedel-memory-write-scope intent)
-                                (plist-get (plist-get intent :item) :root))
-     t)))
+                                 (plist-get (plist-get intent :item) :root))
+     t)
+   (lambda ()
+     (when before-write (funcall before-write))
+     ;; Include unchanged dependencies, not only paths that will be written.
+     (mevedel-tool-patch--assert-buffers-unmodified
+      (mapcar (lambda (row) (list :path (plist-get (cdr row) :path)))
+              (plist-get intent :before))))))
 
 (defun mevedel-memory-write-rollback (workspace claim target intent)
   "Restore a known pending INTENT under current WORKSPACE CLAIM and TARGET.
@@ -408,6 +431,68 @@ The caller must have accepted the decision before releasing this write fence."
                       (list :op 'delete-file :path pin))
                 (plist-get target :directory)))
         (mevedel-session-control-fs-program-value result)))))
+
+(defun mevedel-memory-write-abandon (workspace claim target intent)
+  "Abandon an unchanged held INTENT under its original WORKSPACE CLAIM and TARGET.
+Authenticate the exact intent and both still-owned tokens, prove full before
+state, then elect and freshly authenticate an empty cancelled coordinator
+outcome.  While TARGET remains owned, prove before state and marker again in
+one target-locked program that only deletes the marker.  The immutable unmarked
+intent remains for inspection, but cannot attribute later external edits.
+Errors or quit leave retirement unresolved, never permission to retry writes."
+  (unless (and (equal intent (mevedel-memory-write-read workspace (plist-get intent :id) (plist-get intent :hash)))
+               (not (plist-get intent :reverse-of))
+               (equal (plist-get claim :directory) (mevedel-memory-store--claim-directory workspace))
+               (equal (mevedel-journal-claim--record claim) (plist-get intent :claim))
+               (equal (mevedel-journal-claim--record target) (plist-get intent :target-claim))
+               (equal (plist-get target :directory)
+                      (file-name-concat (mevedel-memory-write--target (mevedel-memory-write-scope intent)
+                                                                      (plist-get (plist-get intent :item) :root)) "claims")))
+    (error "Held memory intent or original ownership changed"))
+  (mevedel-memory-store--assert-owned claim)
+  (mevedel-memory-store--assert-owned target)
+  (unless (eq (mevedel-memory-write-state intent) 'before)
+    (error "Held memory intent is not fully unchanged"))
+  (mevedel-tool-patch--assert-buffers-unmodified
+   (mapcar (lambda (row) (list :path (plist-get (cdr row) :path))) (plist-get intent :before)))
+  (mevedel-journal-claim-settle claim 'cancelled "")
+  ;; The coordinator and target may be on different hosts.  Authenticate this
+  ;; immutable outcome on its original host, not through the target program.
+  (let ((outcome (mevedel-journal-claim-outcome claim)))
+    (unless (and (eq (plist-get outcome :status) 'cancelled)
+                 (equal (plist-get outcome :payload) ""))
+      (error "Held memory intent lacks its exact cancellation fence")))
+  (let ((pin (mevedel-memory-write--pin intent)) checks)
+    (mevedel-memory-store--assert-owned target)
+    (dolist (row (plist-get intent :before))
+      (let* ((before (cdr row)) (path (plist-get before :path)))
+        (setq checks
+              (append checks
+                      (cond
+                       ((not (plist-get before :exists)) (list (list :op 'absent :path path)))
+                       ((plist-get before :directory)
+                        (let ((paths (mevedel-session-control-fs-list-directory path ".*")))
+                          (unless (eq (null paths) (and (plist-get before :empty) t))
+                            (error "Held memory directory changed"))
+                          (list (list :op 'directory-p :path path)
+                                (mevedel-session-control-fs-listing-proof path paths))))
+                       (t (list (list :op 'verify-hash :path path :content (plist-get before :hash))
+                                (list :op 'verify-mode :path path :content (format "%o" (plist-get before :mode))))))))))
+    (mevedel-tool-patch--assert-buffers-unmodified
+     (mapcar (lambda (row) (list :path (plist-get (cdr row) :path))) (plist-get intent :before)))
+    (dolist (result
+             (mevedel-session-control-fs-run-program
+              (append
+               (list (list :op 'verify :path (mevedel-journal-claim--path target nil)
+                           :content (json-serialize (mevedel-journal-claim--record target)))
+                     (list :op 'absent :path (mevedel-journal-claim--path target t))
+                     (list :op 'before-time :path (plist-get target :directory)
+                           :content (number-to-string (plist-get target :expires-at))))
+               checks
+               (list (list :op 'verify :path pin :content (plist-get intent :hash))
+                     (list :op 'delete-file :path pin)))
+              (plist-get target :directory)))
+      (mevedel-session-control-fs-program-value result))))
 
 (defun mevedel-memory-write-list (workspace &optional ids)
   "Inspect retained write records in WORKSPACE without mutating targets.

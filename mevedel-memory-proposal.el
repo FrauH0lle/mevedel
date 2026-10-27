@@ -10,7 +10,7 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
 (require 'json)
 (require 'subr-x)
 
@@ -126,11 +126,16 @@ NOTES maps each admitted note ID to (ROOT-ID . RELATIVE-PATH)."
            (admitted (plist-get root :files))
            (new-file (and (plist-get root :complete)
                           (not (member file (plist-get root :existing))))))
-      (unless (and root (mevedel-memory-proposal--file-p file)
-                   (vectorp ids)
-                   (= (length ids) (length (delete-dups (append ids nil))))
-                   (cl-every (lambda (id) (and (stringp id) (member id evidence))) ids))
-        (error "Proposal target or evidence is outside the captured scope"))
+      (unless root
+        (error "Unknown proposal root"))
+      (unless (mevedel-memory-proposal--file-p file)
+        (error "Unsafe proposal file path"))
+      (unless (vectorp ids)
+        (error "Proposal evidence must be an array"))
+      (unless (= (length ids) (length (delete-dups (append ids nil))))
+        (error "Proposal evidence contains duplicate entries"))
+      (unless (cl-every (lambda (id) (and (stringp id) (member id evidence))) ids)
+        (error "Proposal evidence contains an invalid or unadmitted entry"))
       (if (eq action 'instructions)
           (unless (and (eq (plist-get root :kind) 'instructions)
                        (member file admitted))

@@ -313,6 +313,10 @@
                    (setq busy nil)
                    (mevedel-memory-pass--retry-notes workspace)
                    (should-not (gethash workspace mevedel-memory-pass--deferred))
+                   (let ((deadline (+ (float-time) 30)))
+                     (while (and (mevedel-memory-pass-running workspace) (< (float-time) deadline))
+                       (accept-process-output nil .01)))
+                   (should-not (mevedel-memory-pass-running workspace))
                    (should-not (file-exists-p path))
                    (should (eq 'applied (status (proposal 'note-delete "busy.md")))))
                  :doc "a later review supersedes an earlier undecided disposition of the same file"

@@ -1000,13 +1000,14 @@ holds WORKSPACE's consolidation claim.  Return the number deleted."
       (setq directory (file-name-directory (directory-file-name directory))))
     (nreverse ancestors)))
 
-(defun mevedel-memory-notes-commit (workspace root target changes currentp)
+(defun mevedel-memory-notes-commit (workspace root target changes currentp &optional before-write)
   "Apply shared-note CHANGES below captured ROOT under WORKSPACE TARGET.
 Each change runs as one program under TARGET's lock: ownership guard, exact
 before-state proof, capture of the previous bytes as an undo blob, mutation,
 then optional pruning of ancestors left empty.  CURRENTP must keep
 authorizing every change.  A failure leaves earlier changes for checked
-recovery from the retained intent."
+recovery from the retained intent.  BEFORE-WRITE rechecks editor admission
+immediately before each forward mutation, after preparatory IO."
   (let ((blobs (mevedel-memory-notes-blob-directory (plist-get root :dir)))
         (lock (plist-get target :directory)))
     (dolist (change changes)
@@ -1037,6 +1038,9 @@ recovery from the retained intent."
              (file-name-directory path))
            t))
         (unless (funcall currentp) (error "Shared-note ownership is unavailable"))
+        (when before-write (funcall before-write))
+        (when-let* ((buffer (find-buffer-visiting path)) ((buffer-modified-p buffer)))
+          (error "Shared note has unsaved buffer changes: %s" path))
         (dolist (result
                  (mevedel-session-control-fs-run-program
                   (append

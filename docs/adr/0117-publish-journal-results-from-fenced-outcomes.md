@@ -19,6 +19,74 @@ content stay in private control storage. Public text alone cannot prove acceptan
 or decide a proposal. Source identities, original root/target/client authority,
 exact bytes, and accepted hashes remain binding through recovery.
 
+Recovery groups decision metadata by pass only to choose read order; every
+decision and write intent still undergoes authentication. A scan shares at most
+one authenticated pass bundle, including with the write reader, and discards it
+after publication. Pending automatic selection refreshes its public observation
+and discards proofs after applying a proposal. Completed pass recovery still
+authenticates every bundle and recovers accepted expiry under mutation ownership,
+but avoids republication when exact public bytes match and no spare pins remain.
+These operation-local observations do not survive a new application claim.
+
+Local automatic application uses one parent-owned fixed-deadline workspace
+claim per proposal. The maintenance worker performs publication/store recovery;
+the editor freshly checks the current operation and ownership before acquiring
+target ownership and committing with live-buffer protections. Pending selection
+authenticates current status and omits every already-decided proposal, retaining
+undecided extractions and their waiting dependencies. It returns identities only,
+and each later operation reauthenticates its proposal
+and status. Sequential callbacks yield between proposals, keeping the pass
+registered through application completion rather than reporting the queue entry
+as completion. Scheduled marked-write reconciliation uses the same owned
+recovery prelude, but its live state classification remains in the editor.
+Original-target ownership never crosses the child in this design. Automatic
+note forward writes recheck active turns, cancellation and unsaved buffers at
+their mutation boundary; checked rollback keeps its separate ownership proof.
+Reentrant replies cannot enter an executing continuation. Reply identity, origin
+binding and freshly read workspace identity fence delayed continuations.
+Cancellation fences the child before stopping it; an executing editor transaction
+retains its fixed, unrenewed workspace claim until unwind so checked rollback
+remains possible. Expiry or takeover still prevents rollback and retains evidence.
+Allowed or delivered quit during setup, continuation or cleanup remains visible
+cancellation and prevents subsequent application. Interrupted mutation finishes
+checked rollback
+before cancellation delivery. Only local child launch/registration and the pure
+parent handle handoff defer pending quit; request IO stays interruptible, and the
+parent receives the handle before exact-token fencing and retirement.
+Inherited outer quit inhibition and its pending flag remain unchanged.
+Cleanup failure cannot strand the operation registry or suppress its callback.
+Settlement failure is reported even after a successful idempotent retry; if no
+fence is established, the original deadline performs terminal retirement only
+after authoritative settlement/expiry proof. Continued IO failure stays visible
+and does not authorize these lifecycle paths to delete an unfenced child.
+A nil settlement is not proof:
+release requires an accepted outcome or fresh authentication of that token's
+durable outcome. A fresh target-clock expiry observation may elect expiry for
+the original token, never renew or replace its authority. Scheduled publication
+recovery uses the same proof before child deletion and live-write scheduling.
+Generic maintenance-process teardown may still force-stop children without
+storage settlement; that separate boundary leaves durable evidence for recovery.
+Automatic admission reads the
+live origin's policy rather than an incidental timer buffer's policy.
+Deferred retries retain and freshly validate their original buffer, session,
+workspace and identity context, including live policy at forward write boundaries.
+Invalid context or explicit cancellation preserves pending decisions without
+retrying from another actor; cancel also removes deferred work between passes.
+Unsupported workers use native recovery through the same guarded executor.
+Held admission and ordinary cancellation have distinct non-error callbacks;
+timeouts, protocol, authentication, IO and cleanup failures stay errors.
+Cancellation preserves an authenticated result and its written-file accounting
+before stopping later proposals. A cancelled coordinator outcome proves fencing,
+not the cause of termination.
+Worker eligibility uses fresh authenticated retained-root metadata, not only
+current configuration. Remote or uncertain historical state routes to native
+editor recovery under the same claim, preserving accepted-expiry recovery and
+original remote authority without returning accepted proofs. This conservative
+preflight adds an all-history read and can increase total work.
+Manual/unsupported remote operations remain synchronous. Remaining editor-side
+intent, commit and finalization IO can still block; this is not an asynchronous
+filesystem transaction or a guarantee of imperceptible background processing.
+
 Successful completed-turn saves freeze one immutable evidence bundle and pin its
 source before marking it ready. Compaction, clear, session-end, or idle sealing
 admits digest work without capturing incomplete responses. Idle sealing ends a
@@ -85,8 +153,26 @@ in the editor. Live-buffer artifact cleanup also remains there because its
 retention proof includes active buffers and gptel context. Worker failure leaves
 fenced claims and retained evidence, rather than inferring completion.
 
-The main session menu only renders cached memory observations, explicitly marking missing
-or old counts. Opening or refreshing the Memory table collects current evidence.
+The main session menu only renders cached memory observations, marking missing
+or old counts. The Memory table requests checked workspace recovery and observes
+its pending, dispatching and active owner without replacing callbacks or acquiring
+authority. A display-only local child collects current evidence with existing
+validators and returns detached metadata, not accepted bundles or write proofs.
+Current-job, context, session, root, fresh workspace identity, client and
+configuration checks reject stale replies. Closing the display retires its own
+work, not recovery's owner. Candidates and History reuse snapshots; Memories
+inventories independently. Refresh and completed actions request new observations;
+empty views distinguish pending data, completed emptiness and scan failure with
+static presentation-only notices, not synthetic rows or action targets.
+Details and mutations freshly authenticate existing evidence. Command return
+and full-data readiness differ. Background printing can restore buffer point
+while leaving a nonselected window on another row. The memory surface retains
+each displayed window's per-tab row identity across loading gaps and restores
+its window point without selecting it, preserving independent selections and
+the active composer. Remote/uncertain inspection and topic inventory
+can still block; offloading a scan does not establish lower total IO.
+Explicit inspection and decision commands retain synchronous authentication and
+processing; display responsiveness does not establish nonblocking manual actions.
 
 Explicit backlog drain coordinates successive bounded general reviews through
 the same claim and settlement owner; it yields between batches and waits while
@@ -106,11 +192,25 @@ writes, rollback, claim settlement, and marker retirement share a target-side
 marker. Reconciliation compares exact before/after states; it does not infer a
 successful write from an unmarked intent. Reversal is a separate accepted intent
 and decision, preserving the original application as evidence.
+A known admission hold or cancellation may abandon an exact prepared intent
+without deciding the proposal only after checked rollback and freshly proven
+complete before-state. Original authority, tokens and live buffers are checked
+before and after electing and authenticating the exact coordinator's cancelled
+empty-payload outcome on its original host. The still-owned target's locked
+program verifies its token, disk before-state and exact marker before deleting
+that marker alone. The immutable unmarked intent remains, with no accepted public
+decision. This immutable outcome is invocation-local evidence, not a cached proof
+or permission to run paths on another host. After, mixed or uncertain states
+retain normal accounted recovery; incomplete retirement failures stay visible.
 Scheduled and synchronous recovery fully inspect only records whose marker
 exists, plus any record this client has not yet read successfully; markers are
 observed afresh in one program per target. A record's marker path and pass
 retirement are immutable facts remembered per workspace object, never whether
 the marker exists.
+Read-only candidate inspection yields between records. Only a marked candidate
+starts another owned recovery operation, which rereads its evidence; unmarked
+records do not repeat full publication recovery. Unreadable records report their
+diagnostic and remain inspectable without blocking independent work.
 
 Index freshness is checked per affected destination: the proposal's topic and
 merge sources must retain their captured entries or absence. Unrelated manual
@@ -205,6 +305,20 @@ longer than ordinary recall when evidence or recovery still needs it; the recall
 limit is not an erasure guarantee.
 
 ## Decision history
+
+- **Display collection and retry admission gained separate ownership.** On
+  2026-10-27, an authentic four-pass, 32-note fixture spent seconds opening and
+  switching every Memory view because each repeated full history collection,
+  even Memories. Opening also ran synchronous checked recovery. Display-only
+  child observations replace command-side scans; mutations keep fresh native
+  authentication. Full-recovery verification then exposed complete recovery
+  children launched per unmarked write, missing a 45-second readiness bound.
+  Read-only per-record inspection now admits owned recovery only for marked
+  records. Separately, a real timer replay showed deferred auto work adopting
+  an unrelated buffer's policy; a late policy change could publish unavailable
+  for an untouched prepared write. Retained original context, typed outcomes
+  and checked before-state abandonment preserve pending work without weakening
+  original-target, rollback, recovery or accepted-outcome checks.
 
 - **Cleanup no longer feeds its own continuation.** On 2026-10-25, a laptop
   sustained roughly 10% total CPU while cleanup spawned about 1,060 processes
@@ -749,3 +863,21 @@ turn. A replaced request, a dead or reassigned root, a changed save path, a
 pending publication, disabled journaling, a worker error and the deadline still
 report failure. The restart costs one more child preparation, only when this
 race occurs.
+
+### 2026-10-27: split automatic application recovery from editor mutation
+
+Native automatic application stalled the editor for minutes while repeatedly
+authenticating and republishing retained history. Operation-local authenticated
+observations and exact-publication checks removed redundant body reads and
+publication programs without retaining authority across attempts. Automatic local
+application now runs recovery in an owned child and yields between editor-side
+transactions; original-target ownership and live-buffer safeguards remain in the
+editor. This reduces contiguous editor work, not all commit blocking or total IO.
+
+An initial child split returned terminal historical proposal identities too.
+An isolated replay with 64 retained decisions and eight fresh applications
+spawned 73 recovery workers, including 64 that only skipped a decided proposal.
+Pending discovery now authenticates status before returning identities, matching
+the synchronous selector. A later editor attempt still authenticates its own
+current status; neither the selection nor the eligibility preflight returns
+reusable acceptance authority.

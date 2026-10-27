@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-memory-write)
+(require 'mevedel-tool-patch)
 
 (mevedel-deftest mevedel-memory-write-control-directory
   (:doc "shares target-local state across callers without aliasing memory and instruction ownership")

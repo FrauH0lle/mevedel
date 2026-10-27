@@ -1,0 +1,183 @@
+;;; test-mevedel-memory-decision-history.el -- Bounded history observations -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Real accepted passes and write-backed decisions exercise recovery and pending
+;; selection over retained history.  Counters observe real readers, not stubs
+;; replacing authentication or application.
+
+;;; Code:
+
+(require 'helpers
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
+(require 'mevedel-memory-decision)
+(require 'mevedel-memory-notes)
+(require 'mevedel-memory-pass)
+(require 'mevedel-memory-store)
+(require 'mevedel-memory-write)
+(require 'mevedel-journal-store)
+(require 'mevedel-journal-cleanup)
+(require 'mevedel-session-control-fs)
+
+(require 'memory-history-fixtures
+         (file-name-concat (file-name-directory (or buffer-file-name load-file-name)) "memory-history-fixtures"))
+
+(mevedel-deftest mevedel-memory-decision-recover/history
+    (:vars* ((root (make-temp-file "mevedel-memory-history-" t))
+             (workspace (mevedel-workspace--create :root root))
+             (mevedel-memory-dirs nil)
+             (mevedel-memory-consolidation-mode 'auto)
+             (mevedel-journal-cleanup--inhibit-scheduling t)
+             (identity (mevedel-workspace-identity-ensure root))
+             (bundles (mevedel-test-memory-history-create workspace 3 4 6000)))
+            :after-each ((delete-directory root t)))
+  ,test
+  (test)
+  :doc "recovery authenticates one bounded bundle per pass despite interleaved write-backed decisions"
+  (let ((reader (symbol-function 'mevedel-memory-store-accepted))
+        (listing (symbol-function 'mevedel-session-control-fs-list-directory))
+        (reads 0) paths)
+    ;; Force an adversarial listing: one decision from each pass in turn.
+    (dolist (accepted bundles)
+      (push (mapcar (lambda (proposal)
+                      (let ((decision (mevedel-memory-decision-status workspace (plist-get proposal :id))))
+                        (file-name-concat (mevedel-memory-decision--directory workspace)
+                                          (concat (plist-get decision :decision-id) ".el"))))
+                    (plist-get accepted :proposals)) paths))
+    (setq paths (apply #'cl-mapcan #'list paths))
+    (cl-letf (((symbol-function 'mevedel-memory-store-accepted)
+               (lambda (&rest args) (cl-incf reads) (apply reader args)))
+              ((symbol-function 'mevedel-session-control-fs-list-directory)
+               (lambda (directory &rest args)
+                 (if (equal directory (mevedel-memory-decision--directory workspace)) paths
+                   (apply listing directory args)))))
+      (mevedel-test-memory-history-owned workspace
+        (mevedel-memory-decision-recover workspace)))
+    (should (= 3 reads)))
+  :doc "pending selection reads the public journal once and never reapplies terminal history"
+  (let ((reader (symbol-function 'mevedel-journal-store-entries))
+        (calls 0) notified)
+    (cl-letf (((symbol-function 'mevedel-journal-store-entries)
+               (lambda (&rest args) (cl-incf calls) (apply reader args))))
+      (should (equal '(0 . 0) (mevedel-memory-pass--apply-pending workspace))))
+    (should (= 1 calls))
+    (let* ((accepted (car bundles))
+           (pass (plist-get (plist-get accepted :prepared) :id)))
+      (should (eq 'applied (plist-get (mevedel-memory-decision-apply
+                                       workspace pass (plist-get (car (plist-get accepted :proposals)) :id)
+                                       (lambda (_) (setq notified t))) :status))))
+    (should-not notified))
+  :doc "settled store recovery authenticates bundles without redundant publication transactions"
+  (let ((publisher (symbol-function 'mevedel-memory-store-publish)) (calls 0))
+    (cl-letf (((symbol-function 'mevedel-memory-store-publish)
+               (lambda (&rest args) (cl-incf calls) (apply publisher args))))
+      (mevedel-test-memory-history-owned workspace
+        (mevedel-memory-store-recover workspace)))
+    (should (= 0 calls)))
+  :doc "each new observation rejects tampered accepted bytes, claim outcomes and write evidence"
+  (let* ((accepted (car bundles))
+         (prepared (plist-get accepted :prepared))
+         (proposal (car (plist-get accepted :proposals)))
+         (decision (mevedel-memory-decision-status workspace (plist-get proposal :id)))
+         (private (mevedel-memory-decision--published workspace decision))
+         (intent (plist-get private :intent))
+         (decision-path (file-name-concat (mevedel-memory-decision--directory workspace)
+                                          (concat (plist-get decision :decision-id) ".el")))
+         (paths (list (file-name-concat (mevedel-memory-store--directory workspace (plist-get prepared :id)) "accepted.el")
+                      (mevedel-journal-claim--path (plist-get prepared :claim) t)
+                      decision-path
+                      (file-name-concat (mevedel-memory-write--directory workspace) (concat (plist-get intent :id) ".el")))))
+    (should (equal "Invalid memory write intent"
+                   (error-message-string
+                    (should-error (mevedel-memory-write-read workspace (plist-get intent :id)
+                                                             (plist-get intent :hash) (cadr bundles))))))
+    (dolist (path paths)
+      (let ((text (mevedel-session-control-fs-read-file path))
+            (expected (cond ((equal path decision-path) "Accepted memory decision changed")
+                            ((equal path (car (last paths))) "Memory write intent changed")
+                            (t "Accepted memory bundle changed"))))
+        (unwind-protect
+            (progn
+              (write-region (cond ((equal path (mevedel-journal-claim--path (plist-get prepared :claim) t))
+                                   (string-replace (plist-get accepted :hash) (make-string 64 ?f) text))
+                                  ((equal path decision-path)
+                                   ;; A forged grouping hint must not bypass authentication.
+                                   (string-replace (plist-get prepared :id) (make-string 64 ?f) text))
+                                  (t (concat text "\n")))
+                            nil path nil 'silent)
+              (mevedel-test-memory-history-owned workspace
+                (should (equal expected (error-message-string
+                                         (should-error (mevedel-memory-decision-recover workspace))))))
+              (should (equal expected (error-message-string
+                                       (should-error (mevedel-memory-decision-apply
+                                                      workspace (plist-get prepared :id) (plist-get proposal :id)))))))
+          (write-region text nil path nil 'silent))
+        (mevedel-test-memory-history-owned workspace
+          (mevedel-memory-decision-recover workspace)))))
+  :doc "pending selection refreshes after application publishes another terminal proposal"
+  (let* ((accepted (car (mevedel-test-memory-history-create workspace 1 2 100 t)))
+         (pass (plist-get (plist-get accepted :prepared) :id))
+         (items (plist-get accepted :proposals))
+         (apply-decision (symbol-function 'mevedel-memory-decision-apply))
+         (calls 0))
+    (should (= 2 (length items)))
+    (cl-letf (((symbol-function 'mevedel-memory-decision-apply)
+               (lambda (ws id proposal &rest args)
+                 (cl-incf calls)
+                 (prog1 (apply apply-decision ws id proposal args)
+                   ;; A separate real application publishes the next candidate
+                   ;; before the pending selector continues its iteration.
+                   (should (eq 'applied
+                               (plist-get (funcall apply-decision ws pass (plist-get (cadr items) :id)) :status)))))))
+      (should (equal '(1 . 0) (mevedel-memory-pass--apply-pending workspace))))
+    (should (= 1 calls)))
+  :doc "post-publication settlement reauthenticates its pass before releasing write recovery evidence"
+  (let* ((accepted (car (mevedel-test-memory-history-create workspace 1 1 100 t)))
+         (pass (plist-get (plist-get accepted :prepared) :id))
+         (proposal (car (plist-get accepted :proposals)))
+         (path (file-name-concat (mevedel-memory-store--directory workspace pass) "accepted.el"))
+         (text (mevedel-session-control-fs-read-file path))
+         (publisher (symbol-function 'mevedel-journal-store-publish-decision)) injected)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-journal-store-publish-decision)
+                   (lambda (&rest args)
+                     (prog1 (apply publisher args)
+                       (setq injected t)
+                       (write-region (concat text "\n") nil path nil 'silent)))))
+          (should (equal "Accepted memory bundle changed"
+                         (error-message-string
+                          (should-error (mevedel-memory-decision-apply workspace pass (plist-get proposal :id)))))))
+      (write-region text nil path nil 'silent))
+    (should injected)
+    (should (mevedel-memory-write-pending workspace (plist-get proposal :id)))
+    (mevedel-memory-decision-recover-pending workspace)
+    (should-not (mevedel-memory-write-pending workspace (plist-get proposal :id)))
+    (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get proposal :id)) :status))))
+  :doc "pending selection never reuses a later pass bundle captured before an earlier application"
+  (let* ((pending (car (mevedel-test-memory-history-create workspace 1 1 100 t)))
+         (later (car bundles))
+         (later-id (plist-get (plist-get later :prepared) :id))
+         (path (file-name-concat (mevedel-memory-store--directory workspace later-id) "accepted.el"))
+         (text (mevedel-session-control-fs-read-file path))
+         (enumerate (symbol-function 'mevedel-memory-notes-passes))
+         (apply-decision (symbol-function 'mevedel-memory-decision-apply)) injected)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-memory-notes-passes)
+                   (lambda (&rest args)
+                     (let ((all (apply enumerate args)))
+                       (list (seq-find (lambda (bundle) (equal bundle pending)) all)
+                             (seq-find (lambda (bundle) (equal bundle later)) all)))))
+                  ((symbol-function 'mevedel-memory-decision-apply)
+                   (lambda (&rest args)
+                     (prog1 (apply apply-decision args)
+                       (setq injected t)
+                       (write-region (concat text "\n") nil path nil 'silent)))))
+          (should (equal "Accepted memory bundle changed"
+                         (error-message-string
+                          (should-error (mevedel-memory-pass--apply-pending workspace))))))
+      (write-region text nil path nil 'silent))
+    (should injected)))
+
+(provide 'test-mevedel-memory-decision-history)
+;;; test-mevedel-memory-decision-history.el ends here

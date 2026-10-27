@@ -59,7 +59,8 @@
          (mapcar (lambda (command)
                    (cons command (copy-tree (symbol-plist command))))
                  '(mevedel-create-reference mevedel-create-directive
-                   mevedel-delete-instructions))))
+                   mevedel-delete-instructions))
+         mevedel--instruction-command-active))
   (mevedel-evil-setup))
 
 (defun mevedel-evil-test--teardown ()
@@ -71,6 +72,8 @@
     (set (car pair) (cdr pair)))
   (dolist (pair (nth 3 mevedel-evil-test--snapshot))
     (setplist (car pair) (cdr pair)))
+  (setq mevedel--instruction-command-active
+        (nth 4 mevedel-evil-test--snapshot))
   (advice-remove 'mevedel-cockpit-setup-tabulated-surface #'mevedel-evil--cockpit)
   (advice-remove 'mevedel-cockpit-surface-key-help-text #'mevedel-evil--key-help)
   (advice-remove 'mevedel-view--display-fragment-keymap #'mevedel-evil--fragment-maps)
@@ -86,6 +89,22 @@
   (clrhash mevedel-evil--overlay-maps)
   (setq mevedel-evil--installed nil
         mevedel-evil-test--snapshot nil))
+
+(mevedel-deftest mevedel-evil-test--fixture-restores-command-active
+  (:vars ((mevedel--instruction-command-active :outer))
+   :quiet t)
+  ,test
+  (test)
+  :doc "restores pre-existing command scope after an aborted keyboard command"
+  (unwind-protect
+      (progn
+        (mevedel-evil-test--setup)
+        ;; A failed keyboard macro can leave the command scope at depth zero.
+        (setq mevedel--instruction-command-active 0)
+        (mevedel-evil-test--teardown)
+        (should (eq mevedel--instruction-command-active :outer)))
+    (when mevedel-evil-test--snapshot
+      (mevedel-evil-test--teardown))))
 
 (defmacro mevedel-evil-test--buffer (&rest body)
   "Run BODY in a displayed temporary buffer with local Evil enabled."

@@ -9,7 +9,7 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
 (require 'mevedel-journal-cleanup)
 (require 'mevedel-memory-scope)
 
@@ -379,21 +379,47 @@ their admitted evidence; a no-action pass releases it after public publication."
   "Recover settled pass publications and evidence releases in WORKSPACE.
 Call after acquiring a successor pass claim, so all older attempts are fenced.
 Live preparations are left alone. Unreadable accepted state fails closed rather
-than letting a new selection silently ignore its unpublished review coverage."
-  (dolist (directory
-           (mevedel-session-control-fs-list-directory
-            (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "passes") mevedel-journal-store-id-regexp))
-    ;; A crash after creating the directory but before preparation retains no
-    ;; evidence pins: the immutable prepared file always precedes pin writes.
-    (when (and (not (mevedel-journal-cleanup-pass-retired-p
-                     (mevedel-workspace-root workspace) (file-name-nondirectory (directory-file-name directory))))
-               (mevedel-session-control-fs-path-exists-p (file-name-concat directory "prepared.el")))
-      (let* ((id (file-name-nondirectory (directory-file-name directory)))
-             (prepared (mevedel-memory-store-read workspace id))
-             (outcome (mevedel-journal-claim-outcome (plist-get prepared :claim))))
-        (pcase (plist-get outcome :status)
-          ('completed (mevedel-memory-store-publish workspace id))
-          ((or 'failed 'cancelled 'expired) (mevedel-memory-store-release workspace id)))))))
+than letting a new selection silently ignore its unpublished review coverage.
+Authenticate every completed bundle, but avoid a publication transaction when
+the public bytes already match and no spare evidence pins remain."
+  (let ((published (make-hash-table :test #'equal)))
+    ;; Publication used to do this once per completed pass.  Recover accepted
+    ;; expiry before observing retirement or taking the no-op publication path.
+    (mevedel-memory-store--mutation
+     workspace
+     (lambda (mutation)
+       (mevedel-memory-store--assert-owned mutation)
+       (mevedel-journal-cleanup-recover
+        (mevedel-journal-store-directory (mevedel-workspace-root workspace)))))
+    (dolist (entry (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
+      (puthash (plist-get entry :file) (plist-get entry :text) published))
+    (dolist (directory
+             (mevedel-session-control-fs-list-directory
+              (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "passes") mevedel-journal-store-id-regexp))
+      ;; A crash after creating the directory but before preparation retains no
+      ;; evidence pins: the immutable prepared file always precedes pin writes.
+      (when (and (not (mevedel-journal-cleanup-pass-retired-p
+                       (mevedel-workspace-root workspace) (file-name-nondirectory (directory-file-name directory))))
+                 (mevedel-session-control-fs-path-exists-p (file-name-concat directory "prepared.el")))
+        (let* ((id (file-name-nondirectory (directory-file-name directory)))
+               (prepared (mevedel-memory-store-read workspace id))
+               (outcome (mevedel-journal-claim-outcome (plist-get prepared :claim))))
+          (pcase (plist-get outcome :status)
+            ('completed
+             (let* ((accepted (mevedel-memory-store-accepted workspace id))
+                    (prepared (plist-get accepted :prepared))
+                    (review (plist-get accepted :review))
+                    (file (mevedel-journal-store--filename review 'consolidation))
+                    (text (mevedel-journal-store--encode review nil 'consolidation))
+                    (keep (and (plist-get accepted :proposals) (plist-get review :digests))))
+               (when (or (not (equal text (gethash file published)))
+                         (seq-some (lambda (entry)
+                                     (and (not (member (plist-get entry :id) keep))
+                                          (mevedel-session-control-fs-path-exists-p
+                                           (mevedel-memory-store--pin workspace id (plist-get entry :id)))))
+                                   (plist-get prepared :entries)))
+                 (mevedel-memory-store-publish workspace id))))
+            ((or 'failed 'cancelled 'expired) (mevedel-memory-store-release workspace id))))))))
 
 (provide 'mevedel-memory-store)
 ;;; mevedel-memory-store.el ends here

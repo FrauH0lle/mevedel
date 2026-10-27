@@ -34,10 +34,12 @@
 (defvar mevedel-memory-history-max-age-days)
 
 ;; `mevedel-memory-decision'
+(declare-function mevedel-memory-decision--worker-local-p "mevedel-memory-decision" (workspace))
 (declare-function mevedel-memory-decision-recover "mevedel-memory-decision" (workspace))
 
 ;; `mevedel-memory-pass'
 (declare-function mevedel-memory-pass--prepare "mevedel-memory-pass" (workspace payload))
+(declare-function mevedel-memory-pass--pending-items "mevedel-memory-pass" (workspace skip))
 (declare-function mevedel-memory-pass--publish "mevedel-memory-pass" (workspace payload))
 (defvar mevedel-memory-pass--inhibit-scheduling)
 
@@ -86,12 +88,15 @@ non-ASCII string into unibyte bytes."
        (eq system-type 'gnu/linux)
        (not (file-remote-p (mevedel-workspace-root workspace)))))
 
-(defun mevedel-journal-worker-start (workspace operation callback &optional force payload)
+(defun mevedel-journal-worker-start (workspace operation callback &optional force payload owner)
   "Run WORKSPACE OPERATION in a child and call CALLBACK with its result.
 OPERATION is `capture-prepare', `digest-prepare', `recovery', `cleanup',
 `memory-recover', `memory-prepare', `memory-publish', or
 `generation-observations'.
 FORCE bypasses cleanup throttling.  PAYLOAD freezes consolidation inputs.
+OWNER, when non-nil, is the parent lifecycle's mutable job plist.  Record its
+:worker before pending quit delivery; that owner fences and retires the child
+even if setup subsequently signals.  This handoff executes no callbacks.
 Return the child process.  CALLBACK receives (:ok t :count N :more BOOL
 :cleanup-at TIME), operation-specific :prepared/:accepted/:entry/:observations,
 or (:error MESSAGE). Capture preparation returns bounded frozen evidence.
@@ -115,40 +120,55 @@ Deleting the process cancels work; durable claims fence interrupted attempts."
                  :history-age mevedel-memory-history-max-age-days
                  :journal-enabled (bound-and-true-p mevedel-journal-enabled)
                  :payload payload))
-          (setq process
-                (make-process
-                 :name "mevedel-journal-worker" :noquery t :connection-type 'pipe
-                 :buffer nil
-                 :command
-                 (list (expand-file-name invocation-name invocation-directory)
-                       "--batch" "-Q" "--eval"
-                       (let ((print-length nil) (print-level nil))
-                         (prin1-to-string `(setq load-path ',load-path)))
-                       "-l" (locate-library "mevedel-journal-worker")
-                       "--eval" (prin1-to-string `(mevedel-journal-worker--run ,request ,reply)))
-                 :sentinel
-                 (lambda (child _event)
-                   (when (memq (process-status child) '(exit signal))
-                     (setq mevedel-journal-worker--processes
-                           (delq child mevedel-journal-worker--processes))
-                     (let ((result
-                            (condition-case failure
-                                (progn
-                                  (unless (and (zerop (process-exit-status child))
-                                               (file-exists-p reply)
-                                               (<= (file-attribute-size (file-attributes reply))
-                                                   (if (memq operation '(capture-prepare memory-prepare memory-publish generation-observations)) (* 8 1024 1024) 4096)))
-                                    (error "Journal worker exited with status %s" (process-exit-status child)))
-                                  (mevedel-journal-worker--read reply))
-                              (error (list :error (error-message-string failure))))))
-                       (unwind-protect (funcall callback result)
-                         (delete-directory directory t)))))))
-          (push process mevedel-journal-worker--processes)
           (add-hook 'kill-emacs-hook #'mevedel-journal-worker-stop-all)
+          ;; Request IO above remains interruptible.  Only local launch and
+          ;; ownership handoff are indivisible with respect to pending C-g.
+          (let ((inhibit-quit t))
+            (setq process
+                  (make-process
+                   :name "mevedel-journal-worker" :noquery t :connection-type 'pipe
+                   :buffer nil
+                   :command
+                   (list (expand-file-name invocation-name invocation-directory)
+			 "--batch" "-Q" "--eval"
+			 (let ((print-length nil) (print-level nil))
+                           (prin1-to-string `(setq load-path ',load-path)))
+			 "-l" (locate-library "mevedel-journal-worker")
+			 "--eval" (prin1-to-string `(mevedel-journal-worker--run ,request ,reply)))
+                   :sentinel
+                   (lambda (child _event)
+                     (when (memq (process-status child) '(exit signal))
+                       (setq mevedel-journal-worker--processes
+                             (delq child mevedel-journal-worker--processes))
+                       (let ((result
+                              (condition-case failure
+                                  (progn
+                                    (unless (and (zerop (process-exit-status child))
+						 (file-exists-p reply)
+						 (<= (file-attribute-size (file-attributes reply))
+                                                     (if (or (memq operation '(capture-prepare memory-prepare memory-publish generation-observations))
+                                                             (and (eq operation 'memory-recover) (plist-get payload :pending-selection)))
+							 (* 8 1024 1024) 4096)))
+                                      (error "Journal worker exited with status %s" (process-exit-status child)))
+                                    (mevedel-journal-worker--read reply))
+				(error (list :error (error-message-string failure))))))
+			 (unwind-protect (funcall callback result)
+                           (delete-directory directory t)))))))
+            (push process mevedel-journal-worker--processes)
+            (when owner (plist-put owner :worker process)))
+          ;; Interpreted code need not deliver a pending quit at this binding's
+          ;; exit.  Deliver it inside the setup handler, after ownership handoff,
+          ;; rather than letting it escape at a later caller/event-loop check.
+          (when (and quit-flag (not inhibit-quit))
+            (setq quit-flag nil)
+            (signal 'quit nil))
           process)
-      (error
-       (when (and process (process-live-p process)) (delete-process process))
-       (when (file-directory-p directory) (delete-directory directory t))
+      ((error quit)
+       ;; An owned lifecycle now has the handle and must prove its exact-token
+       ;; fence before deletion.  Never preempt that authority in this helper.
+       (unless (and process owner)
+         (when (and process (process-live-p process)) (delete-process process))
+         (when (file-directory-p directory) (delete-directory directory t)))
        (signal (car err) (cdr err))))))
 
 (defun mevedel-journal-worker-stop-all ()
@@ -206,9 +226,19 @@ Deleting the process cancels work; durable claims fence interrupted attempts."
                   ('memory-recover
                    (require 'mevedel-memory-decision)
                    (mevedel-memory-store--assert-owned (plist-get (plist-get options :payload) :claim))
-                   (mevedel-memory-decision-recover workspace)
-                   (mevedel-memory-store-recover workspace)
-                   (list :ok t))
+                   (if (not (mevedel-memory-decision--worker-local-p workspace))
+                       (list :ok t :operation-id (plist-get (plist-get options :payload) :operation-id) :synchronous t)
+                     (progn
+                       (mevedel-memory-decision-recover workspace)
+                       (unless (plist-get (plist-get options :payload) :decisions-only)
+                         (mevedel-memory-store-recover workspace))
+                       (if (plist-get (plist-get options :payload) :pending-selection)
+                           (progn
+                             (require 'mevedel-memory-pass)
+                             (list :ok t :operation-id (plist-get (plist-get options :payload) :operation-id) :items
+                                   (mevedel-memory-pass--pending-items
+                                    workspace (plist-get (plist-get options :payload) :skip))))
+                         (list :ok t :operation-id (plist-get (plist-get options :payload) :operation-id))))))
                   ((or 'memory-prepare 'memory-publish)
                    (require 'mevedel-memory-pass)
                    (if (eq (plist-get options :operation) 'memory-prepare)

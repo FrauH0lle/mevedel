@@ -13,6 +13,60 @@
           "helpers"))
 (require 'mevedel-memory-proposal)
 
+(mevedel-deftest mevedel-memory-proposal/cold-compile-runtime-owner ()
+  ,test
+  (test)
+  :doc "compiled proposal parser loads its runtime helper owner on first use"
+  (let* ((root (file-name-directory (locate-library "mevedel-memory-proposal")))
+         (directory (make-temp-file "mevedel-proposal-cold-" t))
+         (source (file-name-concat directory "mevedel-memory-proposal.el"))
+         (bytecode (file-name-concat directory "mevedel-memory-proposal.elc")))
+    (unwind-protect
+        (progn
+          (copy-file (file-name-concat root "mevedel-memory-proposal.el") source)
+          (with-temp-buffer
+            (let ((status
+                   (call-process
+                    (expand-file-name invocation-name invocation-directory)
+                    nil t nil "--batch" "-Q" "--eval"
+                    (prin1-to-string
+                     `(progn
+                        (setq load-path ',load-path native-comp-jit-compilation nil)
+                        (unless (and (not (featurep 'cl-lib))
+                                     (not (fboundp 'cl-every)))
+                          (error "Cold compiler child inherited cl-lib"))
+                        (require 'bytecomp)
+                        (when (or (featurep 'cl-lib) (fboundp 'cl-every))
+                          (error "Compiler dependency loaded cl-lib"))
+                        (let ((byte-compile-verbose nil)
+                              (byte-compile-error-on-warn t))
+                          (unless (byte-compile-file ,source)
+                            (error "Proposal parser compilation failed"))))))))
+              (ert-info ((buffer-string))
+                (should (equal 0 status))
+                (should (equal "" (buffer-string))))))
+          (with-temp-buffer
+            (let ((status
+                   (call-process
+                    (expand-file-name invocation-name invocation-directory)
+                    nil t nil "--batch" "-Q" "--eval"
+                    (prin1-to-string
+                     `(progn
+                        (setq load-path ',(cons directory load-path)
+                              native-comp-jit-compilation nil)
+                        (unless (and (not (featurep 'cl-lib))
+                                     (not (fboundp 'cl-every)))
+                          (error "Cold runtime child inherited cl-lib"))
+                        (load ,bytecode nil t)
+                        (unless (and (featurep 'cl-lib) (fboundp 'cl-every))
+                          (error "Proposal parser did not load its runtime helper owner"))
+                        (unless (mevedel-memory-proposal--file-p "cold.md")
+                          (error "Cold parser first use failed")))))))
+              (ert-info ((buffer-string))
+                (should (equal 0 status))
+                (should (equal "" (buffer-string)))))))
+      (delete-directory directory t))))
+
 (defconst mevedel-test-memory-proposal--roots
   '(("local-agents" :kind memory :files ("old.md" "duplicate.md")
      :existing ("MEMORY.md" "old.md" "duplicate.md" "unread.md") :complete t)
@@ -71,6 +125,26 @@ Use a monotonic deadline for elapsed-time retries.
   (should-error
    (mevedel-memory-proposal-parse mevedel-test-memory-proposal--reply
                                  mevedel-test-memory-proposal--roots nil))
+
+  :doc "scope diagnostics distinguish root, path, and evidence failures"
+  (let* ((id (make-string 64 ?a))
+         (encoded-id (json-serialize (vector id)))
+         (cases `(("Unknown proposal root" "root: \"local-agents\"" "root: \"unknown-root\"")
+                  ("Unsafe proposal file path" "file: \"retry.md\"" "file: \"../unsafe.md\"")
+                  ("Proposal evidence must be an array" ,encoded-id "null")
+                  ("Proposal evidence contains duplicate entries" ,encoded-id
+                   ,(json-serialize (vector id id)))
+                  ("Proposal evidence contains an invalid or unadmitted entry" ,encoded-id
+                   ,(json-serialize (vector (make-string 64 ?b))))
+                  ("Proposal evidence contains an invalid or unadmitted entry" ,encoded-id "[1]"))))
+    (dolist (case cases)
+      (let* ((changed (string-replace (nth 1 case) (nth 2 case)
+                                      mevedel-test-memory-proposal--reply))
+             (condition (should-error
+                         (mevedel-memory-proposal-parse changed
+                                                       mevedel-test-memory-proposal--roots
+                                                       (list id)))))
+        (should (equal (car case) (error-message-string condition))))))
 
   :doc "a no-action review needs no proposal targets or digest evidence"
   (let ((result

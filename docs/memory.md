@@ -426,6 +426,10 @@ target and client, proposed change, and before-state. The accepted bundle is
 written before its hash competes in the pass claim's immutable outcome election.
 Changed private bundles cannot be replayed as accepted results.
 
+Recovery authenticates completed bundles on every operation. A matching public
+review with no spare pins needs no republication transaction; accepted expiry
+is still recovered under mutation ownership before this observation.
+
 Publication reads that accepted bundle under fresh journal mutation ownership
 and publishes the immutable review record. Only this public record advances
 general coverage. Replaying publication is idempotent, including after the
@@ -566,6 +570,14 @@ in a pass is terminal, publication releases that pass's digest pins. Review
 and decision records remain retained while evidence or unresolved work needs
 them, then expire together under the resolution-based history window.
 
+Decision recovery groups small metadata records by pass, then freshly
+authenticates each decision and its retained write evidence. It shares at most
+one authenticated proposal bundle with the write reader within that scan and
+discards the proof after publication. Pending automatic selection shares one
+public journal observation, refreshing it and discarding pass proofs after
+each application. Every application still acquires fresh workspace and target
+ownership and performs the ordinary recovery and freshness checks.
+
 Before a later request, the coordinator recovers accepted decisions and includes
 bounded recent rejection evidence: the original suggestion and reason, under
 the original memory-root authority. It admits at most twenty whole records
@@ -611,6 +623,95 @@ original target, independently of the calling workspace. An unresolved
 marker blocks other workspaces at that root even after the original claim
 expires. Coordination files are excluded from consolidation memory and source
 scopes; inventory does not descend into their directory.
+
+For local Linux automatic application, a sequential job runs publication and
+store recovery in a maintenance child under one parent-owned, fixed-deadline
+180-second workspace claim per operation. Pending automatic proposal discovery
+also runs in that child. It freshly authenticates decision status to omit every
+already-decided proposal, rather than starting another recovery child just to
+skip it; undecided extractions and their waiting dependent disposals remain
+eligible. Selection returns identities only, never reusable acceptance proofs.
+The editor checks the worker reply's operation identity, current job,
+originating session/workspace binding, unchanged root and freshly read workspace
+identity, cancellation, mode and fresh ownership on return, then freshly reads
+the proposal and status. Reentrant and late duplicate replies cannot reenter
+an executing or finished operation. Automatic admission reads the live origin
+buffer's mode, not whichever buffer happens to run a timer or continuation.
+Only the editor acquires original-target ownership, prepares the intent, checks
+unsaved visiting buffers, writes files and synchronizes buffers. No target claim
+crosses the child boundary. It yields between proposals and refreshes status
+after every attempt; the pass stays registered until application finishes and
+its final callback runs once. Manual and unsupported remote application retain
+the synchronous API. Deferred automatic retries retain their original buffer,
+session, workspace and identity context, rather than adopting the timer's current
+buffer. They freshly check that context and its live auto policy before admission
+and at forward mutation boundaries. Invalid context or explicit cancellation
+leaves decisions pending without rearming a retry from another actor. Explicit
+cancel also removes deferred work when no pass is running. Unsupported workers
+use the same guarded executor with native editor recovery, without a child.
+Before target-sensitive recovery, the worker authenticates
+retained scope metadata: historical remote roots remain authoritative even if
+current configuration is local. Such history, or uncertain metadata, selects
+checked native editor recovery under the same continuously held claim instead.
+This preflight passes no accepted proofs back to the editor and does not bypass
+accepted-expiry or marked-write recovery. It adds a history scan per operation;
+offloading editor work does not imply lower total CPU or IO cost.
+This split removes eligible recovery scans from the editor, not all
+remaining commit/publication IO: an editor continuation can still block.
+
+Automatic shared-note mutations recheck active requests and pending turn
+settlements at the actual write boundary, after preparation, as well as holding
+notes when a turn is already active. All affected visiting buffers, including
+unchanged before-state dependencies, must still be unmodified. Cancellation or
+a newly busy workspace prevents new forward writes without disabling safely
+owned checked rollback. A refusal after durable intent preparation follows the
+checked abandonment path only for a known admission hold or cancellation whose
+complete before-state is freshly proved after any checked rollback. It
+authenticates the exact intent and original tokens, checks visiting buffers
+before and after fencing, and authenticates that coordinator's cancelled,
+empty-payload outcome on its original host. Under the still-owned original
+target claim and lock, it verifies full disk before-state and the exact marker
+before removing that marker alone. The immutable unmarked intent remains;
+no public decision is accepted, so the proposal stays pending. Cross-host checks
+stay on their original authorities. Uncertain, mixed or after states retain
+ordinary application/recovery accounting. Genuine IO, ownership, fencing or
+retirement failures remain actionable and retain unresolved evidence; quitting
+during incomplete retirement is not quiet success. Child-phase cancellation fences
+ownership before stopping this client's child. Once editor mutation starts,
+cancellation stops forward admission but retains the unrenewed workspace claim
+through transaction unwind and checked rollback; completion settles it before
+the final callback. Expired or replaced ownership still refuses rollback and
+retains recovery evidence. Late replies cannot start another write.
+An allowed or delivered user quit remains a visible cancellation during setup
+or cleanup:
+it stops subsequent proposals, and an interrupted write completes its checked
+rollback before delivering cancellation. Request-file IO remains interruptible;
+only local child launch, process registration and the pure parent handle handoff
+defer pending quit briefly, so cleanup can fence the exact claim before deletion.
+Inherited outer quit inhibition remains authoritative; startup neither consumes
+its pending flag nor overrides the timer/filter/sentinel caller's policy.
+Settlement IO failure remains an error even if one idempotent retry succeeds.
+Registry cleanup and the final callback still happen once. If neither attempt
+establishes a fence, the original unrenewed deadline timer performs one terminal
+fencing/retirement attempt; these lifecycle paths never delete the child on an
+unproved fence.
+Storage failure still preventing that proof is explicitly reported and leaves
+the child tracked, not falsely described as a bounded process lifetime.
+A nil native settlement does not prove release: retirement requires its accepted
+outcome or a freshly authenticated outcome for that exact claim. If neither
+exists after a fresh target-clock expiry check, retirement elects and authenticates
+expiry for the original token, without acquiring or renewing ownership. Scheduled
+publication recovery uses the same proof before release or child deletion; an
+unproved release cannot schedule subsequent live-write inspection.
+Generic maintenance-process teardown can still force-stop children without
+waiting for storage; it does not establish settlement or erase retained evidence.
+
+Callbacks distinguish held admission and ordinary user cancellation from errors;
+neither fabricates an accepted decision. Timeout, malformed replies,
+authentication, IO and cleanup failures remain errors. Cancellation cannot erase
+an already authenticated result or its confirmed updated-file count, and stops
+subsequent proposals. A cancelled coordinator fence alone does not identify why
+an operation stopped: successful and failed operations also use fencing.
 
 Curated mutations and target-claim settlement take the same target-side `flock`
 on the pinned claims directory. Each mutation checks the unsettled claim,
@@ -662,7 +763,12 @@ coalesce and wait for idle transport. On local Linux workspaces, accepted
 publication recovery runs in a batch child under the workspace claim. The editor
 then inspects one retained write per event-loop callback and reconciles marked
 attempts against current target authority and live buffers; unsaved edits cannot
-be classified by the child. Only records whose target marker exists, or that
+be classified by the child. Read-only inspection of an unmarked record does not
+launch another owned recovery operation. Only a currently marked candidate
+enters that operation, passing identities rather than inspection proofs;
+the owned operation freshly rereads evidence before reconciliation. Unreadable
+records report their diagnostic while independent inspections continue.
+Only records whose target marker exists, or that
 this client has not yet read, are inspected: one batched program per target
 observes the markers of records already read, whose marker paths never change.
 Each inspected record is read afresh. Cancellation stops the
@@ -686,15 +792,37 @@ Recovery neither requests a model nor repeats or rolls back memory writes.
 the memory table with **Candidates**, **Memories**, and **History** views.
 Switch with the clickable header or `1`, `2`, and `3`. Opening starts with
 Candidates when proposals need attention, otherwise Memories. Refresh retains
-the selected view and row where possible. Resolved candidates move to History.
+the selected view and each displayed window's row where possible, including
+across loading gaps and tab switches. Background completion restores window
+positions without selecting a window. Resolved candidates move to History.
 Rows show action, type, title, status, and exact target/origin. A candidate's
 status reflects the same read-only freshness check acceptance runs: a recorded
 `stale` decision that would now apply reads `ready`, and a pending or stale
 candidate whose targets changed since capture reads `superseded` (only `r`
-resolves it). Refresh reads the public journal once and authenticates each
-decision once. The header shows
-workspace, pending/recovery counts, history retention, and this client's running pass. Opening attempts checked recovery; a busy owner does
-not prevent read-only inspection or lose its claim. Refresh preserves the active
+resolves it). The history collector shares one public journal observation across
+proposal checks and authenticates each decision; locality and checked-recovery
+preflights read separately. The header shows workspace, pending/recovery counts,
+history retention, and this client's running pass. Opening requests checked workspace
+recovery without blocking the table. Initial history collection follows that
+workspace's pending, dispatching or active recovery owner, not unrelated work.
+Local history collection runs in a cancellable read-only batch child, returning
+detached display metadata, never accepted bundles or write proofs. The header
+shows loading or a retryable failure; complete data can arrive after command
+return. An empty table also shows a static loading notice while its observation
+is pending, rather than looking like a completed empty result. Completed empty
+views and failed scans show distinct notices; these are not selectable rows or
+decision targets. Switching views reuses snapshots rather than rescanning history.
+Memories inventories configured topics independently. `g`, completed decisions
+and settled review updates request fresh observations. Current job, context,
+session, root, fresh workspace identity, client and configured roots fence replies.
+Closing the table retires its display work, not workspace-owned checked recovery.
+Remote or uncertain retained scopes keep native checked inspection and can still
+block. Display snapshots never authorize inspection or mutation: those paths
+freshly authenticate accepted evidence, original authority and current status.
+Explicit accept, reject and reversal commands retain synchronous authentication
+and decision processing, which can still block; asynchronous display collection
+does not make these manual actions asynchronous.
+Refresh preserves the active
 session composer draft. Another client's unavailable memory root remains visible,
 but inspecting private body/diff evidence or applying there requires its original
 authority.
