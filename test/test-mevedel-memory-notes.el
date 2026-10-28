@@ -78,26 +78,52 @@
                    (mevedel-memory-notes--ancestors "/w/.mevedel/shared/a/b/c.md" "/w/.mevedel/shared/")))
     (should-not (mevedel-memory-notes--ancestors "/w/.mevedel/shared/c.md" "/w/.mevedel/shared"))))
 
-(mevedel-deftest mevedel-memory-notes-workspace-busy-p
-    (:vars* ((workspace (mevedel-workspace--create :root "/tmp/mevedel-busy-ws/"))
+(mevedel-deftest mevedel-memory-notes-in-use
+    (:vars* ((root (file-name-as-directory (file-truename (make-temp-file "mevedel-in-use-" t))))
+             (other-root (file-name-as-directory (file-truename (make-temp-file "mevedel-in-use-other-" t))))
+             (workspace (mevedel-workspace--create :root root))
+             (mevedel-memory-notes-quiet-hours 24)
              (buffers nil))
-     :after-each ((mapc #'kill-buffer buffers)))
+     :before-each ((dolist (directory (list root other-root))
+                     (make-directory (file-name-concat directory ".mevedel" "shared" "audit") t)))
+     :after-each ((mapc (lambda (buffer) (when (buffer-live-p buffer) (kill-buffer buffer))) buffers)
+                  (delete-directory root t)
+                  (delete-directory other-root t)))
   ,test
   (test)
-  :doc "returns t, never the live request, and skips sessions without a root"
-  (cl-flet ((session-buffer (root request)
-              (let ((buffer (generate-new-buffer " *busy-probe*")))
+  :doc "a named shared file a live session's tool touched is in use until that session closes"
+  (cl-flet ((session-buffer (directory &optional request)
+              (let ((buffer (generate-new-buffer " *in-use-probe*")))
                 (push buffer buffers)
                 (with-current-buffer buffer
                   (setq-local mevedel--session
-                              (mevedel-session--create :workspace (mevedel-workspace--create :root root)))
+                              (mevedel-session--create
+                               :workspace (if (equal directory root) workspace
+                                            (mevedel-workspace--create :root directory))))
                   (setq-local mevedel--current-request request))
-                buffer)))
-    (session-buffer nil (list :request 'other-workspace))
-    (session-buffer "/tmp/elsewhere/" (list :request 'elsewhere))
-    (should-not (mevedel-memory-notes-workspace-busy-p workspace))
-    (session-buffer "/tmp/mevedel-busy-ws" (list :request 'live))
-    (should (eq t (mevedel-memory-notes-workspace-busy-p workspace)))))
+                buffer))
+            (use (buffer operation address)
+              (mevedel-resource-prepare operation address
+                                        (list :session (buffer-local-value 'mevedel--session buffer)))))
+    (let ((reader (session-buffer root))
+          (elsewhere (session-buffer other-root)))
+      ;; Another session's running turn alone protects nothing.
+      (session-buffer root (list :request 'live))
+      (should-not (mevedel-memory-notes-in-use workspace))
+      ;; Listings and searches over folders are not use of their notes.
+      (use reader 'glob "work://shared/")
+      (use reader 'grep "work://shared/audit")
+      (use elsewhere 'read "work://shared/audit/report.md")
+      (should-not (mevedel-memory-notes-in-use workspace))
+      (use reader 'read "work://shared/audit/report.md")
+      (should (equal '("audit/report.md") (mevedel-memory-notes-in-use workspace)))
+      (should (eq t (mevedel-memory-notes-in-use-p workspace "audit/report.md")))
+      (should-not (mevedel-memory-notes-in-use-p workspace "audit/other.md"))
+      ;; Use ends with the quiet period.
+      (let ((mevedel-memory-notes-quiet-hours 0))
+        (should-not (mevedel-memory-notes-in-use workspace)))
+      (kill-buffer reader)
+      (should-not (mevedel-memory-notes-in-use workspace)))))
 
 (mevedel-deftest mevedel-memory-notes-same-p ()
   ,test

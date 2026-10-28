@@ -39,8 +39,10 @@
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-encode-component "mevedel-resource" (value))
+(declare-function mevedel-resource-shared-accesses "mevedel-resource" (workspace))
 (declare-function mevedel-resource-work-shared-directory "mevedel-resource" (workspace))
 (autoload 'mevedel-resource-encode-component "mevedel-resource")
+(autoload 'mevedel-resource-shared-accesses "mevedel-resource")
 (autoload 'mevedel-resource-work-shared-directory "mevedel-resource")
 
 ;; `mevedel-structs'
@@ -49,10 +51,6 @@
 ;; `mevedel-tool-fs-read'
 (declare-function mevedel-tool-fs-read--binary-extension-p "mevedel-tool-fs-read" (filename))
 (autoload 'mevedel-tool-fs-read--binary-extension-p "mevedel-tool-fs-read")
-
-;; `mevedel-turn'
-(declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
-(autoload 'mevedel-turn-busy-p "mevedel-turn")
 
 (defvar read-circle)
 (defvar read-eval)
@@ -129,18 +127,22 @@ whose contents it deletes."
   (concat "work://shared/"
           (mapconcat #'mevedel-resource-encode-component (split-string relative "/") "/")))
 
-(defun mevedel-memory-notes-workspace-busy-p (workspace)
-  "Return t while a conversation in WORKSPACE runs or settles a turn.
-Return a plain boolean, never the live request it observed."
-  (let ((root (file-name-as-directory (expand-file-name (mevedel-workspace-root workspace)))))
-    (and (cl-some (lambda (buffer)
-                    (when-let* ((session (buffer-local-value 'mevedel--session buffer))
-                                (other (mevedel-session-workspace session))
-                                (other-root (mevedel-workspace-root other)))
-                      (and (equal root (file-name-as-directory (expand-file-name other-root)))
-                           (mevedel-turn-busy-p buffer))))
-                  (buffer-list))
-         t)))
+(defun mevedel-memory-notes-in-use (workspace)
+  "Return WORKSPACE's shared relative paths that open sessions are using.
+A path is in use while a session whose buffer is live accessed it through a
+tool within `mevedel-memory-notes-quiet-hours'.  Other sessions' turns do
+not hold back unrelated notes."
+  (when-let* ((accesses (mevedel-resource-shared-accesses workspace)))
+    (let ((since (- (float-time) (* 3600 mevedel-memory-notes-quiet-hours)))
+          (live (delq nil (mapcar (lambda (buffer) (buffer-local-value 'mevedel--session buffer))
+                                  (buffer-list)))))
+      (cl-loop for (relative . rows) in accesses
+               when (cl-some (lambda (row) (and (> (cdr row) since) (memq (car row) live))) rows)
+               collect relative))))
+
+(defun mevedel-memory-notes-in-use-p (workspace relative)
+  "Return t while an open session in WORKSPACE uses shared RELATIVE."
+  (and (member relative (mevedel-memory-notes-in-use workspace)) t))
 
 
 ;;
@@ -430,18 +432,20 @@ have not been published are included.  Unreadable accepted state signals."
         (when-let* ((accepted (mevedel-memory-store-accepted workspace id)))
           (push accepted bundles))))))
 
-(defun mevedel-memory-notes--history (workspace entries)
+(defun mevedel-memory-notes--history (workspace entries &optional paths)
   "Return a table from shared relative path to retained disposition observations.
 Each observation has :action, :hash (the reviewed version), :result (the
 condensed version), :status, :superseded, and :at, the decision or review
-time."
+time.  When PATHS is a hash table of current inventory paths, omit decisions
+for absent sources: they cannot affect this capture's suppression."
   (let ((table (make-hash-table :test #'equal))
         (passes (make-hash-table :test #'equal)))
     (dolist (accepted (mevedel-memory-notes-passes workspace entries) table)
       (clrhash passes)
       (puthash (plist-get (plist-get accepted :prepared) :id) accepted passes)
       (dolist (proposal (plist-get accepted :proposals))
-        (when (mevedel-memory-proposal-note-action-p (plist-get proposal :action))
+        (when (and (mevedel-memory-proposal-note-action-p (plist-get proposal :action))
+                   (or (null paths) (gethash (plist-get proposal :file) paths)))
           (let* ((decision (mevedel-memory-decision-status workspace (plist-get proposal :id) entries passes))
                  (before (cdr (assoc (plist-get proposal :file) (plist-get proposal :before)))))
             (push (list :action (plist-get proposal :action)
@@ -479,7 +483,7 @@ REVIEW-DAYS sets the reconsideration period after a retained outcome."
 (cl-defun mevedel-memory-notes-capture (workspace entries &key (quiet-hours mevedel-memory-notes-quiet-hours)
                                                   (review-days mevedel-memory-notes-review-days)
                                                   (quota mevedel-memory-notes-undo-quota)
-                                                  mode external)
+                                                  mode external in-use)
   "Select WORKSPACE's ready shared working files for consolidation.
 ENTRIES is one public journal observation.  Return nil without a shared
 folder, otherwise a plist with :root, a (ID . ROOT) scope row or nil when
@@ -487,7 +491,8 @@ nothing is ready, :notes, :attachments, :directories and :remaining counts,
 :blocked, at most `mevedel-memory-notes--max-blocked' (RELATIVE . REASON)
 rows, and :blocked-count.  MODE freezes the consolidation mode.  EXTERNAL
 lists memory and instruction texts; files they cite are never removed as
-housekeeping, and cited notes are flagged for the review.
+housekeeping, and cited notes are flagged for the review.  IN-USE lists
+relative paths open sessions are using; like recent files, they wait.
 
 Complete UTF-8 notes are admitted oldest first.  An oversized note within
 the configured chunk-review bound is admitted alone.  Attachments are
@@ -500,9 +505,13 @@ changed; the summary is recorded as the latest observation."
              (client (unless (file-remote-p directory) (mevedel-workspace-identity-client)))
              (now (mevedel-session-control-fs-target-time directory))
              (quiet (* quiet-hours 3600))
-             (history (mevedel-memory-notes--history workspace entries))
              (inventory (mevedel-memory-notes--inventory directory))
              (rows (mevedel-memory-notes--read directory (plist-get inventory :files)))
+             (paths (make-hash-table :test #'equal))
+             (history (progn
+                        (dolist (row (append rows (plist-get inventory :directories)))
+                          (puthash (car row) t paths))
+                        (mevedel-memory-notes--history workspace entries paths)))
              (scan (mevedel-memory-notes--scan
                     directory rows
                     (mapcar #'car (seq-filter (lambda (row) (eq (plist-get (cdr row) :kind) 'attachment)) rows))))
@@ -517,6 +526,7 @@ changed; the summary is recorded as the latest observation."
                  (push (cons relative reason) blocked)))
              (ready-p (relative modified version)
                (and (<= (float-time modified) (- now quiet))
+                    (not (member relative in-use))
                     (not (mevedel-memory-notes--suppressed
                           (gethash relative history) version now review-days)))))
           (dolist (row (sort (copy-sequence rows)

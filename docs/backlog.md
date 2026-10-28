@@ -51,9 +51,51 @@ Investigate and reduce main-thread stalls in memory and journal processing,
 including authenticated recovery, proposal application, publication, and cleanup.
 Reuse background workers where safe; preserve original-target authority, claim
 lifetime, fresh checks after mutations, unsaved-buffer protection, active-turn
-note deferral, cancellation, recovery, undo, and idempotence. Measure editor
+in-use note protection, cancellation, recovery, undo, and idempotence. Measure editor
 responsiveness alongside CPU, memory, and backlog throughput on representative
 workloads. Distinguish moving work off the main thread from reducing total cost.
+
+### P1: Sustainable shared-note throughput and preservation
+
+User concern (2026-10-28): processing is "terribly slow" and should not take
+hours and hours; a session can easily produce 20 or more notes, so ordinary
+creation could outpace processing indefinitely. Treat this as an operational
+viability requirement, not merely an optimization for a one-time backlog.
+
+Measure sustained safe dispositions against note arrivals in representative
+multi-session workloads, including sessions producing at least 20 notes. The
+backlog and oldest eligible-note age must decline while unrelated sessions stay
+active. Review alone is not completion: measure actual applied dispositions and
+retained reasons. Separate admission waiting, preparation, provider, application,
+publication, recovery and manual audit time; explain batch-size limits. One
+2026-10-28 batch reviewed and deleted one note in 172 seconds from queuing; this
+is an end-to-end sample, not a provider benchmark or a steady-state rate.
+
+Throughput must not depend on dropping uncertain findings. Repeated content
+audits found deletion rationales dismissing historical unverified leads and
+acceptance limits without establishing resolution or preserving them elsewhere.
+Add those cases to preservation verification and measure the need for manual
+repairs alongside throughput. Retain mutation safety, recoverability and
+lifecycle-managed protection of in-use handoffs; do not obtain speed by removing
+those boundaries or by leaving destructive applications indefinitely deferred.
+
+Landed 2026-10-28 (see ADR 0117's dated sections): tool-access leases replace
+the workspace-wide turn gate; deletes quote read evidence per open item; compact
+reference checks admit more notes per request; inventory-first capture, batched
+decision authentication and operation-local proof reuse cut storage programs.
+Remaining:
+- Measure a sustained multi-session workload with a specified arrival cadence;
+  only component timings and single real reviews exist. Real provider reviews
+  took about 10-30 seconds each; checked application of one held note still
+  took about 20 seconds, dominated by per-proposal recovery.
+- Over-retention: in real-model evaluation the reviewer kept or condensed an old
+  failed review whose findings ADR 0126 had resolved, because it did not quote
+  matching evidence for each item. Condensed notes are re-reviewed after the
+  suppression period; check whether they ever reach deletion.
+- About one reply per seven-review round failed the output format (a missing
+  final section or malformed action section) and costs a later retry.
+- Leases do not observe shell access by ordinary path, accesses before an editor
+  restart, or sessions on another client.
 
 ## Execution
 
@@ -151,6 +193,65 @@ code, and remove an item once explained, fixed or no longer worth pursuing.
 
 ### View and transcript
 
+- Status-zone audit follow-ups (2026-10-18): investigate whether copying panel
+  text into the composer can retain zone ownership properties and allow a later
+  reconcile after region recreation to delete draft text. This was an unverified
+  hypothesis, not a reproduced defect; exercise the real copy/yank/recreation
+  path before changing behavior. The same audit left stale-zone scan cost as a
+  profiling lead: a synthetic transcript matched to an observed property density
+  showed increasing scan cost with size, but no real-session optimization was
+  established. Profile a representative long session before narrowing scans;
+  preserve stale-text recovery across undo, reinsertion and lost local state.
+- Historical status-audit verification (2026-10-18): five full-suite failures
+  in side-conversation and Claude selected-context tests reproduced on both the
+  patch and its base with the same shared dependencies after an earlier run
+  passed. This rules out a patch-specific regression in that comparison, but
+  does not identify the environment change. Locate later dependency/load-order
+  resolution before treating that historical validation as clean.
+- Composer jumpiness audit acceptance limits (2026-10-18): the directive-prompt
+  fix did not cover text-scale changes without resize; truncation remained stale
+  until a refit trigger. The skill-hint fix deferred skill-list changes without
+  draft edits until the next edit. Locate later coverage or exercise these
+  specific transitions before extending acceptance; these are historical limits,
+  not newly reproduced defects. The same branch's full suite reported one
+  unexpected `mevedel-present-wayland` failure; two passing isolated reruns under
+  a GUI lock did not alone establish the claimed compositor-contention cause.
+  Reproduce the original concurrent conditions or find later explanatory evidence
+  before treating that failure as resolved.
+- Ask overhaul follow-ups (2026-10-18): the final diagnosis left C-g cancelling
+  the whole form as a raised, unchanged behavior question. Recheck current
+  cancellation semantics and user intent before changing it. Its full-suite run
+  also reported timing failures in journal-recall-expiry and ACP turn tool-hooks;
+  three passing isolated reruns did not explain them. Find later resolution or
+  reproduce the original ordered conditions before declaring those failures
+  resolved. These are historical leads, not reproduced current failures.
+- Browser completion notices and image-button acceptance limits (2026-10-18):
+  renderer/host protocol checks did not include browser visual acceptance of the
+  final completion notices. Image-button graphical checks verified activation
+  and normal-state decoration suppression, not hover-theme or higher-priority
+  overlay styling. Locate subsequent evidence or exercise those specific states
+  before extending the historical acceptance claims; preserve image activation,
+  committed-artifact resolution and notice ownership/wording.
+- Composer/status layout acceptance limits (2026-10-17): the scoped cross-review
+  resolved five findings using batch probes of production preservers and rendered
+  content, but did not measure minibuffer-active or graphical variable-height
+  cases. The rail microbenchmark did not establish graphical redisplay or
+  long-session performance; integrated graphical acceptance remained root-owned.
+  Before closing those checks, locate later evidence or run bounded multiwindow,
+  wrapped/tall-draft and simultaneous status/approval scenarios, preserving draft
+  position and interactive row identity. These are historical limits, not proof
+  of a current defect or missing coverage.
+- Task-panel mouse disclosure (2026-10-16 suggestion): panels currently toggle
+  with TAB/RET while mouse clicks place point. Consider a clickable header only,
+  preserving selection on task rows. This is an optional consistency improvement,
+  not an implemented feature or a request for per-task detail inspectors.
+- Pending-input local preview acceptance limits (2026-10-16): the implementation
+  handoff reported rendered-consumer tests, but no separate read-only-authority,
+  deferred-render, or live graphical interaction checks. This is historical
+  verification scope, not a reproduced defect or proof current coverage is absent.
+  Before claiming those scenarios verified, locate subsequent coverage or run a
+  bounded check that preserves drafts, selection, viewport, delivery and queue
+  management's explicit pause semantics.
 - Automatic Read collapse (2026-10-14): an opened Read row later appeared
   collapsed in a live session; replays did not reproduce it. A bounded fold
   trace was prepared; the next step is a consented live reproduction. The prior

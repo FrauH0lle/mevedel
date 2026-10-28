@@ -42,21 +42,38 @@ it. Only IDs in the top-level `notes` array may receive dispositions. Omitted
 or merely referenced notes remain outside this review, even if investigation
 tools can read them. Dispose of each admitted note exactly once in Notes:
 
-- `delete`: the normal outcome, after extraction or when nothing qualifies.
-  When future usefulness is uncertain, delete.
+- `delete`: the normal outcome for completed material, after extraction or when
+  nothing qualifies. When the only question is whether finished history might
+  help someday, delete.
 - `keep`: only for concrete continuing use, such as an open handoff or an
   investigation still in progress, including its prepared diagnostic needed
   for an unresolved follow-up. The note is reviewed again later.
 - `condense`: rewrite the note to the part still in use, for example only its
   open handoff after its finding was extracted.
 
-Unresolved defects or investigations with no record visible in the supplied
-memories, instructions or investigation reads are continuing use: condense to
-their evidence, caveats and next step until resolved, superseded or recorded
-elsewhere with the material caveats and next-step conditions intact.
-Before deleting a note, check for unresolved findings even when its main task
-is complete. Passing checks or completed fixes in the same note do not
-establish resolution of a separate finding.
+Before choosing a disposition, list the note's open items: unresolved defects
+or findings, failed or unfinished checks, unverified hypotheses or leads,
+stated acceptance limits, and work it explicitly leaves for someone else
+("not done", "remains", "handoff", "belongs to"). Do this even when the note's
+main task is complete; passing checks or completed fixes do not resolve a
+separate finding. Age, an absent next step, or a missing record is not
+resolution: "not established as unresolved" is not a reason to delete.
+
+An open item ends the note's continuing use only when it was resolved,
+superseded, or recorded elsewhere with its caveats and next-step conditions
+intact. Establish that with the workspace tools: Grep maintained records such
+as `docs/backlog.md`, decision records under `docs/adr/`, documentation, and
+the code and tests the note names for the item's specific terms, then Read the
+matching lines with `offset` and `limit`. A Read returns at most 8 KiB, so a
+whole large file shows only its start; searches of the workspace root are
+partial, so search a directory or file. Issue independent searches and reads
+together in one tool round. These checks can change the proposal, so make them
+even when other guidance favours brief investigation. If an open item remains
+unestablished, condense the note to that item's dated evidence, caveats and
+next step, stated as the note's observation at that date, not as a current
+defect or a user preference; or keep it when the whole note is still in use.
+Delete when every open item is established as resolved or recorded, or when the
+note has none.
 
 Do not keep or condense a note merely because it might help someday, and do
 not invent memories to justify deleting one. A note is removed only after
@@ -72,6 +89,9 @@ match in a bounded search is not proof of absence; unavailable or exhausted
 investigation remains unknown. Preserve the date and scope of reference checks.
 Do not assert that a symbol, flag, command, or external reference is verified
 merely because its spelling appears in a file. Do not add a verified stamp.
+`reference_checks` groups observations by shared `topic`, `scope`, and
+`checked` date; each `checks` item retains its own `token` and `result`.
+Shared metadata applies to every item and never certifies a lesson.
 
 Work within these hard limits, not toward them:
 
@@ -97,6 +117,8 @@ Return these level-two headings in order:
 ## No action
 
 Include `## Notes` exactly when the input contains notes; omit it otherwise.
+Always finish with the `## No action` section, even after long Notes blocks; a
+reply without it is rejected whole.
 Every action section contains one or more proposal blocks, or the single line
 `- none`. Notes contains one block per supplied note and is never `- none`.
 The No action section contains plain bullets explaining why no changes
@@ -153,9 +175,22 @@ applies to merge sources. Shared index updates are managed by application.
 A Notes block uses the same fence with exactly these three header fields:
 
     note: "the note's exact ID"
-    disposition: "delete"
+    disposition: "keep"
     reason: "Why this disposition fits"
     ---
+
+A delete adds exactly two more header fields after `reason`:
+
+    open-items: ["Each open item listed above, one short string each"]
+    resolved-by: ["docs/backlog.md: exact words of the entry recording the item"]
+
+`open-items` is `[]` only when the note has none. `resolved-by` gives at least
+one entry per open item: a workspace-relative file you Read in this review,
+`: `, and exact words copied from that Read showing the item's resolution or
+record, at least a short sentence fragment. It is `[]` only when `open-items`
+is. A file that discusses the topic is not evidence unless the quoted words
+resolve or record that item. A delete whose quotes do not occur in your reads
+is accepted as keep.
 
 The body after `---` is empty for `delete` and `keep`. For `condense` it is the
 complete replacement note text.

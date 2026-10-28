@@ -269,8 +269,10 @@ Use a monotonic deadline for elapsed-time retries.
                            (string-remove-suffix "## No action\n- none" mevedel-test-memory-proposal--reply))
                           "## Notes\n" dispositions "## No action\n- none")))
          (block (lambda (note disposition &optional body)
-                  (format "````proposal\nnote: %S\ndisposition: %S\nreason: \"Reviewed\"\n---\n%s````\n"
-                          note disposition (if body (concat body "\n") ""))))
+                  (format "````proposal\nnote: %S\ndisposition: %S\nreason: \"Reviewed\"\n%s---\n%s````\n"
+                          note disposition
+                          (if (equal disposition "delete") "open-items: []\nresolved-by: []\n" "")
+                          (if body (concat body "\n") ""))))
          (result (mevedel-memory-proposal-parse
                   (funcall reply (concat (funcall block "work://shared/a.md" "delete")
                                          (funcall block "work://shared/b.md" "condense" "Open: verify.")))
@@ -296,6 +298,52 @@ Use a monotonic deadline for elapsed-time retries.
                            "- none\n"))
       (should-error (mevedel-memory-proposal-parse (funcall reply invalid)
                                                    mevedel-test-memory-proposal--roots nil notes))))
+  :doc "a delete accounts for its open items with distinct quotes from safe normalized workspace paths"
+  (let* ((notes '(("work://shared/a.md" "notes-root" . "a.md")))
+         (parse (lambda (disposition fields)
+                  (mevedel-memory-proposal-parse
+                   (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n"
+                           "## Instructions\n- none\n## Notes\n````proposal\nnote: \"work://shared/a.md\"\n"
+                           (format "disposition: %S\nreason: \"Reviewed\"\n%s---\n````\n" disposition fields)
+                           "## No action\n- none")
+                   mevedel-test-memory-proposal--roots nil notes)))
+         (item (car (plist-get (funcall parse "delete"
+                                        (concat "open-items: [\"Finding 2\"]\nresolved-by: "
+                                                "[\"./docs/adr/x.md: Restoration keeps one anchor\", "
+                                                "\"a/./c.el: (defun keep-the-row: here)\"]\n"))
+                               :proposals))))
+    (should (equal '("Finding 2") (plist-get item :open-items)))
+    ;; Comparison with the review's reads uses one canonical path spelling;
+    ;; the first colon separates, so quotes may contain colons.
+    (should (equal '(("docs/adr/x.md" . "Restoration keeps one anchor")
+                     ("a/c.el" . "(defun keep-the-row: here)"))
+                   (plist-get item :resolved-by)))
+    (should-not (plist-member (car (plist-get (funcall parse "keep" "") :proposals)) :open-items))
+    (dolist (invalid '(("delete" "")
+                       ("delete" "open-items: []\n")
+                       ("delete" "resolved-by: []\n")
+                       ("keep" "open-items: []\nresolved-by: []\n")
+                       ("delete" "open-items: \"Finding 2\"\nresolved-by: []\n")
+                       ("delete" "open-items: [\"\"]\nresolved-by: []\n")
+                       ("delete" "open-items: [\"A\", \"A\"]\nresolved-by: []\n")
+                       ;; A bare path is no longer evidence.
+                       ("delete" "open-items: [\"A\"]\nresolved-by: [\"docs/backlog.md\"]\n")
+                       ("delete" "open-items: [\"A\"]\nresolved-by: [\"docs/backlog.md: too short\"]\n")
+                       ("delete" "open-items: [\"A\"]\nresolved-by: [\"/etc/passwd: root entry for the system\"]\n")
+                       ("delete" "open-items: [\"A\"]\nresolved-by: [\"../outside.md: escaping quote text\"]\n")
+                       ("delete" "open-items: [\"A\"]\nresolved-by: [\"a/b/../c.el: escaping quote text\"]\n")
+                       ("delete" "open-items: [\"A\"]\nresolved-by: [\"~/notes.md: home quote text here\"]\n")))
+      (should-error (funcall parse (car invalid) (cadr invalid)))))
+  :doc "resolution quotes match delivered Read text across line numbers and wrapping only"
+  (let ((read "  352\t- **One viewport anchor per window (2026-10-18).** Logical window-start\n  353\t  restoration previously overrode\n"))
+    (should (mevedel-memory-proposal-quoted-p "window (2026-10-18).** Logical window-start restoration previously" read))
+    (should (mevedel-memory-proposal-quoted-p "One viewport anchor per window (2026-10-18). Logical" read))
+    ;; Citation decoration around quoted words is ignored; each quoted part counts.
+    (should (mevedel-memory-proposal-quoted-p "\"Logical window-start restoration\" (ADR 0126, lines 352-353)" read))
+    (should-not (mevedel-memory-proposal-quoted-p "\"Logical window-start\" and \"was later removed\" (ADR 0126)" read))
+    (should-not (mevedel-memory-proposal-quoted-p "\"window\" (ADR 0126, lines 352-353)" read))
+    (should-not (mevedel-memory-proposal-quoted-p "window start restoration was removed" read))
+    (should-not (mevedel-memory-proposal-quoted-p "353 restoration previously" read)))
   :doc "without admitted notes the section is optional and may only be empty"
   (progn
     (should (mevedel-memory-proposal-parse

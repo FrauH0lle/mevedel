@@ -22,7 +22,9 @@
 (autoload 'mevedel-memory-list--finished "mevedel-memory-list")
 
 ;; `mevedel-telemetry'
+(declare-function mevedel-telemetry--monotonic-now "mevedel-telemetry" ())
 (declare-function mevedel-telemetry-record-workspace "mevedel-telemetry" (workspace event &rest props))
+(autoload 'mevedel-telemetry--monotonic-now "mevedel-telemetry")
 (autoload 'mevedel-telemetry-record-workspace "mevedel-telemetry")
 
 (defcustom mevedel-memory-consolidation-mode 'propose
@@ -71,6 +73,26 @@ day, not one larger request.  Explicit drain bypasses this automatic cap."
 
 (defvar mevedel-memory-pass--drains (make-hash-table :test #'equal)
   "Explicit drains keyed by physical pass ownership directory.")
+
+(defun mevedel-memory-pass--timing-add (state key duration)
+  "Accumulate known millisecond DURATION under KEY in STATE's timings."
+  (when (numberp duration)
+    (let ((timings (plist-get state :phase-durations)))
+      (plist-put state :phase-durations
+                 (plist-put timings key (+ (or (plist-get timings key) 0) duration))))))
+
+(defun mevedel-memory-pass--timing-start (state key)
+  "Start parent-local interval KEY in STATE, without resetting a live interval."
+  (unless (assq key (plist-get state :phase-starts))
+    (plist-put state :phase-starts
+               (cons (cons key (mevedel-telemetry--monotonic-now)) (plist-get state :phase-starts)))))
+
+(defun mevedel-memory-pass--timing-end (state key)
+  "Accumulate and close parent-local interval KEY in STATE, if it started."
+  (when-let* ((start (assq key (plist-get state :phase-starts))))
+    (plist-put state :phase-starts (delq start (plist-get state :phase-starts)))
+    (mevedel-memory-pass--timing-add
+     state key (round (* 1000 (max 0 (- (mevedel-telemetry--monotonic-now) (cdr start))))))))
 
 (defun mevedel-memory-pass--producer (result)
   "Return the producer label of review RESULT; housekeeping has no model."
@@ -162,7 +184,7 @@ a candidate, so shared notes are cleaned up even with journaling disabled."
   (unless (or mevedel-memory-pass--inhibit-scheduling
               (eq mevedel-memory-consolidation-mode 'manual)
               (gethash (mevedel-memory-store--claim-directory workspace) mevedel-memory-pass--drains))
-    (let ((cached (mevedel-workspace-memory-schedule workspace)) opportunity)
+    (let ((cached (mevedel-workspace-memory-schedule workspace)) opportunity queued-at)
       (unless (or (gethash workspace mevedel-memory-pass--pending)
                   (and (equal (plist-get cached :hours) mevedel-memory-consolidation-min-hours)
                        (equal (plist-get cached :digests) mevedel-memory-consolidation-min-digests)
@@ -179,6 +201,7 @@ a candidate, so shared notes are cleaned up even with journaling disabled."
                           :mode mevedel-memory-consolidation-mode
                           :batches mevedel-memory-consolidation-max-batches-per-day
                           :catch-up (plist-get cached :catch-up))))
+        (setq queued-at (mevedel-telemetry--monotonic-now))
         (mevedel-transport-schedule-idle
          mevedel-memory-pass--pending workspace 'memory-pass (mevedel-workspace-root workspace)
          (lambda ()
@@ -191,7 +214,7 @@ a candidate, so shared notes are cleaned up even with journaling disabled."
                             (mevedel-memory-notes-directory workspace)))
                    (unless (mevedel-memory-pass-start
                             workspace (lambda (result) (mevedel-memory-list--finished workspace result))
-                            :automatic t)
+                            :automatic t :queued-at queued-at)
                      ;; A busy owner is not an admission observation. Preserve
                      ;; any fresh gate result, but allow the next activity offer.
                      (when (eq opportunity (mevedel-workspace-memory-schedule workspace))
@@ -242,16 +265,16 @@ represented by the target claim and does not grant local cancellation rights."
 
 (defun mevedel-memory-pass--drain-step (state)
   "Offer the next bounded review for explicit drain STATE.
-Active turns, local applications, cleanup and busy transports wait sixty
-seconds, without capturing notes or starting an empty model request.
-Every continuation yields to input."
+Local applications, cleanup and busy transports wait sixty seconds, without
+capturing notes or starting an empty model request.  Other sessions' turns
+do not; capture leaves the notes they use for later.  Every continuation
+yields to input."
   (let* ((workspace (plist-get state :workspace))
          (key (plist-get state :key)))
     (when (eq state (gethash key mevedel-memory-pass--drains))
       (plist-put state :timer nil)
       (condition-case err
-          (let* ((busy (or (mevedel-memory-notes-workspace-busy-p workspace)
-                           (mevedel-journal-cleanup-active-p workspace)
+          (let* ((busy (or (mevedel-journal-cleanup-active-p workspace)
                            (mevedel-transport-busy-p (mevedel-workspace-root workspace))
                            (input-pending-p)))
                  (fresh-key (mevedel-memory-store--claim-directory workspace)))
@@ -276,16 +299,16 @@ Every continuation yields to input."
 		   (lambda (result)
                      (when (eq state (gethash key mevedel-memory-pass--drains))
                        (when (eq (plist-get result :outcome) 'success)
+                         (plist-put state :queued-at (mevedel-telemetry--monotonic-now))
 			 (plist-put state :batch (1+ (plist-get state :batch))))
-                       (if (and (memq (plist-get result :outcome) '(success waiting restart-required))
+                       (if (and (memq (plist-get result :outcome) '(success restart-required))
 				(not (plist-get result :stopped))
 				(not (plist-get result :error))
 				(not (plist-get result :recovery-required)))
 			   (progn
                              (plist-put state :notes-remaining (plist-get result :notes-remaining))
                              (plist-put state :remaining (plist-get result :remaining))
-                             (plist-put state :timer (run-at-time (if (eq (plist-get result :outcome) 'waiting) 60 .05)
-                                                                  nil #'mevedel-memory-pass--drain-step state)))
+                             (plist-put state :timer (run-at-time .05 nil #'mevedel-memory-pass--drain-step state)))
 			 (remhash key mevedel-memory-pass--drains)
 			 (plist-put state :status
                                     (cond ((plist-get result :stopped) 'aborted)
@@ -293,7 +316,7 @@ Every continuation yields to input."
 					  (t (plist-get result :outcome)))))
                        (funcall (plist-get state :callback)
 				(append (list :batch (plist-get state :batch)) result))))
-		   :drain state))))))
+			   :drain state :queued-at (plist-get state :queued-at)))))))
         (error
          (when (eq state (gethash key mevedel-memory-pass--drains))
            (remhash key mevedel-memory-pass--drains)
@@ -314,6 +337,7 @@ automatic timing/count gates and daily cap, not ownership or request limits."
   (let* ((root (copy-sequence (mevedel-workspace-root workspace)))
          (key (mevedel-memory-store--claim-directory workspace))
          (state (list :workspace workspace :root root :key key :origin-buffer (current-buffer)
+                      :queued-at (mevedel-telemetry--monotonic-now)
                       :callback callback :batch 0 :status 'queued :timer nil)))
     (unless (equal root (mevedel-workspace-root workspace)) (error "Memory drain workspace changed"))
     (when (or (gethash key mevedel-memory-pass--drains) (gethash key mevedel-memory-pass--running))
@@ -327,37 +351,33 @@ automatic timing/count gates and daily cap, not ownership or request limits."
 Each application reacquires workspace and original-target ownership, for
 instruction proposals as for memory ones.  Stop before further proposals if
 cancellation was requested, holding the rest.
-Shared-note decisions wait while a conversation in the workspace runs a
-turn; a retry applies them, and earlier held ones, once it is idle.
+A shared-note decision waits while an open session uses its file; a retry
+applies it once that use ends.  Other notes and earlier held ones proceed.
+Each note rechecks use before and at its write, since IO yields.
 Count distinct files only through this call's confirmed-write notification."
+  (mevedel-memory-pass--timing-start state :application-duration-ms)
   (let ((workspace (plist-get state :workspace))
         (pass (plist-get (plist-get accepted :prepared) :id))
         (applied 0) (held 0) (unapplied 0) deferred files)
     (plist-put state :application-context
                (mevedel-memory-decision--operation-context workspace (plist-get state :origin-buffer)))
     (dolist (proposal (plist-get accepted :proposals))
-      (cond
-       ((plist-get state :stop-apply) (cl-incf held))
-       ((and (mevedel-memory-proposal-note-action-p (plist-get proposal :action))
-             (or deferred (mevedel-memory-notes-workspace-busy-p workspace)))
-        (setq deferred t)
-        (cl-incf held))
-       (t
-        (condition-case nil
-            (let ((decision
-                   (mevedel-memory-decision-apply
-                    workspace pass (plist-get proposal :id)
-                    (lambda (paths) (cl-incf applied) (setq files (append paths files))))))
-              (unless (mevedel-memory-decision-terminal-status-p (plist-get decision :status))
-                (cl-incf unapplied)))
-          (quit (plist-put state :stop-apply t) (cl-incf unapplied))
-          (error (cl-incf unapplied))))))
-    (if deferred
-        (mevedel-memory-pass--defer-notes state)
-      (unless (plist-get state :stop-apply)
-        (let ((earlier (mevedel-memory-pass--apply-pending workspace pass)))
-          (cl-incf applied (car earlier))
-          (cl-incf unapplied (cdr earlier)))))
+      (if (plist-get state :stop-apply)
+          (cl-incf held)
+        (pcase (mevedel-memory-pass--apply-automatic
+                workspace pass proposal
+                (lambda (paths) (cl-incf applied) (setq files (append paths files))))
+          ('held (push (plist-get proposal :file) deferred) (cl-incf held))
+          ('quit (plist-put state :stop-apply t) (cl-incf unapplied))
+          ('applied nil)
+          (_ (cl-incf unapplied)))))
+    (unless (plist-get state :stop-apply)
+      (let ((earlier (mevedel-memory-pass--apply-pending
+                      workspace pass (lambda (file) (push file deferred)))))
+        (cl-incf applied (car earlier))
+        (cl-incf unapplied (cdr earlier))))
+    (when deferred
+      (mevedel-memory-pass--defer-notes state deferred))
     (list :updated-files (length (delete-dups files)) :applied-count applied
           :held-count held :unapplied-count unapplied)))
 
@@ -403,7 +423,9 @@ each later attempt still freshly reads accepted proof and status."
           (dolist (proposal (plist-get accepted :proposals))
             (unless (mevedel-memory-decision-status workspace (plist-get proposal :id) entries passes)
               (push (list :pass pass :proposal (plist-get proposal :id) :pending t
-                          :note (mevedel-memory-proposal-note-action-p (plist-get proposal :action))) items))))))
+                          :note (mevedel-memory-proposal-note-action-p (plist-get proposal :action))
+                          :file (plist-get proposal :file))
+                    items))))))
     (nreverse items)))
 
 (defun mevedel-memory-pass--application-context-current-p (context)
@@ -432,6 +454,11 @@ Stored identity is an expectation, not authority; read it afresh on each check."
   (when (and (eq job (plist-get state :application)) (not (plist-get job :done)))
     (plist-put job :timer (run-at-time .01 nil #'mevedel-memory-pass--application-step state job))))
 
+(defun mevedel-memory-pass--hold-file (job file)
+  "Record held note FILE in JOB, mutating the shared plist in place.
+The `setf' expansion of `plist-get' would rebind a local copy instead."
+  (plist-put job :deferred (cons file (plist-get job :deferred))))
+
 (defun mevedel-memory-pass--application-pending (state job)
   "Select pending identities for STATE's JOB in its owned recovery child."
   (with-current-buffer (plist-get state :origin-buffer)
@@ -445,6 +472,8 @@ Stored identity is an expectation, not authority; read it afresh on each check."
                 (lambda (reply)
                   (plist-put job :operation nil)
                   (when (and (eq job (plist-get state :application)) (not (plist-get job :done)))
+                    (mevedel-memory-pass--timing-add state :application-recovery-round-trip-ms
+                                                   (plist-get reply :recovery-round-trip-ms))
                     (when (plist-get reply :cancelled)
                       (plist-put job :cancelled t)
                       (plist-put state :stop-apply t))
@@ -473,14 +502,13 @@ Stored identity is an expectation, not authority; read it afresh on each check."
 	      (plist-put job :pending-loaded t))
 	    (when (and (null (plist-get job :items)) (not (plist-get job :pending-loaded)))
 	      (plist-put job :pending-loaded t)
-	      (unless (plist-get job :deferred)
-		(mevedel-memory-pass--application-pending state job)
-		(cl-return-from mevedel-memory-pass--application-step nil)))
+	      (mevedel-memory-pass--application-pending state job)
+	      (cl-return-from mevedel-memory-pass--application-step nil))
 	    (if (setq item (pop (plist-get job :items)))
 		(if (and (plist-get item :note)
-			 (or (plist-get job :deferred) (mevedel-memory-notes-workspace-busy-p workspace)))
+			 (mevedel-memory-notes-in-use-p workspace (plist-get item :file)))
 		    (progn
-		      (plist-put job :deferred t)
+		      (mevedel-memory-pass--hold-file job (plist-get item :file))
 		      (cl-incf (plist-get job :held))
 		      (mevedel-memory-pass--application-next state job))
 		  (with-current-buffer (plist-get state :origin-buffer)
@@ -497,6 +525,8 @@ Stored identity is an expectation, not authority; read it afresh on each check."
 				(lambda (reply)
 				  (plist-put job :operation nil)
 				  (when (and (eq job (plist-get state :application)) (not (plist-get job :done)))
+                                    (mevedel-memory-pass--timing-add state :application-recovery-round-trip-ms
+                                                                   (plist-get reply :recovery-round-trip-ms))
 				    (when (plist-get reply :error)
 				      (plist-put job :error (or (plist-get job :error) (plist-get reply :error))))
 				    (when (plist-get reply :cancelled)
@@ -509,12 +539,12 @@ Stored identity is an expectation, not authority; read it afresh on each check."
                                        ((and (not status) (or (plist-get reply :held) (plist-get reply :cancelled)))
                                         (if (and (plist-get reply :held) (plist-get item :note)
                                                  (mevedel-memory-pass--application-live-p state job))
-                                            (plist-put job :deferred t)
+                                            (mevedel-memory-pass--hold-file job (plist-get item :file))
                                           (plist-put state :stop-apply t))
                                         (cl-incf (plist-get job :held)))
 				       ((eq status 'held)
 					(cl-incf (plist-get job :held))
-					(when (plist-get item :note) (plist-put job :deferred t)))
+					(when (plist-get item :note) (mevedel-memory-pass--hold-file job (plist-get item :file))))
 					       (t (cl-incf (plist-get job :unapplied)))))
 				    ;; No public/proof observation survives this attempt;
 				    ;; the next owned helper reads both afresh.
@@ -522,7 +552,7 @@ Stored identity is an expectation, not authority; read it afresh on each check."
 				(lambda () (mevedel-memory-pass--application-live-p state job))))))
 	      (plist-put job :done t)
 	      (when (and (plist-get job :deferred) (not (plist-get state :stop-apply)))
-		(mevedel-memory-pass--defer-notes state))
+		(mevedel-memory-pass--defer-notes state (plist-get job :deferred)))
 	      (funcall (plist-get job :callback)
 		       (list :updated-files (length (delete-dups (plist-get job :files)))
 			     :cancelled (plist-get job :cancelled)
@@ -543,14 +573,16 @@ Stored identity is an expectation, not authority; read it afresh on each check."
 Storage recovery runs in a real child; original target ownership and all live
 buffer checks and mutations remain in the editor.  Nil ACCEPTED retries pending
 automatic proposals without starting inference.  Return the application job."
+  (mevedel-memory-pass--timing-start state :application-duration-ms)
   (let* ((pass (plist-get (plist-get accepted :prepared) :id))
          (context (or (plist-get state :application-context)
                       (mevedel-memory-decision--operation-context
                        (plist-get state :workspace) (plist-get state :origin-buffer))))
-         (job (append (list :pass pass :callback callback :applied 0 :held 0 :unapplied 0
+         (job (append (list :pass pass :callback callback :applied 0 :held 0 :unapplied 0 :deferred nil
                             :items (mapcar (lambda (proposal)
                                              (list :pass pass :proposal (plist-get proposal :id)
-                                                   :note (mevedel-memory-proposal-note-action-p (plist-get proposal :action))))
+                                                   :note (mevedel-memory-proposal-note-action-p (plist-get proposal :action))
+                                                   :file (plist-get proposal :file)))
                                            (plist-get accepted :proposals)))
                       (copy-sequence context))))
     (plist-put state :application-context context)
@@ -558,12 +590,34 @@ automatic proposals without starting inference.  Return the application job."
     (mevedel-memory-pass--application-next state job)
     job))
 
-(defun mevedel-memory-pass--apply-pending (workspace &optional skip)
+(defun mevedel-memory-pass--apply-automatic (workspace pass proposal &optional on-applied)
+  "Synchronously apply PROPOSAL of PASS in WORKSPACE as automatic application.
+ON-APPLIED receives confirmed paths.  Return `applied' for a terminal
+decision, `held' while an open session uses a note's file (checked before and
+at its write), `quit' after interruption, and `unapplied' otherwise."
+  (let ((note (mevedel-memory-proposal-note-action-p (plist-get proposal :action))))
+    (if (and note (mevedel-memory-notes-in-use-p workspace (plist-get proposal :file)))
+        'held
+      (condition-case nil
+          (let ((status (plist-get (mevedel-memory-decision-apply
+                                    workspace pass (plist-get proposal :id) on-applied
+                                    (and note #'always))
+                                   :status)))
+            (cond ((mevedel-memory-decision-terminal-status-p status) 'applied)
+                  ((and note (eq status 'held)) 'held)
+                  (t 'unapplied)))
+        (mevedel-memory-decision-held 'held)
+        (quit 'quit)
+        (error 'unapplied)))))
+
+(defun mevedel-memory-pass--apply-pending (workspace &optional skip on-held)
   "Apply undecided proposals of earlier automatic note reviews in WORKSPACE.
 Only reviews whose frozen mode was `auto' qualify, and only while the
 current mode is still `auto'.  SKIP names a pass already handled.  Return
 \(APPLIED . UNAPPLIED): proposals reaching a terminal decision, and those
-that did not, including ones still waiting for their extraction."
+that did not, including ones still waiting for their extraction.  A note
+decision whose file an open session uses stays undecided; ON-HELD, when
+non-nil, receives that file."
   (let ((count 0) (failed 0)
         entries
         (passes (make-hash-table :test #'equal)))
@@ -577,38 +631,48 @@ that did not, including ones still waiting for their extraction."
                                                 (plist-get (plist-get accepted :prepared) :scope)))
                                           :mode)))
             (dolist (proposal (plist-get accepted :proposals))
-              (unless (mevedel-memory-decision-status workspace (plist-get proposal :id) entries passes)
+              (cond
+               ((mevedel-memory-decision-status workspace (plist-get proposal :id) entries passes))
+               (t
                 (unwind-protect
-                    (condition-case nil
-                        (if (mevedel-memory-decision-terminal-status-p
-                             (plist-get (mevedel-memory-decision-apply workspace pass (plist-get proposal :id))
-                                        :status))
-                            (cl-incf count)
-                          (cl-incf failed))
-                      (error (cl-incf failed)))
+                    (pcase (mevedel-memory-pass--apply-automatic workspace pass proposal)
+                      ('applied (cl-incf count))
+                      ('held (when on-held (funcall on-held (plist-get proposal :file))))
+                      ('quit (signal 'quit nil))
+                      (_ (cl-incf failed)))
                   ;; Application recovers and mutates under fresh ownership;
                   ;; no earlier proof may authorize the next selection.
                   (setq entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
-                  (clrhash passes))))))))
+                  (clrhash passes)))))))))
     (cons count failed)))
 
-(defun mevedel-memory-pass--defer-notes (state)
-  "Retry STATE's held note decisions using its original application context."
+(defun mevedel-memory-pass--defer-notes (state &optional files)
+  "Retry STATE's held note decisions using its original application context.
+FILES are the held notes' relative paths; the retry waits until one is free.
+Without FILES, the next tick retries."
   (let ((workspace (plist-get state :workspace)))
-    (unless (or (plist-get state :stop-apply) (gethash workspace mevedel-memory-pass--deferred))
-      (let ((retry (list :timer nil :context (plist-get state :application-context))))
-        (puthash workspace retry mevedel-memory-pass--deferred)
-        (plist-put retry :timer (run-with-timer 60 60 #'mevedel-memory-pass--retry-notes workspace retry))))))
+    (unless (plist-get state :stop-apply)
+      (if-let* ((retry (gethash workspace mevedel-memory-pass--deferred)))
+          (plist-put retry :files (seq-union (plist-get retry :files) files))
+        (let ((retry (list :timer nil :context (plist-get state :application-context)
+                           :files (delete-dups (copy-sequence files)))))
+          (puthash workspace retry mevedel-memory-pass--deferred)
+          (plist-put retry :timer (run-with-timer 60 60 #'mevedel-memory-pass--retry-notes workspace retry)))))))
 
 (defun mevedel-memory-pass--retry-notes (workspace &optional expected)
-  "Apply WORKSPACE's held automatic note decisions when nothing is running.
+  "Apply WORKSPACE's held automatic note decisions once one of them is free.
+A held note is free when no open session uses its file and no local
+consolidation, drain or busy transport runs.
 EXPECTED, when non-nil, is this timer's exact context, not a newer retry.
 The retry ends after an idle attempt or invalidation of its original actor."
   (when-let* ((retry (gethash workspace mevedel-memory-pass--deferred)))
     (when (or (null expected) (eq retry expected))
       (condition-case err
           (let* ((context (plist-get retry :context))
-                 (busy (or (mevedel-memory-notes-workspace-busy-p workspace)
+                 (busy (or (let ((in-use (mevedel-memory-notes-in-use workspace)))
+                             (and (plist-get retry :files)
+                                  (cl-every (lambda (file) (member file in-use))
+                                            (plist-get retry :files))))
                            (mevedel-transport-busy-p (mevedel-workspace-root workspace))))
                  (current (mevedel-memory-pass--application-context-current-p context))
                  (key (mevedel-memory-store--claim-directory workspace)))
@@ -647,6 +711,8 @@ The retry ends after an idle attempt or invalidation of its original actor."
 (cl-defun mevedel-memory-pass--finish (state result)
   "Settle STATE once from RESULT and publish only its accepted immutable reply."
   (unless (plist-get state :settled)
+    (dolist (key '(:preparation-duration-ms :review-request-duration-ms :publication-duration-ms))
+      (mevedel-memory-pass--timing-end state key))
     (when (and (eq (plist-get result :outcome) 'success)
                (not (plist-get state :publication-finished))
                (mevedel-journal-worker-supported-p (plist-get state :workspace))
@@ -654,6 +720,7 @@ The retry ends after an idle attempt or invalidation of its original actor."
                              (plist-get (plist-get (plist-get state :prepared) :scope) :roots))))
       (unless (plist-get state :publishing)
         (plist-put state :publishing t)
+        (mevedel-memory-pass--timing-start state :publication-duration-ms)
         (condition-case err
             (plist-put state :worker
                        (mevedel-journal-worker-start
@@ -671,6 +738,7 @@ The retry ends after an idle attempt or invalidation of its original actor."
                         nil (list :prepared (plist-get state :prepared)
                                   :reply (plist-get result :reply) :entries (plist-get result :entries)
                                   :notes (plist-get result :notes)
+                                  :inspected (plist-get result :inspected)
                                   :model (mevedel-memory-pass--producer result)
                                   :references (plist-get (plist-get result :references) :references))))
           (error
@@ -712,18 +780,21 @@ The retry ends after an idle attempt or invalidation of its original actor."
           (when (eq (plist-get result :outcome) 'success)
             (setq failure-class 'publication)
             (unless (plist-get state :publication-finished)
+              (mevedel-memory-pass--timing-start state :publication-duration-ms)
               (setq accepted
                     (mevedel-memory-store-accept
                      workspace (plist-get state :prepared) (plist-get result :reply)
                      (plist-get result :entries) (mevedel-memory-pass--producer result)
                      (plist-get (plist-get result :references) :references)
-                     (plist-get result :notes)))
+                     (plist-get result :notes) (plist-get result :inspected)))
               (unless accepted (error "Memory pass lost ownership before accepting its result"))
               (setq entry (mevedel-memory-store-publish workspace id)))
             (when (string-empty-p (plist-get entry :focus))
               (setf (mevedel-workspace-memory-schedule workspace) nil)))
         (error (setq result (list :outcome 'error :error (error-message-string err)))))
+      (mevedel-memory-pass--timing-end state :publication-duration-ms)
       (unless entry
+        (mevedel-memory-pass--timing-start state :retirement-duration-ms)
         (condition-case err
             (progn
               (mevedel-journal-claim-settle claim status "")
@@ -742,13 +813,16 @@ The retry ends after an idle attempt or invalidation of its original actor."
                                '(failed cancelled expired)))
                 (mevedel-memory-store-release workspace id)))
           (error (setq recovery-error (error-message-string err)))))
+      (mevedel-memory-pass--timing-end state :retirement-duration-ms)
       (when (plist-get state :publishing)
         (setf (mevedel-workspace-journal-observation workspace) nil))
       (cl-labels ((complete (applied)
+			    (mevedel-memory-pass--timing-end state :application-duration-ms)
 		    (plist-put state :result
 			       (append (list :outcome (if entry 'success (plist-get result :outcome))
 					     :id id :entry entry :error (or (plist-get result :error) (plist-get applied :error))
 					     :mode (plist-get (plist-get state :telemetry) :mode)
+                                             :queue-duration-ms (plist-get (plist-get state :telemetry) :queue-duration-ms)
 					     :stopped (plist-get state :stop-apply)
 					     :recovery-required (or recovery-error (and accepted (not entry)))
 					     :remaining (if entry
@@ -784,9 +858,10 @@ The retry ends after an idle attempt or invalidation of its original actor."
 			   (cond (entry 'memory-consolidation-completed)
 				 ((eq status 'cancelled) 'memory-consolidation-killed)
 				 (t 'memory-consolidation-failed))
-			   (append (plist-get state :telemetry) usage
+			   (append (plist-get state :telemetry) usage (plist-get state :phase-durations)
 				   (list :model model :outcome (plist-get (plist-get state :result) :outcome)
-					 :duration-ms (round (* 1000 (max 0 (- (float-time) (or (plist-get state :started-at) (float-time))))))
+					 :duration-ms (when-let* ((start (plist-get state :started-at)))
+                                                        (round (* 1000 (max 0 (- (mevedel-telemetry--monotonic-now) start)))))
 					 :failure-class (and (not entry) (not (eq status 'cancelled)) failure-class)
 					 :reviewed-count (length (plist-get entry :digests))
 					 :covered-count (if (eq 'general (plist-get (plist-get state :telemetry) :scope))
@@ -849,7 +924,8 @@ The accepted bundle survives a publication failure for checked recovery."
                 (mevedel-memory-store-accept
                  workspace (plist-get payload :prepared) (plist-get payload :reply)
                  (plist-get payload :entries) (plist-get payload :model)
-                 (plist-get payload :references) (plist-get payload :notes)))
+                 (plist-get payload :references) (plist-get payload :notes)
+                 (plist-get payload :inspected)))
           (unless accepted (error "Memory pass lost ownership before accepting its result"))
           (list :ok t :accepted accepted
                 :entry (mevedel-memory-store-publish
@@ -877,10 +953,12 @@ inference and is marked :housekeeping-only."
          (mevedel-memory-notes-review-days (plist-get payload :notes-review-days))
          (mevedel-memory-notes-undo-quota (plist-get payload :notes-quota))
          (mevedel-memory-notes-max-review-bytes (plist-get payload :notes-max-review-bytes))
-         notes scope)
+         recovery-duration notes scope)
     (mevedel-memory-store--assert-owned claim)
-    (mevedel-memory-decision-recover workspace)
-    (mevedel-memory-store-recover workspace)
+    (let ((start (mevedel-telemetry--monotonic-now)))
+      (mevedel-memory-decision-recover workspace)
+      (mevedel-memory-store-recover workspace)
+      (setq recovery-duration (round (* 1000 (max 0 (- (mevedel-telemetry--monotonic-now) start))))))
     (let* ((observed
             (mevedel-memory-store--mutation
              workspace
@@ -890,14 +968,15 @@ inference and is marked :housekeeping-only."
                (mevedel-journal-store-entries (mevedel-workspace-root workspace)))))
            (capture
             (lambda ()
-              (unless (or notes (not general) (plist-get payload :defer-notes))
+              (unless (or notes (not general))
                 (mevedel-memory-store--assert-owned claim)
                 ;; Memory and instructions are captured first: files they
                 ;; cite are protected from cleanup.
                 (setq scope (mevedel-memory-scope-capture workspace nil (plist-get payload :configuration))
                       notes (or (mevedel-memory-pass--capture-notes
                                  workspace observed (plist-get payload :mode)
-                                 (mevedel-memory-pass--cited-texts scope))
+                                 (mevedel-memory-pass--cited-texts scope)
+                                 (plist-get payload :in-use-notes))
                                 (list :root nil))))
               (plist-get notes :root)))
            (selection (if automatic
@@ -917,7 +996,7 @@ inference and is marked :housekeeping-only."
           (list :skipped t :schedule (mevedel-workspace-memory-schedule workspace))
         (when (and (plist-get payload :drain) (not entries) (not (plist-get notes :root)))
           (cl-return-from mevedel-memory-pass--prepare
-            (if (plist-get payload :defer-notes) (list :waiting t) (list :empty t))))
+            (list :empty t)))
         (unless (or entries (plist-get notes :root) (plist-get payload :memory-only))
           (error "No eligible digests or shared notes for consolidation"))
         (mevedel-memory-store--assert-owned claim)
@@ -927,6 +1006,7 @@ inference and is marked :housekeeping-only."
                (scope (if root (plist-put scope :roots (append (plist-get scope :roots) (list root))) scope))
                (prepared (mevedel-memory-store-prepare workspace claim scope entries focus)))
           (list :selection selection :schedule (mevedel-workspace-memory-schedule workspace)
+                :preparation-recovery-duration-ms recovery-duration
                 :record prepared :rejections (mevedel-memory-decision-rejections workspace)
                 :notes (cl-loop for key in '(:notes :attachments :directories :remaining :blocked :blocked-count)
                                 append (list key (plist-get notes key)))
@@ -940,9 +1020,10 @@ inference and is marked :housekeeping-only."
                            when (plist-get (cdr file) :bytes)
                            collect (decode-coding-string (plist-get (cdr file) :bytes) 'utf-8-unix))))
 
-(defun mevedel-memory-pass--capture-notes (workspace entries mode cited)
+(defun mevedel-memory-pass--capture-notes (workspace entries mode cited &optional in-use)
   "Capture WORKSPACE's ready shared files from public ENTRIES under MODE.
 CITED are memory and instruction texts whose citations protect files.
+IN-USE lists relative paths open sessions are using; they wait.
 First collect undo blobs no retained write needs.  The caller holds the
 consolidation claim, which also excludes concurrent application."
   (when-let* ((configured (mevedel-memory-notes-directory workspace))
@@ -952,12 +1033,15 @@ consolidation claim, which also excludes concurrent application."
     (ignore-errors
       (mevedel-memory-notes-collect-blobs
        workspace (mevedel-memory-notes-blob-directory (file-truename configured))))
-    (mevedel-memory-notes-capture workspace entries :mode mode :external cited)))
+    (mevedel-memory-notes-capture workspace entries :mode mode :external cited :in-use in-use)))
 
 (defun mevedel-memory-pass--prepared (state result focus memory-only)
   "Start STATE's configured review from prepared RESULT, FOCUS and MEMORY-ONLY.
 Cancelled or expired storage replies never start a model request."
   (unless (plist-get state :settled)
+    (mevedel-memory-pass--timing-end state :preparation-duration-ms)
+    (mevedel-memory-pass--timing-add state :preparation-recovery-duration-ms
+                                   (plist-get (plist-get result :prepared) :preparation-recovery-duration-ms))
     (plist-put state :worker nil)
     (condition-case err
         (let* ((workspace (plist-get state :workspace))
@@ -969,7 +1053,7 @@ Cancelled or expired storage replies never start a model request."
           (setf (mevedel-workspace-memory-schedule workspace) (plist-get bundle :schedule)
                 (mevedel-workspace-memory-observation workspace) nil
                 (mevedel-workspace-journal-observation workspace) nil)
-          (if (or (plist-get bundle :empty) (plist-get bundle :waiting)
+          (if (or (plist-get bundle :empty)
                   (and (plist-get state :automatic) (plist-get bundle :skipped)))
               (progn
                 (mevedel-journal-claim-settle claim 'cancelled "")
@@ -978,10 +1062,11 @@ Cancelled or expired storage replies never start a model request."
                 (plist-put state :settled t)
                 (plist-put state :skipped t)
                 (remhash (plist-get claim :directory) mevedel-memory-pass--running)
-                (when (or (plist-get bundle :empty) (plist-get bundle :waiting))
-                  (let ((outcome (if (plist-get bundle :empty) 'empty 'waiting)))
-                    (plist-put state :result (list :outcome outcome))
-                    (funcall (plist-get state :callback) (plist-get state :result)))))
+                (when (plist-get bundle :empty)
+                  (plist-put state :result
+                             (list :outcome 'empty :queue-duration-ms
+                                   (plist-get (plist-get state :telemetry) :queue-duration-ms)))
+                  (funcall (plist-get state :callback) (plist-get state :result))))
             (unless (and prepared (equal claim (plist-get prepared :claim)))
               (error "Memory preparation returned another claim"))
             (plist-put state :selection (plist-get bundle :selection))
@@ -996,6 +1081,7 @@ Cancelled or expired storage replies never start a model request."
                 ;; Proved quiet, unreferenced attachments and empty folders
                 ;; need no inference; acceptance derives their decisions.
                 (mevedel-memory-pass--finish state (list :outcome 'success :reply nil :entries nil :notes nil))
+            (mevedel-memory-pass--timing-start state :review-request-duration-ms)
             (plist-put state :request
                        (with-current-buffer (plist-get state :origin-buffer)
                          (mevedel-memory-review-request
@@ -1011,7 +1097,7 @@ Cancelled or expired storage replies never start a model request."
       (error (mevedel-memory-pass--finish
               state (list :outcome 'error :error (error-message-string err)))))))
 
-(cl-defun mevedel-memory-pass-start (workspace callback &key (focus "") memory-only automatic drain)
+(cl-defun mevedel-memory-pass-start (workspace callback &key (focus "") memory-only automatic drain queued-at)
   "Start one sessionless consolidation in WORKSPACE and return its state.
 CALLBACK receives its settled outcome and diagnostics. Automatic admission can
 settle the returned state as :skipped without a callback or model request.
@@ -1022,7 +1108,8 @@ FOCUS selects a bounded focused review; MEMORY-ONLY allows an empty batch.
 AUTOMATIC uses the general-review time/count gates after fenced recovery.
 DRAIN is the exact explicit drain owner, when non-nil; an empty general
 selection settles with outcome `empty' without starting inference or
-publishing a review."
+publishing a review.  QUEUED-AT is an optional parent-local monotonic timestamp
+from the automatic or drain queue owner; direct starts omit admission dwell."
   (let ((root (copy-sequence (mevedel-workspace-root workspace))))
     (unless (and (stringp focus) (<= (string-bytes focus) 4096))
       (error "Memory focus exceeds its byte limit"))
@@ -1066,10 +1153,12 @@ publishing a review."
                           (cl-return-from mevedel-memory-pass-start nil))
 			(if automatic (cl-return-from mevedel-memory-pass-start nil)
 			  (error "Memory consolidation is busy")))))
+	   (admitted-at (mevedel-telemetry--monotonic-now))
 	   (state (list :workspace workspace :claim claim :callback callback :settled nil
 			:automatic automatic :drain drain :origin-buffer (current-buffer)
-			:started-at (float-time)
+			:started-at admitted-at
 			:telemetry (list :pass-id (plist-get claim :owner)
+					 :queue-duration-ms (when queued-at (round (* 1000 (max 0 (- admitted-at queued-at)))))
 					 :attempt-generation (plist-get claim :generation)
 					 :mode mevedel-memory-consolidation-mode :workload 'memory
 					 :scope (if (string-empty-p focus) 'general 'focused))))
@@ -1124,8 +1213,8 @@ publishing a review."
 				  :notes-review-days mevedel-memory-notes-review-days
 				  :notes-quota mevedel-memory-notes-undo-quota
 				  :notes-max-review-bytes mevedel-memory-notes-max-review-bytes
-				  ;; Active conversations may still be using notes.
-				  :defer-notes (mevedel-memory-notes-workspace-busy-p workspace)
+				  ;; Notes that open sessions are using wait; others proceed.
+				  :in-use-notes (mevedel-memory-notes-in-use workspace)
 				  :client (mevedel-workspace-identity-client)
 				  :configuration (list :roots roots :instructions
 						       (mevedel-system-workspace-config-files workspace))))
@@ -1133,7 +1222,8 @@ publishing a review."
 	      (unless (and (not (plist-get state :settled)) (funcall currentp))
 		(mevedel-memory-pass--finish state '(:outcome aborted))
 		(cl-return-from mevedel-memory-pass-start nil))
-	      (if (and (mevedel-journal-worker-supported-p workspace)
+		      (mevedel-memory-pass--timing-start state :preparation-duration-ms)
+		      (if (and (mevedel-journal-worker-supported-p workspace)
 		       (not (cl-some (lambda (root) (file-remote-p (plist-get root :dir))) roots)))
 		  (plist-put state :worker
 			     (mevedel-journal-worker-start workspace 'memory-prepare ready nil payload))

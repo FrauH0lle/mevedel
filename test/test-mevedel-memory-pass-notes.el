@@ -13,8 +13,10 @@
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-memory-pass)
+(require 'mevedel-memory-decision)
 (require 'mevedel-memory-notes)
 (require 'mevedel-memory-review)
+(require 'mevedel-resource)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-system)
 (require 'gptel-openai)
@@ -45,13 +47,13 @@
                           (gptel--known-backends nil)
                           (backend (gptel-make-openai "notes-test" :key "test-only" :models '(test-model)))
                           (now 1800000000)
-                          (calls 0) (busy nil) callback scope-seen entries-seen state result reply)
+                          (calls 0) callback scope-seen entries-seen state result reply buffers)
                          :before-each ((make-directory shared t) (make-directory memory t))
                          :after-each ((mevedel-memory-pass-stop-all)
+                                      (mapc (lambda (buffer) (when (buffer-live-p buffer) (kill-buffer buffer))) buffers)
                                       (delete-directory root t)))
                  (cl-letf (((symbol-value 'mevedel-journal-worker--child-p) t)
                            ((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) now))
-                          ((symbol-function 'mevedel-memory-notes-workspace-busy-p) (lambda (_) busy))
                            ((symbol-function 'mevedel-memory-review-request)
                            (lambda (scope entries cb &rest _)
                               (cl-incf calls)
@@ -70,6 +72,20 @@
                                    (insert-file-contents-literally path)
                                    (buffer-string)))
                                (address (relative) (mevedel-memory-notes-address relative))
+                               (session-buffer (&optional request)
+                                 ;; An open conversation in this workspace, running a turn
+                                 ;; when REQUEST is non-nil.
+                                 (let ((buffer (generate-new-buffer " *notes-session*")))
+                                   (push buffer buffers)
+                                   (with-current-buffer buffer
+                                     (setq-local mevedel--session (mevedel-session--create :workspace workspace))
+                                     (setq-local mevedel--current-request request))
+                                   buffer))
+                               (use (buffer relative)
+                                 ;; The production resource path records a session's tool access.
+                                 (mevedel-resource-prepare
+                                  'read (address relative)
+                                  (list :session (buffer-local-value 'mevedel--session buffer))))
                                (memory-id ()
                                  (car (seq-find (lambda (row) (eq 'memory (plist-get (cdr row) :kind)))
                                                 (plist-get (mevedel-memory-scope-capture workspace) :roots))))
@@ -90,19 +106,24 @@
                                     (concat "## Notes\n"
                                             (mapconcat
                                              (lambda (disposition)
-                                               (format "````proposal\nnote: %S\ndisposition: %S\nreason: \"Reviewed\"\n---\n%s````\n"
+                                               (format "````proposal\nnote: %S\ndisposition: %S\nreason: \"Reviewed\"\n%s---\n%s````\n"
                                                        (nth 0 disposition) (nth 1 disposition)
+                                                       (cond ((nth 3 disposition))
+                                                             ((equal (nth 1 disposition) "delete")
+                                                              "open-items: []\nresolved-by: []\n")
+                                                             (t ""))
                                                        (if (nth 2 disposition) (concat (nth 2 disposition) "\n") "")))
                                              dispositions "")))
                                   "## No action\n- none"))
                                (start (&rest args)
                                  (setq result nil state (apply #'mevedel-memory-pass-start workspace
                                                                (lambda (value) (setq result value)) args)))
-                               (finish ()
+                               (finish (&optional inspected)
                                  (funcall callback
                                           (list :outcome 'success :entries nil :reply reply
                                                 :notes (mapcar (lambda (document) (plist-get document :id))
                                                                (mevedel-memory-notes-documents scope-seen))
+                                                :inspected inspected
                                                 :policy (list :backend backend :model 'test-model))))
                                (pass () (plist-get (plist-get state :claim) :owner))
                                (proposals () (plist-get (mevedel-memory-store-accepted workspace (pass)) :proposals))
@@ -167,6 +188,30 @@
                      (should (file-exists-p path))
                      ;; The unextracted note returns to review.
                      (should (= 1 (plist-get (capture) :notes)))))
+                 :doc "capture authenticates only present-path decisions and rechecks recreated sources"
+                 (let ((gone (note "gone.md" "Completed investigation.\n"))
+                       (kept (note "kept.md" "Open handoff.\n")))
+                   (should (start :automatic t))
+                   (setq reply (text nil (list (list (address "gone.md") "delete")
+                                               (list (address "kept.md") "keep"))))
+                   (finish)
+                   (should-not (file-exists-p gone))
+                   (should (file-exists-p kept))
+                   (let ((reader (symbol-function 'mevedel-memory-decision-status)) observed)
+                     (cl-letf (((symbol-function 'mevedel-memory-decision-status)
+                                (lambda (ws id &rest args)
+                                  (push id observed)
+                                  (apply reader ws id args))))
+                       (should (= 0 (plist-get (capture) :notes)))
+                       (should (equal (list (plist-get (proposal 'note-keep) :id)) observed))
+                       ;; Both identical and changed recreations must reenter
+                       ;; history authentication; absence is not cached.
+                       (dolist (body '("Completed investigation.\n" "New investigation.\n"))
+                         (note "gone.md" body)
+                         (setq observed nil)
+                         (should (= 1 (plist-get (capture) :notes)))
+                         (should (member (plist-get (proposal 'note-delete) :id) observed))
+                         (should (member (plist-get (proposal 'note-keep) :id) observed))))))
                  :doc "keep and condense retain their versions until reconsideration or an edit"
                  (let ((kept (note "kept.md" "Open handoff: continue the parser fix tomorrow.\n"))
                        (condensed (note "long.md" "Finding: obsolete detail.\nOpen: verify the remote case.\n")))
@@ -274,6 +319,48 @@
                      (should (string-prefix-p "Kept: a memory topic" (plist-get (proposal 'note-keep "lab/report.md") :reason)))
                      (should (file-exists-p report))
                      (should (file-exists-p image))))
+                 :doc "a delete listing open items applies only with quoted read workspace evidence for each"
+                 ;; Real failure (run08, 2026-10-28): a reviewer with no tool calls
+                 ;; proposed deleting an audit while naming two unresolved findings;
+                 ;; with tools, a reviewer cited a file it read that did not record them.
+                 (let ((paths (list (note "unread.md" "Findings 2 and 1B belong to the partner.\n")
+                                    (note "claimed.md" "Acceptance limit: text-scale without resize.\n")
+                                    (note "elsewhere.md" "Finding 7 not re-measured.\n")
+                                    (note "fewer.md" "Findings 1B and 7 remain open.\n")
+                                    (note "resolved.md" "Finding 1B remains open.\n")
+                                    (note "done.md" "Fixed and verified.\n")))
+                       (anchor "./docs/adr/0126.md: One viewport anchor per window (2026-10-18). Logical window-start restoration"))
+                   (should (start :automatic t))
+                   (setq reply
+                         (text nil (list (list (address "unread.md") "delete" nil
+                                               "open-items: [\"Finding 2\", \"Finding 1B\"]\nresolved-by: []\n")
+                                         ;; Read, but the quote is not there: over-claiming.
+                                         (list (address "claimed.md") "delete" nil
+                                               "open-items: [\"Text-scale limit\"]\nresolved-by: [\"docs/adr/0126.md: the text-scale limit is resolved\"]\n")
+                                         ;; The quote names a file the review never read.
+                                         (list (address "elsewhere.md") "delete" nil
+                                               "open-items: [\"Finding 7\"]\nresolved-by: [\"docs/backlog.md: Finding 7 was re-measured\"]\n")
+                                         (list (address "fewer.md") "delete" nil
+                                               (format "open-items: [\"Finding 1B\", \"Finding 7\"]\nresolved-by: [%S]\n" anchor))
+                                         ;; Quotes span a line break and ignore line numbers.
+                                         (list (address "resolved.md") "delete" nil
+                                               (format "open-items: [\"Finding 1B\"]\nresolved-by: [%S]\n" anchor))
+                                         (list (address "done.md") "delete"))))
+                   (finish (list (cons "docs/adr/0126.md"
+                                       (concat "  352\t- **One viewport anchor per window (2026-10-18).** Logical window-start\n"
+                                               "  353\t  restoration previously overrode the composer's row\n"))
+                                 (cons "mevedel-view-zone.el" "  1\t;;; mevedel-view-zone.el\n")))
+                   (should (eq 'success (plist-get result :outcome)))
+                   (should (string-prefix-p
+                            "Kept: the review did not quote read workspace evidence resolving or recording each of these open items: Finding 2; Finding 1B. Reviewer: "
+                            (plist-get (proposal 'note-keep "unread.md") :reason)))
+                   (should (proposal 'note-keep "claimed.md"))
+                   (should (proposal 'note-keep "elsewhere.md"))
+                   (should (proposal 'note-keep "fewer.md"))
+                   (should (proposal 'note-delete "resolved.md"))
+                   (should (proposal 'note-delete "done.md"))
+                   (should-not (proposal 'note-delete "unread.md"))
+                   (dotimes (index 4) (should (file-exists-p (nth index paths)))))
                  :doc "an attachment referenced by a note written after capture is not removed"
                  (let ((mevedel-memory-consolidation-mode 'propose)
                        (image (note "old.png" (unibyte-string 0 1 2 3))))
@@ -300,17 +387,46 @@
                    (should (start :automatic t))
                    (should (= 2 (length entries-seen)))
                    (should (= 1 (length (mevedel-memory-notes-documents scope-seen)))))
-                 :doc "automatic note decisions wait while a turn runs and apply once idle"
-                 (let ((path (note "busy.md" "Nothing durable.\n")))
+                 :doc "an old handoff an open session uses waits while an unrelated note applies during another turn"
+                 (let ((handoff (note "handoff.md" "Open handoff: port the fix.\n" 240))
+                       (quiet (note "quiet.md" "Nothing durable.\n"))
+                       (reader (session-buffer)))
+                   (session-buffer (list :request 'live))
+                   (use reader "handoff.md")
+                   ;; A folder search is not use of every note in it.
+                   (mevedel-resource-prepare 'glob "work://shared/"
+                                             (list :session (buffer-local-value 'mevedel--session reader)))
+                   (should (equal '("handoff.md") (mevedel-memory-notes-in-use workspace)))
                    (should (start :automatic t))
-                   (setq reply (text nil (list (list (address "busy.md") "delete"))) busy t)
+                   (should (equal (list (address "quiet.md"))
+                                  (mapcar (lambda (document) (plist-get document :id))
+                                          (mevedel-memory-notes-documents scope-seen))))
+                   (setq reply (text nil (list (list (address "quiet.md") "delete"))))
+                   (finish)
+                   (should (eq 'success (plist-get result :outcome)))
+                   (should-not (file-exists-p quiet))
+                   (should (eq 'applied (status (proposal 'note-delete "quiet.md"))))
+                   (should (file-exists-p handoff))
+                   ;; Closing the reading session ends the use.
+                   (kill-buffer reader)
+                   (should-not (mevedel-memory-notes-in-use workspace)))
+                 :doc "a note decision waits while an open session uses its file and applies once that use ends"
+                 (let ((path (note "busy.md" "Nothing durable.\n"))
+                       (other (note "other.md" "Nothing durable either.\n"))
+                       (reader (session-buffer)))
+                   (should (start :automatic t))
+                   (setq reply (text nil (list (list (address "busy.md") "delete")
+                                               (list (address "other.md") "delete"))))
+                   ;; Use begins after admission; application rechecks it.
+                   (use reader "busy.md")
                    (finish)
                    (should (= 1 (plist-get result :held-count)))
                    (should (file-exists-p path))
+                   (should-not (file-exists-p other))
                    (should (gethash workspace mevedel-memory-pass--deferred))
                    (mevedel-memory-pass--retry-notes workspace)
                    (should (file-exists-p path))
-                   (setq busy nil)
+                   (kill-buffer reader)
                    (mevedel-memory-pass--retry-notes workspace)
                    (should-not (gethash workspace mevedel-memory-pass--deferred))
                    (let ((deadline (+ (float-time) 30)))

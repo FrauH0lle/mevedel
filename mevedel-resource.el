@@ -1018,6 +1018,38 @@ also rejects symlink escapes."
   "Return non-nil when work COMPONENTS address the workspace's shared files."
   (equal (car components) mevedel-resource--shared-work-component))
 
+(defvar mevedel-resource--shared-accesses (make-hash-table :test #'equal)
+  "Session tool accesses to shared working files in this Emacs.
+Maps an expanded workspace root directory to a table from relative path to
+a weak-keyed table of SESSION to its latest access `float-time'.")
+
+(defun mevedel-resource--record-shared-access (workspace relative session)
+  "Record SESSION's tool access to shared RELATIVE in WORKSPACE.
+This is evidence of use for shared-note processing, not an authority."
+  (when-let* ((root (and workspace session (mevedel-workspace-root workspace))))
+    (let* ((key (file-name-as-directory (expand-file-name root)))
+           (paths (or (gethash key mevedel-resource--shared-accesses)
+                      (puthash key (make-hash-table :test #'equal)
+                               mevedel-resource--shared-accesses)))
+           (sessions (or (gethash relative paths)
+                         (puthash relative (make-hash-table :test #'eq :weakness 'key)
+                                  paths))))
+      (puthash session (float-time) sessions))))
+
+(defun mevedel-resource-shared-accesses (workspace)
+  "Return WORKSPACE's recorded shared-file accesses.
+Each element is (RELATIVE . ACCESSES), ACCESSES being (SESSION . TIME) rows."
+  (when-let* ((root (and workspace (mevedel-workspace-root workspace)))
+              (paths (gethash (file-name-as-directory (expand-file-name root))
+                              mevedel-resource--shared-accesses)))
+    (let (rows)
+      (maphash (lambda (relative sessions)
+                 (let (accesses)
+                   (maphash (lambda (session time) (push (cons session time) accesses)) sessions)
+                   (when accesses (push (cons relative accesses) rows))))
+               paths)
+      rows)))
+
 (defun mevedel-resource-session-work-p (address)
   "Return non-nil if ADDRESS names a session-owned work descendant."
   (when (and (stringp address) (string-prefix-p "work://" address))
@@ -1821,7 +1853,13 @@ errors before any content or handler is reached."
           (setq root owner
                 physical (mevedel-resource--safe-path owner relative)
                 logical-p (or (null components)
-                              (equal components '("shared"))))))
+                              (equal components '("shared")))))
+        ;; A named shared file touched by a session's tool is in use; folder
+        ;; listings and searches are not.  Sub-agents carry their parent session.
+        (when (and (mevedel-resource--shared-work-p components) (cdr components) physical
+                   (not (file-directory-p physical)))
+          (mevedel-resource--record-shared-access
+           workspace (string-join (cdr components) "/") session)))
        ((eq scheme 'artifact)
         (setq root (mevedel-resource--root scheme session)
               physical (and root

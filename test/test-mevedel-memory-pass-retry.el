@@ -14,8 +14,23 @@
 (require 'mevedel-memory-write)
 (require 'mevedel-journal-claim)
 (require 'mevedel-journal-worker)
+(require 'mevedel-resource)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-workspace-identity)
+
+(defvar mevedel-test-retry--reader nil
+  "Buffer of an open session that uses the fixture's held note.")
+
+(defun mevedel-test-retry-use (proposal)
+  "Make an open session use PROPOSAL's shared note through the resource path."
+  (with-current-buffer mevedel-test-retry--reader
+    (mevedel-resource-prepare 'read (mevedel-memory-notes-address (plist-get proposal :file))
+                              (list :session mevedel--session))))
+
+(defun mevedel-test-retry-release ()
+  "Close the session that used the fixture's held note."
+  (with-current-buffer mevedel-test-retry--reader
+    (kill-local-variable 'mevedel--session)))
 
 (defun mevedel-test-retry-wait (predicate &optional diagnostics)
   "Drive native child callbacks until PREDICATE or a bounded test deadline.
@@ -37,10 +52,13 @@ DIAGNOSTICS returns bounded details when the expected callback never arrives."
           (mevedel-memory-pass--deferred (make-hash-table :test #'eq))
           (origin (generate-new-buffer " *retry-controller*"))
           (unrelated (generate-new-buffer " *retry-unrelated*"))
+          (mevedel-test-retry--reader (generate-new-buffer " *retry-reader*"))
           (_identity (mevedel-workspace-identity-ensure root))
           (accepted (with-current-buffer origin
                       (setq-local mevedel-memory-consolidation-mode 'auto)
                       (setq-local mevedel--session (mevedel-session--create :workspace workspace))
+                      (with-current-buffer mevedel-test-retry--reader
+                        (setq-local mevedel--session (mevedel-session--create :workspace workspace)))
                       (mevedel-test-memory-history-create workspace 1 1 100 t)))
           (accepted (car accepted))
           (proposal (car (plist-get accepted :proposals)))
@@ -70,17 +88,19 @@ DIAGNOSTICS returns bounded details when the expected callback never arrives."
          (mevedel-memory-decision--operation-stop operation))
        (remhash key mevedel-memory-pass--running)
        (when (buffer-live-p origin) (kill-buffer origin))
+       (kill-buffer mevedel-test-retry--reader)
        (kill-buffer unrelated)
        (delete-directory root t))))
 
 (defun mevedel-test-retry-defer (state accepted)
-  "Defer real ACCEPTED proposals in STATE, then end the originating turn."
+  "Defer real ACCEPTED proposals in STATE, then end the session's use of the note."
   (let ((origin (plist-get state :origin-buffer)) result)
-    (with-current-buffer origin (setq-local mevedel--current-request '(:id "active-turn")))
+    (ignore origin)
+    (mevedel-test-retry-use (car (plist-get accepted :proposals)))
     (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
     (mevedel-test-retry-wait (lambda () result))
     (should (= 1 (plist-get result :held-count)))
-    (with-current-buffer origin (setq mevedel--current-request nil))
+    (mevedel-test-retry-release)
     (remhash (mevedel-memory-store--claim-directory (plist-get state :workspace)) mevedel-memory-pass--running)))
 
 (mevedel-deftest mevedel-memory-pass--retry-notes ()
@@ -88,14 +108,14 @@ DIAGNOSTICS returns bounded details when the expected callback never arrives."
   (test)
   :doc "deferred callback uses controller-local auto even with unrelated propose buffer current"
   (mevedel-test-retry-fixture
-    (with-current-buffer origin (setq-local mevedel--current-request '(:id "active-turn")))
+    (mevedel-test-retry-use proposal)
     (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
     (mevedel-test-retry-wait (lambda () result))
     (should (= 1 (plist-get result :held-count)))
     (should retry-timer)
     (should (file-exists-p path))
     (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))
-    (with-current-buffer origin (setq mevedel--current-request nil))
+    (mevedel-test-retry-release)
     (remhash key mevedel-memory-pass--running)
     (with-current-buffer unrelated
       (should (eq 'propose mevedel-memory-consolidation-mode))

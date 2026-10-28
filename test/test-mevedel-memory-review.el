@@ -178,14 +178,18 @@
     (dolist (rule '("`user`:" "`feedback`:" "`project`:" "`reference`:"
                     "Tasks, blockers, deadlines, progress, and decisions belong"
                     "reviewing older notes containing project progress"
-                    "When future usefulness is uncertain, delete."
-                    "Unresolved defects or investigations with no record visible in the supplied"
-                    "memories, instructions or investigation reads are continuing use: condense to"
-                    "their evidence, caveats and next step until resolved, superseded or recorded"
-                    "elsewhere with the material caveats and next-step conditions intact."
+                    "When the only question is whether finished history might"
+                    "Before choosing a disposition, list the note's open items: unresolved defects"
+                    "stated acceptance limits, and work it explicitly leaves for someone else"
+                    "resolution: \"not established as unresolved\" is not a reason to delete."
+                    "superseded, or recorded elsewhere with its caveats and next-step conditions"
+                    "matching lines with `offset` and `limit`. A Read returns at most 8 KiB, so a"
+                    "unestablished, condense the note to that item's dated evidence, caveats and"
+                    "defect or a user preference; or keep it when the whole note is still in use."
+                    "open-items: [\"Each open item listed above, one short string each\"]"
+                    "is. A file that discusses the topic is not evidence unless the quoted words"
                     "investigation still in progress, including its prepared diagnostic needed"
-                    "Before deleting a note, check for unresolved findings even when its main task"
-                    "Passing checks or completed fixes in the same note do not"
+                    "main task is complete; passing checks or completed fixes do not resolve a"
                     "No action is a successful"))
       (should (string-search rule sent-system)))
     (with-current-buffer (plist-get handle :buffer)
@@ -240,7 +244,7 @@
       (review)
       (respond (replace-regexp-in-string
                 "## No action" (concat "## Notes\n````proposal\nnote: \"work://shared/note.md\"\n"
-                                       "disposition: \"delete\"\nreason: \"Nothing durable.\"\n---\n````\n## No action")
+                                       "disposition: \"delete\"\nreason: \"Nothing durable.\"\nopen-items: []\nresolved-by: []\n---\n````\n## No action")
                 mevedel-test-memory-review--none t t))
       (gptel--fsm-transition request 'DONE)
       (ert-info ((format "Review error: %s" (plist-get result :error)))
@@ -274,7 +278,7 @@
                      (concat "## Notes\n"
                              (mapconcat
                               (lambda (note)
-                                (format "````proposal\nnote: %s\ndisposition: \"delete\"\nreason: \"Nothing durable.\"\n---\n````\n"
+                                (format "````proposal\nnote: %s\ndisposition: \"delete\"\nreason: \"Nothing durable.\"\nopen-items: []\nresolved-by: []\n---\n````\n"
                                         (json-serialize (plist-get note :id))))
                               notes "")
                              "## No action")

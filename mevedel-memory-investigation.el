@@ -9,6 +9,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-memory-proposal)
 (require 'mevedel-memory-scope)
 (require 'mevedel-tool-fs-read)
 (require 'mevedel-tool-fs-search)
@@ -33,8 +34,9 @@
 	      "One bounded investigation; CURRENTP and EXHAUSTED belong to its owner.
 SCOPE contains captured roots. ENTRIES are the owner's admitted public
 journal snapshots. CURRENTP must reject expired generations. EXHAUSTED is
-called with a reason when a tool budget prevents valid completion."
-	      scope entries currentp exhausted (calls 0) (bytes 0) stopped active)
+called with a reason when a tool budget prevents valid completion.
+INSPECTED maps each normalized workspace path to the Read text delivered for it."
+	      scope entries currentp exhausted (calls 0) (bytes 0) stopped active inspected)
 
 (defun mevedel-memory-investigation-stop (state)
   "Retire STATE and cancel its active helpers without delivering late results."
@@ -54,20 +56,32 @@ called with a reason when a tool budget prevents valid completion."
     (mevedel-memory-investigation-stop state)
     (funcall (mevedel-memory-investigation-exhausted state) reason)))
 
-(defun mevedel-memory-investigation--bounded (text)
-  "Return TEXT bounded to 8 KiB of UTF-8 with a visible omission marker."
-  (mevedel--truncate-bytes (mevedel--normalize-message-text text) 8192
-                           "\n[Result truncated at 8 KiB; narrow the query.]"))
+(defun mevedel-memory-investigation--bounded (text &optional read)
+  "Return TEXT bounded to 8 KiB of UTF-8 with a visible omission marker.
+For a numbered READ result the marker names the line to continue from, since
+a whole large document otherwise shows only its beginning."
+  (let ((text (mevedel--normalize-message-text text))
+        (continue "\n[Result truncated at 8 KiB; Read again with offset %s to continue, or Grep this file for specific terms.]"))
+    (if (or (not read) (<= (string-bytes text) 8192))
+        (mevedel--truncate-bytes text 8192 "\n[Result truncated at 8 KiB; narrow the query.]")
+      ;; Cut for the longest marker so the named line was actually delivered.
+      (let* ((longest (format continue (make-string 10 ?9)))
+             (prefix (string-remove-suffix longest (mevedel--truncate-bytes text 8192 longest))))
+        (if (string-match "\\(?:\\`\\|\n\\) *\\([0-9]+\\)\t[^\n]*\\'" prefix)
+            (concat prefix (format continue (match-string 1 prefix)))
+          (mevedel--truncate-bytes text 8192 "\n[Result truncated at 8 KiB; narrow the query.]"))))))
 
-(defun mevedel-memory-investigation--deliver (state callback text)
-  "Deliver bounded TEXT to CALLBACK if STATE remains live and within budget."
+(defun mevedel-memory-investigation--deliver (state callback text &optional read)
+  "Deliver bounded TEXT to CALLBACK if STATE remains live and within budget.
+READ marks a numbered Read result.  Return the delivered text, or nil."
   (when (mevedel-memory-investigation--live-p state)
-    (let ((text (mevedel-memory-investigation--bounded text)))
+    (let ((text (mevedel-memory-investigation--bounded text read)))
       (if (> (+ (mevedel-memory-investigation-bytes state) (string-bytes text))
              mevedel-memory-investigation--max-bytes)
-          (mevedel-memory-investigation--exhaust state "Tool output budget exhausted")
+          (progn (mevedel-memory-investigation--exhaust state "Tool output budget exhausted") nil)
         (cl-incf (mevedel-memory-investigation-bytes state) (string-bytes text))
-        (funcall callback text)))))
+        (funcall callback text)
+        text))))
 
 (defun mevedel-memory-investigation--relative (path)
   "Validate one tool-relative PATH, accepting dot for a search root."
@@ -221,10 +235,18 @@ another model follow-up. Calls after retirement have no effects or callback."
                                                       (file-name-extension path t)))
                       (let ((coding-system-for-write 'utf-8-unix))
                         (write-region document nil temporary nil 'silent))
-                      (mevedel-memory-investigation--deliver
-                       state callback
-                       (mevedel-tool-fs-read-slurp-file-contents
-                        temporary (plist-get args :offset) (plist-get args :limit) path)))
+                      (let ((delivered (mevedel-memory-investigation--deliver
+                                        state callback
+                                        (mevedel-tool-fs-read-slurp-file-contents
+                                         temporary (plist-get args :offset) (plist-get args :limit) path)
+                                        t)))
+                        (when (and delivered (equal root "workspace"))
+                          ;; A delete's resolution quotes must come from text the
+                          ;; review actually read, not from a search match.
+                          (let* ((key (mevedel-memory-proposal-normalize-path path))
+                                 (row (assoc key (mevedel-memory-investigation-inspected state))))
+                            (if row (setcdr row (concat (cdr row) "\n" delivered))
+                              (push (cons key delivered) (mevedel-memory-investigation-inspected state)))))))
                   (when temporary (delete-file temporary))))))
         (error (mevedel-memory-investigation--deliver
                 state callback (concat "Error: " (error-message-string err))))))))

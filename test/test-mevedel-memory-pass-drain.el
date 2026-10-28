@@ -19,6 +19,7 @@
 (require 'mevedel-memory-notes)
 (require 'mevedel-memory-store)
 (require 'mevedel-models)
+(require 'mevedel-resource)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-skills-ui)
 (require 'mevedel-transport)
@@ -42,6 +43,7 @@
              (model (make-symbol "drain-model"))
              (backend (gptel-make-openai "drain-test" :key "test-only" :models (list model)))
              (real-request (symbol-function 'gptel-request))
+             (real-cleanup-active (symbol-function 'mevedel-journal-cleanup-active-p))
              (now (floor (float-time)))
              (calls 0) (busy nil) pending latest drain results batches retry-origin)
      :quiet t
@@ -56,7 +58,8 @@
             ((symbol-function 'mevedel-model-resolve-workload)
              (lambda (&rest _) (list :backend backend :model model)))
             ((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) now))
-            ((symbol-function 'mevedel-memory-notes-workspace-busy-p) (lambda (_) busy))
+            ((symbol-function 'mevedel-journal-cleanup-active-p)
+             (lambda (ws) (or busy (funcall real-cleanup-active ws))))
             ((symbol-function 'gptel-request)
              (lambda (prompt &rest args)
                (let ((fsm (apply real-request prompt (plist-put (copy-sequence args) :dry-run t))))
@@ -90,18 +93,23 @@
            (cancel-timer timer)
            (apply (timer--function timer) (timer--args timer)))
          (defer ()
+           ;; An open session uses the note while it is applied, then closes.
            (setq retry-origin (generate-new-buffer " *drain-retry-origin*"))
            (with-current-buffer retry-origin
              (setq-local mevedel-memory-consolidation-mode 'auto)
              (let* ((accepted (car (mevedel-test-memory-history-create workspace 1 1 100 t)))
                     (proposal (car (plist-get accepted :proposals)))
                     (state (list :workspace workspace :origin-buffer retry-origin))
-                    (was-busy busy))
+                    (reader (generate-new-buffer " *drain-reader*")))
                (unwind-protect
                    (progn
-                     (setq busy t)
+                     (with-current-buffer reader
+                       (setq-local mevedel--session (mevedel-session--create :workspace workspace))
+                       (mevedel-resource-prepare
+                        'read (mevedel-memory-notes-address (plist-get proposal :file))
+                        (list :session mevedel--session)))
                      (should (= 1 (plist-get (mevedel-memory-pass--apply state accepted) :held-count))))
-                 (setq busy was-busy))
+                 (kill-buffer reader))
                (list :state state :proposal proposal
                      :path (plist-get (cdr (car (plist-get proposal :before))) :path)))))
          (summary ()
@@ -237,7 +245,7 @@
           (should (= 1 calls))
           (should (eq 'empty (plist-get (car results) :outcome))))
       (cancel-timer idle)))
-  :doc "active workspace turns wait without inference, and cancellation fences the queued retry"
+  :doc "running cleanup waits without inference, and cancellation fences the queued retry"
   (progn
     (notes 20)
     (setq busy t)
@@ -252,7 +260,7 @@
       (should (= 0 calls))
       (should-not (mevedel-memory-pass-drain-status workspace))
       (should (eq 'aborted (plist-get (car results) :outcome)))))
-  :doc "waiting resumes when the workspace becomes idle without changing the batch limits"
+  :doc "waiting resumes when cleanup ends without changing the batch limits"
   (progn
     (notes 1)
     (setq busy t)

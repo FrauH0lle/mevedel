@@ -230,6 +230,11 @@ owns index consistency. This parser performs no reads or writes and does not
 establish current authority, freshness, or factual correctness. The request uses
 this parser at terminal settlement before accepting proposals into the durable
 review and decision lifecycle exposed by the memory cockpit.
+A note `delete` additionally requires `open-items` and `resolved-by` arrays;
+`keep` and `condense` must omit them. Each resolution entry is a plain
+workspace-relative path, `: `, and a quote of at least 12 characters; the path
+is normalized before acceptance compares the quote with the review's reads (see
+[Shared working-note lifecycle](#shared-working-note-lifecycle)).
 
 `mevedel-memory-scope-capture` supplies the parser's root and file allowlist.
 It reads complete topic, index, and root instruction files without changing
@@ -263,7 +268,11 @@ the referenced line. Commands, flags, external references, ambiguous identifiers
 and paths outside the source boundary remain `unknown`. Oversized references,
 unavailable topics, and the count limit produce explicit omissions. Topics
 without candidates receive no certification. These rows can be stored in the
-immutable review record and are supplied to the consolidation request.
+immutable review record and are supplied to the consolidation request. The
+request groups them by identical topic, scope and check date, each group listing
+its token/result pairs; every observation is retained, and the stored rows keep
+their own schema. On a real 200-row scope this shrank that part of the request
+from 56,258 to 19,567 bytes, so more notes fit under the same input bound.
 
 ### Investigation tools
 
@@ -274,6 +283,11 @@ family. Memory and journal reads use captured evidence; source Read uses the
 ordinary text reader over a pinned UTF-8 snapshot capped at 512 KiB, including
 range support within that snapshot. Oversized files are refused before the
 reader can scan a long line or a large offset. No tool definitions are added to gptel's global tool registry.
+The investigation records the text each workspace Read delivered, per file;
+the review result reports it as `:inspected`, the evidence a note delete's
+`resolved-by` quotes must match. Searches and memory or journal reads do not
+count. A truncated Read names the line offset to continue from, because a
+whole large document otherwise shows only its first 8 KiB.
 
 Searches reuse ordinary Glob/Grep over private admitted copies. Source search
 examines at most 256 entries, copies at most 2 MiB, and omits files larger than
@@ -677,11 +691,12 @@ fresh work. It is not an accepted recovery job awaiting completion.
 Publication recovery alone does not require auto
 mode or a live application session and does not authorize proposal application.
 
-Automatic shared-note mutations recheck active requests and pending turn
-settlements at the actual write boundary, after preparation, as well as holding
-notes when a turn is already active. All affected visiting buffers, including
+Automatic shared-note mutations recheck whether an open session uses the note
+at the actual write boundary, after preparation, as well as holding notes
+already in use; this applies to the synchronous fallback for worker-ineligible
+targets as well as the yielding path. All affected visiting buffers, including
 unchanged before-state dependencies, must still be unmodified. Cancellation or
-a newly busy workspace prevents new forward writes without disabling safely
+a newly started use prevents new forward writes without disabling safely
 owned checked rollback. A refusal after durable intent preparation follows the
 checked abandonment path only for a known admission hold or cancellation whose
 complete before-state is freshly proved after any checked rollback. It
@@ -924,7 +939,7 @@ Shared-note rows show their disposition as the action and `note`, `attachment`
 or `directory` as the type; a disposal whose extraction is undecided shows
 `awaits extraction`. Attachment diffs show size and hash.
 `D` starts a **backlog drain**; `k` stops it, including between requests or while
-waiting for an active turn. `/remember drain` and `M-x mevedel-remember-drain`
+waiting for running memory work. `/remember drain` and `M-x mevedel-remember-drain`
 start the same operation. The header shows batch number, status and the last
 observed notes-remaining count; completion messages report each batch's notes
 and digest backlog. Drain runs successive general reviews, with ordinary-note
@@ -933,8 +948,10 @@ bounded chunks; digest/request limits remain unchanged. It stops when a fresh
 selection finds no ready shared notes, housekeeping or uncovered digests. It
 does not request an empty current-memory review. Pending, kept and blocked
 notes are not ready; propose/manual drain leaves decisions for approval rather
-than deleting their files. Active workspace turns wait with a 60-second retry,
-so drain neither captures their notes nor spins on empty reviews. Closing its
+than deleting their files. Other sessions' turns do not stop the drain; notes
+they use wait (see Readiness). Running local consolidation, application or
+cleanup and a busy transport wait with a 60-second retry, so drain neither
+races that work nor spins on empty reviews. Closing its
 originating buffer or exiting stops it; a failed review stops without retry.
 An accepted review also stops the drain if application reports an error or a
 recovery requirement. Acceptance, actual application counts and the diagnostic
@@ -1010,7 +1027,16 @@ version is its path and content hash; an edit creates a new version. A pending
 decision suppresses a version. Kept or condensed versions, and versions a user
 rejected or restored, are reconsidered after `mevedel-memory-notes-review-days`
 (default 7). Stale, unavailable and deleted outcomes impose no wait. A review
-admitted while a conversation in the workspace runs a turn captures no notes.
+leaves notes that open sessions are using for later. A note is in use while a
+session whose buffer is live, or one of its sub-agents, named that file in a
+`work://shared/` Read, Glob, Grep or ApplyPatch within the quiet period. Folder
+listings and searches do not count, and neither does another session merely
+running a turn. This evidence lives in the editor that ran the tool and is not
+retained across restarts or shared between clients; access through ordinary
+paths, such as a shell command, is not observed. Capture reads the folder
+inventory first and authenticates prior disposition status only for paths
+present in it: a deleted path cannot be admitted, and a recreated one is
+checked like any other.
 
 **Capture.** Each general review walks the folder without following links
 (at most 4,096 entries). Text is complete UTF-8 without NUL bytes; anything
@@ -1043,16 +1069,31 @@ flagged `cited_by_memory`; a delete without an extraction citing the note is
 accepted as keep, so the citation cannot silently break.
 
 **Decisions.** The reply's Notes section gives every admitted note exactly one
-disposition: delete (the normal outcome, also when future usefulness is
-uncertain), keep (concrete continuing use such as an open handoff or a prepared
-diagnostic needed for an unresolved follow-up) or
-condense (rewrite to the part still in use). Unresolved defects or investigations
-with no record visible in the supplied memories, instructions or investigation
-reads are continuing use: condense to their evidence, caveats and next step until
-resolved, superseded or recorded elsewhere with the material caveats and
-next-step conditions intact. Check for these findings even when
-the note's main task is complete; passing checks or completed fixes do not
-establish resolution of a separate finding. Extraction is ordinary memory and
+disposition: delete (the normal outcome for completed material, including when
+the only question is whether finished history might help someday), keep
+(concrete continuing use such as an open handoff or a prepared diagnostic
+needed for an unresolved follow-up) or condense (rewrite to the part still in
+use). The reviewer first lists the note's open items: unresolved findings,
+failed or unfinished checks, unverified hypotheses or leads, acceptance limits
+and work left to others, even when the note's main task is complete. Age or a
+missing record is not resolution. An open item ends continuing use only when
+the reviewer establishes, with the workspace tools, that it was resolved,
+superseded or recorded elsewhere with its caveats and next step; otherwise the
+note is condensed to that item's dated evidence, caveats and next step, or kept.
+A delete therefore carries `open-items` and `resolved-by` header fields:
+the items, and at least one `path: exact words` entry per item quoting the
+workspace file, read in this review, that establishes its resolution or
+record. Acceptance records both. A delete whose open items lack enough quotes,
+or whose quotes do not occur in the text the review received from that file,
+is accepted as keep with that explanation, as a cited note is; a search match
+alone is not a read. Quote matching ignores Read line numbers, Markdown
+emphasis and code marks, whitespace and citation text outside quotation marks.
+These checks are deterministic; whether a reviewer lists every open item, or
+quotes text that really resolves it rather than merely discussing the topic,
+is model quality. Real held and applied deletions of 2026-10-28 that dismissed
+unresolved findings without any tool call motivated this rule; a later
+evaluation in which a reviewer cited a file it had read that did not record the
+items motivated the quotes. Extraction is ordinary memory and
 instruction proposals citing the note's ID as evidence. Acceptance records
 those extractions as the disposition's `:requires`. Delete or condense applies
 only after every required extraction is applied; an undecided requirement
@@ -1106,8 +1147,10 @@ deletion fallback.
 **Modes.** `manual` processes notes only through `/remember`; `propose` leaves
 their decisions in the cockpit; `auto` applies extraction, deletion,
 condensation and housekeeping without prompts. In `auto`, note decisions wait
-while a conversation in the workspace runs a turn; a one-minute retry applies
-them, and undecided decisions of earlier automatic note reviews, once idle.
+while an open session uses their file (see Readiness), rechecked at the
+mutation boundary; other notes and undecided decisions of earlier automatic
+note reviews proceed. A one-minute retry applies the held ones once any of
+their files is no longer in use.
 That retry defers to a registered explicit drain, including its between-batch
 waiting gaps; the drain applies earlier pending decisions through its normal
 owned application path. A drain also waits for already-running local work.

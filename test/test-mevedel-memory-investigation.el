@@ -56,7 +56,15 @@
 					   (:root "workspace" :path ".mevedel/state/journal/private.json")
 					   (:root "journal" :path "unselected.md")
 					   (:root "missing" :path "topic.md")))
-			     (should (string-prefix-p "Error:" (mevedel-test-investigation--call state 'read args))))))
+			     (should (string-prefix-p "Error:" (mevedel-test-investigation--call state 'read args))))
+			   (should (string-match-p "Current source" (mevedel-test-investigation--call
+								     state 'read '(:root "workspace" :path "./source.el"))))
+			   ;; Only delivered workspace reads can support a note delete's
+			   ;; resolution; their text accumulates per normalized path.
+			   (let ((inspected (mevedel-memory-investigation-inspected state)))
+			     (should (equal '("source.el") (mapcar #'car inspected)))
+			     (should (= 2 (cl-count-if (lambda (start) (string-match-p "Current source" start))
+						      (split-string (cdar inspected) "\n" t)))))))
 		     (when state (mevedel-memory-investigation-stop state))
 		     (delete-directory directory t)))
 		 :doc "Glob and Grep reuse ordinary search over admitted nested snapshots without leaking private paths"
@@ -184,6 +192,19 @@
 			   (should (= failures 1))
 			   (mevedel-memory-investigation-call state 'read nil (lambda (_) (ert-fail "Retired callback")))
 			   (should (= failures 1))
+			   ;; A truncated Read names a delivered line to continue from,
+			   ;; so following it skips nothing.
+			   (let* ((state (mevedel-memory-investigation-create scope nil (lambda () t) #'ignore))
+				  (first (mevedel-test-investigation--call
+					  state 'read '(:root "workspace" :path "large.txt")))
+				  (line (and (string-match "Read again with offset \\([0-9]+\\) to continue" first)
+					     (string-to-number (match-string 1 first))))
+				  (next (mevedel-test-investigation--call
+					 state 'read (list :root "workspace" :path "large.txt" :offset line))))
+			     (should (<= (string-bytes first) 8192))
+			     (should (> line 1))
+			     (should (string-match-p (format "\n *%d\t" line) first))
+			     (should (string-match-p (format "\\` *%d\t" line) next)))
 			   (setq state (mevedel-memory-investigation-create scope nil (lambda () t)
 									    (lambda (value) (setq reason value))))
 			   (should (= 64 mevedel-memory-investigation--max-calls))

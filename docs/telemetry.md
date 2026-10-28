@@ -241,6 +241,41 @@ cancellation releases the fence and leaves the machine retryable.
   Auto completion also records `updated-file-count`, the distinct paths newly
   confirmed written by that run, without exposing those paths or claiming that
   the resulting memory is better.
+  Phase durations accumulate in memory and join only that existing terminal
+  event; phase transitions append no additional workspace events.
+  `:duration-ms` starts after claim acquisition. `:queue-duration-ms`, when
+  present, measures parent-local admission dwell from the automatic opportunity
+  being queued or the drain batch becoming ready until claim acquisition.
+  Drain batches reset this boundary after each completed batch; dwell includes
+  busy-session waits and admission checks, not the preceding batch's work.
+  Direct starts have no queue duration. Phase fields use monotonic milliseconds:
+  - `:preparation-duration-ms`: preparation dispatch through its callback,
+    including worker startup, recovery, selection and capture (or the same
+    synchronous fallback).
+  - `:review-request-duration-ms`: review request invocation through settlement,
+    including input preparation, investigation tools and chunk summaries. This
+    is **not provider time**.
+  - `:publication-duration-ms`: asynchronous publication dispatch through reply,
+    or synchronous acceptance and publication.
+  - `:application-duration-ms`: automatic application invocation through actual
+    completion, including yielding, pending selection and owned recovery.
+  - `:retirement-duration-ms`: the unsuccessful pass's existing durable
+    settlement and prepared-evidence release block. Successful publication's
+    retirement remains inside publication, not counted again here.
+  - `:preparation-recovery-duration-ms`: decision and store recovery measured
+    within preparation's process; the child returns a duration, never a clock
+    timestamp. It nests inside preparation, not additive service time.
+  - `:application-recovery-round-trip-ms`: sum of owned operation recovery
+    dispatches through the editor continuation immediately before application
+    or pending selection. This includes worker/preflight overhead, reply
+    validation and synchronous recovery fallback, and nests inside application.
+    Only yielding owned-operation application supplies this field; fully
+    synchronous application leaves it absent.
+  Interrupted parent-local intervals end at cancellation/failure settlement;
+  unavailable child recovery durations remain absent. Unentered phases are
+  absent, not zero. These diagnostic boundaries are not an additive partition
+  of total latency; setup and other coordinator work remain outside them.
+  Late replies neither extend timing nor emit another terminal event.
   Terminal events and pass results retain `:output-bytes` (cumulative reply,
   reasoning, and normalized tool-call bytes), `:output-estimated-tokens` (the cumulative
   client estimate), and `:result-bytes` (current-round reply bytes, final at DONE),

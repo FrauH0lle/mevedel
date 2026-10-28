@@ -145,14 +145,19 @@ checked rollback retains CURRENTP's ownership without a cancelled forward gate."
                                         (plist-get intent :before)))))
              before-write))))))
 
-(cl-defun mevedel-memory-write-read (workspace id hash &optional accepted observation)
+(cl-defun mevedel-memory-write-read (workspace id hash &optional accepted observation coordinator)
   "Read WORKSPACE write ID only when its bytes match expected HASH.
 Validate its source pass and closed affected-file states. Private scope remains
 bound to the originating client; reading does not authorize target access.
 Return nil for an intent whose source pass has been retired.
 ACCEPTED may supply this operation's authenticated source bundle.  Callers
 must discard it after mutation and never retain it between operations.
-OBSERVATION may supply the intent's pinned read from this operation's batch."
+OBSERVATION may supply the intent's pinned read from this operation's batch.
+COORDINATOR may supply this read's freshly authenticated decision claim.
+When it matches the intent's original claim exactly, reuse its immutable
+acceptance evidence together with ACCEPTED.  Recovered writes can instead
+belong to an older coordinator; read their original evidence normally.
+Neither proof authorizes a later mutation or survives this read observation."
   (unless (and (mevedel-journal-store-id-p id) (mevedel-journal-store-id-p hash)) (error "Invalid memory write identity"))
   (let* ((record (mevedel-memory-store--read-lisp
                   (file-name-concat (mevedel-memory-write--directory workspace) (concat id ".el")) observation))
@@ -167,16 +172,25 @@ OBSERVATION may supply the intent's pinned read from this operation's batch."
       (let* ((claim (append (list :directory (mevedel-memory-store--claim-directory workspace)) (plist-get data :claim)))
              (accepted (or accepted (mevedel-memory-store-accepted workspace (plist-get data :pass))))
              (source (plist-get (plist-get accepted :prepared) :claim))
-             (evidence (mevedel-session-control-fs-run-program
-                        (list (list :op 'read :optional t :path (mevedel-journal-claim--path claim nil))
-                              (list :op 'read :optional t :path (mevedel-journal-claim--path source t)))))
+             (coordinator (and coordinator
+                               (equal (plist-get coordinator :directory) (plist-get claim :directory))
+                               (equal (mevedel-journal-claim--record coordinator)
+                                      (mevedel-journal-claim--record claim))
+                               coordinator))
+             (evidence (unless coordinator
+                         (mevedel-session-control-fs-run-program
+                          (list (list :op 'read :optional t :path (mevedel-journal-claim--path claim nil))
+                                (list :op 'read :optional t :path (mevedel-journal-claim--path source t))))))
              (proposal (seq-find (lambda (item) (equal (plist-get data :proposal) (plist-get item :id))) (plist-get accepted :proposals))))
 	(unless (and (proper-list-p data) (= (length data) 20)
                      (cl-every (lambda (key) (plist-member data key))
                                '(:id :claim :target-claim :pass :proposal :source-hash :changes :before :after :reverse-of))
                      (equal id (plist-get data :id)) (equal id (plist-get claim :owner))
+                     (or (null coordinator)
+                         (equal (plist-get coordinator :directory) (plist-get claim :directory)))
                      (equal (mevedel-journal-claim--record claim)
-                            (mevedel-journal-claim--read (mevedel-journal-claim--path claim nil) nil (car evidence)))
+                            (if coordinator (mevedel-journal-claim--record coordinator)
+                              (mevedel-journal-claim--read (mevedel-journal-claim--path claim nil) nil (car evidence))))
                      (equal (plist-get data :pass) (plist-get (plist-get accepted :prepared) :id))
                      proposal
                      (if-let* ((source (plist-get data :reverse-of)))
@@ -189,7 +203,8 @@ OBSERVATION may supply the intent's pinned read from this operation's batch."
                                      (equal (plist-get data :after) (plist-get original :before)))))
                        (mevedel-memory-write--before-p proposal (plist-get data :before)))
                      (equal (plist-get data :source-hash)
-                            (plist-get (mevedel-journal-claim-outcome source (cadr evidence)) :payload))
+                            (if coordinator (plist-get accepted :hash)
+                              (plist-get (mevedel-journal-claim-outcome source (cadr evidence)) :payload)))
                      (proper-list-p (plist-get data :changes))
                      (cl-every (lambda (change)
 				 (and (memq (plist-get change :action) '(write delete))

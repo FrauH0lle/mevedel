@@ -60,6 +60,27 @@ Captured when the request starts; must be a positive integer."
   :type 'natnum
   :group 'mevedel)
 
+(defun mevedel-memory-review--reference-groups (references)
+  "Group REFERENCES by topic, scope and check time without losing observations.
+The durable review retains individual rows.  Only the provider input shares
+repeated metadata, leaving each token and its result explicit."
+  (let ((groups (make-hash-table :test #'equal)) order)
+    (dolist (reference references)
+      (let* ((key (mapcar (lambda (field) (plist-get reference field))
+                          '(:topic :scope :checked)))
+             (group (gethash key groups)))
+        (unless group
+          (setq group (list :topic (nth 0 key) :scope (nth 1 key)
+                            :checked (nth 2 key) :checks nil))
+          (puthash key group groups)
+          (push group order))
+        (push (list :token (plist-get reference :token)
+                    :result (plist-get reference :result))
+              (plist-get group :checks))))
+    (mapcar (lambda (group)
+              (plist-put group :checks (vconcat (nreverse (plist-get group :checks)))))
+            (nreverse order))))
+
 (defun mevedel-memory-review--input (scope entries documents references focus rejections omitted
                                            &optional notes omitted-notes)
   "Encode admitted SCOPE, ENTRIES, DOCUMENTS, and REFERENCES as untrusted input.
@@ -94,7 +115,8 @@ counts captured notes left for a later review."
                                     :body (plist-get note :body)))
                             notes))
     :omitted_notes (or omitted-notes 0)
-    :reference_checks (vconcat (plist-get references :references))
+    :reference_checks (vconcat (mevedel-memory-review--reference-groups
+                               (plist-get references :references)))
     :reference_omissions (vconcat (plist-get references :omissions))
     :omitted_digests omitted
     :document_guidance "Other admitted snapshots remain available through Read. Only fully supplied digests can enter this review's coverage."))
@@ -180,6 +202,8 @@ dispose of every admitted note."
                                       :scope scope :entries admitted
                                       :notes (mapcar (lambda (note) (plist-get note :id)) admitted-notes)
                                       :omitted-notes (- (length notes) (length admitted-notes))
+                                      :inspected (and investigation
+                                                      (reverse (mevedel-memory-investigation-inspected investigation)))
                                       :references references :policy policy :omitted-digests (- (length entries) (length admitted)))
                                 parsed (snapshot))))))
          (estimated ()

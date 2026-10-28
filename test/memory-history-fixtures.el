@@ -46,7 +46,7 @@ PENDING leaves their proposals undecided."
                    (reply (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n"
                                   "## Remove\n- none\n## Instructions\n- none\n## Notes\n"
                                   (mapconcat (lambda (note)
-                                               (format "```proposal\nnote: %S\ndisposition: \"delete\"\nreason: \"Reviewed\"\n---\n```\n" note))
+                                               (format "```proposal\nnote: %S\ndisposition: \"delete\"\nreason: \"Reviewed\"\nopen-items: []\nresolved-by: []\n---\n```\n" note))
                                              notes "")
                                   "## No action\n- none"))
                    (accepted (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil notes)))

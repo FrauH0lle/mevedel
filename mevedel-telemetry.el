@@ -175,7 +175,7 @@ profile file larger and cost a little more per sample."
 (defconst mevedel-telemetry--allowed-keys
   '(:abort-plan-approval :active-work-paused :additional-read-count
     :additional-write-count :admitted :allocated-kb :approval-lifetime
-    :artifact-count
+    :application-duration-ms :application-recovery-round-trip-ms :artifact-count
     :agent-id :agent-path :agent-type :aggressive :artifacts-directory
     :artifacts-local :attempt-generation :backend :baseline-marker-position
     :backend-type :baseline-request-id :blocked :boundary :bubblewrap-available :bucket
@@ -206,18 +206,20 @@ profile file larger and cost a little more per sample."
     :over-1000-ms :over-200-ms :over-500-ms :overlap-count :owner
     :parent-tool-use-id :parent-turn :pass-id :pending-count :permission-id :permission-mode
     :permission-mode-base
-    :permission-mode-effective :permission-via :preexisting-count :preparation-state
+    :permission-mode-effective :permission-via :preexisting-count
+    :preparation-duration-ms :preparation-recovery-duration-ms :preparation-state
     :previous-owner :previous-status :proc :profile :profile-bytes-total
     :profile-file-names :prompt-chars :prompt-function :prompt-hash :proposed-count
     :protected-path-count :provider-context-model :provider-context-status
     :provider-context-tokens :provider-context-usage
     :provider-context-window :provider-error-code :provider-error-type
-    :provider-status :purpose :queue-depth
+    :provider-status :publication-duration-ms :purpose :queue-depth
     :queue-depth-before :queue-duration-ms :read-only :reason
     :reason-class :reasoning-bytes :remaining-count :repair-count :reply-bytes
     :report-bytes-total :report-file-names
     :request-id :requested-yield-time-ms :resolved-count :resource-access
-    :restored :result-bytes :result-chars :retained :retained-count :reviewed-count :roster-chars :rounds
+    :restored :result-bytes :result-chars :retained :retained-count :retirement-duration-ms
+    :review-request-duration-ms :reviewed-count :roster-chars :rounds
     :sandbox :sandbox-mode :sandbox-permissions :scope :settled :settlement-source
     :skill-count :skill-name :skill-names :skip-gates :span-id
     :specifier-key :stage :status :step :summary-context-source :summary-context-window

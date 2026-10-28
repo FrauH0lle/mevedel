@@ -19,10 +19,11 @@ content stay in private control storage. Public text alone cannot prove acceptan
 or decide a proposal. Source identities, original root/target/client authority,
 exact bytes, and accepted hashes remain binding through recovery.
 
-Recovery groups decision metadata by pass only to choose read order; every
-decision and write intent still undergoes authentication. Each pass group shares
-its authenticated bundle with the write reader and discards that observation
-after publication. The read-only cockpit collector reuses its freshly
+Recovery authenticates decision metadata in batches of eight, then groups the
+bounded metadata by pass; every decision and write intent still undergoes
+authentication. Each pass group shares its authenticated bundle and matching
+coordinator proof with the write reader. Publication discards all pending
+metadata and bundle observations. The read-only cockpit collector reuses its freshly
 authenticated write intents when the identity, intent hash and source-bundle
 hash match the decision; these observations never authorize a later action.
 Pending automatic selection refreshes its public observation
@@ -43,8 +44,9 @@ registered through application completion rather than reporting the queue entry
 as completion. Scheduled marked-write reconciliation uses the same owned
 recovery prelude, but its live state classification remains in the editor.
 Original-target ownership never crosses the child in this design. Automatic
-note forward writes recheck active turns, cancellation and unsaved buffers at
-their mutation boundary; checked rollback keeps its separate ownership proof.
+note forward writes recheck that no open session uses the note, cancellation
+and unsaved buffers at their mutation boundary; checked rollback keeps its
+separate ownership proof.
 Reentrant replies cannot enter an executing continuation. Reply identity, origin
 binding and freshly read workspace identity fence delayed continuations.
 Cancellation fences the child before stopping it; an executing editor transaction
@@ -226,7 +228,8 @@ processing; display responsiveness does not establish nonblocking manual actions
 
 Explicit backlog drain coordinates successive bounded general reviews through
 the same claim and settlement owner; it yields between batches and waits while
-a workspace turn is active. Auto mode offers a remaining ready backlog at the
+local consolidation, application or cleanup runs; other sessions' turns do not
+stop it, and notes they use wait. Auto mode offers a remaining ready backlog at the
 next idle opportunity instead of waiting another day, subject to a rolling
 24-hour cap (eight successful general reviews by default, including explicit
 ones). Published and retired timestamps enforce admission under ownership;
@@ -333,7 +336,7 @@ chunks with a compact running summary, retaining whole-file before-state and
 invalidating that summary if the file changes. Attachment reference scanning
 streams large text rather than making size alone an incomplete scan.
 Auto mode applies them
-without prompts once no turn runs in the workspace.
+without prompts, holding any whose file an open session uses.
 
 The [memory manual](../memory.md) owns configuration, limits, scheduling, proposal
 syntax, commands, inspection, and recovery procedures. Control-program mechanics
@@ -994,3 +997,129 @@ Measurements on the same copied real journal with compiled code:
 
 These are component timings, not complete cockpit-readiness measurements. The
 Podman target shares the client host and does not measure physical SSH latency.
+
+### 2026-10-28: protect notes in use rather than pausing for every turn
+
+The workspace-wide turn gate (introduced with shared-note processing in
+`5fe59aee`, made boolean in `2b4eeefa`) stopped capture, drain admission and
+automatic note application whenever any conversation in the workspace ran or
+settled a turn. Several open sessions are the normal case, so the backlog barely
+moved: one 900-second native drain admitted nothing. The gate was also too weak
+in the other direction: an old handoff that an idle session had just read was
+not protected at all.
+
+A note is now in use while a session whose buffer is live, including its
+sub-agents, named that file through a `work://shared/` tool within the quiet
+period. The resource layer records the fact; the notes module decides. Capture
+leaves in-use notes for later, automatic application holds only those
+decisions and rechecks at the mutation boundary, and the retry runs once any
+held file is free. Other sessions' turns no longer stop the drain. The user
+chose this lease over transcript mentions, accepting that shell access by
+ordinary path, accesses before an editor restart and other clients' sessions
+are not observed; the quiet period still protects recently changed files.
+
+### 2026-10-28: account for open items before deleting a note
+
+Audited reviews deleted notes whose unresolved findings, unverified leads or
+acceptance limits had no later resolution or record, and a held proposal
+named two unresolved findings while proposing deletion. Each of the last three
+native reviews made no tool call. The prompt already said that unresolved
+findings are continuing use, so another sentence would not suffice; "delete
+when future usefulness is uncertain" also invited the inverted reading.
+
+A delete disposition now lists `open-items` and, per item, a `resolved-by`
+quote of the workspace text establishing its resolution or record. The
+investigation records the text each workspace Read delivered; acceptance turns
+a delete whose quotes are missing or absent from those reads into keep, with
+the reason, as it already did for a cited note. Requiring only that the cited
+file had been read was not enough: in a real-model evaluation on the audited
+preimages, a reviewer deleted a note whose acceptance limits were unrecorded,
+citing a decision record it had read that does not mention them. Truncated
+Reads now name the continuation offset; earlier, reviewers read only the first
+8 KiB of the backlog and the decision record and never saw the relevant entries.
+
+A model can still omit an open item or quote text that discusses rather than
+resolves it; that remains model quality. In seven real reviews per round
+(Codex `gpt-6-luna`, medium, one note each, against private copies with and
+without the backlog repairs), the last round made no unsupported deletion:
+acceptance kept two over-claimed deletes, and the others condensed to dated
+open items. The negative control, an old failed review later resolved in
+ADR 0126, was also kept rather than deleted, so over-retention remains; one
+reply per round still failed the output format and is retried by a later
+review. Old completed history and historical failures with quoted later
+resolution remain deletable.
+
+### 2026-10-28: reduce note admission and retained-history overhead
+
+A frozen real workspace copy contained 64 retained accepted passes and 247
+decisions. Its configured capture bound admitted sixteen notes, but the native
+review request admitted only five under its separate 32,000-token initial-input
+cap. Reference observations repeated the same topic identity, scope and check
+date for every token. Request-only grouping now shares those fields and retains
+each token/result observation; the durable review schema, indexes, instructions,
+input/output limits and oldest-first admission priorities are unchanged.
+
+Note capture now inventories sources before reading disposition history. It
+authenticates decision status only for paths present in that inventory; absent
+sources cannot be admitted or suppressed. All retained pass bundles are still
+authenticated, and a recreated source reenters the ordinary decision checks.
+
+Decision recovery now reads up to eight metadata records in one pinned program,
+then verifies their exact hashes alongside their coordinator claim/outcome reads
+in a second program. Only closed, bounded authenticated metadata survives for
+grouping, never raw record or proposal bodies. Each full decision still validates
+its source bundle and write intent. A matching intent can reuse that read's
+authenticated coordinator and source proof. A recovered write may have a newer
+decision coordinator than its original intent; that mismatch takes the original
+fresh authentication path. Publication invalidates every pending metadata and
+bundle observation, and no proof survives the operation or authorizes a later
+mutation. Regression tests change bytes between the initial read and hash proof,
+and change a later decision during publication; both fail closed.
+
+Measurements used fresh private copies, compiled package code, the same frozen
+installed dependencies and concrete Codex OAuth dry-run transport. The host
+filesystem was read-only and networking disabled. Baseline was `f7047e9a`;
+application retained native ownership, validators and the 24-hour quiet period.
+
+- Scenario native input admission, same sixteen-note candidate prefix; metric
+  admitted notes; baseline 5, updated 9; unit notes; one sample per build.
+- Scenario same input admission; metric reference projection size; baseline
+  56,258, updated 19,567; unit UTF-8 JSON bytes; one sample per build. All 200
+  dated observations survive, and MEMORY.md and AGENTS.md remain supplied.
+- Scenario retained-history note capture; metric wall time; baseline median
+  9.315, updated median 3.305; unit seconds; three samples per build.
+- Scenario same capture; metric control programs; baseline 2,056, updated 587;
+  unit programs; three samples per build.
+- Scenario same capture; metric relevant decision reads; baseline 216,
+  updated 7; unit reads; three samples per build. No present-path decision
+  is omitted.
+- Scenario accepted-decision recovery; metric wall time; baseline median
+  10.841, updated median 9.102; unit seconds; three samples per build.
+- Scenario same recovery; metric control programs; baseline 1,988,
+  updated 1,279; unit programs; three samples per build. All 247 decisions
+  remain authenticated.
+- Scenario actual checked application of one held note deletion; metric total
+  wall time; baseline 21.969, updated 20.189; unit seconds; one sample per build.
+  Both copies have the source absent, exact authenticated intent before-state,
+  and a retained undo blob matching the original bytes.
+
+The remaining application recovery still dominates that last sample. Its
+updated nested components are inclusive and must not be added together:
+
+- Scenario updated checked application; metric editor application-body wall
+  time; value 3.069; unit seconds; one sample.
+- Scenario same application; metric publication wall time;
+  value 1.389; unit seconds; one sample.
+- Scenario same application; metric write-marker retirement wall time;
+  value 0.031; unit seconds; one sample.
+
+These do not measure provider latency, graphical responsiveness, cost or
+sustained-drain throughput. No inference call was made for these measurements.
+
+Phase durations now accompany the existing terminal consolidation telemetry
+event, without adding one expensive workspace append per phase. Parent-local
+queue dwell, preparation, review-request, publication, application and retirement
+intervals remain distinct from child-local preparation recovery and nested
+application recovery round trips. Review-request time includes prompt packing,
+tools and chunk summaries, so it is not labelled provider time. Missing intervals
+remain unknown rather than zero; cancellation closes only started intervals.

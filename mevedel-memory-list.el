@@ -852,7 +852,6 @@ Check original root authority before disclosing private topic contents."
                     (length (plist-get entry :digests)) (length (plist-get entry :proposals))
                     (or (plist-get result :remaining) 0) notes))))
       ('aborted (message "mevedel: memory review cancelled"))
-      ('waiting (message "mevedel: memory drain waiting for the workspace turn to finish (k stops)"))
       ('restart-required (message "mevedel: %s" (plist-get result :error)))
       (_ (message "mevedel: memory review failed: %s" (or (plist-get result :error) "Unavailable"))))))
 

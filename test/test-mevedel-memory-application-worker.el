@@ -16,6 +16,7 @@
 (require 'mevedel-memory-notes)
 (require 'mevedel-memory-store)
 (require 'mevedel-memory-write)
+(require 'mevedel-resource)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-tool-patch)
 
@@ -138,11 +139,11 @@ while constructing retained history.  Recovery still owns final pin release."
       (should-not (gethash key mevedel-memory-pass--running))
       (should (eq origin (plist-get state :origin-buffer)))))
 
-  :doc "a request or pending agent settlement starting during child work holds the note"
-  (dolist (pending '(request settlement))
+  :doc "a session starting to use the note during child work holds it, unlike a turn elsewhere"
+  (dolist (late '(use turn))
     (mevedel-test-application-fixture
       (let ((start (symbol-function 'mevedel-journal-worker-start))
-	    (conversation (generate-new-buffer " *application-live-turn*")))
+	    (conversation (generate-new-buffer " *application-live-session*")))
         (unwind-protect
 	    (progn
 	      (with-current-buffer conversation
@@ -152,16 +153,22 @@ while constructing retained history.  Recovery still owns final pin release."
 			   (apply start ws operation
 				  (lambda (reply)
 				    (with-current-buffer conversation
-				      (if (eq pending 'request)
-					  (setq-local mevedel--current-request '(:id "late-user-turn"))
-				        (setq-local mevedel--turn-settlements-pending t)))
+				      (if (eq late 'use)
+					  (mevedel-resource-prepare
+					   'read (mevedel-memory-notes-address (plist-get proposal :file))
+					   (list :session mevedel--session))
+					(setq-local mevedel--current-request '(:id "unrelated-turn"))))
 				    (funcall callback reply)) args))))
 	        (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
 	        (mevedel-test-application-wait (lambda () result)))
-	      (should (= 1 (plist-get result :held-count)))
-	      (should (= 0 (plist-get result :applied-count)))
-	      (should (file-exists-p path))
-	      (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id))))
+	      (if (eq late 'turn)
+		  (progn
+		    (should (= 1 (plist-get result :applied-count)))
+		    (should-not (file-exists-p path)))
+		(should (= 1 (plist-get result :held-count)))
+		(should (= 0 (plist-get result :applied-count)))
+		(should (file-exists-p path))
+		(should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))))
 	  (kill-buffer conversation)))))
 
   :doc "a visiting buffer modified during child work is preserved and never applied"
@@ -185,9 +192,11 @@ while constructing retained history.  Recovery still owns final pin release."
         (should (string-suffix-p "unsaved" (buffer-string))))))
 
   :doc "late admission changes after note preparation refuse mutation at the actual write boundary"
-  (dolist (late '(turn edit))
+  ;; `sync' is the production fallback for worker-ineligible targets.
+  (dolist (case '((use . async) (edit . async) (use . sync) (edit . sync)))
     (mevedel-test-application-fixture
-      (let ((mkdir (symbol-function 'mevedel-session-control-fs-make-directory)) injected
+      (let ((late (car case))
+            (mkdir (symbol-function 'mevedel-session-control-fs-make-directory)) injected
 	    (conversation (generate-new-buffer " *application-late-turn*")))
         (unwind-protect
 	    (progn
@@ -198,15 +207,26 @@ while constructing retained history.  Recovery still owns final pin release."
 			   (prog1 (apply mkdir directory args)
 			     (when (and (not injected) (string-suffix-p "/blobs" (directory-file-name directory)))
 			       (setq injected t)
-			       (if (eq late 'turn)
-				   (with-current-buffer conversation (setq-local mevedel--current-request '(:id "late")))
+		       (if (eq late 'use)
+			   (with-current-buffer conversation
+			     (mevedel-resource-prepare
+			      'read (mevedel-memory-notes-address (plist-get proposal :file))
+			      (list :session mevedel--session)))
 				 (with-current-buffer (find-file-noselect path) (goto-char (point-max)) (insert "unsaved"))))))))
-	        (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
-	        (mevedel-test-application-wait (lambda () result)))
+	        (if (eq (cdr case) 'sync)
+		    (setq result (mevedel-memory-pass--apply state accepted))
+		  (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
+		  (mevedel-test-application-wait (lambda () result))))
 	      (should injected)
 	      (should (= 0 (plist-get result :applied-count)))
+	      (when (eq late 'use)
+		(should (= 1 (plist-get result :held-count)))
+		(should (gethash workspace mevedel-memory-pass--deferred)))
 	      (should (equal (make-string 100 ?x) (mevedel-session-control-fs-read-file path)))
 	      (should-not (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get proposal :id)) :status))))
+	  (when-let* ((retry (gethash workspace mevedel-memory-pass--deferred)))
+	    (cancel-timer (plist-get retry :timer))
+	    (remhash workspace mevedel-memory-pass--deferred))
 	  (kill-buffer conversation)))))
 
   :doc "batch cancellation during a real child cannot rearm or notify twice on late success"
@@ -333,7 +353,7 @@ while constructing retained history.  Recovery still owns final pin release."
                                          "title: \"Lesson\"\nhook: \"Lesson\"\nreason: \"Supported\"\nevidence: [%S]\n---\n"
                                          "Preserve extraction dependencies.\n```\n## Update\n- none\n## Merge\n- none\n"
                                          "## Remove\n- none\n## Instructions\n- none\n## Notes\n```proposal\nnote: %S\n"
-                                         "disposition: \"delete\"\nreason: \"Reviewed\"\n---\n```\n## No action\n- none")
+                                         "disposition: \"delete\"\nreason: \"Reviewed\"\nopen-items: []\nresolved-by: []\n---\n```\n## No action\n- none")
                                  memory-id address address))
                    (pending (mevedel-memory-store-accept workspace prepared text nil "test:model" nil (list address)))
                    (items (plist-get pending :proposals))
