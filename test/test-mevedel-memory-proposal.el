@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-memory-proposal)
+(require 'mevedel-memory-store)
 
 (mevedel-deftest mevedel-memory-proposal/cold-compile-runtime-owner ()
   ,test
@@ -327,14 +328,20 @@ Use a monotonic deadline for elapsed-time retries.
                        ("delete" "open-items: \"Finding 2\"\nresolved-by: []\n")
                        ("delete" "open-items: [\"\"]\nresolved-by: []\n")
                        ("delete" "open-items: [\"A\", \"A\"]\nresolved-by: []\n")
-                       ;; A bare path is no longer evidence.
-                       ("delete" "open-items: [\"A\"]\nresolved-by: [\"docs/backlog.md\"]\n")
-                       ("delete" "open-items: [\"A\"]\nresolved-by: [\"docs/backlog.md: too short\"]\n")
-                       ("delete" "open-items: [\"A\"]\nresolved-by: [\"/etc/passwd: root entry for the system\"]\n")
-                       ("delete" "open-items: [\"A\"]\nresolved-by: [\"../outside.md: escaping quote text\"]\n")
-                       ("delete" "open-items: [\"A\"]\nresolved-by: [\"a/b/../c.el: escaping quote text\"]\n")
-                       ("delete" "open-items: [\"A\"]\nresolved-by: [\"~/notes.md: home quote text here\"]\n")))
-      (should-error (funcall parse (car invalid) (cadr invalid)))))
+                       ("delete" "open-items: [\"A\"]\nresolved-by: \"docs/backlog.md: not an array\"\n")))
+      (should-error (funcall parse (car invalid) (cadr invalid))))
+    ;; Entries that cannot be evidence (a bare path, a short or placeholder
+    ;; quote, an address, an unsafe path) are dropped, never trusted: the
+    ;; delete keeps its open item without support, so acceptance keeps it.
+    (dolist (entry '("docs/backlog.md" "docs/backlog.md: too short" "GIT-HISTORY: none"
+                     "work://shared/a.md: quoting the note itself here"
+                     "/etc/passwd: root entry for the system" "../outside.md: escaping quote text"
+                     "a/b/../c.el: escaping quote text" "~/notes.md: home quote text here"))
+      (let ((item (car (plist-get (funcall parse "delete" (format "open-items: [\"A\"]\nresolved-by: [%S]\n" entry))
+                                  :proposals))))
+        (should (equal '("A") (plist-get item :open-items)))
+        (should-not (plist-get item :resolved-by))
+        (should (mevedel-memory-store--unsupported-delete-p item nil)))))
   :doc "real reply shapes rejected in production parse without loosening dispositions"
   ;; Shapes from real Codex gpt-6-luna replies, 2026-10-28: keep and condense
   ;; carrying open items, a header-only delete without separator, and a reply
@@ -357,6 +364,18 @@ Use a monotonic deadline for elapsed-time retries.
     (should (equal '("Duration undecided") (plist-get (car (plist-get result :proposals)) :open-items)))
     (should (equal "" (plist-get (nth 2 (plist-get result :proposals)) :body)))
     (should (funcall parse (concat head blocks "## No action\n- Nothing further.\n")))
+    ;; Real 2026-10-28 shapes: Instructions after Notes, and an exactly
+    ;; repeated header line.  Proposals come back in canonical order.
+    (let ((moved (concat (string-replace "## Instructions\n- none\n" "" head) blocks "## Instructions\n- none\n")))
+      (should (equal '(note-keep note-condense note-delete)
+                     (mapcar (lambda (item) (plist-get item :action))
+                             (plist-get (funcall parse moved) :proposals)))))
+    ;; An omitted action section is indistinguishable from truncation.
+    (should-error (funcall parse (concat (string-replace "## Instructions\n- none\n" "" head) blocks)))
+    (should-error (mevedel-memory-proposal-parse "## Promote\n- none\n" mevedel-test-memory-proposal--roots nil))
+    (should (funcall parse (concat head (string-replace "open-items: [\"Duration undecided\"]\n"
+                                                        "open-items: [\"Duration undecided\"]\nopen-items: [\"Duration undecided\"]\n"
+                                                        blocks))))
     ;; Fence spellings from real replies: a four-dash separator, a shorter
     ;; closing fence, and a missing close before the next empty-body block.
     (dolist (variant (list (string-replace "Open handoff\"\nopen-items: [\"Duration undecided\"]\n---\n````"
@@ -371,6 +390,12 @@ Use a monotonic deadline for elapsed-time retries.
       (should (equal "Open:\n```\n(fix)\n```" (plist-get (nth 1 (plist-get coded :proposals)) :body))))
     (dolist (invalid
              (list
+              ;; A repeated header line with a different value is ambiguous.
+              (concat head (string-replace "open-items: [\"Duration undecided\"]\n"
+                                           "open-items: [\"Duration undecided\"]\nopen-items: [\"Other\"]\n" blocks))
+              ;; Repeated, missing and unknown sections.
+              (concat head "## Promote\n- none\n" blocks)
+              (concat head blocks "## Unknown\n- none\n")
               ;; An unterminated non-empty body is ambiguous.
               (concat head (string-replace "Open: port the fix.\n````\n" "Open: port the fix.\n" blocks))
               ;; Analysis between blocks remains invalid.

@@ -349,7 +349,7 @@ dispose of every admitted note."
                    (ensure-live)
                    (record-usage (gptel-fsm-info fsm) t)
                    (dolist (call (plist-get (gptel-fsm-info fsm) :tool-use))
-                     (unless (member (plist-get call :name) '("Read" "Glob" "Grep"))
+                     (unless (member (plist-get call :name) '("Read" "Glob" "Grep" "Git"))
                        (error "Unavailable review tool: %s" (plist-get call :name))))
                    ;; gptel exposes executable arguments here, not raw JSON
                    ;; spelling or argument fragments still in flight.

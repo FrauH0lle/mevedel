@@ -232,10 +232,13 @@ this parser at terminal settlement before accepting proposals into the durable
 review and decision lifecycle exposed by the memory cockpit.
 A note `delete` additionally requires `open-items` and `resolved-by` arrays;
 `keep` and `condense` may carry them, validated as string arrays, and their
-open items are recorded. A block with an empty body may omit the `---`
-separator, and a reply may end after its last action section without
-`## No action`; every required disposition is still checked, and text between
-proposal blocks still invalidates the reply. These accept shapes real replies
+open items are recorded. A `resolved-by` entry that is not `PATH: QUOTE`
+(an address, a placeholder) is no evidence rather than an invalid reply. A
+block with an empty body may omit the `---` separator, a note disposition may
+repeat a header line with an identical value, sections may appear in any order
+(each once; every action section required, so a truncated reply still fails),
+and a reply may end without `## No action`; text between proposal blocks still
+invalidates the reply. These accept shapes real replies
 produced, which previously discarded whole reviews. A rejected reply is retained,
 newest eight, under `.mevedel/state/diagnostics/rejected-replies/` for
 diagnosis; it never becomes proposals. Each resolution entry is a plain
@@ -295,6 +298,14 @@ the review result reports it as `:inspected`, the evidence a note delete's
 `resolved-by` quotes must match. Searches and memory or journal reads do not
 count. A truncated Read names the line offset to continue from, because a
 whole large document otherwise shows only its first 8 KiB.
+A fourth tool, Git, reads the workspace's history without a shell, pager,
+hook or optional lock: `log` searches commit messages (at most 30 commits,
+optionally limited to a path; a commit hash is shown instead), and `show`
+prints one commit's message and changed files plus whether the current HEAD
+contains it, naming the commit. Its output is bounded like the other tools,
+counts against the same budgets, is unavailable on remote workspaces, and is
+recorded as `GIT-HISTORY` evidence, which a delete may quote. Handoffs to
+integrate or commit are usually completed only in history.
 
 Searches reuse ordinary Glob/Grep over private admitted copies. Source search
 examines at most 256 entries, copies at most 2 MiB, and omits files larger than

@@ -1278,3 +1278,39 @@ the residual details or deletes without listing open items:
 Condensed bodies still lose concrete residual details in about a third of the
 reviews: recall of residual detail remains model quality, bounded by the
 condensation's undo window, not a guarantee.
+
+### 2026-10-28: let reviews read Git history
+
+Run14 kept five of seven notes after a review with no tool calls. Handoffs such
+as "root owns full-suite validation and fast-forward integration" are usually
+finished only in Git history, which the workspace-only tools could not read, so
+reviewers could never establish their resolution and kept them indefinitely.
+The user approved a bounded read-only Git tool. `log` searches commit messages,
+`show` prints a commit's message, changed files and whether the current HEAD
+contains it; the containment line names the commit so a quote cannot vouch for
+another one. Output is recorded as `GIT-HISTORY` evidence and checked like
+other quotes. Real replies also misused the format in unambiguous ways: a
+`resolved-by` entry that is not `PATH: QUOTE` now counts as no evidence
+instead of rejecting the whole reply, note dispositions may repeat a header
+line with an identical value, and sections may appear in any order. Omitted
+action sections remain an error: treating them as empty let a reply truncated
+after its first section pass when no notes were admitted.
+
+The run14 deletion of a completed final review with no open items was judged
+defensible: its typing variance was bounded by a later probe in the same note,
+and its limits were scope disclaimers without a next step.
+
+Real reviews (Codex `gpt-6-luna`, medium) of run14's seven preimages in one
+review, eight reviews per condition, with full workspace Git history:
+
+- Scenario: committed d85e986d; metric: failed reviews; value: 1 of 8;
+  deletes: 30 of 49 dispositions; composer2-progress Git-quoted deletes: 0 of 7.
+- Scenario: this change; metric: failed reviews; value: 0 of 8; deletes: 39 of
+  56; composer2-progress Git-quoted deletes: 3 of 8, one quoting
+  "Commit d46b1d6f... contained in current HEAD: yes".
+- Git-quoted tmp-git-leak deletes quote commit 1889fb64, whose message records
+  the unproven-producer caveat.
+
+Some Git-quoted deletes cite a commit that records a handoff as remaining with
+its owner rather than completed; that is a durable record, but weak evidence.
+Distinguishing those remains model quality.

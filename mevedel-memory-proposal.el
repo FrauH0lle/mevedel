@@ -123,11 +123,12 @@ Plain relative paths contain no colon, so the first one separates them."
        (cl-every (lambda (part) (not (member part '("" "." ".mevedel"))))
                  (split-string file "/"))))
 
-(defun mevedel-memory-proposal--fenced (text names)
+(defun mevedel-memory-proposal--fenced (text names &optional repeats)
   "Split fenced proposal TEXT into its decoded header plist and body.
 NAMES maps the closed header field names to keywords.  Without a `---'
 separator the body is empty and every line must be a header line; the
-action's own body rule then decides whether an empty body is valid."
+action's own body rule then decides whether an empty body is valid.
+With REPEATS, an exactly repeated header line is accepted."
   (let* ((separated (string-match "^-\\{3,\\}\\(?:\n\\|\\'\\)" text))
          (header (if separated (substring text 0 (match-beginning 0)) text))
          (body (if separated (string-remove-suffix "\n" (substring text (match-end 0))) ""))
@@ -139,11 +140,13 @@ action's own body rule then decides whether an empty body is valid."
         (error "Invalid proposal header line"))
       (let ((key (cdr (assoc (match-string 1 line) names)))
             (encoded (match-string 2 line)))
-        (unless (and key (not (plist-member fields key)))
-          (error "Unknown or repeated proposal field"))
-        (setq fields (plist-put fields key
-                                (json-parse-string encoded :null-object :null
-                                                   :false-object :false)))))
+        (let ((value (and key (json-parse-string encoded :null-object :null
+                                                 :false-object :false))))
+          ;; An exactly repeated line is unambiguous; a differing repeat is not.
+          (unless (and key (or (not (plist-member fields key))
+                               (and repeats (equal value (plist-get fields key)))))
+            (error "Unknown or repeated proposal field"))
+          (setq fields (plist-put fields key value)))))
     (cons fields body)))
 
 (defun mevedel-memory-proposal--disposition (text notes)
@@ -155,7 +158,7 @@ exact words from a workspace file establishing their resolution or durable
 record, returned as (PATH . QUOTE).  Acceptance checks the quotes against the
 review's reads; this parser only validates shape.  Keep and condense may
 carry the same fields; they are validated and recorded but never required."
-  (let* ((decoded (mevedel-memory-proposal--fenced text mevedel-memory-proposal--note-fields))
+  (let* ((decoded (mevedel-memory-proposal--fenced text mevedel-memory-proposal--note-fields t))
          (fields (car decoded)) (body (cdr decoded))
          (note (assoc (plist-get fields :note) notes))
          (action (cdr (assoc (plist-get fields :disposition) mevedel-memory-proposal--dispositions)))
@@ -179,10 +182,13 @@ carry the same fields; they are validated and recorded but never required."
        (list :open-items (mevedel-memory-proposal--strings (plist-get fields :open-items) #'always)))
      (cond
       ((eq action 'note-delete)
-       (list :resolved-by (mapcar #'mevedel-memory-proposal--resolution
-                                  (mevedel-memory-proposal--strings
-                                   (if (plist-member fields :resolved-by) (plist-get fields :resolved-by) [])
-                                   #'mevedel-memory-proposal--resolution))))
+       ;; An entry that is not "PATH: QUOTE" (an address, a placeholder such
+       ;; as "none") is no evidence; acceptance then keeps a delete whose
+       ;; open items lack enough valid quotes.  It never rejects the reply.
+       (list :resolved-by (delq nil (mapcar #'mevedel-memory-proposal--resolution
+                                            (mevedel-memory-proposal--strings
+                                             (if (plist-member fields :resolved-by) (plist-get fields :resolved-by) [])
+                                             #'always)))))
       ;; Resolution evidence only matters for a delete; elsewhere check shape.
       ((plist-member fields :resolved-by)
        (mevedel-memory-proposal--strings (plist-get fields :resolved-by) #'always)
@@ -298,7 +304,9 @@ a block with an empty body may omit the separator.
 Its closing backtick fence must match its opener, allowing shorter fences
 inside Markdown bodies. Remove proposals have empty bodies. No action has
 plain bullets and, being commentary, may be omitted at the very end of the
-reply.  Conflicting file operations make the entire reply invalid."
+reply.  Sections may appear in any order but each at most once; every
+required section must be present, and proposals are returned in canonical
+section order.  Conflicting file operations make the entire reply invalid."
   (unless (and (stringp text) (<= (string-bytes text) mevedel-memory-proposal--max-bytes)
                (not (string-blank-p text)))
     (error "Consolidation reply is empty or exceeds its byte limit"))
@@ -307,21 +315,18 @@ reply.  Conflicting file operations make the entire reply invalid."
     (insert (string-trim text) "\n")
     (goto-char (point-min))
     (let ((evidence (append evidence (mapcar #'car notes)))
-          proposals touched no-action disposed)
+          proposals touched no-action disposed seen)
       (cl-labels ((blank-lines ()
                     (while (looking-at "[ \t]*\n") (forward-line 1))))
-        (dolist (section mevedel-memory-proposal--sections)
-          (blank-lines)
-          (cond
-           ((and (null (cdr section)) (eobp))
-            ;; A reply ending after its last action section: No action is
-            ;; commentary, every required disposition was already checked.
-            (setq no-action "- none"))
-           ((not (looking-at (concat (regexp-quote (concat "## " (car section))) "\n")))
-            ;; Only an optional Notes section may be absent.
-            (unless (and (eq (cdr section) 'notes) (null notes))
-              (error "Expected consolidation heading: %s" (car section))))
-           (t
+        (blank-lines)
+        (while (not (eobp))
+          (unless (looking-at "## \\(.+\\)\n")
+            (error "Text outside consolidation sections"))
+          (let ((section (assoc (match-string-no-properties 1) mevedel-memory-proposal--sections)))
+            (unless section (error "Unknown consolidation heading: %s" (match-string-no-properties 1)))
+            (when (member (car section) seen)
+              (error "Repeated consolidation heading: %s" (car section)))
+            (push (car section) seen)
             (forward-line 1)
             (blank-lines)
             (cond
@@ -360,12 +365,24 @@ reply.  Conflicting file operations make the entire reply invalid."
                       (push item proposals))
                     (cl-incf count)
                     (blank-lines)))
-                (when (= count 0) (error "Action section requires proposals or none"))))))))
+                (when (= count 0) (error "Action section requires proposals or none"))))))
+          (blank-lines))
+        ;; Every action section is required, so a reply truncated after an
+        ;; early section cannot pass as complete; Notes only with admitted
+        ;; notes, and No action is commentary.
+        (dolist (section mevedel-memory-proposal--sections)
+          (unless (or (member (car section) seen) (null (cdr section))
+                      (and (eq (cdr section) 'notes) (null notes)))
+            (error "Expected consolidation heading: %s" (car section))))
+        (unless no-action (setq no-action "- none"))
         (unless (= (length disposed) (length notes))
-          (error "Every admitted note requires exactly one disposition"))
-        (blank-lines)
-        (unless (eobp) (error "Text outside consolidation sections")))
-      (list :proposals (nreverse proposals) :no-action no-action))))
+          (error "Every admitted note requires exactly one disposition")))
+      (let ((rank (lambda (item)
+                    (cl-position (if (mevedel-memory-proposal-note-action-p (plist-get item :action))
+                                     'notes (plist-get item :action))
+                                 mevedel-memory-proposal--sections :key #'cdr))))
+        (list :proposals (cl-stable-sort (nreverse proposals) #'< :key rank)
+              :no-action no-action)))))
 
 (provide 'mevedel-memory-proposal)
 ;;; mevedel-memory-proposal.el ends here

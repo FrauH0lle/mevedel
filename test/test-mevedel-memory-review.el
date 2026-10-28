@@ -189,7 +189,9 @@
                     "stated acceptance limits, and work it explicitly leaves for someone else"
                     "resolution: \"not established as unresolved\" is not a reason to delete."
                     "superseded, or recorded elsewhere with its caveats and next-step conditions"
-                    "terms and numbers too. A Read returns at most 8 KiB, so a"
+                    "A Read returns at most 8 KiB, so a"
+                    "are usually completed in Git history: search it with the Git tool (`log` with"
+                    "reports \"Commit HASH contained in current HEAD: yes\" when that is done; quote"
                     "unestablished, condense the note to that item's dated evidence, caveats and"
                     "defect or a user preference; or keep it when the whole note is still in use."
                     "open-items: [\"Each open item listed above, one short string each\"]"
@@ -200,7 +202,7 @@
       (should (string-search rule sent-system)))
     (with-current-buffer (plist-get handle :buffer)
       (should-not mevedel--session)
-      (should (equal '("Read" "Glob" "Grep") (mapcar #'gptel-tool-name gptel-tools))))
+      (should (equal '("Read" "Glob" "Grep" "Git") (mapcar #'gptel-tool-name gptel-tools))))
     (respond mevedel-test-memory-review--none)
     (respond t)
     (should-not result)

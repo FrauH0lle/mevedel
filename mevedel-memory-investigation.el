@@ -28,6 +28,10 @@
 (defconst mevedel-memory-investigation--max-bytes 65536
   "Maximum aggregate UTF-8 tool result bytes per review request.")
 
+(defconst mevedel-memory-investigation-git-evidence "GIT-HISTORY"
+  "Evidence key recording Git history a review read.
+A note delete cites it in `resolved-by' as \"GIT-HISTORY: quote\".")
+
 (cl-defstruct (mevedel-memory-investigation
                (:constructor mevedel-memory-investigation-create
                              (scope entries currentp exhausted)))
@@ -191,6 +195,94 @@ relative filenames; private copy paths are removed from results and errors."
                                 :output_mode "content" :head_limit 100 :glob (plist-get args :glob)))))
        (error (finish (concat "Error: " (error-message-string err))))))))
 
+(defun mevedel-memory-investigation--record (state key delivered)
+  "Record DELIVERED text as read evidence under KEY in STATE."
+  (when delivered
+    (let ((row (assoc key (mevedel-memory-investigation-inspected state))))
+      (if row (setcdr row (concat (cdr row) "\n" delivered))
+        (push (cons key delivered) (mevedel-memory-investigation-inspected state))))))
+
+(defun mevedel-memory-investigation--git (state args path callback)
+  "Run read-only Git history query ARGS for STATE, limited to PATH.
+`log' searches commit messages for :pattern; `show' prints one :pattern
+commit's message, changed-file summary and whether the current HEAD
+contains it.  A commit hash given to `log' is shown instead.  No shell,
+pager, hook or optional lock is involved; output is bounded and recorded
+as evidence."
+  (let* ((scope (mevedel-memory-investigation-scope state))
+         (root (plist-get scope :workspace-root))
+         (pattern (plist-get args :pattern))
+         (hashp (string-match-p "\\`[0-9a-f]\\{7,40\\}\\'" pattern))
+         (command (if (and hashp (equal (plist-get args :command) "log")) "show" (plist-get args :command)))
+         (format "--format=commit %h %ad%n%s%n%n%b")
+         ;; Each step is (ARGUMENTS . FORMATTER); FORMATTER receives the
+         ;; step's output and exit status and returns its text.
+         (steps (pcase command
+                  ("log" (list (cons (append (list "log" "--no-color" "-i" "-E" (concat "--grep=" pattern)
+                                                   "--date=short" format "-n" "30")
+                                             (unless (equal path ".") (list "--" path)))
+                                     (lambda (text status)
+                                       (cond ((/= status 0) "Error: Git history query failed")
+                                             ((string-blank-p text) "No matching commits.")
+                                             (t text))))))
+                  ("show" (unless hashp (error "Git show needs an abbreviated or full commit hash"))
+                          (list (cons (list "show" "--no-color" "--no-ext-diff" "--stat" "--date=short" format pattern "--")
+                                      (lambda (text status)
+                                        (if (= status 0) text "Error: Unknown commit")))
+                                (cons (list "merge-base" "--is-ancestor" pattern "HEAD")
+                                      (lambda (_text status)
+                                        ;; Name the commit, so a quote of this
+                                        ;; line cannot vouch for another one.
+                                        (format "\nCommit %s contained in current HEAD: %s\n" pattern
+                                                (pcase status (0 "yes") (1 "no") (_ "unknown")))))))
+                  (_ (error "Git command must be log or show"))))
+         (output (generate-new-buffer " *mevedel-memory-git*"))
+         (process-environment (append '("GIT_OPTIONAL_LOCKS=0" "GIT_TERMINAL_PROMPT=0" "GIT_PAGER=cat")
+                                      process-environment))
+         (default-directory (file-name-as-directory root))
+         (collected "")
+         done process timer stopper)
+    (when (file-remote-p root) (error "Git history is unavailable for remote workspaces"))
+    (cl-labels
+        ((finish (text)
+           (unless done
+             (setq done t)
+             (when timer (cancel-timer timer))
+             (setf (mevedel-memory-investigation-active state)
+                   (delq stopper (mevedel-memory-investigation-active state)))
+             (when (buffer-live-p output) (kill-buffer output))
+             (when text
+               (mevedel-memory-investigation--record
+                state mevedel-memory-investigation-git-evidence
+                (mevedel-memory-investigation--deliver state callback text)))))
+         (run (remaining)
+           (with-current-buffer output (erase-buffer))
+           (setq process
+                 (make-process
+                  :name "mevedel-memory-git" :buffer output :noquery t :connection-type 'pipe
+                  :stderr (get-buffer-create " *mevedel-memory-git-stderr*")
+                  :command (append (list "git" "-c" "core.fsmonitor=false" "-C" root) (car (car remaining)))
+                  :sentinel
+                  (lambda (proc _event)
+                    (unless (or done (process-live-p proc))
+                      (let ((text (funcall (cdr (car remaining))
+                                           (with-current-buffer output
+                                             (decode-coding-string (buffer-string) 'utf-8-unix))
+                                           (process-exit-status proc))))
+                        (setq collected (concat collected text))
+                        (if (and (cdr remaining) (not (string-prefix-p "Error:" text)))
+                            (run (cdr remaining))
+                          (finish collected)))))))
+           (set-process-coding-system process 'binary 'binary)))
+      (setq stopper (lambda ()
+                      (when (process-live-p process) (delete-process process))
+                      (finish nil)))
+      (push stopper (mevedel-memory-investigation-active state))
+      (run steps)
+      (setq timer (run-at-time 20 nil (lambda ()
+                                        (when (process-live-p process) (delete-process process))
+                                        (finish "Error: Git history query timed out")))))))
+
 (defun mevedel-memory-investigation-call (state operation args callback)
   "Run read-only OPERATION with ARGS and deliver a string to CALLBACK.
 ARGS uses :root (workspace, journal, or a captured root ID), :path relative
@@ -205,16 +297,22 @@ another model follow-up. Calls after retirement have no effects or callback."
       (cl-incf (mevedel-memory-investigation-calls state))
       (condition-case err
           (let* ((root (plist-get args :root))
-                 (path (mevedel-memory-investigation--relative (or (plist-get args :path) ".")))
+                 (path (mevedel-memory-investigation--relative
+                        (let ((given (string-trim (or (plist-get args :path) ""))))
+                          (if (string-empty-p given) "." given))))
                  (scope (mevedel-memory-investigation-scope state))
                  (mevedel--session nil))
-            (unless (memq operation '(read glob grep)) (error "Unsupported investigation operation"))
-            (if (memq operation '(glob grep))
-                (progn
-                  (unless (and (stringp (plist-get args :pattern))
-                               (<= 1 (length (plist-get args :pattern)) 1024))
-                    (error "Invalid investigation search pattern"))
-                  (mevedel-memory-investigation--search state operation args root path callback))
+            (unless (memq operation '(read glob grep git)) (error "Unsupported investigation operation"))
+            (when (memq operation '(glob grep git))
+              (unless (and (stringp (plist-get args :pattern))
+                           (<= 1 (length (plist-get args :pattern)) 1024))
+                (error "Invalid investigation search pattern")))
+            (cond
+             ((eq operation 'git)
+              (mevedel-memory-investigation--git state args path callback))
+             ((memq operation '(glob grep))
+              (mevedel-memory-investigation--search state operation args root path callback))
+             (t
               (dolist (key '(:offset :limit))
 		(when-let* ((value (plist-get args key)))
                   (unless (and (integerp value) (> value 0)) (error "Invalid Read range"))))
@@ -243,22 +341,21 @@ another model follow-up. Calls after retirement have no effects or callback."
                         (when (and delivered (equal root "workspace"))
                           ;; A delete's resolution quotes must come from text the
                           ;; review actually read, not from a search match.
-                          (let* ((key (mevedel-memory-proposal-normalize-path path))
-                                 (row (assoc key (mevedel-memory-investigation-inspected state))))
-                            (if row (setcdr row (concat (cdr row) "\n" delivered))
-                              (push (cons key delivered) (mevedel-memory-investigation-inspected state)))))))
-                  (when temporary (delete-file temporary))))))
+                          (mevedel-memory-investigation--record
+                           state (mevedel-memory-proposal-normalize-path path) delivered))))
+                  (when temporary (delete-file temporary)))))))
         (error (mevedel-memory-investigation--deliver
                 state callback (concat "Error: " (error-message-string err))))))))
 
 (defun mevedel-memory-investigation-tools (state)
-  "Return STATE's three scoped asynchronous gptel tools.
+  "Return STATE's four scoped asynchronous gptel tools.
 Tool definitions stay request-local; they do not enter gptel's global registry.
 Paths are relative to the explicit root argument, not a new resource family."
   (let ((gptel--known-tools nil)
         (roots (vconcat '("workspace" "journal")
                         (mapcar #'car (plist-get (mevedel-memory-investigation-scope state) :roots)))))
-    (mapcar
+    (append
+     (mapcar
      (lambda (operation)
        (let* ((readp (eq operation 'read))
               (keys (if readp '(:root :path :offset :limit) '(:root :path :pattern)))
@@ -284,7 +381,22 @@ Paths are relative to the explicit root argument, not a new resource family."
           :function (lambda (callback &rest values)
                       (mevedel-memory-investigation-call
                        state operation (cl-mapcan #'list keys values) callback)))))
-     '(read glob grep))))
+     '(read glob grep))
+     (list
+     (gptel-make-tool
+      :name "Git" :category "memory-review" :async t :include nil :confirm nil
+      :args '((:name "command" :type string :enum ["log" "show"]
+               :description "log searches commit messages; show prints one commit's message and changed files")
+              (:name "pattern" :type string
+               :description "log: case-insensitive extended regular expression over commit messages; show: commit hash")
+              (:name "path" :type string :optional t
+               :description "log only: limit to commits touching this workspace-relative path; default ."))
+      :description (concat "Read-only Git history of the workspace, bounded to 30 commits and 8 KiB. "
+                           "Use it to establish that work a note leaves open was later committed; "
+                           "quote its output in resolved-by as \"" mevedel-memory-investigation-git-evidence ": exact words\".")
+      :function (lambda (callback command pattern &optional path)
+                  (mevedel-memory-investigation-call
+                   state 'git (list :command command :pattern pattern :path path) callback)))))))
 
 (provide 'mevedel-memory-investigation)
 ;;; mevedel-memory-investigation.el ends here

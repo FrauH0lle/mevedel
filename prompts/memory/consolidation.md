@@ -76,7 +76,13 @@ the code and tests the note names for the item's specific terms, then Read the
 matching lines with `offset` and `limit`. Measurements, residual costs and
 acceptance limits are usually recorded in a decision record's measurements or
 consequences, not the backlog: search `docs/adr/` with the item's distinctive
-terms and numbers too. A Read returns at most 8 KiB, so a
+terms and numbers too. Handoffs to integrate, commit, merge or run final checks
+are usually completed in Git history: search it with the Git tool (`log` with
+the item's terms, or `show` a commit hash the note names) and quote it as
+`GIT-HISTORY`. For a handoff to integrate or merge a named commit, `show`
+reports "Commit HASH contained in current HEAD: yes" when that is done; quote
+that line. A commit that merely touches the topic
+does not resolve an item. A Read returns at most 8 KiB, so a
 whole large file shows only its start; searches of the workspace root are
 partial, so search a directory or file. Issue independent searches and reads
 together in one tool round. These checks can change the proposal, so make them
@@ -204,8 +210,9 @@ include `open-items` too:
     resolved-by: ["docs/backlog.md: exact words of the entry recording the item"]
 
 `open-items` is `[]` only when the note has none. `resolved-by` gives at least
-one entry per open item: a workspace-relative file you Read in this review,
-`: `, and exact words copied from that Read showing the item's resolution or
+one entry per open item: a workspace-relative file you Read in this review, or
+`GIT-HISTORY` for Git tool output, then `: `, and exact words copied from that
+output showing the item's resolution or
 record, at least a short sentence fragment. It is `[]` only when `open-items`
 is. A file that discusses the topic is not evidence unless the quoted words
 resolve or record that item. A delete whose quotes do not occur in your reads
