@@ -34,45 +34,59 @@
 (defconst mevedel-memory-scope--max-bytes (* 96 1024)
   "Maximum total before-state bytes captured for one consolidation pass.")
 
-(defun mevedel-memory-scope--inventory (directory)
+(defun mevedel-memory-scope--inventory (directory &optional attributes)
   "Return DIRECTORY's bounded names and whether their observation is complete.
-Include directory and symlink names but never descend through symlinks."
+Include directory and symlink names but never descend through symlinks.
+With ATTRIBUTES, also return :attributes, an alist mapping each name to its
+`file-attributes', observed in the same per-directory listing."
   (let ((pending (list directory)) (remaining mevedel-memory-scope--max-entries)
-        names directories (complete t))
+        names directories observed (complete t))
     (while (and pending (> remaining 0))
       (let* ((parent (pop pending))
+             ;; One listing per directory yields names and types together,
+             ;; instead of a symlink and directory probe per entry.
              (children (and (file-exists-p parent)
-                            (directory-files parent t directory-files-no-dot-files-regexp
-                                             nil (1+ remaining)))))
+                            (directory-files-and-attributes
+                             parent t directory-files-no-dot-files-regexp
+                             nil 'integer (1+ remaining)))))
         (when (> (length children) remaining)
           (setq complete nil children (seq-take children remaining)))
-        (dolist (path children)
-          (cl-decf remaining)
-          (push (file-relative-name path directory) names)
-          (when (and (not (equal (file-name-nondirectory path) ".mevedel"))
-                     (not (file-symlink-p path)) (file-directory-p path))
-            (push (file-relative-name path directory) directories)
-            (push path pending)))))
-    (list :existing (sort names #'string<) :directories (sort directories #'string<)
-          :complete (and complete (not pending)))))
+        (dolist (child children)
+          (let* ((path (car child)) (name (file-relative-name path directory)))
+            (cl-decf remaining)
+            (push name names)
+            (when attributes (push (cons name (cdr child)) observed))
+            ;; A symlink's type is its target string, never t.
+            (when (and (not (equal (file-name-nondirectory path) ".mevedel"))
+                       (eq t (file-attribute-type (cdr child))))
+              (push name directories)
+              (push path pending))))))
+    (append (list :existing (sort names #'string<) :directories (sort directories #'string<)
+                  :complete (and complete (not pending)))
+            (when attributes (list :attributes observed)))))
+
+(defun mevedel-memory-scope--text (bytes limit)
+  "Return BYTES decoded as UTF-8 text, or signal unless within LIMIT and exact."
+  (let ((text (decode-coding-string bytes 'utf-8-unix)))
+    (unless (and (<= (length bytes) limit)
+                 (not (string-search "\0" bytes))
+                 (not (cl-some #'mevedel--invalid-message-char-p text))
+                 (equal bytes (encode-coding-string text 'utf-8-unix)))
+      (error "Memory file exceeds its bound or is not UTF-8 text"))
+    text))
 
 (defun mevedel-memory-scope--snapshot (path limit &optional result)
   "Capture complete literal PATH bytes, bounded by LIMIT, or expected absence.
 Use the pinned target read so a changed parent cannot redirect the read.
 RESULT, when supplied, is the pinned read result for PATH from a bounded batch."
   (condition-case nil
-      (let* ((bytes (if result
-                        (progn
-                          (unless (equal path (plist-get result :path))
-                            (error "Snapshot result names another path"))
-                          (mevedel-session-control-fs-program-value result))
-                      (mevedel-session-control-fs-read-file path 'no-conversion (1+ limit))))
-             (text (decode-coding-string bytes 'utf-8-unix)))
-        (unless (and (<= (length bytes) limit)
-                     (not (string-search "\0" bytes))
-                     (not (cl-some #'mevedel--invalid-message-char-p text))
-                     (equal bytes (encode-coding-string text 'utf-8-unix)))
-          (error "Memory file exceeds its bound or is not UTF-8 text"))
+      (let ((bytes (if result
+                       (progn
+                         (unless (equal path (plist-get result :path))
+                           (error "Snapshot result names another path"))
+                         (mevedel-session-control-fs-program-value result))
+                     (mevedel-session-control-fs-read-file path 'no-conversion (1+ limit)))))
+        (mevedel-memory-scope--text bytes limit)
         (list :path path :exists t :bytes bytes :hash (secure-hash 'sha256 bytes)
               :mode (file-modes path)))
     (mevedel-session-control-fs-absent (list :path path :exists nil))))

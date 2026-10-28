@@ -12,6 +12,7 @@
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-memory-decision)
+(require 'mevedel-memory-list)
 (require 'mevedel-memory-notes)
 (require 'mevedel-memory-pass)
 (require 'mevedel-memory-store)
@@ -22,6 +23,56 @@
 
 (require 'memory-history-fixtures
          (file-name-concat (file-name-directory (or buffer-file-name load-file-name)) "memory-history-fixtures"))
+
+(mevedel-deftest mevedel-memory-write-list/history
+    (:vars* ((root (make-temp-file "mevedel-memory-write-history-" t))
+             (workspace (mevedel-workspace--create :root root))
+             (mevedel-memory-dirs nil)
+             (mevedel-journal-cleanup--inhibit-scheduling t)
+             (identity (mevedel-workspace-identity-ensure root))
+             (bundles (mevedel-test-memory-history-create workspace 2 3 100)))
+            :after-each ((remhash workspace mevedel-memory-write--inspected)
+                         (delete-directory root t)))
+  ,test
+  (test)
+  :doc "authenticates one source bundle per pass and preserves all write rows"
+  (let ((reader (symbol-function 'mevedel-memory-store-accepted)) (calls 0))
+    (cl-letf (((symbol-function 'mevedel-memory-store-accepted)
+               (lambda (&rest args) (cl-incf calls) (apply reader args))))
+      (let ((rows (mevedel-memory-write-list workspace)))
+        (should (= 6 (length rows)))
+        (dolist (row rows)
+          (should (plist-get row :intent))
+          (should-not (plist-get row :error))
+          (should-not (plist-get row :marked)))))
+    (should (= 2 calls)))
+  :doc "the read-only collector authenticates each write once, not once per decision"
+  (let ((reader (symbol-function 'mevedel-memory-write-read)) (calls 0))
+    (cl-letf (((symbol-function 'mevedel-memory-write-read)
+               (lambda (&rest args) (cl-incf calls) (apply reader args))))
+      (let ((rows (mevedel-memory-list--collect (mevedel-cockpit-workspace-context workspace))))
+        (should (= 6 (length rows)))
+        (dolist (row rows)
+          (should (eq 'applied (plist-get row :status)))
+          (should-not (plist-get row :error)))))
+    (should (= 6 calls)))
+  :doc "new observations reject changed source and intent bytes after a successful listing"
+  (let* ((rows (mevedel-memory-write-list workspace))
+         (row (car rows))
+         (intent (plist-get row :intent))
+         (source (file-name-concat (mevedel-memory-store--directory workspace (plist-get intent :pass)) "accepted.el"))
+         (write (file-name-concat (mevedel-memory-write--directory workspace) (concat (plist-get intent :id) ".el"))))
+    (dolist (path (list source write))
+      (let ((text (mevedel-session-control-fs-read-file path)))
+        (unwind-protect
+            (progn
+              (write-region (concat text "\n") nil path nil 'silent)
+              (let* ((changed (mevedel-memory-list--collect (mevedel-cockpit-workspace-context workspace)))
+                     (item (seq-find (lambda (item) (equal (plist-get intent :pass) (plist-get item :id))) changed)))
+                (should (eq 'unavailable (plist-get item :status)))
+                (should (equal (if (equal path source) "Accepted memory bundle changed" "Memory write intent changed")
+                               (plist-get item :error)))))
+          (write-region text nil path nil 'silent))))))
 
 (mevedel-deftest mevedel-memory-decision-recover/history
     (:vars* ((root (make-temp-file "mevedel-memory-history-" t))
@@ -53,7 +104,8 @@
                  (if (equal directory (mevedel-memory-decision--directory workspace)) paths
                    (apply listing directory args)))))
       (mevedel-test-memory-history-owned workspace
-        (mevedel-memory-decision-recover workspace)))
+        ;; Fully published history is a no-op recovery.
+        (should-not (mevedel-memory-decision-recover workspace))))
     (should (= 3 reads)))
   :doc "pending selection reads the public journal once and never reapplies terminal history"
   (let ((reader (symbol-function 'mevedel-journal-store-entries))
@@ -73,7 +125,7 @@
     (cl-letf (((symbol-function 'mevedel-memory-store-publish)
                (lambda (&rest args) (cl-incf calls) (apply publisher args))))
       (mevedel-test-memory-history-owned workspace
-        (mevedel-memory-store-recover workspace)))
+        (should-not (mevedel-memory-store-recover workspace))))
     (should (= 0 calls)))
   :doc "each new observation rejects tampered accepted bytes, claim outcomes and write evidence"
   (let* ((accepted (car bundles))

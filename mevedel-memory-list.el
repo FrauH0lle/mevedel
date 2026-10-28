@@ -23,7 +23,10 @@
 (defvar-local mevedel-memory-list--positions nil "Selected row IDs by view.")
 (defvar-local mevedel-memory-list--window-positions nil "Selected row IDs by window and view.")
 (defvar-local mevedel-memory-list--snapshot nil "Display-only proposal observation.")
-(defvar-local mevedel-memory-list--memories :unread "Display-only topic inventory.")
+(defvar-local mevedel-memory-list--memories nil "Displayed topic rows, possibly from an earlier observation.")
+(defvar-local mevedel-memory-list--memories-state 'stale
+  "Topic rows' state: `stale' until observed, `refreshing', or `current'.")
+(defvar-local mevedel-memory-list--memories-job nil "Current topic observation token.")
 (defvar-local mevedel-memory-list--job nil "Current read-only history scan.")
 (defvar-local mevedel-memory-list--error nil "Last history scan failure.")
 (defvar-local mevedel-memory-list--recovery nil "Display watcher for checked recovery.")
@@ -35,7 +38,8 @@
   (let ((text (cond
                (unavailable unavailable)
                (items nil)
-               ((eq mevedel-memory-list--view 'memories) "No stored memories.")
+               ((eq mevedel-memory-list--view 'memories)
+                (if (eq mevedel-memory-list--memories-state 'current) "No stored memories." "Loading memories..."))
                (mevedel-memory-list--error "Could not load memory data; press g to retry")
                (mevedel-memory-list--job "Loading history...")
                ((and mevedel-memory-list--recovery (not mevedel-memory-list--snapshot))
@@ -52,17 +56,6 @@
       (when (overlayp mevedel-memory-list--notice) (delete-overlay mevedel-memory-list--notice))
       (setq mevedel-memory-list--notice nil))))
 
-(defun mevedel-memory-list--copy (value)
-  "Copy display VALUE, including mutable strings."
-  (cond ((stringp value) (copy-sequence value))
-        ((consp value)
-         (let ((tail value) copied)
-           (while (consp tail)
-             (push (mevedel-memory-list--copy (car tail)) copied)
-             (setq tail (cdr tail)))
-           (nconc (nreverse copied) (mevedel-memory-list--copy tail))))
-        (t value)))
-
 (defun mevedel-memory-list--display-row (row)
   "Project ROW to display metadata, without accepted evidence or write proofs."
   (let (display)
@@ -73,7 +66,7 @@
       (setq display (plist-put display :proposal
                                (list :action (plist-get proposal :action)
                                      :type (plist-get proposal :type) :title (plist-get proposal :title)))))
-    (mevedel-memory-list--copy display)))
+    (mevedel-memory-library-copy display)))
 
 (defun mevedel-memory-list--cancel ()
   "Retire this buffer's scan, retaining ownership if cleanup fails."
@@ -119,12 +112,70 @@
              (position (save-excursion (mevedel-cockpit-goto-id id) (point))))
         (set-window-point window position)))))
 
+(defun mevedel-memory-list--cancel-memories ()
+  "Retire this buffer's topic observation; a late reply is ignored."
+  (when-let* ((timer (plist-get mevedel-memory-list--memories-job :timer))) (cancel-timer timer))
+  (setq mevedel-memory-list--memories-job nil))
+
+(defun mevedel-memory-list--observe-memories (context)
+  "Show CONTEXT's last topic rows now and observe current ones after display.
+Rows stay marked refreshing until the observation replaces them.  Retiring the
+token stops it; a changed root or memory configuration restarts it."
+  (let* ((buffer (current-buffer))
+         (workspace (mevedel-cockpit-context-workspace context))
+         (root (mevedel-workspace-root workspace))
+         (roots (mevedel-system--memory-roots workspace))
+         (token (list :context context)))
+    (unless mevedel-memory-list--memories
+      (setq mevedel-memory-list--memories (mevedel-memory-library-cached workspace)))
+    (setq mevedel-memory-list--memories-state 'refreshing mevedel-memory-list--memories-job token)
+    (cl-labels ((live-p ()
+                  (and (buffer-live-p buffer)
+                       (eq token (buffer-local-value 'mevedel-memory-list--memories-job buffer))
+                       (eq context (buffer-local-value 'mevedel-cockpit--context buffer))))
+                (deliver (rows)
+                  (when (live-p)
+                    (with-current-buffer buffer
+                      (setq mevedel-memory-list--memories-job nil)
+                      ;; Like the history fence, rows observed for another root
+                      ;; or memory configuration never land as current.
+                      (if (not (and (equal root (mevedel-workspace-root workspace))
+                                    (equal roots (mevedel-system--memory-roots workspace))))
+                          (setq mevedel-memory-list--memories nil
+                                mevedel-memory-list--memories-state 'stale)
+                        (setq mevedel-memory-list--memories rows
+                              mevedel-memory-list--memories-state 'current))
+                      ;; A closed owner context keeps the history path's notice.
+                      (when (mevedel-cockpit--live-context-p context)
+                        (mevedel-memory-list--remember-position)
+                        (mevedel-cockpit-surface-refresh
+                         (or (tabulated-list-get-id)
+                             (alist-get mevedel-memory-list--view mevedel-memory-list--positions)))
+                        (mevedel-memory-list--restore-positions))))))
+      (plist-put
+       token :timer
+       (run-at-time
+        0 nil
+        (lambda ()
+          (plist-put token :timer nil)
+          (when (live-p)
+            ;; Per-root failures arrive as rows; anything else must not leave
+            ;; the table refreshing forever.  A retired token stops the reads.
+            (condition-case err
+                (mevedel-memory-library-refresh workspace #'deliver #'live-p)
+              (error
+               (deliver (list (list :kind 'memory :id '(unavailable inventory)
+                                    :title "Unavailable memory inventory" :status 'unavailable
+                                    :error (error-message-string err)))))))))))))
+
 (defun mevedel-memory-list-refresh ()
   "Request a fresh display observation without reusing any acceptance proof."
   (interactive)
   (mevedel-memory-list--remember-position)
   (mevedel-memory-list--cancel)
-  (setq mevedel-memory-list--snapshot nil mevedel-memory-list--memories :unread
+  (mevedel-memory-list--cancel-memories)
+  ;; Topic rows stay visible, marked refreshing, until their observation lands.
+  (setq mevedel-memory-list--snapshot nil mevedel-memory-list--memories-state 'stale
         mevedel-memory-list--error nil)
   (mevedel-cockpit-surface-refresh)
   (mevedel-memory-list--restore-positions))
@@ -134,6 +185,7 @@
   (when (overlayp mevedel-memory-list--notice) (delete-overlay mevedel-memory-list--notice))
   (setq mevedel-memory-list--notice nil)
   (mevedel-memory-list--cancel)
+  (mevedel-memory-list--cancel-memories)
   (when (timerp (plist-get mevedel-memory-list--recovery :timer))
     (cancel-timer (plist-get mevedel-memory-list--recovery :timer)))
   (setq mevedel-memory-list--recovery nil))
@@ -175,13 +227,18 @@
            ((not (mevedel-memory-decision-recovering-p workspace))
             (cancel-timer (plist-get token :timer))
             (setq mevedel-memory-list--recovery nil mevedel-memory-list--recovery-warning nil)
-            ;; Reconciliation publishes/classifies retained writes; it does not
-            ;; reapply curated files. Keep the independent topic inventory.
-            (mevedel-memory-list--remember-position)
-            (mevedel-memory-list--cancel)
-            (setq mevedel-memory-list--snapshot nil mevedel-memory-list--error nil)
-            (mevedel-cockpit-surface-refresh)
-            (mevedel-memory-list--restore-positions))))))))
+            (if (= (plist-get token :generation) (mevedel-memory-decision-recovery-generation workspace))
+                ;; Recovery changed nothing: a history scan, in flight or
+                ;; complete, still reads current committed state.
+                (progn (mevedel-memory-list--update-notice mevedel-cockpit--items)
+                       (force-mode-line-update))
+              ;; Reconciliation publishes/classifies retained writes; it does not
+              ;; reapply curated files. Keep the independent topic inventory.
+              (mevedel-memory-list--remember-position)
+              (mevedel-memory-list--cancel)
+              (setq mevedel-memory-list--snapshot nil mevedel-memory-list--error nil)
+              (mevedel-cockpit-surface-refresh)
+              (mevedel-memory-list--restore-positions)))))))))
 
 (defun mevedel-memory-list--received (buffer job reply)
   "Present read-only REPLY for BUFFER's current JOB, without selecting a window."
@@ -232,13 +289,9 @@
                                                               '(:accepted :decision :write)))))
                                          (plist-get reply :rows)))
                     (error "Invalid memory display observation"))
-                  (setq mevedel-memory-list--snapshot (mevedel-memory-list--copy reply))
+                  (setq mevedel-memory-list--snapshot (mevedel-memory-library-copy reply))
                   (setf (mevedel-workspace-memory-observation workspace)
-                        (mevedel-memory-list--copy (plist-get reply :observation)))
-                  (unless mevedel-memory-list--view
-                    (setq mevedel-memory-list--view
-                          (if (seq-some (lambda (row) (not (memq (plist-get row :status) '(applied rejected reversed completed))))
-                                        (plist-get reply :rows)) 'candidates 'memories))))
+                        (mevedel-memory-library-copy (plist-get reply :observation))))
               (error (setq mevedel-memory-list--error (error-message-string err))))
             (if (mevedel-cockpit--live-context-p context)
                 (progn
@@ -341,6 +394,12 @@
   (mevedel-cockpit-surface-refresh (alist-get view mevedel-memory-list--positions))
   (mevedel-memory-list--restore-positions))
 
+(defun mevedel-memory-list--candidate-count (context)
+  "Return CONTEXT's last observed candidate count, or nil when unknown.
+Count pending, recovery-required and unavailable rows, as Candidates shows."
+  (when-let* ((observation (mevedel-workspace-memory-observation (mevedel-cockpit-context-workspace context))))
+    (apply #'+ (mapcar (lambda (key) (or (plist-get observation key) 0)) '(:pending :recovery :unavailable)))))
+
 (defun mevedel-memory-list-candidates ()
   "Show outstanding memory candidates."
   (interactive) (mevedel-memory-list-switch 'candidates))
@@ -360,22 +419,28 @@
     (cl-return-from mevedel-memory-list--visible
       (append (mapcar #'mevedel-memory-list--display-row (mevedel-memory-list--collect context))
               (mevedel-memory-library-list (mevedel-cockpit-context-workspace context)))))
-  (unless (or mevedel-memory-list--snapshot mevedel-memory-list--job mevedel-memory-list--error)
-    (mevedel-memory-list--start context))
+  ;; Known alerts open Candidates; otherwise Memories shows at once.  Passes,
+  ;; decisions, changing recovery and cleanup discard the counts.
+  (let ((counts (mevedel-memory-list--candidate-count context)))
+    (unless (or mevedel-memory-list--view mevedel-memory-list--snapshot)
+      (setq mevedel-memory-list--view (if (and counts (> counts 0)) 'candidates 'memories)))
+    ;; Stored topics never need proposal history; Memories scans only to learn
+    ;; unknown candidate counts for its tab label, and never switches views.
+    (unless (or mevedel-memory-list--snapshot mevedel-memory-list--job mevedel-memory-list--error
+                (and (eq mevedel-memory-list--view 'memories) counts))
+      (mevedel-memory-list--start context)))
   (let* ((rows (plist-get mevedel-memory-list--snapshot :rows))
          (pending (seq-remove (lambda (row) (memq (plist-get row :status) '(applied rejected reversed completed))) rows)))
-    (when (and mevedel-memory-list--snapshot (not mevedel-memory-list--view))
-      (setq mevedel-memory-list--view (if pending 'candidates 'memories)))
     (let ((items
            (pcase mevedel-memory-list--view
              ('candidates pending)
              ('memories
-              (when (eq mevedel-memory-list--memories :unread)
-                (setq mevedel-memory-list--memories (mevedel-memory-library-list (mevedel-cockpit-context-workspace context))))
+              (when (eq mevedel-memory-list--memories-state 'stale)
+                (mevedel-memory-list--observe-memories context))
               mevedel-memory-list--memories)
              ('history (seq-filter (lambda (row) (memq (plist-get row :status) '(applied rejected reversed completed))) rows)))))
       (mevedel-memory-list--update-notice items)
-      (mevedel-memory-list--copy items))))
+      (mevedel-memory-library-copy items))))
 
 (defun mevedel-memory-list-open-file ()
   "Open the selected stored memory for normal Emacs editing."
@@ -402,7 +467,11 @@
   (let* ((workspace (mevedel-cockpit-context-workspace context))
          (entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
          (writes (mevedel-memory-write-list workspace))
+         (intents (make-hash-table :test #'equal))
          (passes (make-hash-table :test #'equal)) last-pass seen rows)
+    (dolist (write writes)
+      (when-let* ((intent (plist-get write :intent)))
+        (puthash (plist-get intent :id) intent intents)))
     ;; Accepted private state remains inspectable if public publication failed.
     (dolist (directory (mevedel-session-control-fs-list-directory
                         (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "passes")
@@ -429,7 +498,7 @@
                   (let* ((id (plist-get proposal :id))
                          (scope (plist-get (plist-get accepted :prepared) :scope))
                          (root (cdr (assoc (plist-get proposal :root) (plist-get scope :roots))))
-                         (decision (mevedel-memory-decision-status workspace id entries passes))
+                         (decision (mevedel-memory-decision-status workspace id entries passes intents))
                          (write (seq-find (lambda (row) (and (equal id (plist-get (plist-get row :intent) :proposal))
                                                             (or (plist-get row :marked) (plist-get row :error)))) writes))
                          (status (or (plist-get decision :status) 'pending)) problem)
@@ -488,20 +557,35 @@
                       (lambda (event) (interactive "e")
                         (select-window (posn-window (event-start event)))
                         (mevedel-memory-list-switch view)))
-          (propertize (capitalize (symbol-name view)) 'local-map map 'mouse-face 'highlight
-                      'face (if (eq view mevedel-memory-list--view) 'bold 'link))))
+          (concat
+           (propertize (capitalize (symbol-name view)) 'local-map map 'mouse-face 'highlight
+                       'face (if (eq view mevedel-memory-list--view) 'bold 'link))
+           ;; Signal waiting candidates on their tab instead of switching to it.
+           (when-let* (((eq view 'candidates))
+                       (count (mevedel-memory-list--candidate-count context))
+                       ((> count 0)))
+             (propertize (format " (%d)" count) 'face 'warning 'local-map map 'mouse-face 'highlight)))))
       '(candidates memories history) " | ")
      (cond (mevedel-memory-list--error (format "    Scan failed: %s (g retries)" mevedel-memory-list--error))
            (mevedel-memory-list--job "    Loading history...")
+           ((not mevedel-memory-list--snapshot) "    History not loaded")
            (t "    Committed snapshot (g refreshes)"))
+     (if (and (eq mevedel-memory-list--view 'memories) mevedel-memory-list--memories-job)
+         " | refreshing memories" "")
      (if mevedel-memory-list--recovery " | recovery pending" "")
      (if mevedel-memory-list--recovery-warning
          (concat " | " mevedel-memory-list--recovery-warning) "")
      "    "
      (mevedel-cockpit-format-header
       "memory" (mevedel-workspace-root workspace)
-      (format "%d pending | %d recovery | history %d days%s"
-              (or (plist-get observation :pending) 0) (or (plist-get observation :recovery) 0)
+      (format "%s | history %d days%s"
+              (cond ((not observation) "proposals not checked")
+                    ;; Counts from an earlier scan, not this table's snapshot.
+                    ((not mevedel-memory-list--snapshot)
+                     (format "%d pending | %d recovery (cached)"
+                             (or (plist-get observation :pending) 0) (or (plist-get observation :recovery) 0)))
+                    (t (format "%d pending | %d recovery"
+                               (or (plist-get observation :pending) 0) (or (plist-get observation :recovery) 0))))
               mevedel-memory-history-max-age-days
               (if-let* ((drain (mevedel-memory-pass-drain-status workspace)))
                   (format " | drain batch %d (%s), %s notes remain"
@@ -858,7 +942,9 @@ limit this explicit command.  Proposals still follow the configured mode."
     (setq mevedel-memory-list--recovery-warning nil
           mevedel-memory-list--recovery
           (list :context context :root (mevedel-workspace-root workspace)
-                :expires (+ (float-time) 180)))
+                :expires (+ (float-time) 180)
+                ;; Compared at retirement: only a changing recovery stales reads.
+                :generation (mevedel-memory-decision-recovery-generation workspace)))
     ;; The existing owner retains workspace claims, original target checks,
     ;; and live-buffer reconciliation. Closing the display does not cancel
     ;; workspace maintenance or grant a second operation its ownership.

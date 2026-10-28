@@ -808,8 +808,19 @@ Recovery neither requests a model nor repeats or rolls back memory writes.
 
 `M-x mevedel-memory-list-open`, or **Memory** (`l`) in the session cockpit, opens
 the memory table with **Candidates**, **Memories**, and **History** views.
-Switch with the clickable header or `1`, `2`, and `3`. Opening starts with
-Candidates when proposals need attention, otherwise Memories. Refresh retains
+Switch with the clickable header or `1`, `2`, and `3`. Opening uses the
+workspace's last proposal counts (the observation the main cockpit's Memory
+row shows) at once: Candidates when they report proposals needing attention,
+otherwise Memories. Passes, decisions, cleanup and recovery that changed
+committed state discard those counts; without them the table opens on
+Memories and scans history in the background only to learn them. The table
+never switches views by itself: whenever known counts are nonzero, the
+Candidates tab label shows them, for example `Candidates (2)`. Proposal history
+is otherwise collected only for Candidates and History: with known counts,
+opening on, refreshing, or acting in Memories starts no history scan, and
+switching to a proposal view loads it on demand. The header labels counts not
+from the current table's scan `(cached)`, and says `proposals not checked`
+before any observation. Refresh retains
 the selected view and each displayed window's row where possible, including
 across loading gaps and tab switches. Background completion restores window
 positions without selecting a window. Resolved candidates move to History.
@@ -825,7 +836,11 @@ recovery without blocking the table. Initial history collection independently
 reads committed data even while recovery is pending, dispatching or active; the
 header labels the committed snapshot and pending recovery rather than implying
 reconciliation has completed. While its bounded observer remains active, recovery
-completion requests a fresh history scan. After 180 seconds, display observation
+completion requests a fresh history scan only if that recovery changed committed
+state (published or released evidence, finished expiry, or reconciled a marked
+write); a no-op recovery keeps the scan in flight and the workspace's counts.
+The recovery owner exposes this as a per-workspace generation, an observation
+for presentation only. After 180 seconds, display observation
 ends without cancelling workspace recovery or discarding rows or an active scan.
 A visible incomplete-recovery warning remains across `g`, which refreshes data
 without claiming recovery completed. Reopening renews recovery observation.
@@ -853,9 +868,21 @@ authority.
 
 Memories inventories actual topic files in configured roots, including manual
 and unindexed topics, with frontmatter title/type and indexed/unindexed status.
-Indexes and internal coordination files are excluded. `RET` inspects the full
+Indexes and internal coordination files are excluded. The listing is display
+metadata, not a transaction snapshot: each root directory is listed once with
+file attributes, and only the index and topics whose attributes changed are
+read, together by bounded pinned programs that run asynchronously. Unchanged
+files reuse their cached title, type and error within the Emacs session. The
+table shows the last observed rows at once, marked `refreshing memories` in the
+header (or a loading notice before any observation), and replaces them after
+display; `g` keeps rows visible while they refresh. A retired table stops its
+remaining reads; rows observed under a changed workspace root or memory
+configuration are discarded and observed again. Frontmatter in the
+form mevedel writes (JSON-string name, plain type word) is read without a YAML
+parse; any other frontmatter is parsed as YAML. `RET` inspects the full
 stored body, `o` opens the actual file, and `d` asks for confirmation naming the
-exact topic. Deletion freshly captures the topic and index, then uses the same
+exact topic. Inspection reads a fresh bounded snapshot. Deletion freshly
+captures the topic and index, then uses the same
 checked transaction as proposal application. Its producer is `user`; it runs no
 model and fabricates no model response. A concurrent edit prevents application.
 The deletion appears in History, where `u` can restore its exact before-state
@@ -867,8 +894,9 @@ The main cockpit's Memory row shows pending/stale proposals, interrupted-write
 recovery, and unavailable-record counts separately. Opening and rendering the
 main cockpit use cached observations without reading journal or memory files.
 The row says `not checked` before an observation exists and marks observations
-older than ten seconds as `cached`. Open the Memory table or refresh it to
-collect current evidence. Counts are disposable UI state and never authorize
+older than ten seconds as `cached`. Show Candidates or History in the Memory
+table, or refresh there, to collect current counts. Counts are disposable UI
+state and never authorize
 an application or override its freshness checks.
 
 `RET`/`i` shows the complete proposed body, retained before/after diff, decision

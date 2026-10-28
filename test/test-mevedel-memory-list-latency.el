@@ -20,15 +20,6 @@
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name)) "mevedel-memory-list-test-support"))
 
-(mevedel-deftest mevedel-memory-list--copy
-    (:doc "large display observations copy strings without recursive list-spine depth")
-  (let* ((original (make-list 10000 (list :title (copy-sequence "Display"))))
-         (copied (mevedel-memory-list--copy original)))
-    (should (equal original copied))
-    (aset (plist-get (car copied) :title) 0 ?X)
-    (should (equal "Display" (plist-get (car original) :title)))
-    (should (equal "Display" (plist-get (cadr copied) :title)))))
-
 (mevedel-deftest mevedel-memory-list-latency
     (:vars* ((root (make-temp-file "mevedel-cockpit-latency-" t))
              (workspace (mevedel-workspace--create :root root :type 'project))
@@ -56,6 +47,8 @@
                (lambda (&rest args) (cl-incf calls) (apply read args))))
       (save-window-excursion
         (dotimes (_ (if (getenv "MEVEDEL_COCKPIT_BENCHMARK") 3 1))
+          ;; Measure the complete scan-backed open, not a counts-chosen Memories view.
+          (setf (mevedel-workspace-memory-observation workspace) nil)
           (let* ((start (float-time)) (last start) (gap 0) (ticks 0)
                  (collections gcs-done) (gc-seconds gc-elapsed)
                  (timer (run-at-time .01 .01
@@ -68,18 +61,19 @@
                   (mevedel-memory-list-open context)
                   (push (list 'open (- (float-time) start)) samples)
                   (with-current-buffer "*mevedel memory*"
+                    ;; Without prior counts, opening must scan to choose a view.
+                    (let* ((job (or mevedel-memory-list--job (ert-fail "Opening did not start a history scan")))
+                           (library (cadr (member "-l" (process-command (plist-get job :worker))))))
+                      (should (equal (locate-library "mevedel-memory-list") library))
+                      (when-let* ((snapshot (getenv "MEVEDEL_COCKPIT_SNAPSHOT")))
+                        (dolist (source (list library (symbol-file 'mevedel-memory-list-open)
+                                              (symbol-file 'gptel-request)))
+                          (should (file-in-directory-p source snapshot))))
+                      (push (list :editor (symbol-file 'mevedel-memory-list-open) :child library
+                                  :gptel (symbol-file 'gptel-request)) sources))
                     (with-timeout (45 (ert-fail "Recovery did not admit the display scan"))
                       (while mevedel-memory-list--recovery (accept-process-output nil .01)))
-                    (push (list 'recovery-ready (- (float-time) start)) samples)
-                    (when-let* ((job mevedel-memory-list--job))
-                      (let ((library (cadr (member "-l" (process-command (plist-get job :worker))))))
-                        (should (equal (locate-library "mevedel-memory-list") library))
-                        (when-let* ((snapshot (getenv "MEVEDEL_COCKPIT_SNAPSHOT")))
-                          (dolist (source (list library (symbol-file 'mevedel-memory-list-open)
-                                                (symbol-file 'gptel-request)))
-                            (should (file-in-directory-p source snapshot))))
-                        (push (list :editor (symbol-file 'mevedel-memory-list-open) :child library
-                                    :gptel (symbol-file 'gptel-request)) sources))))
+                    (push (list 'recovery-ready (- (float-time) start)) samples))
                   (mevedel-test-memory-list-await (get-buffer "*mevedel memory*"))
                   (push (list 'ready (- (float-time) start)) samples)
                   (push (list 'max-timer-gap gap) samples)
@@ -93,6 +87,8 @@
               (let ((start (float-time)))
                 (mevedel-memory-list-switch view)
                 (push (list view (- (float-time) start)) samples)))
+            ;; Recovery completion may have discarded history while Memories showed.
+            (mevedel-test-memory-list-await)
             (should (= (* batches items) (length (mevedel-cockpit-surface-items))))))))
     (should (= (if (getenv "MEVEDEL_COCKPIT_BENCHMARK") 3 1) (length sources)))
     (when (getenv "MEVEDEL_COCKPIT_BENCHMARK")
@@ -307,7 +303,7 @@
             (mevedel-test-memory-list-await)
             (should-not mevedel-memory-list--recovery)
             (should mevedel-memory-list--snapshot))))))
-  :doc "opening scans during recovery, refreshes after its owner retires, and tabs reuse each snapshot"
+  :doc "opening scans during recovery, rescans only after a changing recovery, and tabs reuse each snapshot"
   (let* ((starts 0) (start (symbol-function 'mevedel-memory-list--start))
          (mevedel-memory-decision--recovery-workers (make-hash-table :test #'equal))
          (key (mevedel-memory-store--claim-directory workspace))
@@ -329,6 +325,24 @@
               (should (= 1 starts))
               (dolist (view '(history candidates memories history)) (mevedel-memory-list-switch view))
               (should (= 1 starts))
+              ;; A recovery that changed nothing leaves the committed snapshot current.
+              (let ((watcher mevedel-memory-list--recovery))
+                (remhash key mevedel-memory-decision--recovery-workers)
+                (mevedel-memory-list--observe-recovery (current-buffer) watcher)
+                (should-not mevedel-memory-list--recovery)
+                (should mevedel-memory-list--snapshot)
+                (should (= 1 starts)))
+              ;; Reopening watches again; a changing recovery stales the snapshot.
+              (puthash key owner mevedel-memory-decision--recovery-workers)
+              (mevedel-memory-list-open context)
+              ;; Counts without alerts reopen Memories; History scans on demand.
+              (should (eq 'memories mevedel-memory-list--view))
+              (should-not mevedel-memory-list--job)
+              (mevedel-memory-list-history)
+              (with-timeout (45 (ert-fail "Reopened display scan did not finish"))
+                (while mevedel-memory-list--job (accept-process-output nil .01)))
+              (setq starts 1)
+              (mevedel-memory-decision--recovery-changed workspace)
               (remhash key mevedel-memory-decision--recovery-workers)
               (mevedel-memory-list--observe-recovery (current-buffer) mevedel-memory-list--recovery)
               (mevedel-test-memory-list-await)
@@ -339,18 +353,20 @@
         (when (eq owner (gethash key mevedel-memory-decision--recovery-workers))
           (remhash key mevedel-memory-decision--recovery-workers))
         (when (get-buffer "*mevedel memory*") (kill-buffer "*mevedel memory*")))))
-  :doc "Memories inventories once while recovery is pending and keeps that independent snapshot"
+  :doc "Memories inventories once while recovery is pending and keeps that independent observation"
   (let* ((mevedel-memory-decision--recovery-workers (make-hash-table :test #'equal))
          (key (mevedel-memory-store--claim-directory workspace))
-         (read (symbol-function 'mevedel-memory-library-list)) (reads 0))
+         (read (symbol-function 'mevedel-memory-library-refresh)) (reads 0))
     (puthash key '(existing-owner) mevedel-memory-decision--recovery-workers)
-    (cl-letf (((symbol-function 'mevedel-memory-library-list)
-               (lambda (workspace) (cl-incf reads) (funcall read workspace))))
+    (cl-letf (((symbol-function 'mevedel-memory-library-refresh)
+               (lambda (&rest args) (cl-incf reads) (apply read args))))
       (save-window-excursion
         (with-current-buffer (mevedel-memory-list-open context)
           (mevedel-memory-list-memories)
+          (mevedel-test-memory-list-await-memories)
           (should (= 1 reads))
           (let ((watcher mevedel-memory-list--recovery))
+            (mevedel-memory-decision--recovery-changed workspace)
             (remhash key mevedel-memory-decision--recovery-workers)
             (mevedel-memory-list--observe-recovery (current-buffer) watcher))
           (mevedel-test-memory-list-await)
@@ -469,6 +485,8 @@
     (dolist (cause '(explicit completion))
       (dolist (view '(candidates memories history))
         (mevedel-memory-list-switch view)
+        ;; A refresh on Memories leaves history to load with its own view.
+        (mevedel-test-memory-list-await)
         (should (>= (length (mevedel-cockpit-surface-items)) 2))
         (let ((selected (plist-get (cadr (mevedel-cockpit-surface-items)) :id)))
           (mevedel-cockpit-goto-id selected)
@@ -535,6 +553,7 @@
             (let (left-id right-id)
               (with-selected-window left
                 (mevedel-memory-list-switch tab)
+                (when (eq tab 'memories) (mevedel-test-memory-list-await-memories))
                 (setq left-id (plist-get (car (mevedel-cockpit-surface-items)) :id)
                       right-id (plist-get (cadr (mevedel-cockpit-surface-items)) :id))
                 (should left-id) (should right-id)

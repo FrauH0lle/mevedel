@@ -14,6 +14,7 @@
 (require 'mevedel-journal-cleanup)
 (require 'mevedel-journal-index)
 (require 'mevedel-journal-pins)
+(require 'mevedel-session-control-fs)
 (require 'mevedel-session-persistence)
 
 (defun mevedel-test-journal-cleanup--entry (root name &optional fresh)
@@ -225,6 +226,27 @@
           (should-not (file-exists-p path))
           (should (= 0 (mevedel-journal-cleanup-expired workspace t)))
           (should (equal (plist-get entry :turn-ids) (mevedel-journal-store-covered-turns root))))
+      (delete-directory root t)))
+  :doc "counts only manifests it finishes now, so a steady-state recovery reports none"
+  (let* ((root (make-temp-file "mevedel-journal-expiry-finished-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (entry (mevedel-test-journal-cleanup--entry root "finished"))
+         (directory (mevedel-journal-store-directory root))
+         (path (file-name-concat directory (plist-get entry :file)))
+         (delete-file-fn (symbol-function 'mevedel-session-control-fs-delete-file))
+         (mevedel-journal-max-age-days 365))
+    (unwind-protect
+        (progn
+          (mevedel-test--with-captured-messages nil
+            (cl-letf (((symbol-function 'mevedel-session-control-fs-delete-file)
+                       (lambda (target)
+                         (if (equal target path) (error "Injected interruption")
+                           (funcall delete-file-fn target)))))
+              (should-not (mevedel-journal-cleanup-expired workspace))))
+          ;; The interrupted manifest still finishes even if its public file is gone.
+          (delete-file path)
+          (should (= 1 (mevedel-journal-cleanup-recover directory)))
+          (should (= 0 (mevedel-journal-cleanup-recover directory))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-journal-cleanup--apply ()

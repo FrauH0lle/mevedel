@@ -73,6 +73,9 @@
                   ;; nonblocking open so their owners can finish or cancel.
                   (let ((buffer (mevedel-memory-list-open context)))
                     (mevedel-test-memory-list-await buffer)
+                    ;; Without earlier counts the table opens on Memories and
+                    ;; only signals candidates; these cases inspect proposals.
+                    (with-current-buffer buffer (mevedel-memory-list-candidates))
                     buffer)))
       ,test))
   (test)
@@ -257,6 +260,7 @@
     (with-current-buffer (open-for-inspection)
       (call-interactively (key-binding (kbd "2")))
       (should (eq 'memories mevedel-memory-list--view))
+      (mevedel-test-memory-list-await-memories)
       (should (= 1 (length (mevedel-cockpit-surface-items))))
       (goto-char (point-min))
       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
@@ -266,6 +270,8 @@
       (should-not (string-search "topic.md" (mevedel-session-control-fs-read-file (file-name-concat memory "MEMORY.md"))))
       (should-not (mevedel-cockpit-surface-items))
       (call-interactively (key-binding (kbd "3")))
+      ;; Deletion refreshed Memories only; History loads on demand.
+      (mevedel-test-memory-list-await)
       (goto-char (point-min))
       (should (equal "user" (plist-get (plist-get (mevedel-memory-store-accepted
                                                   workspace (plist-get (mevedel-cockpit-surface-selected) :pass)) :review) :model)))
@@ -280,6 +286,7 @@
       (unwind-protect
           (with-current-buffer (open-for-inspection)
             (call-interactively (key-binding (kbd "2")))
+            (mevedel-test-memory-list-await-memories)
             (let ((row (seq-find (lambda (item) (equal file (plist-get item :target))) (mevedel-cockpit-surface-items))))
               (should (equal "Manual lesson" (plist-get row :title)))
               (should (equal "feedback" (plist-get row :type)))
@@ -287,7 +294,7 @@
               (should (equal tab-line-format '(:eval (mevedel-cockpit-surface-header-line))))
               (let* ((header (mevedel-cockpit-surface-header-line))
                      (map (get-text-property 0 'local-map header)))
-                (should (string-prefix-p "Candidates | Memories | History" header))
+                (should (string-match-p "\\`Candidates\\(?: ([0-9]+)\\)? | Memories | History" header))
                 (should (commandp (lookup-key map [tab-line mouse-1]))))
               (mevedel-cockpit-goto-id (plist-get row :id))
               (mevedel-cockpit-surface-details)
@@ -302,6 +309,7 @@
   (save-window-excursion
     (with-current-buffer (open-for-inspection)
       (mevedel-memory-list-memories)
+      (mevedel-test-memory-list-await-memories)
       (goto-char (point-min))
       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
         (mevedel-memory-list-delete))
@@ -313,6 +321,7 @@
   (save-window-excursion
     (with-current-buffer (open-for-inspection)
       (mevedel-memory-list-memories)
+      (mevedel-test-memory-list-await-memories)
       (goto-char (point-min))
       (let ((capture (symbol-function 'mevedel-memory-scope-capture)))
         (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
@@ -334,6 +343,7 @@
       (save-window-excursion
         (with-current-buffer (open-for-inspection)
           (mevedel-memory-list-memories)
+          (mevedel-test-memory-list-await-memories)
           (goto-char (point-min))
           (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
                     ((symbol-function 'mevedel-memory-scope-capture)
@@ -364,6 +374,7 @@
   :doc "rejects the selected proposal with a retained reason and no target writes"
   (with-current-buffer (save-window-excursion (with-current-buffer view (mevedel-menu-open 'memory)))
     (mevedel-test-memory-list-await)
+    (mevedel-memory-list-candidates)
     (mevedel-cockpit-goto-id id)
     (mevedel-memory-list-reject "This is already documented.")
     (mevedel-test-memory-list-await)
@@ -442,6 +453,7 @@
             (with-current-buffer (plist-get (plist-get state :request) :buffer) (should-not mevedel--session))
             (with-current-buffer "*mevedel memory*"
               (await-display)
+              (mevedel-memory-list-candidates)
               (mevedel-cockpit-goto-id id)
               (should (eq 'pending (plist-get (mevedel-cockpit-surface-selected) :status)))
               (should-not (plist-member (mevedel-cockpit-surface-selected) :accepted))

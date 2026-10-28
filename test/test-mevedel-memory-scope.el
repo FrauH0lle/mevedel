@@ -303,7 +303,25 @@
             (should (equal '("topic.md") (plist-get root :files)))
             (should-not (mevedel-memory-proposal--file-p ".mevedel/state/memory-write/topic.md"))
             (should-error (mevedel-memory-scope-source-path scope ".mevedel/state/memory-write/root/1.claim"))))
-      (delete-directory directory t))))
+      (delete-directory directory t)))
+  :doc "one listing reports names, directories and requested attributes without following links"
+  (let ((directory (file-name-as-directory (make-temp-file "mevedel-memory-inventory-" t)))
+        (outside (make-temp-file "mevedel-memory-outside-" t)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat directory "nested"))
+          (write-region "Topic\n" nil (file-name-concat directory "nested" "topic.md") nil 'silent)
+          (write-region "Outside\n" nil (file-name-concat outside "hidden.md") nil 'silent)
+          (make-symbolic-link outside (file-name-concat directory "linked"))
+          (let ((inventory (mevedel-memory-scope--inventory directory t)))
+            (should (equal '("linked" "nested" "nested/topic.md") (plist-get inventory :existing)))
+            (should (equal '("nested") (plist-get inventory :directories)))
+            (should (plist-get inventory :complete))
+            (should (= 6 (file-attribute-size (cdr (assoc "nested/topic.md" (plist-get inventory :attributes))))))
+            (should (stringp (file-attribute-type (cdr (assoc "linked" (plist-get inventory :attributes)))))))
+          (should-not (plist-member (mevedel-memory-scope--inventory directory) :attributes)))
+      (delete-directory directory t)
+      (delete-directory outside t))))
 
 (provide 'test-mevedel-memory-scope)
 ;;; test-mevedel-memory-scope.el ends here

@@ -119,6 +119,8 @@
 			   (let ((deadline (+ (float-time) 10)))
 			     (while (and (gethash key mevedel-memory-decision--recovery-workers) (< (float-time) deadline))
 			       (accept-process-output nil .01))))
+				 ;; Reconciling a marked write changes committed state.
+				 (should (= 1 (mevedel-memory-decision-recovery-generation workspace)))
 			 (should-not (gethash key mevedel-memory-decision--recovery-workers))
 			 (should-not (plist-get job :timer))
 			 (mevedel-memory-decision--recover-next-write workspace job))
@@ -195,7 +197,29 @@
           (should (= 0 (hash-table-count mevedel-memory-decision--recovery-workers)))
           (should (eq 'cancelled (plist-get (mevedel-journal-claim-outcome (plist-get job :claim)) :status))))
       (mevedel-memory-decision-stop-recovery)
-      (delete-directory root t))))
+      (delete-directory root t)))
+  :doc "only recovery that changed committed state drops observations and advances the generation"
+  (dolist (changed '(nil t))
+    (let* ((root (make-temp-file "mevedel-recovery-generation-" t))
+           (workspace (mevedel-workspace--create :root root))
+           (observation (list :at 1 :pending 0 :recovery 0 :unavailable 0))
+           completed)
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-journal-worker-supported-p) #'ignore)
+                    ((symbol-function 'mevedel-memory-decision-recover) (lambda (_) changed))
+                    ((symbol-function 'mevedel-memory-store-recover) #'ignore))
+            (setf (mevedel-workspace-memory-observation workspace) observation
+                  (mevedel-workspace-journal-observation workspace) observation)
+            (mevedel-memory-decision--start-recovery
+             workspace (lambda () (setq completed t)) (current-buffer) #'always
+             (mevedel-memory-store--claim-directory workspace))
+            (with-timeout (10 (ert-fail "Synchronous recovery did not complete"))
+              (while (not completed) (accept-process-output nil .01)))
+            (should (= (if changed 1 0) (mevedel-memory-decision-recovery-generation workspace)))
+            (should (eq (unless changed observation) (mevedel-workspace-memory-observation workspace)))
+            (should (eq (unless changed observation) (mevedel-workspace-journal-observation workspace))))
+        (mevedel-memory-decision-stop-recovery)
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-memory-decision-recovering-p ()
   ,test

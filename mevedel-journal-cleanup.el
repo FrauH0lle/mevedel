@@ -46,6 +46,10 @@
 (defvar mevedel-journal-cleanup--more nil
   "Non-nil when this batch reached a work limit and may leave more work.")
 
+(defvar mevedel-journal-cleanup--finished nil
+  "Non-nil once `mevedel-journal-cleanup--apply' finishes a manifest now.
+`mevedel-journal-cleanup-recover' binds it per manifest.")
+
 (defun mevedel-journal-cleanup--memory-entry-p (entry)
   "Validate ENTRY's closed memory dependency paths and identity hashes."
   (let* ((id (gethash "id" entry))
@@ -116,7 +120,9 @@
 
 (defun mevedel-journal-cleanup--apply (root manifest)
   "Apply MANIFEST only if its immutable claim outcome accepted its exact hash.
-An accepted manifest remains recoverable after its owner expires."
+An accepted manifest remains recoverable after its owner expires.  Return the
+number of public files deleted; finishing the manifest now also sets
+`mevedel-journal-cleanup--finished', even when no public file remained."
   (let* ((outcome (mevedel-journal-claim-outcome (plist-get manifest :token)))
          (hash (plist-get manifest :hash))
          (done (concat (plist-get manifest :path) ".done"))
@@ -169,7 +175,8 @@ An accepted manifest remains recoverable after its owner expires."
                       (mevedel-session-control-fs-delete-file path))
                   (mevedel-session-control-fs-absent nil))))))
         (unless (mevedel-session-control-fs-create-or-verify done hash)
-          (error "Conflicting journal expiry completion"))))
+          (error "Conflicting journal expiry completion"))
+        (setq mevedel-journal-cleanup--finished t)))
     deleted))
 
 (defun mevedel-journal-cleanup-pass-retired-p (workspace-root id)
@@ -182,13 +189,16 @@ This only prevents reuse of expired private state; it never authorizes deletion.
 (defun mevedel-journal-cleanup-recover (root)
   "Finish accepted expiry manifests under journal ROOT before new mutations.
 Callers must hold journal mutation ownership while selecting subsequent
-evidence."
-  (let ((deleted 0))
+evidence.  Return how many manifests this call finished; already finished
+manifests are verified but not counted."
+  (let ((finished 0))
     (dolist (path (mevedel-session-control-fs-list-directory
                    (file-name-concat (mevedel-journal-store-state-directory root) "expiry")
                    (concat "\\`" mevedel-journal-store-hash-regexp "\\.json\\'")))
-      (cl-incf deleted (mevedel-journal-cleanup--apply root (mevedel-journal-cleanup--read root path))))
-    deleted))
+      (let ((mevedel-journal-cleanup--finished nil))
+        (mevedel-journal-cleanup--apply root (mevedel-journal-cleanup--read root path))
+        (when mevedel-journal-cleanup--finished (cl-incf finished))))
+    finished))
 
 (defun mevedel-journal-cleanup--protected-p (root entry)
   "Return non-nil when ENTRY retains pending capture or pinned review evidence."

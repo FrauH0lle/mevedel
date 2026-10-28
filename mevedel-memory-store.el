@@ -57,11 +57,15 @@ remain recoverable if an operation fails after committing its publication."
         (funcall function claim)
       (mevedel-journal-claim-settle claim 'completed ""))))
 
-(defun mevedel-memory-store--read-lisp (path)
+(defun mevedel-memory-store--read-lisp (path &optional observation)
   "Read the bounded private Lisp record at PATH as (DATA . TEXT).
 DATA is nil when TEXT is oversized, unreadable, or followed by anything but
-whitespace; callers validate DATA's shape and signal their own errors."
-  (let* ((text (mevedel-session-control-fs-read-file path 'utf-8-unix (1+ mevedel-memory-store--max-bytes)))
+whitespace; callers validate DATA's shape and signal their own errors.
+OBSERVATION may supply PATH's pinned read from this operation's bounded batch."
+  (when (and observation (not (equal path (plist-get observation :path))))
+    (error "Memory record observation addresses another path"))
+  (let* ((text (if observation (mevedel-session-control-fs-program-value observation)
+                 (mevedel-session-control-fs-read-file path 'utf-8-unix (1+ mevedel-memory-store--max-bytes))))
          (read-eval nil) (read-circle nil)
          (parsed (and (<= (string-bytes text) mevedel-memory-store--max-bytes)
                       (ignore-errors (read-from-string text)))))
@@ -170,7 +174,8 @@ No coverage is consumed."
 
 (defun mevedel-memory-store-release (workspace id)
   "Release only WORKSPACE pass ID's pins after a fenced unsuccessful outcome.
-Repeated release is harmless. Live and accepted passes retain their evidence."
+Repeated release is harmless. Live and accepted passes retain their evidence.
+Return the number of pins released."
   (mevedel-memory-store--mutation
    workspace
    (lambda (mutation)
@@ -182,17 +187,20 @@ Repeated release is harmless. Live and accepted passes retain their evidence."
 
 (defun mevedel-memory-store--release-pins (workspace prepared keep mutation)
   "Release PREPARED's pins in WORKSPACE except digest IDs in KEEP.
-MUTATION holds journal ownership; the caller has proved release eligibility."
-  (dolist (entry (plist-get prepared :entries))
-    (unless (member (plist-get entry :id) keep)
-      (let ((pin (mevedel-memory-store--pin workspace (plist-get prepared :id) (plist-get entry :id))))
-        (condition-case nil
-            (progn
-              (unless (equal (plist-get prepared :hash) (mevedel-session-control-fs-read-file pin 'utf-8-unix 65))
-                (error "Memory evidence pin changed"))
-              (mevedel-memory-store--assert-owned mutation)
-              (mevedel-session-control-fs-delete-file pin))
-          (mevedel-session-control-fs-absent nil))))))
+MUTATION holds journal ownership; the caller has proved release eligibility.
+Return the number of pins released; already absent pins are not counted."
+  (let ((released 0))
+    (dolist (entry (plist-get prepared :entries) released)
+      (unless (member (plist-get entry :id) keep)
+        (let ((pin (mevedel-memory-store--pin workspace (plist-get prepared :id) (plist-get entry :id))))
+          (condition-case nil
+              (progn
+                (unless (equal (plist-get prepared :hash) (mevedel-session-control-fs-read-file pin 'utf-8-unix 65))
+                  (error "Memory evidence pin changed"))
+                (mevedel-memory-store--assert-owned mutation)
+                (mevedel-session-control-fs-delete-file pin)
+                (cl-incf released))
+            (mevedel-session-control-fs-absent nil)))))))
 
 (defun mevedel-memory-store--proposal (scope id proposal)
   "Bind PROPOSAL to pass ID, original SCOPE targets, and complete before-state.
@@ -381,16 +389,20 @@ Call after acquiring a successor pass claim, so all older attempts are fenced.
 Live preparations are left alone. Unreadable accepted state fails closed rather
 than letting a new selection silently ignore its unpublished review coverage.
 Authenticate every completed bundle, but avoid a publication transaction when
-the public bytes already match and no spare evidence pins remain."
-  (let ((published (make-hash-table :test #'equal)))
+the public bytes already match and no spare evidence pins remain.
+Return non-nil when recovery changed committed journal state: finished an
+expiry, published, or released evidence pins."
+  (let ((published (make-hash-table :test #'equal)) changed)
     ;; Publication used to do this once per completed pass.  Recover accepted
     ;; expiry before observing retirement or taking the no-op publication path.
-    (mevedel-memory-store--mutation
-     workspace
-     (lambda (mutation)
-       (mevedel-memory-store--assert-owned mutation)
-       (mevedel-journal-cleanup-recover
-        (mevedel-journal-store-directory (mevedel-workspace-root workspace)))))
+    (when (> (mevedel-memory-store--mutation
+              workspace
+              (lambda (mutation)
+                (mevedel-memory-store--assert-owned mutation)
+                (mevedel-journal-cleanup-recover
+                 (mevedel-journal-store-directory (mevedel-workspace-root workspace)))))
+             0)
+      (setq changed t))
     (dolist (entry (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
       (puthash (plist-get entry :file) (plist-get entry :text) published))
     (dolist (directory
@@ -418,8 +430,11 @@ the public bytes already match and no spare evidence pins remain."
                                           (mevedel-session-control-fs-path-exists-p
                                            (mevedel-memory-store--pin workspace id (plist-get entry :id)))))
                                    (plist-get prepared :entries)))
-                 (mevedel-memory-store-publish workspace id))))
-            ((or 'failed 'cancelled 'expired) (mevedel-memory-store-release workspace id))))))))
+                 (mevedel-memory-store-publish workspace id)
+                 (setq changed t))))
+            ((or 'failed 'cancelled 'expired)
+             (when (> (mevedel-memory-store-release workspace id) 0) (setq changed t)))))))
+    changed))
 
 (provide 'mevedel-memory-store)
 ;;; mevedel-memory-store.el ends here

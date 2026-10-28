@@ -294,8 +294,9 @@
           (let* ((next (mevedel-memory-store-prepare workspace successor scope (list entry) ""))
                  (pin (mevedel-memory-store--pin workspace (plist-get successor :owner) (plist-get entry :id))))
             (make-directory (mevedel-memory-store--directory workspace (make-string 64 ?f)) t)
-            (mevedel-memory-store-recover workspace)
-            (mevedel-memory-store-recover workspace)
+            ;; Only the release that actually removed pins reports a change.
+            (should (mevedel-memory-store-recover workspace))
+            (should-not (mevedel-memory-store-recover workspace))
             (should-not (file-exists-p (mevedel-memory-store--pin workspace (plist-get prepared :id) (plist-get entry :id))))
             (should (equal (plist-get next :hash) (mevedel-session-control-fs-read-file pin)))
             (should-not (mevedel-journal-claim-outcome successor))
@@ -325,16 +326,16 @@
         (cl-letf (((symbol-function 'mevedel-memory-store-publish)
                    (lambda (&rest args) (cl-incf calls) (apply publisher args))))
           (setq successor (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-          (mevedel-memory-store-recover workspace)
+          (should (mevedel-memory-store-recover workspace))
           (should (= 1 calls))
           (should-not (file-exists-p pin))
           (setq calls 0)
-          (mevedel-memory-store-recover workspace)
+          (should-not (mevedel-memory-store-recover workspace))
           (should (= 0 calls))
           ;; Interrupted spare-pin release still needs a real transaction.
           (make-directory (file-name-directory pin) t)
           (write-region (plist-get prepared :hash) nil pin nil 'silent)
-          (mevedel-memory-store-recover workspace)
+          (should (mevedel-memory-store-recover workspace))
           (should (= 1 calls))
           (should-not (file-exists-p pin))
           ;; A missing publication can be recovered while source pins survive.
@@ -392,6 +393,13 @@
           (write-region "(:id \"a\" :n 1)\n" nil path nil 'silent)
           (should (equal (cons '(:id "a" :n 1) "(:id \"a\" :n 1)\n")
                          (mevedel-memory-store--read-lisp path)))
+          (let ((observation (car (mevedel-session-control-fs-run-program
+                                   (list (list :op 'read :path path :coding 'utf-8-unix
+                                               :max-bytes (1+ mevedel-memory-store--max-bytes)))))))
+            (should (equal (mevedel-memory-store--read-lisp path)
+                           (mevedel-memory-store--read-lisp path observation)))
+            (should-error (mevedel-memory-store--read-lisp
+                           (file-name-concat root "other.el") observation)))
           (write-region "(:id \"a\") trailing" nil path nil 'silent)
           (should-not (car (mevedel-memory-store--read-lisp path)))
           (write-region "(:id \"a\"" nil path nil 'silent)

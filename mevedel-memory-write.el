@@ -145,16 +145,17 @@ checked rollback retains CURRENTP's ownership without a cancelled forward gate."
                                         (plist-get intent :before)))))
              before-write))))))
 
-(cl-defun mevedel-memory-write-read (workspace id hash &optional accepted)
+(cl-defun mevedel-memory-write-read (workspace id hash &optional accepted observation)
   "Read WORKSPACE write ID only when its bytes match expected HASH.
 Validate its source pass and closed affected-file states. Private scope remains
 bound to the originating client; reading does not authorize target access.
 Return nil for an intent whose source pass has been retired.
 ACCEPTED may supply this operation's authenticated source bundle.  Callers
-must discard it after mutation and never retain it between operations."
+must discard it after mutation and never retain it between operations.
+OBSERVATION may supply the intent's pinned read from this operation's batch."
   (unless (and (mevedel-journal-store-id-p id) (mevedel-journal-store-id-p hash)) (error "Invalid memory write identity"))
   (let* ((record (mevedel-memory-store--read-lisp
-                  (file-name-concat (mevedel-memory-write--directory workspace) (concat id ".el"))))
+                  (file-name-concat (mevedel-memory-write--directory workspace) (concat id ".el")) observation))
          (text (cdr record)))
     (unless (equal hash (secure-hash 'sha256 text))
       (error "Memory write intent changed"))
@@ -165,12 +166,17 @@ must discard it after mutation and never retain it between operations."
         (cl-return-from mevedel-memory-write-read nil))
       (let* ((claim (append (list :directory (mevedel-memory-store--claim-directory workspace)) (plist-get data :claim)))
              (accepted (or accepted (mevedel-memory-store-accepted workspace (plist-get data :pass))))
+             (source (plist-get (plist-get accepted :prepared) :claim))
+             (evidence (mevedel-session-control-fs-run-program
+                        (list (list :op 'read :optional t :path (mevedel-journal-claim--path claim nil))
+                              (list :op 'read :optional t :path (mevedel-journal-claim--path source t)))))
              (proposal (seq-find (lambda (item) (equal (plist-get data :proposal) (plist-get item :id))) (plist-get accepted :proposals))))
 	(unless (and (proper-list-p data) (= (length data) 20)
                      (cl-every (lambda (key) (plist-member data key))
                                '(:id :claim :target-claim :pass :proposal :source-hash :changes :before :after :reverse-of))
                      (equal id (plist-get data :id)) (equal id (plist-get claim :owner))
-                     (equal (mevedel-journal-claim--record claim) (mevedel-journal-claim--read (mevedel-journal-claim--path claim nil) nil))
+                     (equal (mevedel-journal-claim--record claim)
+                            (mevedel-journal-claim--read (mevedel-journal-claim--path claim nil) nil (car evidence)))
                      (equal (plist-get data :pass) (plist-get (plist-get accepted :prepared) :id))
                      proposal
                      (if-let* ((source (plist-get data :reverse-of)))
@@ -183,7 +189,7 @@ must discard it after mutation and never retain it between operations."
                                      (equal (plist-get data :after) (plist-get original :before)))))
                        (mevedel-memory-write--before-p proposal (plist-get data :before)))
                      (equal (plist-get data :source-hash)
-                            (plist-get (mevedel-journal-claim-outcome (plist-get (plist-get accepted :prepared) :claim)) :payload))
+                            (plist-get (mevedel-journal-claim-outcome source (cadr evidence)) :payload))
                      (proper-list-p (plist-get data :changes))
                      (cl-every (lambda (change)
 				 (and (memq (plist-get change :action) '(write delete))
@@ -494,6 +500,24 @@ Errors or quit leave retirement unresolved, never permission to retry writes."
               (plist-get target :directory)))
       (mevedel-session-control-fs-program-value result))))
 
+(defun mevedel-memory-write--read-batch (workspace ids)
+  "Return bounded pinned read observations for WORKSPACE write IDS.
+A transport failure makes each identity unavailable without aborting later
+batches.  Reject incomplete control responses rather than losing identities."
+  (let ((operations
+         (mapcar (lambda (id)
+                   (list :op 'read :optional t :coding 'utf-8-unix
+                         :max-bytes (1+ mevedel-memory-store--max-bytes)
+                         :path (file-name-concat (mevedel-memory-write--directory workspace) (concat id ".el")))) ids)))
+    (condition-case err
+        (let ((results (mevedel-session-control-fs-run-program operations)))
+          (unless (and (proper-list-p results) (= (length results) (length ids)))
+            (error "Incomplete memory write observations"))
+          results)
+      (error (mapcar (lambda (op)
+                       (list :path (plist-get op :path) :status 'failed
+                             :diagnostic (error-message-string err))) operations)))))
+
 (defun mevedel-memory-write-list (workspace &optional ids)
   "Inspect retained write records in WORKSPACE without mutating targets.
 Each row has :id, and readable rows have :hash and :intent. Check original root
@@ -506,30 +530,63 @@ Remember each readable identity's marker path for
   (let ((inspected (or (gethash workspace mevedel-memory-write--inspected)
                        (puthash workspace (make-hash-table :test #'equal)
                                 mevedel-memory-write--inspected)))
-        records)
-    (dolist (id (or ids
-                    (mapcar (lambda (path) (file-name-sans-extension (file-name-nondirectory path)))
-                            (mevedel-session-control-fs-list-directory
-                             (mevedel-memory-write--directory workspace) mevedel-memory-write-intent-file-regexp))))
-      (unless (mevedel-journal-store-id-p id) (error "Invalid memory write identity"))
-      (let ((row (list :id id))
-            (path (file-name-concat (mevedel-memory-write--directory workspace) (concat id ".el"))))
-        (condition-case err
-            (let* ((text (mevedel-session-control-fs-read-file path 'utf-8-unix (1+ mevedel-memory-store--max-bytes)))
-                   (hash (secure-hash 'sha256 text))
-                   (intent (mevedel-memory-write-read workspace (plist-get row :id) hash)))
-              (if (not intent)
-                  (progn (puthash id 'retired inspected)
-                         (setq row nil))
-                (setq row (append row (list :hash hash :intent intent)))
-                (let ((pin (mevedel-memory-write--pin intent)))
-                  (puthash id pin inspected)
-                  (when (mevedel-session-control-fs-path-exists-p pin)
-                    (unless (equal hash (mevedel-session-control-fs-read-file pin)) (error "Memory root marker changed"))
-                    (setq row (append row (list :marked t)))))))
-          (error (setq row (append row (list :error (error-message-string err))))))
-        (when row (push row records))))
-    (nreverse records)))
+        (ids (or ids
+                 (mapcar (lambda (path) (file-name-sans-extension (file-name-nondirectory path)))
+                         (mevedel-session-control-fs-list-directory
+                          (mevedel-memory-write--directory workspace) mevedel-memory-write-intent-file-regexp))))
+        (groups (make-hash-table :test #'equal))
+        (rows (make-hash-table :test #'equal)))
+    ;; Group only identities, not complete bodies, by an untrusted pass hint.
+    ;; Each group is reread in bounded batches and fully authenticated below.
+    (dolist (id ids)
+      (unless (mevedel-journal-store-id-p id) (error "Invalid memory write identity")))
+    (let ((pending ids))
+      (while pending
+        (let* ((batch (seq-take pending 8))
+               (reads (mevedel-memory-write--read-batch workspace batch)))
+          (setq pending (nthcdr (length batch) pending))
+          (cl-mapc
+           (lambda (id read)
+             (condition-case err
+                 (let* ((record (mevedel-memory-store--read-lisp (plist-get read :path) read))
+                        (pass (plist-get (car record) :pass)))
+                   (unless (mevedel-journal-store-id-p pass) (error "Invalid memory write source pass"))
+                   (push id (gethash pass groups)))
+               (error (puthash id (list :id id :error (error-message-string err)) rows))))
+           batch reads))))
+    (maphash
+     (lambda (pass pending)
+       (let (accepted failure)
+         (condition-case err
+             (unless (mevedel-journal-cleanup-pass-retired-p (mevedel-workspace-root workspace) pass)
+               (setq accepted (mevedel-memory-store-accepted workspace pass)))
+           (error (setq failure (error-message-string err))))
+         (while pending
+           (let* ((batch (seq-take pending 8))
+                  (reads (mevedel-memory-write--read-batch workspace batch)))
+             (setq pending (nthcdr (length batch) pending))
+             (cl-mapc
+              (lambda (id read)
+                (let ((row (list :id id)))
+                  (condition-case err
+                      (progn
+                        (when failure (error "%s" failure))
+                        (let* ((hash (secure-hash 'sha256 (mevedel-session-control-fs-program-value read)))
+                               (intent (mevedel-memory-write-read workspace id hash accepted read)))
+                          (if (not intent)
+                              (progn (puthash id 'retired inspected) (setq row nil))
+                            (setq row (append row (list :hash hash :intent intent)))
+                            (let ((pin (mevedel-memory-write--pin intent)))
+                              (puthash id pin inspected)
+                              (when (mevedel-session-control-fs-path-exists-p pin)
+                                (unless (equal hash (mevedel-session-control-fs-read-file pin))
+                                  (error "Memory root marker changed"))
+                                (setq row (append row (list :marked t))))))))
+                    (error (setq row (append row (list :error (error-message-string err))))))
+                  (when row (puthash id row rows))))
+              batch reads)))))
+     groups)
+    (delq nil (mapcar (lambda (id) (gethash id rows)) ids))))
 
 (defun mevedel-memory-write-recovery-candidates (workspace)
   "Return WORKSPACE write identities whose recovery needs a full inspection.

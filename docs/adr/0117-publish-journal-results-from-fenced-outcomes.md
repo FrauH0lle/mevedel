@@ -20,9 +20,12 @@ or decide a proposal. Source identities, original root/target/client authority,
 exact bytes, and accepted hashes remain binding through recovery.
 
 Recovery groups decision metadata by pass only to choose read order; every
-decision and write intent still undergoes authentication. A scan shares at most
-one authenticated pass bundle, including with the write reader, and discards it
-after publication. Pending automatic selection refreshes its public observation
+decision and write intent still undergoes authentication. Each pass group shares
+its authenticated bundle with the write reader and discards that observation
+after publication. The read-only cockpit collector reuses its freshly
+authenticated write intents when the identity, intent hash and source-bundle
+hash match the decision; these observations never authorize a later action.
+Pending automatic selection refreshes its public observation
 and discards proofs after applying a proposal. Completed pass recovery still
 authenticates every bundle and recovers accepted expiry under mutation ownership,
 but avoids republication when exact public bytes match and no spare pins remain.
@@ -195,12 +198,19 @@ child collects committed evidence with existing
 validators and returns detached metadata, not accepted bundles or write proofs.
 Current-job, context, session, root, fresh workspace identity, client and
 configuration checks reject stale replies. Closing the display retires its own
-work, not recovery's owner. Candidates and History reuse snapshots; Memories
-inventories independently. Refresh and completed actions request new observations;
+work, not recovery's owner. Candidates and History reuse snapshots and collect
+history only when shown; Memories inventories independently, never waits for
+history, and scans it in the background only while candidate counts are
+unknown, to label the Candidates tab. The table never switches views by
+itself. The topic inventory
+is display metadata, not a transaction snapshot: an attribute listing validates
+cached titles, and changed files are read by batched asynchronous pinned programs
+after display. Refresh and completed actions request new observations;
 empty views distinguish pending data, completed emptiness and scan failure with
 static presentation-only notices, not synthetic rows or action targets. The header
-labels committed snapshots and pending recovery. Recovery completion starts a
-fresh scan while the bounded display observer is active. Its 180-second expiry
+labels committed snapshots and pending recovery. Recovery that changed committed
+state starts a fresh scan while the bounded display observer is active; a no-op
+recovery keeps the scan and counts. Its 180-second expiry
 retires only display observation, retaining rows and any scan with an explicit
 incomplete-recovery warning separate from scan errors. `g` refreshes committed
 data without clearing that limitation; reopening renews the observer.
@@ -209,7 +219,7 @@ and full-data readiness differ. Background printing can restore buffer point
 while leaving a nonselected window on another row. The memory surface retains
 each displayed window's per-tab row identity across loading gaps and restores
 its window point without selecting it, preserving independent selections and
-the active composer. Remote/uncertain inspection and topic inventory
+the active composer. Remote/uncertain inspection and topic directory listing
 can still block; offloading a scan does not establish lower total IO.
 Explicit inspection and decision commands retain synchronous authentication and
 processing; display responsiveness does not establish nonblocking manual actions.
@@ -938,3 +948,49 @@ priority, callback ownership and action reauthentication are unchanged. Normal
 observed recovery completion still requests a fresh scan; display-observer expiry
 retains useful data and an explicit limitation instead of declaring recovery
 complete or preventing further read-only refreshes.
+
+### 2026-10-28: list stored memories without proposal history
+
+Listing stored memories reused the transaction snapshot primitive: one pinned
+helper program per topic, with hashing and a mode probe, then a full YAML parse.
+Opening the cockpit also waited for the complete history scan before choosing a
+view, and every recovery completion restarted that scan. On a copy of the real
+workspace (50 topics, 211 completed history rows; compiled, local), listing took
+0.46 s median and the history scan 21 s; over a same-host Podman TRAMP target the
+listing took 2.3 s. YAML parsing was 0.18 s of a cold listing. A no-op recovery
+(10.7 s) cancelled and restarted the in-flight scan.
+
+Memories now uses an attribute listing to reuse cached metadata and reads only
+changed files, batched and asynchronously; mevedel's own frontmatter form is read
+without YAML when it provably equals the YAML result. Measured afterwards: 2.8 ms
+for an unchanged local listing, 0.13 s cold; 0.033 s and 0.23 s over the TRAMP
+target. Prior counts choose the opening view; without them the table opens on
+Memories instead of waiting 15 s for the scan to choose. An automatic switch to
+Candidates when the scan found proposals was tried and rejected by the user as
+confusing; the Candidates tab label shows the count instead. Recovery reports
+whether it changed committed state through a
+presentation-only generation; only changes invalidate counts and rescan.
+Inspection, deletion and decisions still read fresh transaction-grade evidence.
+
+The collector groups retained writes by untrusted pass hints, then freshly reads
+and authenticates bounded batches, sharing the source proof within each pass.
+The read-only decision scan reuses those authenticated intents instead of
+authenticating every write twice. Batch failures keep affected identities visible
+as unavailable and leave independent batches inspectable. Paired claim/outcome
+reads and batched recovery grouping hints reduce helper invocations without
+retaining authorization proofs between operations.
+
+Measurements on the same copied real journal with compiled code:
+
+- Scenario: completed-history collector; metric: total latency; before: 21.03 s;
+  after: 11.78 s; statistic: median; samples: 3 per implementation. All 211 rows
+  remained present, with 210 applied and one rejected, and no errors.
+- Scenario: retained-write listing inside that collector; metric: latency;
+  before: 10.98 s; after: 5.23 s; statistic: median; samples: 3 per implementation.
+- Scenario: completed-history collector; metric: pinned helper programs per scan;
+  before: 4,485; after: 2,365; statistic: mean; samples: 3 per implementation.
+- Scenario: synchronous decision publication recovery; metric: latency;
+  before: 10.68 s; after: 9.84 s; statistic: single sample per implementation.
+
+These are component timings, not complete cockpit-readiness measurements. The
+Podman target shares the client host and does not measure physical SSH latency.

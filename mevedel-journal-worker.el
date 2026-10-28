@@ -228,17 +228,18 @@ Deleting the process cancels work; durable claims fence interrupted attempts."
                    (mevedel-memory-store--assert-owned (plist-get (plist-get options :payload) :claim))
                    (if (not (mevedel-memory-decision--worker-local-p workspace))
                        (list :ok t :operation-id (plist-get (plist-get options :payload) :operation-id) :synchronous t)
-                     (progn
-                       (mevedel-memory-decision-recover workspace)
+                     (let ((changed (mevedel-memory-decision-recover workspace)))
                        (unless (plist-get (plist-get options :payload) :decisions-only)
-                         (mevedel-memory-store-recover workspace))
+                         (when (mevedel-memory-store-recover workspace) (setq changed t)))
                        (if (plist-get (plist-get options :payload) :pending-selection)
                            (progn
                              (require 'mevedel-memory-pass)
-                             (list :ok t :operation-id (plist-get (plist-get options :payload) :operation-id) :items
+                             (list :ok t :operation-id (plist-get (plist-get options :payload) :operation-id)
+                                   :changed changed :items
                                    (mevedel-memory-pass--pending-items
                                     workspace (plist-get (plist-get options :payload) :skip))))
-                         (list :ok t :operation-id (plist-get (plist-get options :payload) :operation-id))))))
+                         (list :ok t :operation-id (plist-get (plist-get options :payload) :operation-id)
+                               :changed changed)))))
                   ((or 'memory-prepare 'memory-publish)
                    (require 'mevedel-memory-pass)
                    (if (eq (plist-get options :operation) 'memory-prepare)
