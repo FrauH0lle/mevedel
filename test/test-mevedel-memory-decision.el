@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-memory-decision)
+(require 'mevedel-journal-cleanup)
 (require 'mevedel-memory-pass)
 (require 'mevedel-session-persistence)
 (require 'mevedel-memory-review)
@@ -152,6 +153,7 @@
   :doc "a decision waits for this client's active cleanup to release ownership"
   (let* ((mevedel-journal-worker--child-p t)
          (mevedel-journal-cleanup--pending (make-hash-table :test #'equal))
+         (mevedel-journal-cleanup--active (make-hash-table :test #'equal))
          (iterator (mevedel-journal-cleanup--steps workspace t))
          (job (cons nil nil)) timer)
     (unwind-protect
@@ -160,9 +162,13 @@
           (should-not (mevedel-journal-claim-acquire
                        (mevedel-memory-store--claim-directory workspace) 180))
           (puthash root job mevedel-journal-cleanup--pending)
+          ;; This iterator owns real cleanup claims; represent admitted IO,
+          ;; not merely a queued job, at the decision's waiting boundary.
+          (puthash root job mevedel-journal-cleanup--active)
           (setq timer (run-at-time .05 nil
                                    (lambda ()
                                      (iter-close iterator)
+                                     (remhash root mevedel-journal-cleanup--active)
                                      (remhash root mevedel-journal-cleanup--pending))))
           (mevedel-test--with-captured-messages nil
             (should (eq 'rejected

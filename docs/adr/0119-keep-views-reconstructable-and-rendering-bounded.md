@@ -293,6 +293,18 @@ Emacs's whole-frame redraws to it, and keeps GLib dispatch on the main thread,
 where the GL context is current. It refuses executables whose imports it cannot
 account for. The October 2026 entry below records why it lives in mevedel.
 
+The headless presentation test separates pending compositor configuration from
+unchanged-content idle measurement. Its test-only module locates the fixture's
+existing GTK frame and verifies its Wayland socket peer against the private
+compositor before queuing configuration or synchronizing that same connection.
+The trace must show the synchronization callback completing before idle; the full
+idle phase still permits no outgoing requests. Pending input must neither shorten
+the 500-ms sample nor turn it into a busy loop. This protocol barrier does not
+establish focus or visual completion, and adds no shipped synchronization API.
+The nested compositor and daemon also omit inherited session-bus and D-Bus
+activation addresses/type, preserving the caller's environment while avoiding
+host application integration, as the isolated graphical checker does.
+
 Eligible Linux PGTK/Wayland views optionally use independent native surfaces.
 The animation module supplies timed, styled samples; a small C module owns
 bounded buffers, GLib scheduling, Pango drawing and Wayland presentation without

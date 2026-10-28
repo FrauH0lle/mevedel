@@ -72,7 +72,41 @@ Deferred retries retain and freshly validate their original buffer, session,
 workspace and identity context, including live policy at forward write boundaries.
 Invalid context or explicit cancellation preserves pending decisions without
 retrying from another actor; cancel also removes deferred work between passes.
+Deferred application retries yield priority to a registered explicit drain,
+including its waiting gaps, rather than starting a competing local owner. The
+drain waits when local work is already running. After potentially reentrant
+busy and identity IO, retry admission rechecks its exact registration and the
+running/drain tables without intervening IO before retiring itself and registering
+application work. An old callback's error teardown cannot remove a successor.
+This addresses the local overlap that can make a drain encounter `Memory
+consolidation is already running`; a forced ordering reproduces that mechanism,
+not the precise ordering of the observed live interruption.
+Scheduled publication recovery likewise retains its original callback and
+origin/workspace/root/canonical-key context while yielding with a bounded,
+nonzero delay to a registered pass/drain or admitted local cleanup. A drain waits
+for already-admitted decision work, including claim-acquisition handoff, but not
+queued recovery or its pre-admission freshness checks. Counting those checks as
+admission would make recovery and drain mutually defer. Exact-owner checks after
+IO prevent cancellation or a changed root/key from admitting replacement work;
+teardown cannot erase a successor. This addresses a separately reproduced local
+claim collision yielding `Memory consolidation is busy`, without identifying the
+original live claimant or suppressing foreign contention and storage failures.
+Foreign native claim contention still declines the unadmitted opportunity;
+callbacks signify successful recovery or absent state, not attempted admission.
+Later maintenance may offer again, without a local foreign-contention retry loop.
+Publication recovery is not proposal application and does not inherit its
+auto-mode or live-session admission requirements.
 Unsupported workers use native recovery through the same guarded executor.
+Scheduled cleanup yields priority to this client's registered memory pass,
+explicit drain and owned asynchronous decision/recovery work, including gaps
+between sequential proposal claims. Forced cleanup remains queued rather than
+competing for mutation ownership during application. An exact-job observation
+distinguishes actual local cleanup admission from queued timers or transport
+callbacks; active cleanup postpones new automatic/drain admission and refuses
+explicit review before its claim, without a synchronous editor wait. Neither
+observation grants authority or replaces the existing cross-client claims.
+This closes the publication-triggered cleanup/application race that could accept
+a review but leave its first proposal pending with `Journal mutation is busy`.
 Held admission and ordinary cancellation have distinct non-error callbacks;
 timeouts, protocol, authentication, IO and cleanup failures stay errors.
 Cancellation preserves an authenticated result and its written-file accounting
@@ -156,14 +190,20 @@ fenced claims and retained evidence, rather than inferring completion.
 The main session menu only renders cached memory observations, marking missing
 or old counts. The Memory table requests checked workspace recovery and observes
 its pending, dispatching and active owner without replacing callbacks or acquiring
-authority. A display-only local child collects current evidence with existing
+authority. Initial collection does not wait for recovery: a display-only local
+child collects committed evidence with existing
 validators and returns detached metadata, not accepted bundles or write proofs.
 Current-job, context, session, root, fresh workspace identity, client and
 configuration checks reject stale replies. Closing the display retires its own
 work, not recovery's owner. Candidates and History reuse snapshots; Memories
 inventories independently. Refresh and completed actions request new observations;
 empty views distinguish pending data, completed emptiness and scan failure with
-static presentation-only notices, not synthetic rows or action targets.
+static presentation-only notices, not synthetic rows or action targets. The header
+labels committed snapshots and pending recovery. Recovery completion starts a
+fresh scan while the bounded display observer is active. Its 180-second expiry
+retires only display observation, retaining rows and any scan with an explicit
+incomplete-recovery warning separate from scan errors. `g` refreshes committed
+data without clearing that limitation; reopening renews the observer.
 Details and mutations freshly authenticate existing evidence. Command return
 and full-data readiness differ. Background printing can restore buffer point
 while leaving a nonselected window on another row. The memory surface retains
@@ -180,8 +220,12 @@ a workspace turn is active. Auto mode offers a remaining ready backlog at the
 next idle opportunity instead of waiting another day, subject to a rolling
 24-hour cap (eight successful general reviews by default, including explicit
 ones). Published and retired timestamps enforce admission under ownership;
-explicit drain bypasses the automatic cap. This replaces one-batch-per-interval
-catch-up: a roughly 250-note ready backlog otherwise took weeks at sixteen
+explicit drain bypasses the automatic cap. A returned application error or
+recovery requirement stops successor
+drain batches even when review acceptance succeeded; the accepted outcome,
+confirmed application counts and original diagnostic remain distinct and intact.
+This replaces one-batch-per-interval catch-up: a roughly 250-note ready backlog
+otherwise took weeks at sixteen
 notes per daily review. Request bounds stay unchanged rather than making one
 oversized request. The cap limits admissions, not provider billing.
 
@@ -881,3 +925,16 @@ Pending discovery now authenticates status before returning identities, matching
 the synchronous selector. A later editor attempt still authenticates its own
 current status; neither the selection nor the eligibility preflight returns
 reusable acceptance authority.
+
+### 2026-10-28: do not withhold committed display data behind recovery
+
+Initial history collection previously followed workspace recovery retirement.
+Recovery correctly yields to a registered consolidation drain, so opening the
+cockpit during a drain could leave Candidates and History blank for the whole
+drain. Imposed display-observer expiry also exposed a persistent scan-error gate
+despite no failed scan. Initial collection now reads committed display-only data
+independently, visibly distinguishing it from completed reconciliation. Recovery
+priority, callback ownership and action reauthentication are unchanged. Normal
+observed recovery completion still requests a fresh scan; display-observer expiry
+retains useful data and an explicit limitation instead of declaring recovery
+complete or preventing further read-only refreshes.

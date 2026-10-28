@@ -38,14 +38,25 @@ Shared working notes in `notes` are temporary working material from
 `work://shared/`. They are cleaned up after this review, so extract every
 qualifying memory from them now: cite the note's ID in a proposal's `evidence`.
 The same qualification rules apply; a note's existence is no reason to save
-it. Then dispose of each note exactly once in the Notes section:
+it. Only IDs in the top-level `notes` array may receive dispositions. Omitted
+or merely referenced notes remain outside this review, even if investigation
+tools can read them. Dispose of each admitted note exactly once in Notes:
 
 - `delete`: the normal outcome, after extraction or when nothing qualifies.
   When future usefulness is uncertain, delete.
 - `keep`: only for concrete continuing use, such as an open handoff or an
-  investigation still in progress. The note is reviewed again later.
+  investigation still in progress, including its prepared diagnostic needed
+  for an unresolved follow-up. The note is reviewed again later.
 - `condense`: rewrite the note to the part still in use, for example only its
   open handoff after its finding was extracted.
+
+Unresolved defects or investigations with no record visible in the supplied
+memories, instructions or investigation reads are continuing use: condense to
+their evidence, caveats and next step until resolved, superseded or recorded
+elsewhere with the material caveats and next-step conditions intact.
+Before deleting a note, check for unresolved findings even when its main task
+is complete. Passing checks or completed fixes in the same note do not
+establish resolution of a separate finding.
 
 Do not keep or condense a note merely because it might help someday, and do
 not invent memories to justify deleting one. A note is removed only after

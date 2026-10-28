@@ -992,6 +992,9 @@
          (mevedel-session-save-path session)))
       (when (buffer-live-p parent)
         (kill-buffer parent))
+      (mevedel-session-persistence-cancel-deferred-agent-save session)
+      (should-not
+       (gethash session mevedel-session-persistence--deferred-agent-saves))
       (delete-directory root t)))
 
   :doc "steers a running target at its next boundary when capacity is full"
@@ -1057,6 +1060,9 @@
          (mevedel-session-save-path session)))
       (when (buffer-live-p parent)
         (kill-buffer parent))
+      (mevedel-session-persistence-cancel-deferred-agent-save session)
+      (should-not
+       (gethash session mevedel-session-persistence--deferred-agent-saves))
       (delete-directory root t))))
 
 

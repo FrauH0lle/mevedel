@@ -261,6 +261,66 @@
       (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-monitor-scheduler-release (:quiet t)
+  ,test
+  (test)
+  :doc "admits an exclusive command after Monitor yields while its watcher stays live"
+  (let* ((root (make-temp-file "mevedel-monitor-scheduler-" t))
+         (session (test-mevedel-execution--session root))
+         (started (file-name-concat root "monitor-started"))
+         (stop (file-name-concat root "monitor-stop"))
+         (completed (file-name-concat root "exclusive-completed"))
+         (mevedel-sandbox-mode 'off)
+         monitor-initial exclusive-result events)
+    (unwind-protect
+        (let ((mevedel-execution-mailbox-delivery-function
+               (lambda (event _owner-context acknowledge)
+                 (push event events)
+                 (funcall acknowledge t nil)
+                 t)))
+          (mevedel-execution-start-bash
+           (lambda (observation) (setq monitor-initial observation))
+           :kind 'monitor :description "scheduler lease"
+           :session session :owner "/root" :owner-context session
+           :command
+           (list "sh" "-c"
+                 "touch \"$1\"; while [ ! -e \"$2\" ]; do sleep .02; done"
+                 "monitor-scheduler" started stop)
+           :workdir root :writable-roots (list root)
+           :artifact-directory (file-name-concat root "artifacts"))
+          (test-mevedel-execution--wait (lambda () monitor-initial))
+          (should (eq 'running
+                      (plist-get (plist-get monitor-initial :facts) :state)))
+          (let* ((id (plist-get (plist-get monitor-initial :facts) :execution-id))
+                 (record (gethash id (mevedel-execution--state-records
+                                      (mevedel-session-execution-state session)))))
+            (test-mevedel-execution--wait (lambda () (file-exists-p started)))
+            (should (mevedel-execution-process-live-p
+                     (mevedel-execution--record-child record)))
+            (mevedel-execution-start-bash
+             (lambda (observation) (setq exclusive-result observation))
+             :session session :owner "/root" :owner-context session
+             :command (list "sh" "-c" "touch \"$1\"" "exclusive" completed)
+             :workdir root :writable-roots (list root)
+             :artifact-directory (file-name-concat root "artifacts")
+             :yield-time-ms nil)
+            (test-mevedel-execution--wait
+             (lambda () (and exclusive-result (file-exists-p completed))))
+            (should (eq 'completed
+                        (plist-get (plist-get exclusive-result :facts) :state)))
+            ;; The dependent command completed before the still-running watcher
+            ;; was stopped; releasing only at Monitor termination cannot pass.
+            (should (mevedel-execution-process-live-p
+                     (mevedel-execution--record-child record)))
+            (with-temp-file stop)
+            (test-mevedel-execution--wait
+             (lambda ()
+               (cl-find 'terminal events
+                        :key (lambda (event) (plist-get event :type)))))))
+      (with-temp-file stop)
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-monitor-terminal ()
   ,test
   (test)

@@ -434,6 +434,14 @@ target is gone, which is slow, noisy, and order dependent."
     (mevedel-view--release-markdown-fontify-buffer))
   (when (boundp 'mevedel-skills--frontmatter-cache)
     (clrhash mevedel-skills--frontmatter-cache))
+  ;; A probe a test cancels mid-flight caches a non-answer that only the next
+  ;; launch retries.  Later real-Bubblewrap cases read the cache directly and
+  ;; would silently skip, so drop non-answers as launches do; keep definitive
+  ;; results to avoid re-probing every case.
+  (when (bound-and-true-p mevedel-sandbox--probe-cache)
+    (setq mevedel-sandbox--probe-cache
+          (cl-remove-if (lambda (entry) (plist-get (cdr entry) :retry-on-execution))
+                        mevedel-sandbox--probe-cache)))
   ;; A paced stream starts the Emacs-wide pause guard on first use.
   (when (bound-and-true-p mevedel-transport--pause-guard)
     (delete-process mevedel-transport--pause-guard)
@@ -1503,7 +1511,9 @@ WAYLAND_DEBUG client log."
          (trace (generate-new-buffer " *mevedel-test-wayland-trace*"))
          (kwin-log (generate-new-buffer " *mevedel-test-kwin*"))
          (process-environment (cl-remove-if (lambda (entry)
-                                              (string-match-p "\\`\\(WAYLAND_DISPLAY\\|DISPLAY\\)=" entry))
+                                              (string-match-p
+                                               "\\`\\(WAYLAND_DISPLAY\\|DISPLAY\\|DBUS_SESSION_BUS_ADDRESS\\|DBUS_STARTER_ADDRESS\\|DBUS_STARTER_BUS_TYPE\\)="
+                                               entry))
                                             process-environment))
          (kwin (make-process
                 :name "mevedel-test-kwin" :noquery t :connection-type 'pipe

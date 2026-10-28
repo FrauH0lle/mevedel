@@ -27,6 +27,7 @@
 (defvar-local mevedel-memory-list--job nil "Current read-only history scan.")
 (defvar-local mevedel-memory-list--error nil "Last history scan failure.")
 (defvar-local mevedel-memory-list--recovery nil "Display watcher for checked recovery.")
+(defvar-local mevedel-memory-list--recovery-warning nil "Retired recovery watch limitation.")
 (defvar-local mevedel-memory-list--notice nil "Non-row table status overlay.")
 
 (defun mevedel-memory-list--update-notice (items &optional unavailable)
@@ -36,8 +37,9 @@
                (items nil)
                ((eq mevedel-memory-list--view 'memories) "No stored memories.")
                (mevedel-memory-list--error "Could not load memory data; press g to retry")
-               (mevedel-memory-list--recovery "Loading memory data after checked recovery...")
                (mevedel-memory-list--job "Loading history...")
+               ((and mevedel-memory-list--recovery (not mevedel-memory-list--snapshot))
+                "Loading committed memory data; recovery pending...")
                ((eq mevedel-memory-list--view 'history) "No retained memory history.")
                (t "No pending memory candidates."))))
     (if text
@@ -166,12 +168,13 @@
            ((> (float-time) (plist-get token :expires))
             (cancel-timer (plist-get token :timer))
             (setq mevedel-memory-list--recovery nil
-                  mevedel-memory-list--error "Recovery observation timed out; workspace recovery retains its own owner")
+                  mevedel-memory-list--recovery-warning
+                  "Recovery observation timed out; completion not observed; g refreshes data; reopen to watch recovery")
             (mevedel-memory-list--update-notice mevedel-cockpit--items)
             (force-mode-line-update))
            ((not (mevedel-memory-decision-recovering-p workspace))
             (cancel-timer (plist-get token :timer))
-            (setq mevedel-memory-list--recovery nil)
+            (setq mevedel-memory-list--recovery nil mevedel-memory-list--recovery-warning nil)
             ;; Reconciliation publishes/classifies retained writes; it does not
             ;; reapply curated files. Keep the independent topic inventory.
             (mevedel-memory-list--remember-position)
@@ -357,8 +360,7 @@
     (cl-return-from mevedel-memory-list--visible
       (append (mapcar #'mevedel-memory-list--display-row (mevedel-memory-list--collect context))
               (mevedel-memory-library-list (mevedel-cockpit-context-workspace context)))))
-  (unless (or mevedel-memory-list--snapshot mevedel-memory-list--job mevedel-memory-list--error
-              mevedel-memory-list--recovery)
+  (unless (or mevedel-memory-list--snapshot mevedel-memory-list--job mevedel-memory-list--error)
     (mevedel-memory-list--start context))
   (let* ((rows (plist-get mevedel-memory-list--snapshot :rows))
          (pending (seq-remove (lambda (row) (memq (plist-get row :status) '(applied rejected reversed completed))) rows)))
@@ -491,9 +493,10 @@
       '(candidates memories history) " | ")
      (cond (mevedel-memory-list--error (format "    Scan failed: %s (g retries)" mevedel-memory-list--error))
            (mevedel-memory-list--job "    Loading history...")
-           (mevedel-memory-list--recovery "    Loading after checked recovery...")
-           (t "    Snapshot (g refreshes)"))
-     (if mevedel-memory-list--recovery " | recovery requested" "")
+           (t "    Committed snapshot (g refreshes)"))
+     (if mevedel-memory-list--recovery " | recovery pending" "")
+     (if mevedel-memory-list--recovery-warning
+         (concat " | " mevedel-memory-list--recovery-warning) "")
      "    "
      (mevedel-cockpit-format-header
       "memory" (mevedel-workspace-root workspace)
@@ -849,10 +852,11 @@ limit this explicit command.  Proposals still follow the configured mode."
   (setq-local tab-line-format '(:eval (mevedel-cockpit-surface-header-line))))
 
 (defun mevedel-memory-list--setup (context)
-  "Request CONTEXT's checked recovery before starting one display scan."
+  "Request CONTEXT's checked recovery independently of its display scan."
   (let ((buffer (current-buffer))
         (workspace (mevedel-cockpit-context-workspace context)))
-    (setq mevedel-memory-list--recovery
+    (setq mevedel-memory-list--recovery-warning nil
+          mevedel-memory-list--recovery
           (list :context context :root (mevedel-workspace-root workspace)
                 :expires (+ (float-time) 180)))
     ;; The existing owner retains workspace claims, original target checks,

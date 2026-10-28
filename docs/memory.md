@@ -218,7 +218,9 @@ root IDs, admitted files, complete filename observations for creation, and
 admitted digest IDs before returning any proposals. The fixed ordered sections
 are Promote, Update, Merge, Remove, Instructions, Notes, and No action; Notes is
 required exactly when shared notes were admitted, with one disposition per
-admitted note, and may otherwise be omitted or `- none`. Proposal fences
+admitted note, and may otherwise be omitted or `- none`. The request's notes-root
+filename roster lists only admitted notes; references and investigation reads do
+not admit additional notes for disposition. Proposal fences
 contain JSON-valued header lines, a `---` separator, and Markdown replacement
 content. The header is a sequence of `key: value` lines, not a JSON object;
 only the values use JSON syntax. Merge sources must be admitted files; overlapping file operations
@@ -659,6 +661,22 @@ offloading editor work does not imply lower total CPU or IO cost.
 This split removes eligible recovery scans from the editor, not all
 remaining commit/publication IO: an editor continuation can still block.
 
+Scheduled publication recovery yields to this client's registered pass or
+explicit drain, including waiting gaps, and to already-admitted local cleanup.
+It retains the original callback and origin/workspace/root/canonical-key context
+across a bounded, nonzero deferral instead of capturing a new caller. Conversely,
+a drain waits for already-admitted decision work, including its claim-acquisition
+handoff. Merely queued recovery and pre-admission freshness checks do not count as
+admitted work, so the two sides cannot indefinitely defer to each other.
+Admission rechecks exact registrations after reentrant IO; cancellation or a
+changed root/key cannot launch work for a replacement owner. These local
+observations neither grant native ownership nor turn foreign contention or IO
+failures into a local retry. A competing native claim declines that unadmitted
+recovery opportunity without a completion callback; later maintenance may offer
+fresh work. It is not an accepted recovery job awaiting completion.
+Publication recovery alone does not require auto
+mode or a live application session and does not authorize proposal application.
+
 Automatic shared-note mutations recheck active requests and pending turn
 settlements at the actual write boundary, after preparation, as well as holding
 notes when a turn is already active. All affected visiting buffers, including
@@ -803,8 +821,14 @@ resolves it). The history collector shares one public journal observation across
 proposal checks and authenticates each decision; locality and checked-recovery
 preflights read separately. The header shows workspace, pending/recovery counts,
 history retention, and this client's running pass. Opening requests checked workspace
-recovery without blocking the table. Initial history collection follows that
-workspace's pending, dispatching or active recovery owner, not unrelated work.
+recovery without blocking the table. Initial history collection independently
+reads committed data even while recovery is pending, dispatching or active; the
+header labels the committed snapshot and pending recovery rather than implying
+reconciliation has completed. While its bounded observer remains active, recovery
+completion requests a fresh history scan. After 180 seconds, display observation
+ends without cancelling workspace recovery or discarding rows or an active scan.
+A visible incomplete-recovery warning remains across `g`, which refreshes data
+without claiming recovery completed. Reopening renews recovery observation.
 Local history collection runs in a cancellable read-only batch child, returning
 detached display metadata, never accepted bundles or write proofs. The header
 shows loading or a retryable failure; complete data can arrive after command
@@ -884,6 +908,9 @@ notes are not ready; propose/manual drain leaves decisions for approval rather
 than deleting their files. Active workspace turns wait with a 60-second retry,
 so drain neither captures their notes nor spins on empty reviews. Closing its
 originating buffer or exiting stops it; a failed review stops without retry.
+An accepted review also stops the drain if application reports an error or a
+recovery requirement. Acceptance, actual application counts and the diagnostic
+remain unchanged; a published review is not proof that every proposal applied.
 A changed chunked note reports `restart-required`, not a failed review; drain
 continues to the next ready batch and automatic catch-up remains armed.
 The explicit command is not subject to the automatic daily cap.
@@ -989,8 +1016,15 @@ accepted as keep, so the citation cannot silently break.
 
 **Decisions.** The reply's Notes section gives every admitted note exactly one
 disposition: delete (the normal outcome, also when future usefulness is
-uncertain), keep (concrete continuing use such as an open handoff) or condense
-(rewrite to the part still in use). Extraction is ordinary memory and
+uncertain), keep (concrete continuing use such as an open handoff or a prepared
+diagnostic needed for an unresolved follow-up) or
+condense (rewrite to the part still in use). Unresolved defects or investigations
+with no record visible in the supplied memories, instructions or investigation
+reads are continuing use: condense to their evidence, caveats and next step until
+resolved, superseded or recorded elsewhere with the material caveats and
+next-step conditions intact. Check for these findings even when
+the note's main task is complete; passing checks or completed fixes do not
+establish resolution of a separate finding. Extraction is ordinary memory and
 instruction proposals citing the note's ID as evidence. Acceptance records
 those extractions as the disposition's `:requires`. Delete or condense applies
 only after every required extraction is applied; an undecided requirement
@@ -1046,6 +1080,13 @@ their decisions in the cockpit; `auto` applies extraction, deletion,
 condensation and housekeeping without prompts. In `auto`, note decisions wait
 while a conversation in the workspace runs a turn; a one-minute retry applies
 them, and undecided decisions of earlier automatic note reviews, once idle.
+That retry defers to a registered explicit drain, including its between-batch
+waiting gaps; the drain applies earlier pending decisions through its normal
+owned application path. A drain also waits for already-running local work.
+After busy/freshness IO, a retry rechecks its exact registration and local
+pass/drain observations before admission. Cancellation or failure of an older
+retry cannot remove or overwrite its successor. These observations coordinate
+this client only; native claims and original-target checks remain authoritative.
 
 ## Working notes and completed-turn capture
 
@@ -1344,7 +1385,16 @@ deletion is interrupted; recovery finishes deletion without inference. Changed
 public or private bytes are retained for inspection. Retired capture payloads can be removed
 with their expired digest, while identity-only capture coverage survives.
 Consolidation uses the same mutation boundary when pinning proposal evidence.
-Cleanup also acquires consolidation admission, so a live pass postpones cleanup.
+Cleanup also acquires consolidation admission. Its scheduler additionally defers
+new cleanup while this client has a registered memory pass, explicit drain or
+owned asynchronous decision/recovery operation, including the gaps between
+sequential application claims. Forced requests remain coalesced and run after
+that work; force bypasses the hourly throttle, not this scheduling gate. Actual
+cleanup admission is distinguished from queued timers and transport callbacks.
+An already-active local cleanup postpones new automatic consolidation and drain
+admission without waiting in the editor; explicit review reports the busy state
+before acquiring a pass claim. Queued cleanup does not block admission. These
+observations grant no storage authority; native claims still fence every owner.
 When an interactive memory decision encounters this client's active cleanup,
 it waits for that batch to release ownership, with quitting available and a
 120-second bound. Queued idle cleanup does not delay decisions. Bulk decisions

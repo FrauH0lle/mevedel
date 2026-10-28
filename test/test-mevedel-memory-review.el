@@ -15,10 +15,14 @@
 (require 'gptel-openai)
 (require 'gptel-anthropic)
 (require 'gptel-bedrock)
+(require 'mevedel-cockpit)
+(require 'mevedel-memory-investigation)
+(require 'mevedel-memory-pass)
 (require 'mevedel-memory-scope)
 (require 'mevedel-memory-review)
 (require 'mevedel-memory-list)
 (require 'mevedel-memory-notes)
+(require 'mevedel-models)
 (require 'mevedel-system)
 (require 'mevedel-claude-code)
 (require 'mevedel-engine-test-support
@@ -174,6 +178,14 @@
     (dolist (rule '("`user`:" "`feedback`:" "`project`:" "`reference`:"
                     "Tasks, blockers, deadlines, progress, and decisions belong"
                     "reviewing older notes containing project progress"
+                    "When future usefulness is uncertain, delete."
+                    "Unresolved defects or investigations with no record visible in the supplied"
+                    "memories, instructions or investigation reads are continuing use: condense to"
+                    "their evidence, caveats and next step until resolved, superseded or recorded"
+                    "elsewhere with the material caveats and next-step conditions intact."
+                    "investigation still in progress, including its prepared diagnostic needed"
+                    "Before deleting a note, check for unresolved findings even when its main task"
+                    "Passing checks or completed fixes in the same note do not"
                     "No action is a successful"))
       (should (string-search rule sent-system)))
     (with-current-buffer (plist-get handle :buffer)
@@ -236,6 +248,63 @@
       (should (equal '("work://shared/note.md") (plist-get result :notes)))
       (should (= 0 (plist-get result :omitted-notes)))
       (should (eq 'note-delete (plist-get (car (plist-get result :proposals)) :action)))))
+  :doc "request admission lists only supplied notes and rejects dispositions for omitted notes"
+  (let* ((shared (file-name-concat directory ".mevedel" "shared"))
+         scope)
+    (put model :context-window 32)
+    (make-directory shared t)
+    (dotimes (index 3)
+      (let ((path (file-name-concat shared (format "note-%d.md" index))))
+        (write-region (make-string 30000 ?x) nil path nil 'silent)
+        (set-file-times path (time-subtract nil (* (- 4 index) 86400)))))
+    (mevedel-workspace-identity-ensure directory)
+    (setq scope (mevedel-memory-scope-capture workspace))
+    (setq scope (plist-put scope :roots
+                           (append (plist-get scope :roots)
+                                   (list (plist-get (mevedel-memory-notes-capture workspace nil) :root)))))
+    (let* ((captured (mevedel-memory-notes-documents scope))
+           supplied omitted)
+      (cl-labels ((review ()
+                    (setq result nil handle
+                          (mevedel-memory-review-request
+                           scope entries (lambda (value) (setq result value)))))
+                  (reply (notes)
+                    (replace-regexp-in-string
+                     "## No action"
+                     (concat "## Notes\n"
+                             (mapconcat
+                              (lambda (note)
+                                (format "````proposal\nnote: %s\ndisposition: \"delete\"\nreason: \"Nothing durable.\"\n---\n````\n"
+                                        (json-serialize (plist-get note :id))))
+                              notes "")
+                             "## No action")
+                     mevedel-test-memory-review--none t t)))
+        (review)
+        (should-not result)
+        (let* ((input (json-parse-string sent :object-type 'plist :array-type 'list))
+               (root (seq-find (lambda (row) (equal "notes" (plist-get row :kind)))
+                               (plist-get input :roots))))
+          (setq supplied (plist-get input :notes)
+                omitted (seq-drop captured (length supplied)))
+          (should (= 3 (length captured)))
+          (should (> (length supplied) 0))
+          (should omitted)
+          (should (= (length omitted) (plist-get input :omitted_notes)))
+          (should (equal (mapcar (lambda (note) (plist-get note :path)) supplied)
+                         (plist-get root :admitted_files)))
+          ;; Admission must not change the retained capture used by storage.
+          (should (= 3 (length (plist-get (cdr (mevedel-memory-notes-root scope)) :files)))))
+        (respond (reply (append supplied (list (car omitted)))))
+        (gptel--fsm-transition request 'DONE)
+        (should (eq 'error (plist-get result :outcome)))
+        (should (equal "Note disposition names an unadmitted note or unknown disposition"
+                       (plist-get result :error)))
+        (should-not (plist-get result :proposals))
+        (review)
+        (respond (reply supplied))
+        (gptel--fsm-transition request 'DONE)
+        (should (eq 'success (plist-get result :outcome)))
+        (should (= (length supplied) (length (plist-get result :proposals)))))))
   :doc "runs an admitted Read without inheriting interactive tool confirmation"
   (let ((gptel-confirm-tool-calls t) tool-result)
     (with-temp-file (file-name-concat directory "source.el") (insert ";; Source evidence.\n"))

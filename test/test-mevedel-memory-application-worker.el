@@ -698,7 +698,7 @@ while constructing retained history.  Recovery still owns final pin release."
       (let (job diagnostics)
         (unwind-protect
             (progn
-              (setq job (mevedel-memory-decision--start-recovery workspace #'ignore (current-buffer)))
+              (setq job (mevedel-memory-decision--start-recovery workspace #'ignore (current-buffer) #'always key))
               (signal-process (plist-get job :worker) 'SIGSTOP)
               (cl-letf (((symbol-function 'mevedel-journal-claim-settle) (lambda (&rest _) nil)))
                 (mevedel-test--with-captured-diagnostics diagnostics
@@ -720,7 +720,7 @@ while constructing retained history.  Recovery still owns final pin release."
     (let ((acquire (symbol-function 'mevedel-journal-claim-acquire)) job diagnostics)
       (cl-letf (((symbol-function 'mevedel-journal-claim-acquire)
                  (lambda (directory _seconds) (funcall acquire directory 2))))
-        (setq job (mevedel-memory-decision--start-recovery workspace #'ignore (current-buffer))))
+        (setq job (mevedel-memory-decision--start-recovery workspace #'ignore (current-buffer) #'always key)))
       (signal-process (plist-get job :worker) 'SIGSTOP)
       (mevedel-test--with-captured-diagnostics diagnostics
                                                (mevedel-test-application-wait (lambda () (not (process-live-p (plist-get job :worker))))))
@@ -766,7 +766,7 @@ while constructing retained history.  Recovery still owns final pin release."
       (let (job diagnostics escaped)
         (unwind-protect
             (progn
-              (setq job (mevedel-memory-decision--start-recovery workspace #'ignore (current-buffer)))
+              (setq job (mevedel-memory-decision--start-recovery workspace #'ignore (current-buffer) #'always key))
               (signal-process (plist-get job :worker) 'SIGSTOP)
               (cl-letf (((symbol-function 'mevedel-journal-claim-settle) (lambda (&rest _) (signal 'quit nil))))
                 (mevedel-test--with-captured-diagnostics diagnostics
@@ -839,7 +839,7 @@ while constructing retained history.  Recovery still owns final pin release."
                             (mevedel-memory-decision--start-operation
                              workspace #'ignore (lambda (value) (cl-incf callbacks) (setq result value)))
                           (mevedel-memory-decision--start-recovery
-                           workspace (lambda () (cl-incf callbacks)) (current-buffer)))
+                           workspace (lambda () (cl-incf callbacks)) (current-buffer) #'always key))
                       (quit (setq escaped t quit-flag nil)))))
                 (should injected)
                 (should-not escaped)
@@ -1141,7 +1141,7 @@ while constructing retained history.  Recovery still owns final pin release."
         (should (= 2 children recoveries stores))
         ;; The existing scheduled-recovery callback consumes the same worker
         ;; reply, so it too must perform native recovery rather than skip it.
-        (mevedel-memory-decision--start-recovery workspace (lambda () (setq recovered t)) (current-buffer))
+        (mevedel-memory-decision--start-recovery workspace (lambda () (setq recovered t)) (current-buffer) #'always key)
         (mevedel-test-application-wait (lambda () recovered)))
       ;; The now-unmarked completed write needs no second owned recovery child.
       (should (= 3 children recoveries))
@@ -1203,7 +1203,7 @@ while constructing retained history.  Recovery still owns final pin release."
                                  (ert-fail (format "Remote IO: %S" operation)))))
                        file-name-handler-alist)))
             (setq job (mevedel-memory-decision--start-recovery
-                       workspace (lambda () (cl-incf callbacks)) (current-buffer))
+                       workspace (lambda () (cl-incf callbacks)) (current-buffer) #'always key)
                   owner (plist-get (plist-get job :claim) :owner))
             (mevedel-test-application-wait (lambda () (= 1 callbacks))))))
       (should (= 1 inspections callbacks))
@@ -1667,6 +1667,9 @@ while constructing retained history.  Recovery still owns final pin release."
           (progn
             (delete-file path)
             (write-region "(:invalid t)" nil bad-file nil 'silent)
+            ;; This fixture's synthetic pass is not active recovery work.
+            (when (eq state (gethash key mevedel-memory-pass--running))
+              (remhash key mevedel-memory-pass--running))
             (cl-letf (((symbol-function 'display-warning) (lambda (_ text &rest _) (push text warnings)))
                       ((symbol-function 'mevedel-journal-worker-start)
                        (lambda (&rest args) (cl-incf children) (apply start args))))
