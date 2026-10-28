@@ -169,6 +169,8 @@ cancellation releases the fence and leaves the machine retryable.
   manufactured. One heartbeat batches workspace rows into one locked target
   program per workspace; quiet samples do not write. Diagnostic append time is
   excluded from native lag attribution so recording a stall cannot renew itself.
+  Nested remote attribution checks a bounded set of supported wait/send dispatch
+  frames; missing or truncated stacks conservatively retain diagnostic ownership.
   This remains synchronous I/O: independent responsiveness and CPU measurements
   must include that observer cost, rather than treating exclusion as a speedup.
   Overlapping session/pass windows can report the same process

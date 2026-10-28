@@ -686,6 +686,12 @@ and COUNT being the collection time and count inside that callback.")
   "Start time of the current workspace diagnostic append, or nil.
 Shared with the native sampler so it cannot observe its own persistence.")
 
+(defvar mevedel-telemetry--lag-observer-count 0
+  "Diagnostic calls active across all threads.")
+
+(defvar mevedel-telemetry--lag-observer-due nil
+  "Heartbeat deadline when the current shared diagnostic interval began.")
+
 (defvar mevedel-telemetry--lag-observer-seconds 0
   "Cumulative workspace diagnostic time excluded from enclosing operations.")
 
@@ -695,32 +701,68 @@ Shared with the native sampler so it cannot observe its own persistence.")
 (defvar mevedel-telemetry--lag-remote-observer-level 0
   "Diagnostic nesting owning the currently running remote operation.")
 
+(defconst mevedel-telemetry--lag-dispatch-scan-limit 96
+  "Maximum frames checked for dispatch inside an observed remote operation.")
+
+(defun mevedel-telemetry--lag-dispatched-in-observer-p ()
+  "Return non-nil for a supported dispatch boundary inside the observer.
+Read one frame's function at a time, retaining no arguments or stack dump.
+The exact enclosing observer call ends the scan: waits below that owner do
+not qualify.  Missing owners and exhausted scans conservatively retain
+observer ownership.  This recognizes dispatch, not arbitrary callback intent."
+  (let ((index 0) boundary found function)
+    (while (and (not found) (< index mevedel-telemetry--lag-dispatch-scan-limit)
+                (setq function (cadr (backtrace-frame index))))
+      (cond
+       ((eq function 'mevedel-telemetry--lag-observer-remote-call) (setq found t))
+       ((memq function '(accept-process-output sit-for sleep-for
+                        process-send-string process-send-region))
+        (setq boundary t)))
+      (setq index (1+ index)))
+    (and found boundary)))
+
+(defun mevedel-telemetry--lag-observer-remote-call (original arguments)
+  "Apply observer-owned ORIGINAL to ARGUMENTS, marking its exact frame."
+  (let ((mevedel-telemetry--lag-remote-observer-level mevedel-telemetry--lag-observer-level))
+    (apply original arguments)))
+
 (defun mevedel-telemetry--lag-observer-call (function)
   "Call diagnostic FUNCTION without feeding its own IO back into lag rows.
 This excludes observer cost, not application work; synchronous diagnostic IO
 still blocks input.  Two clock reads and scalar updates add no target IO."
   (if (not (or mevedel-telemetry--lag-thread mevedel-telemetry--lag-timer))
       (funcall function)
-    (let ((start (float-time)) (due mevedel-telemetry--lag-due)
-          (outer mevedel-telemetry--lag-observer-start)
+    (let ((start (float-time))
           (mevedel-telemetry--lag-observer-level (1+ mevedel-telemetry--lag-observer-level))
           (observed mevedel-telemetry--lag-observer-seconds))
-      (setq mevedel-telemetry--lag-observer-start (or outer start))
+      (when (zerop mevedel-telemetry--lag-observer-count)
+        (setq mevedel-telemetry--lag-observer-start start
+              mevedel-telemetry--lag-observer-due mevedel-telemetry--lag-due))
+      (cl-incf mevedel-telemetry--lag-observer-count)
       (unwind-protect (funcall function)
         (let* ((end (float-time))
                ;; Charge nested diagnostic calls when they return, so a timer
                ;; dispatched during outer IO can exclude its own append too.
                (elapsed (max 0 (- end start (- mevedel-telemetry--lag-observer-seconds observed)))))
-          (setq mevedel-telemetry--lag-observer-start outer)
           (cl-incf mevedel-telemetry--lag-observer-seconds elapsed)
-          (unless outer
+          (cl-decf mevedel-telemetry--lag-observer-count)
+          ;; Threads can finish in either order.  Only the last active call
+          ;; closes the shared interval; restoring a captured start would
+          ;; resurrect a marker whose owning thread has already returned.
+          (when (zerop mevedel-telemetry--lag-observer-count)
             (when mevedel-telemetry--lag-since
-              (cl-incf mevedel-telemetry--lag-since (- end start)))
+              ;; A restarted sampler can begin inside the old observer union.
+              ;; Exclude only its overlap with this sampler's baseline.
+              (cl-incf mevedel-telemetry--lag-since
+                       (max 0 (- end (max mevedel-telemetry--lag-observer-start
+                                          mevedel-telemetry--lag-since)))))
             (when mevedel-telemetry--lag-due
               (setq mevedel-telemetry--lag-due
-                    (if (equal due mevedel-telemetry--lag-due)
-                        (+ due (- end start))
-                      (+ end mevedel-telemetry--lag-interval))))))))))
+                    (if (equal mevedel-telemetry--lag-observer-due mevedel-telemetry--lag-due)
+                        (+ mevedel-telemetry--lag-due (- end mevedel-telemetry--lag-observer-start))
+                      (+ end mevedel-telemetry--lag-interval))))
+            (setq mevedel-telemetry--lag-observer-start nil
+                  mevedel-telemetry--lag-observer-due nil)))))))
 
 (defun mevedel-telemetry--cpu-seconds ()
   "Return the CPU seconds this Emacs has used."
@@ -859,11 +901,12 @@ cannot run a command.  The outermost operation on the main thread is
 therefore counted as late as it took, once it returns."
   (cond
    ((and mevedel-telemetry--lag-observer-start
-         (> mevedel-telemetry--lag-observer-level mevedel-telemetry--lag-remote-observer-level))
-    ;; Only this diagnostic call's own remote operation is excluded.  A
-    ;; sentinel can reenter unrelated work at the same level while it waits.
-    (let ((mevedel-telemetry--lag-remote-observer-level mevedel-telemetry--lag-observer-level))
-      (apply original arguments)))
+         (> mevedel-telemetry--lag-observer-level 0)
+         (or (> mevedel-telemetry--lag-observer-level mevedel-telemetry--lag-remote-observer-level)
+             (not (mevedel-telemetry--lag-dispatched-in-observer-p))))
+    ;; Synchronous TRAMP handler nesting belongs to the diagnostic program.
+    ;; A callback dispatched inside its wait is independently observable.
+    (mevedel-telemetry--lag-observer-remote-call original arguments))
    ((or (and (> mevedel-transport--depth 0) (not mevedel-telemetry--lag-observer-start))
         (not (eq (current-thread) main-thread)))
     (apply original arguments))
@@ -881,6 +924,9 @@ therefore counted as late as it took, once it returns."
 Native condition waits release the interpreter without dispatching process
 sentinels or timers.  Ordinary `sleep-for' is unsafe in this worker."
   (let* ((thread (current-thread))
+         ;; Dynamic bindings are thread-local: native observer IO must not be
+         ;; subtracted from unrelated main-thread callbacks or remote work.
+         (mevedel-telemetry--lag-observer-seconds 0)
          (mutex (make-mutex "mevedel-lag"))
          (gate (make-condition-variable mutex "mevedel-lag")))
     (condition-case err
