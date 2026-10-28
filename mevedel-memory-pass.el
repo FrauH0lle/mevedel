@@ -32,7 +32,8 @@
 Manual runs only on request.  Propose also runs automatically, at digest
 publication, completed root turns, session opening and idle maintenance, and
 leaves its proposals for approval.  Auto catches ready backlogs up at later idle
-opportunities under a daily batch cap, and applies fresh
+opportunities while shared-note decisions make progress, under a daily ceiling,
+and applies fresh
 memory and instruction proposals, including `AGENTS.md' changes, through the
 checked decision path without prior review."
   :type '(choice (const manual) (const propose) (const auto))
@@ -50,13 +51,15 @@ journal expiry, a smaller backlog may be reviewed. Explicit commands bypass
 this threshold."
   :type '(integer :tag "Digests") :group 'mevedel)
 
-(defcustom mevedel-memory-consolidation-max-batches-per-day 8
+(defcustom mevedel-memory-consolidation-max-batches-per-day 48
   "Maximum automatic general reviews in auto mode per rolling 24 hours.
 Successful general reviews, including explicit reviews, consume this allowance.
-Auto catches up a ready backlog at later idle opportunities instead of waiting
-for `mevedel-memory-consolidation-min-hours'.  Each batch retains the ordinary
-request limits, so the default permits up to eight normal-sized requests per
-day, not one larger request.  Explicit drain bypasses this automatic cap."
+Auto catches up a ready backlog at later idle opportunities only while applied
+shared-note decisions make progress, instead of waiting for
+`mevedel-memory-consolidation-min-hours'.  This is a hard spend ceiling, not the
+main catch-up throttle.  Each batch retains the ordinary request limits; the
+default permits up to 48 successful batches, not one larger request.  Zero
+disables automatic review in auto mode.  Explicit review and drain bypass it."
   :type 'natnum :group 'mevedel)
 
 (defvar mevedel-memory-pass--inhibit-scheduling nil
@@ -736,6 +739,30 @@ here are diagnostic only."
                                                       (file-attribute-modification-time (file-attributes a)))))))
           (mapc #'delete-file (nthcdr mevedel-memory-pass--rejected-replies files)))))))
 
+(defun mevedel-memory-pass--progress-p (workspace accepted)
+  "Return non-nil if ACCEPTED's batch made shared-note progress in WORKSPACE.
+Authenticate applied decisions, not proposal or aggregate application counts.
+Only this batch's delete, condense or newly suppressing keep qualifies;
+older pending applications and digest coverage alone do not."
+  (let ((entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
+        (passes (make-hash-table :test #'equal)))
+    (seq-some
+     (lambda (proposal)
+       (let ((action (plist-get proposal :action)))
+         (when (memq action '(note-delete note-condense note-keep))
+           (let ((decision (mevedel-memory-decision-status workspace (plist-get proposal :id) entries passes)))
+             (and (eq (plist-get decision :status) 'applied)
+                  (or (not (eq action 'note-keep))
+                      (let ((before (cdr (assoc (plist-get proposal :file) (plist-get proposal :before)))))
+                        (and (mevedel-memory-notes-current-p before)
+                             (mevedel-memory-notes--suppressed
+                              (list (list :action action :status 'applied :hash (plist-get before :hash)
+                                          :at (float-time (date-to-time (plist-get decision :created)))))
+                              (plist-get before :hash)
+                              (mevedel-session-control-fs-target-time (mevedel-workspace-root workspace))
+                              mevedel-memory-notes-review-days)))))))))
+     (plist-get accepted :proposals))))
+
 (cl-defun mevedel-memory-pass--finish (state result)
   "Settle STATE once from RESULT and publish only its accepted immutable reply."
   (unless (plist-get state :settled)
@@ -798,7 +825,7 @@ here are diagnostic only."
                                 (t 'review)))
            (accepted (plist-get state :accepted))
            (entry (plist-get state :entry))
-           recovery-error)
+           recovery-error progress-error)
       (mevedel-memory-pass--retain-rejected-reply workspace id result)
       (when (timerp (plist-get state :timer)) (cancel-timer (plist-get state :timer)))
       (plist-put state :timer nil)
@@ -864,15 +891,32 @@ here are diagnostic only."
 					     :notes-blocked (or (plist-get (plist-get state :notes) :blocked-count) 0))
 				       applied usage))
 		    (when (and entry
+				       (not (plist-get state :drain))
 			       (not (plist-get state :stop-apply))
+				       (not (plist-get (plist-get state :result) :error))
+				       (not (plist-get (plist-get state :result) :recovery-required))
 			       (string-empty-p (plist-get entry :focus))
 			       (eq mevedel-memory-consolidation-mode 'auto)
 			       (or (> (plist-get (plist-get state :result) :remaining) 0)
-				   (> (plist-get (plist-get state :result) :notes-remaining) 0)))
+					   (> (plist-get (plist-get state :result) :notes-remaining) 0))
+                                       (condition-case err
+                                           (mevedel-memory-pass--progress-p workspace accepted)
+                                         (error
+                                          (setq progress-error (car err))
+                                          nil)
+                                         (quit
+                                          (setq progress-error 'quit)
+                                          (plist-put state :stop-apply t)
+                                          nil))
+                                       ;; Progress authentication can dispatch cancellation.
+                                       (not (plist-get state :stop-apply)))
 		      ;; Offer, do not recurse: the next maintenance/activity boundary
-		      ;; rechecks the rolling cap and readiness under target ownership.
+			      ;; rechecks the rolling ceiling and readiness under ownership.
+			      ;; Publication cleared the old chain; zero progress leaves it ended.
 		      (setf (mevedel-workspace-memory-schedule workspace)
 			    (list :after 0 :catch-up t)))
+                            (when (plist-get state :stop-apply)
+                              (plist-put (plist-get state :result) :stopped t))
 			    (when (and (not entry) (plist-get state :automatic)
                                        (not (plist-get state :admission-aborted))
 			       (not (eq (plist-get result :outcome) 'restart-required)))
@@ -889,6 +933,8 @@ here are diagnostic only."
 				 (t 'memory-consolidation-failed))
 			   (append (plist-get state :telemetry) usage (plist-get state :phase-durations)
 				   (list :model model :outcome (plist-get (plist-get state :result) :outcome)
+                                                 :reason-class (and progress-error 'catch-up-progress)
+                                                 :error-class progress-error
 					 :duration-ms (when-let* ((start (plist-get state :started-at)))
                                                         (round (* 1000 (max 0 (- (mevedel-telemetry--monotonic-now) start)))))
 					 :failure-class (and (not entry) (not (eq status 'cancelled)) failure-class)

@@ -244,9 +244,15 @@ Explicit backlog drain coordinates successive bounded general reviews through
 the same claim and settlement owner; it yields between batches and waits while
 local consolidation, application or cleanup runs; other sessions' turns do not
 stop it, and notes they use wait. Auto mode offers a remaining ready backlog at the
-next idle opportunity instead of waiting another day, subject to a rolling
-24-hour cap (eight successful general reviews by default, including explicit
-ones). Published and retired timestamps enforce admission under ownership;
+next idle opportunity instead of waiting another day only while each successful
+general batch makes shared-note progress. An authenticated applied delete
+(including verified trash relocation), condense, or a keep that suppresses the
+reviewed version qualifies;
+proposal counts, digest coverage and older pending applications do not.
+A successful batch with zero progress ends the chain just like a failed batch:
+later offers must pass the ordinary successful-review clock again. A rolling
+24-hour ceiling remains (48 successful general reviews by default, including
+explicit ones). Published and retired timestamps enforce admission under ownership;
 explicit drain bypasses the automatic cap. A returned application error or
 recovery requirement stops successor
 drain batches even when review acceptance succeeded; the accepted outcome,
@@ -376,6 +382,29 @@ longer than ordinary recall when evidence or recovery still needs it; the recall
 limit is not an erasure guarantee.
 
 ## Decision history
+
+### 2026-10-28: Progress guards automatic catch-up; the cap is a ceiling
+
+The 2026-10-24 catch-up change in `2d2b0991` used an eight-batch rolling-day
+cap to bound unattended spend while draining large ready backlogs. Successful
+publication alone could rearm catch-up even when every disposition was
+rejected, deferred or left unchanged without suppression. Repeated successful
+reviews could therefore spend the entire allowance without reducing ready work.
+
+Catch-up now requires authenticated applied note dispositions from that batch,
+including keep only when it actually suppresses the reviewed version. This
+distinguishes useful retention from a no-op without trusting proposal or
+application totals. Zero progress ends the chain and restores ordinary clock
+admission. The default ceiling rises from eight to 48 to allow productive
+backlogs to drain, but remains a rolling-day spend backstop; zero still disables
+automatic review. It bounds successful batches, not provider calls or billing.
+Explicit general reviews need progress to seed unattended catch-up, but a failed
+progress observation only records its class in telemetry and prevents catch-up;
+it does not change the review result. Explicit drain skips this scheduling-only
+observation and retains its continuation behavior. Empty-directory pruning
+removes no note content and does not qualify as progress. Claims, freshness,
+recovery, cancellation and idempotent application are unchanged; the new
+observation grants only a later scheduling opportunity, never write authority.
 
 - **Display collection and retry admission gained separate ownership.** On
   2026-10-27, an authentic four-pass, 32-note fixture spent seconds opening and
