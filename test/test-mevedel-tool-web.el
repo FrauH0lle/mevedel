@@ -1042,7 +1042,9 @@ display URL and snippet all link to DuckDuckGo's redirect for URL."
   :doc "each YouTube stage settles errors, malformed replies and timeouts without leaks"
   (dolist (stage '(watch metadata captions))
     (dolist (failure '(http malformed timeout))
-      (let ((mevedel-tool-web--timeout 0.1)
+      ;; Long enough that a loaded suite still delivers each request to the
+      ;; in-process server before the client gives up; only timeouts wait.
+      (let ((mevedel-tool-web--timeout 1.0)
             (before (buffer-list))
             (timers-before (copy-sequence timer-list))
             (requests 0))
