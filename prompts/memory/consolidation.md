@@ -65,6 +65,9 @@ Open items appear throughout a note, not only in a closing handoff section:
 account for each statement that something remains, is retained, unattributed,
 unexplained or more expensive than its control. A completed section that a
 later section of the same note resolves is not open.
+A note with `sequential_summary` true is a running summary of a long note's
+chunks; items it marks RESOLVED, with the note's own words, are not open, and
+need no other resolution evidence.
 Record them only in the disposition's `open-items` field, never as text
 between proposal blocks.
 

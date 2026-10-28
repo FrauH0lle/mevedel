@@ -183,6 +183,7 @@
                     "Record them only in the disposition's `open-items` field, never as text"
                     "assigning them elsewhere is not resolving or recording them."
                     "Open items appear throughout a note, not only in a closing handoff section:"
+                    "chunks; items it marks RESOLVED, with the note's own words, are not open, and"
                     "consequences, not the backlog: search `docs/adr/` with the item's distinctive"
                     "A condensed body keeps each open item's concrete content: the operations,"
                     "Analysis, lists and explanations outside proposal blocks invalidate the reply."

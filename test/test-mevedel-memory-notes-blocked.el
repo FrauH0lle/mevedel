@@ -77,11 +77,11 @@
   (let* ((mevedel-memory-review-max-tokens 100)
          (mevedel-memory-review-max-bytes 1000)
          (path (put "large.md" (concat (make-string (* 33 1024) ?x) "\nLast finding.\n")))
-         (original (scope)) pending sources final result handle)
+         (original (scope)) pending sources guidance final result handle)
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload) (lambda (&rest _) '(:model test)))
               ((symbol-function 'mevedel-context-summary-generate)
-               (lambda (source _purpose callback &rest _)
-                 (push source sources) (setq pending callback) #'ignore))
+               (lambda (source _purpose callback &rest args)
+                 (push source sources) (setq pending callback guidance (plist-get args :guidance)) #'ignore))
               ((symbol-function 'mevedel-memory-review--request)
                (lambda (scope entries callback &rest _)
                  (should-not entries)
@@ -98,6 +98,9 @@
                             :output-estimated-tokens 10))
           (should (= 2 (length sources)))
           (should (string-search "Earlier finding." (car sources)))
+          ;; Later chunks retire earlier items they resolve (real 2026-10-28
+          ;; review kept three items the same note had resolved).
+          (should (string-search "mark that item RESOLVED" guidance))
           (should-not final)
           (funcall pending '(:outcome success :summary "All findings and open handoff." :output-tokens 7 :output-bytes 120
                             :output-estimated-tokens 4))

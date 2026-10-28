@@ -1314,3 +1314,21 @@ review, eight reviews per condition, with full workspace Git history:
 Some Git-quoted deletes cite a commit that records a handoff as remaining with
 its owner rather than completed; that is a durable record, but weak evidence.
 Distinguishing those remains model quality.
+
+### 2026-10-28: retire resolved items in chunk summaries
+
+Run17 kept a 118 KB browser-review note, reviewed in sequential chunks, for three
+open items that later sections of the same note had resolved (fixes 95920e3,
+bf8f9b5 and corrected screenshot assertions). The final review sees only the
+running summary, and the chunk guidance said to carry unresolved work forward
+but never to retire it, so early items arrived stale. The guidance now has a
+later chunk mark an earlier item RESOLVED with the note's own words and any
+commit or file named, and the review prompt treats such items as not open.
+
+Real reviews of that note (Codex `gpt-6-luna`, medium; four each): committed
+d78ca3d4 deleted it once, condensed it twice and kept it once; this change
+deleted it four times with no open items. Every finding in the note is marked
+fixed with a commit that is an ancestor of HEAD (28 checked), decided, or a
+status record; the two handoffs without an inline fix were confirmed separately
+(the Goal-clear fix is recorded in the note; mailbox notices in 8e67a05a), so
+deletion is correct for this note. Four reviews are a small sample.
