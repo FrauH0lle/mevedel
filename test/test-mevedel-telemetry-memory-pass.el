@@ -213,8 +213,10 @@
 
   :doc "overlapping workspaces and passes keep independent identity and counts"
   (let* ((root (make-temp-file "mevedel-pass-overlap-" t))
-         (one (mevedel-workspace--create :root (file-name-concat root "one")))
-         (two (mevedel-workspace--create :root (file-name-concat root "two")))
+         (one (progn (make-directory (file-name-concat root "one"))
+                     (mevedel-workspace--create :root (file-name-concat root "one"))))
+         (two (progn (make-directory (file-name-concat root "two"))
+                     (mevedel-workspace--create :root (file-name-concat root "two"))))
          (noninteractive nil)
          (a (mevedel-telemetry-memory-pass-start one "same"))
          (b (mevedel-telemetry-memory-pass-start two "same"))

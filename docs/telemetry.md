@@ -166,7 +166,12 @@ cancellation releases the fence and leaves the machine retryable.
   same two-minute tail. They reuse the process heartbeat, native worker or PGTK
   fallback timer, never a separate sampler. Their lag events and summary go to
   workspace diagnostics with `:pass-id` and `:workload memory`; no session is
-  manufactured. Overlapping session/pass windows can report the same process
+  manufactured. One heartbeat batches workspace rows into one locked target
+  program per workspace; quiet samples do not write. Diagnostic append time is
+  excluded from native lag attribution so recording a stall cannot renew itself.
+  This remains synchronous I/O: independent responsiveness and CPU measurements
+  must include that observer cost, rather than treating exclusion as a speedup.
+  Overlapping session/pass windows can report the same process
   stall, so deduplicate before counting editor stalls. Waiting before admission
   is not watched by the pass. Disabled telemetry and noninteractive Emacs do not
   start pass watching. Every timer delivered

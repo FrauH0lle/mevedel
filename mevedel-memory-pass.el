@@ -571,6 +571,9 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
 			     :applied-count (plist-get job :applied) :held-count (plist-get job :held)
 			     :unapplied-count (plist-get job :unapplied) :error (plist-get job :error)))))
 	((error quit)
+	         ;; A completed job cannot retry its callback.  Preserve failures
+	         ;; from that callback instead of silently dropping its condition.
+	         (when (plist-get job :done) (signal (car err) (cdr err)))
 		 (plist-put job :recovery nil)
 	 (when (eq (car err) 'quit)
            (plist-put job :cancelled t)
@@ -947,6 +950,7 @@ older pending applications and digest coverage alone do not."
 			    (plist-put (mevedel-workspace-memory-schedule workspace) :catch-up nil)))
                             (when (eq state (gethash (plist-get claim :directory) mevedel-memory-pass--running))
 		      (remhash (plist-get claim :directory) mevedel-memory-pass--running))
+	                    (unwind-protect
                             (unless (plist-get state :admission-aborted)
 			    (apply #'mevedel-telemetry-record-workspace workspace
 			   (cond (entry 'memory-consolidation-completed)
@@ -965,8 +969,12 @@ older pending applications and digest coverage alone do not."
 					 :proposed-count (length (plist-get entry :proposals))
 					 :updated-file-count (plist-get applied :updated-files)
 						 :remaining-count (plist-get (plist-get state :result) :remaining)))))
-			    (mevedel-telemetry-memory-pass-settle (plist-get state :lag-watch))
-			    (when-let* ((callback (plist-get state :callback)))
+	                      ;; Async completion runs after this function's outer
+	                      ;; handler has returned.  Terminal telemetry must not
+	                      ;; leave its watch open when an append quits.
+	                      (let ((inhibit-quit t))
+	                        (mevedel-telemetry-memory-pass-settle (plist-get state :lag-watch))))
+				    (when-let* ((callback (plist-get state :callback)))
 		      (funcall callback (plist-get state :result)))))
 	(when entry
 	  (when (plist-get state :publication-finished)
@@ -1282,8 +1290,14 @@ from the automatic or drain queue owner; direct starts omit admission dwell."
 	(funcall finish '(:outcome error :error "Memory consolidation is already running"))
 	(cl-return-from mevedel-memory-pass-start nil))
       (puthash key state mevedel-memory-pass--running)
-      (plist-put state :lag-watch
-                 (mevedel-telemetry-memory-pass-start workspace (plist-get claim :owner)))
+      (condition-case err
+          (plist-put state :lag-watch
+                     (mevedel-telemetry-memory-pass-start workspace (plist-get claim :owner)))
+        (quit
+         ;; The watcher has not returned its handle and the deadline is not
+         ;; armed yet.  Fence this admitted claim before preserving the quit.
+         (let ((inhibit-quit t)) (funcall finish '(:outcome aborted)))
+         (signal (car err) (cdr err))))
       ;; Starting the shared native watcher may yield to cancellation.
       (when (plist-get state :settled)
         (mevedel-telemetry-memory-pass-settle (plist-get state :lag-watch)))

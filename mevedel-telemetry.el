@@ -537,6 +537,29 @@ keys are always discarded.  Return the sanitized event plist."
                 (error-message-string err))
        nil))))
 
+(defvar mevedel-telemetry--workspace-batch nil
+  "Dynamically collected workspace rows for one heartbeat, or nil.
+Keys are physical workspace root names; values hold workspace and row texts.")
+
+(defun mevedel-telemetry--append-workspace (workspace content)
+  "Append bounded CONTENT to WORKSPACE with directory setup in one program."
+  (mevedel-telemetry--lag-observer-call
+   (lambda ()
+     (let* ((root (mevedel-workspace-root workspace))
+            (control (file-name-concat root ".mevedel"))
+            (state (file-name-concat control "state"))
+            (directory (file-name-concat state "diagnostics")))
+       (mevedel-session-control-fs-program-value
+        (car (last
+              (mevedel-session-control-fs-run-program
+               (list (list :op 'make-directory :path control :optional t)
+                     (list :op 'make-directory :path state :optional t)
+                     (list :op 'make-directory :path directory :optional t)
+                     (list :op 'append-rotating
+                           :path (file-name-concat directory mevedel-telemetry-file-name)
+                           :content (concat (number-to-string (* 10 1024 1024)) "\n" content)))
+               root))))))))
+
 ;;;###autoload
 (defun mevedel-telemetry-record-workspace (workspace event &rest props)
   "Append bounded EVENT and PROPS to WORKSPACE's target diagnostic stream.
@@ -544,13 +567,17 @@ This uses the ordinary telemetry envelope and privacy filter without a session.
 Failures are diagnostic only and never alter the background operation."
   (when (and mevedel-telemetry-enabled workspace)
     (condition-case err
-        (let* ((directory (file-name-concat (mevedel-workspace-root workspace)
-                                          ".mevedel" "state" "diagnostics"))
-               (entry (mevedel-telemetry--envelope nil event props)))
-          (mevedel-session-control-fs-make-directory directory t)
-          (mevedel-session-control-fs-append-rotating
-           (file-name-concat directory mevedel-telemetry-file-name)
-           (mevedel-telemetry--entry-text entry) (* 10 1024 1024))
+        (let* ((entry (mevedel-telemetry--envelope nil event props))
+               (text (mevedel-telemetry--entry-text entry)))
+          (if mevedel-telemetry--workspace-batch
+              (let* ((root (file-name-as-directory (expand-file-name (mevedel-workspace-root workspace))))
+                     (batch (or (gethash root mevedel-telemetry--workspace-batch)
+                                ;; IO while another batch flushes may rebind
+                                ;; the original workspace.  Keep this row's root.
+                                (puthash root (list (mevedel-workspace--create :root root))
+                                         mevedel-telemetry--workspace-batch))))
+                (setcdr batch (cons text (cdr batch))))
+            (mevedel-telemetry--append-workspace workspace text))
           entry)
       (error
        (message "mevedel: workspace telemetry failed: %s" (error-message-string err))
@@ -654,6 +681,46 @@ and COUNT being the collection time and count inside that callback.")
 
 (defvar mevedel-telemetry--lag-input nil
   "`num-nonmacro-input-events' when the previous heartbeat ran.")
+
+(defvar mevedel-telemetry--lag-observer-start nil
+  "Start time of the current workspace diagnostic append, or nil.
+Shared with the native sampler so it cannot observe its own persistence.")
+
+(defvar mevedel-telemetry--lag-observer-seconds 0
+  "Cumulative workspace diagnostic time excluded from enclosing operations.")
+
+(defvar mevedel-telemetry--lag-observer-level 0
+  "Dynamic nesting of diagnostic calls in this thread.")
+
+(defvar mevedel-telemetry--lag-remote-observer-level 0
+  "Diagnostic nesting owning the currently running remote operation.")
+
+(defun mevedel-telemetry--lag-observer-call (function)
+  "Call diagnostic FUNCTION without feeding its own IO back into lag rows.
+This excludes observer cost, not application work; synchronous diagnostic IO
+still blocks input.  Two clock reads and scalar updates add no target IO."
+  (if (not (or mevedel-telemetry--lag-thread mevedel-telemetry--lag-timer))
+      (funcall function)
+    (let ((start (float-time)) (due mevedel-telemetry--lag-due)
+          (outer mevedel-telemetry--lag-observer-start)
+          (mevedel-telemetry--lag-observer-level (1+ mevedel-telemetry--lag-observer-level))
+          (observed mevedel-telemetry--lag-observer-seconds))
+      (setq mevedel-telemetry--lag-observer-start (or outer start))
+      (unwind-protect (funcall function)
+        (let* ((end (float-time))
+               ;; Charge nested diagnostic calls when they return, so a timer
+               ;; dispatched during outer IO can exclude its own append too.
+               (elapsed (max 0 (- end start (- mevedel-telemetry--lag-observer-seconds observed)))))
+          (setq mevedel-telemetry--lag-observer-start outer)
+          (cl-incf mevedel-telemetry--lag-observer-seconds elapsed)
+          (unless outer
+            (when mevedel-telemetry--lag-since
+              (cl-incf mevedel-telemetry--lag-since (- end start)))
+            (when mevedel-telemetry--lag-due
+              (setq mevedel-telemetry--lag-due
+                    (if (equal due mevedel-telemetry--lag-due)
+                        (+ due (- end start))
+                      (+ end mevedel-telemetry--lag-interval))))))))))
 
 (defun mevedel-telemetry--cpu-seconds ()
   "Return the CPU seconds this Emacs has used."
@@ -759,9 +826,11 @@ not the clock, and are not counted."
             '(mevedel--coalesced-timer-tick mevedel-telemetry--lag-tick))
       (funcall original timer)
     (let ((start (float-time))
+          (observer mevedel-telemetry--lag-observer-seconds)
           (gc-count gcs-done)
           (gc-seconds gc-elapsed))
-      (when-let* (((not (timer--idle-delay timer)))
+      (when-let* (((not mevedel-telemetry--lag-observer-start))
+                  ((not (timer--idle-delay timer)))
                   (due (timer--time timer))
                   ((car due)))
         (setq mevedel-telemetry--lag-late
@@ -769,10 +838,12 @@ not the clock, and are not counted."
                    (- start (max (float-time due)
                                  (or mevedel-telemetry--lag-since start))))))
       (unwind-protect (funcall original timer)
-        (let ((elapsed (- (float-time) start)))
+        (let ((elapsed (max 0 (- (float-time) start
+                                (- mevedel-telemetry--lag-observer-seconds observer)))))
           (setq mevedel-telemetry--lag-late
                 (max mevedel-telemetry--lag-late
-                     (- (float-time) (max start (or mevedel-telemetry--lag-since start)))))
+                     (min elapsed
+                          (- (float-time) (max start (or mevedel-telemetry--lag-since start))))))
           (when (> elapsed (or (plist-get mevedel-telemetry--lag-slowest :seconds) 0))
             (setq mevedel-telemetry--lag-slowest
                   (list :name (mevedel-telemetry--lag-callback-name timer)
@@ -786,13 +857,24 @@ TRAMP waits for a remote command in `accept-process-output' and `sit-for',
 running timers, so the heartbeat runs on time while the editor
 cannot run a command.  The outermost operation on the main thread is
 therefore counted as late as it took, once it returns."
-  (if (or (> mevedel-transport--depth 0)
-          (not (eq (current-thread) main-thread)))
-      (apply original arguments)
-    (let ((start (float-time)))
+  (cond
+   ((and mevedel-telemetry--lag-observer-start
+         (> mevedel-telemetry--lag-observer-level mevedel-telemetry--lag-remote-observer-level))
+    ;; Only this diagnostic call's own remote operation is excluded.  A
+    ;; sentinel can reenter unrelated work at the same level while it waits.
+    (let ((mevedel-telemetry--lag-remote-observer-level mevedel-telemetry--lag-observer-level))
+      (apply original arguments)))
+   ((or (and (> mevedel-transport--depth 0) (not mevedel-telemetry--lag-observer-start))
+        (not (eq (current-thread) main-thread)))
+    (apply original arguments))
+   (t
+    (let ((start (float-time))
+          (observer mevedel-telemetry--lag-observer-seconds))
       (unwind-protect (apply original arguments)
         (setq mevedel-telemetry--lag-late
-              (max mevedel-telemetry--lag-late (- (float-time) start)))))))
+              (max mevedel-telemetry--lag-late
+                   (- (float-time) start
+                      (- mevedel-telemetry--lag-observer-seconds observer)))))))))
 
 (defun mevedel-telemetry--lag-watch ()
   "Sample until this thread is replaced or stopped.
@@ -930,13 +1012,25 @@ string identifier, never evidence or focus text.  No session is required."
              workspace (stringp pass-id))
     (let ((handle (cons workspace
                         (list :pass-id (mevedel-telemetry--truncate-string pass-id)
-                              :until nil :counts nil))))
+                              :until nil :counts nil)))
+          started)
       (push handle mevedel-telemetry--lag-pass-windows)
       (condition-case err
-          (progn (mevedel-telemetry--lag-start) handle)
+          (unwind-protect
+              (progn
+                (mevedel-telemetry--lag-start)
+                (setq started t)
+                handle)
+            (unless started
+              (let ((inhibit-quit t))
+                (setq mevedel-telemetry--lag-pass-windows
+                      (delq handle mevedel-telemetry--lag-pass-windows))
+                ;; Startup can allocate the sampler before a later failure.
+                ;; Never stop another session's or pass's shared watcher.
+                (unless (or mevedel-telemetry--lag-windows
+                            mevedel-telemetry--lag-pass-windows)
+                  (mevedel-telemetry--lag-stop)))))
         (error
-         (setq mevedel-telemetry--lag-pass-windows
-               (delq handle mevedel-telemetry--lag-pass-windows))
          (message "mevedel: memory pass lag watching failed: %s"
                   (error-message-string err))
          nil)))))
@@ -974,6 +1068,10 @@ pending.  Disabling telemetry stops watching: the request it would close
 never reports settling."
   (if (not mevedel-telemetry-enabled)
       (mevedel-telemetry--lag-stop)
+    (if mevedel-telemetry--lag-observer-start
+        ;; A remote append can dispatch the fallback timer; a native sampler
+        ;; can also wake while the append waits.  Neither observes its own IO.
+        (setq mevedel-telemetry--lag-due (+ (float-time) mevedel-telemetry--lag-interval))
     (let* ((now (float-time))
            (delay (max (- now (or mevedel-telemetry--lag-due now))
                        mevedel-telemetry--lag-late))
@@ -981,7 +1079,8 @@ never reports settling."
            (gc (or mevedel-telemetry--lag-gc (cons gcs-done gc-elapsed)))
            (cpu (mevedel-telemetry--cpu-seconds))
            (cpu-before (or mevedel-telemetry--lag-cpu cpu))
-           (input-before (or mevedel-telemetry--lag-input num-nonmacro-input-events)))
+           (input-before (or mevedel-telemetry--lag-input num-nonmacro-input-events))
+           (mevedel-telemetry--workspace-batch nil))
       (setq mevedel-telemetry--lag-due
             (if mevedel-telemetry--lag-timer
                 (float-time (timer--time mevedel-telemetry--lag-timer))
@@ -1003,6 +1102,9 @@ never reports settling."
                             (let ((until (plist-get (cdr entry) :until)))
                               (or (null until) (< now until))))
                           mevedel-telemetry--lag-pass-windows)))
+      (when (and mevedel-telemetry--lag-pass-windows
+                 (> delay mevedel-telemetry-lag-threshold))
+        (setq mevedel-telemetry--workspace-batch (make-hash-table :test #'equal)))
       (when (> delay mevedel-telemetry--lag-count-threshold)
         (let ((input-pending (> num-nonmacro-input-events input-before)))
           (dolist (entry (if mevedel-telemetry--lag-pass-windows
@@ -1035,9 +1137,21 @@ never reports settling."
                                   :timer-ms (round (* 1000 (plist-get slowest :seconds)))
                                   :timer-gc-count (plist-get slowest :gc-count)
                                   :timer-gc-ms (round (* 1000 (plist-get slowest :gc-seconds)))))))))))
+      (when mevedel-telemetry--workspace-batch
+        (let ((batch mevedel-telemetry--workspace-batch)
+              (mevedel-telemetry--workspace-batch nil))
+          (maphash
+           (lambda (_root rows)
+             (when mevedel-telemetry-enabled
+               (condition-case err
+                   (mevedel-telemetry--append-workspace
+                    (car rows) (apply #'concat (nreverse (cdr rows))))
+                 (error (message "mevedel: workspace telemetry failed: %s"
+                                 (error-message-string err))))))
+           batch)))
       (unless (or mevedel-telemetry--lag-windows
                   mevedel-telemetry--lag-pass-windows)
-        (mevedel-telemetry--lag-stop)))))
+        (mevedel-telemetry--lag-stop))))))
 
 
 ;;
