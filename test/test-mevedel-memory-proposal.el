@@ -388,6 +388,16 @@ Use a monotonic deadline for elapsed-time retries.
     ;; A Markdown code block inside a condensed body survives intact.
     (let ((coded (funcall parse (concat head (string-replace "Open: port the fix.\n" "Open:\n```\n(fix)\n```\n" blocks)))))
       (should (equal "Open:\n```\n(fix)\n```" (plist-get (nth 1 (plist-get coded :proposals)) :body))))
+    ;; A condensed body may start with a Markdown heading (real 2026-10-28
+    ;; replies were rejected when it was taken for the next section).
+    (let ((headed (funcall parse (concat head (string-replace "Open: port the fix.\n" "## Open items\n- Port the fix.\n" blocks)))))
+      (should (equal "## Open items\n- Port the fix." (plist-get (nth 1 (plist-get headed :proposals)) :body))))
+    ;; A real slip: an open-items array spread over several lines.
+    (should (equal '("Duration undecided" "Second")
+                   (plist-get (car (plist-get (funcall parse (concat head (string-replace "open-items: [\"Duration undecided\"]\n"
+                                                                                         "open-items: [\n  \"Duration undecided\",\n  \"Second\"\n]\n" blocks)))
+                                              :proposals))
+                              :open-items)))
     (dolist (invalid
              (list
               ;; A repeated header line with a different value is ambiguous.
@@ -398,6 +408,8 @@ Use a monotonic deadline for elapsed-time retries.
               (concat head blocks "## Unknown\n- none\n")
               ;; An unterminated non-empty body is ambiguous.
               (concat head (string-replace "Open: port the fix.\n````\n" "Open: port the fix.\n" blocks))
+              ;; A multi-line value that never parses stays invalid.
+              (concat head (string-replace "open-items: [\"Duration undecided\"]\n" "open-items: [\n  \"unterminated\n" blocks))
               ;; Analysis between blocks remains invalid.
               (concat head "- Note a.md open items:\n  - Duration undecided\n" blocks)
               ;; Without its separator a condense has no body.

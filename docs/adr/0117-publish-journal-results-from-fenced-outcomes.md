@@ -1332,3 +1332,37 @@ fixed with a commit that is an ancestor of HEAD (28 checked), decided, or a
 status record; the two handoffs without an inline fix were confirmed separately
 (the Goal-clear fix is recorded in the note; mailbox notices in 8e67a05a), so
 deletion is correct for this note. Four reviews are a small sample.
+
+### 2026-10-28: summarize long notes as notes, not as journal digests
+
+Captured run20 summaries showed the cause of sparse chunked reviews: chunk
+summaries used the journal digest format, whose system prompt makes "nothing
+noteworthy" a successful outcome. For a 58 KB findings note the summary after
+its first chunk was Done/Learned/Surprised/Unfinished all `- none`; the final
+summary held three lessons and nothing open, although the note states that its
+installation timeout "remains unresolved". Run20 deleted the note. Chunk
+summaries now use the continuation format, which preserves unresolved work,
+with guidance that the source is a note: open items with their location,
+values and conditions go under Open Questions & Risks (RESOLVED ones shortened
+to a line), findings, measurements and lessons under Work & Evidence and
+Critical Context. Both formats resolve to the same configured model.
+
+The new, heading-rich condensed bodies exposed a parser bug from the earlier
+reply-shape change: a body starting with a Markdown heading was taken for the
+next section, emptying the condensation. Headings now close only a header-only
+block without a separator. A JSON array value spread over several lines is
+joined until it parses. A shorter closing fence remains an error, as the
+existing contract requires.
+
+Real chunked reviews of the run20 note (Codex `gpt-6-luna`, medium):
+
+- Scenario: committed 457a1275; metric: reviews listing the unresolved
+  installation timeout as open; value: 1 of 4; three deleted it with no open
+  items.
+- Scenario: this change (12 KiB target); value: 4 of 4 completed reviews (two
+  condense, two keep); two of six replies failed to parse (a shorter closing
+  fence, a multi-line array, the latter now accepted). An earlier 16 KiB
+  target overflowed once in six.
+
+No maintained record of that timeout was found, so keep or condense is the
+correct outcome. More open items mean more retention of long notes.

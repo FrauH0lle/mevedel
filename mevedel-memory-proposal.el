@@ -135,18 +135,25 @@ With REPEATS, an exactly repeated header line is accepted."
         fields)
     (when (string-blank-p header)
       (error "Proposal lacks its header/body separator"))
-    (dolist (line (split-string (string-remove-suffix "\n" header) "\n"))
+    (let ((lines (split-string (string-remove-suffix "\n" header) "\n")))
+     (while lines
+      (let ((line (pop lines)))
       (unless (string-match "\\`\\([a-z-]+\\): \\(.+\\)\\'" line)
         (error "Invalid proposal header line"))
       (let ((key (cdr (assoc (match-string 1 line) names)))
             (encoded (match-string 2 line)))
+        ;; A JSON array or object value spread over following lines is
+        ;; joined only until it parses; anything else stays invalid.
+        (while (and (string-match-p "\\`[[{]" encoded) lines
+                    (not (ignore-errors (and (json-parse-string encoded) t))))
+          (setq encoded (concat encoded "\n" (pop lines))))
         (let ((value (and key (json-parse-string encoded :null-object :null
                                                  :false-object :false))))
           ;; An exactly repeated line is unambiguous; a differing repeat is not.
           (unless (and key (or (not (plist-member fields key))
                                (and repeats (equal value (plist-get fields key)))))
             (error "Unknown or repeated proposal field"))
-          (setq fields (plist-put fields key value)))))
+          (setq fields (plist-put fields key value)))))))
     (cons fields body)))
 
 (defun mevedel-memory-proposal--disposition (text notes)
@@ -259,9 +266,11 @@ carry the same fields; they are validated and recorded but never required."
 Return the end of its content and leave point after the block.  The body
 of a block ends only at a line of exactly FENCE, so Markdown code blocks
 inside replacement bodies stay intact.  These unambiguous variants of real
-replies are accepted too: a separator of three or more dashes, and a
-backtick-only line, section heading or next proposal opener closing a block
-whose body is still empty.  An unterminated non-empty body is an error."
+replies are accepted too: a separator of three or more dashes; a
+backtick-only line or the next proposal opener closing a block whose body is
+still empty; and a section heading closing a header-only block without a
+separator.  After a separator a heading is body text.  An unterminated
+non-empty body is an error: a body ends only at its exact fence."
   (let ((body nil) (empty t) end)
     (while (not end)
       (when (eobp) (error "Unclosed proposal fence"))
@@ -270,7 +279,8 @@ whose body is still empty.  An unterminated non-empty body is an error."
         (setq end (point)))
        ((looking-at "`\\{3,\\}proposal$")
         (error "Unclosed proposal fence"))
-       ((and empty (or (looking-at "`\\{3,\\}$") (looking-at "## ")))
+       ((or (and empty (looking-at "`\\{3,\\}$"))
+            (and (not body) (looking-at "## ")))
         (setq end (point))
         (unless (looking-at "## ") (forward-line 1)))
        ((and body (looking-at (concat (regexp-quote fence) "$")))

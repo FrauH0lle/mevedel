@@ -80,7 +80,10 @@
          (original (scope)) pending sources guidance final result handle)
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload) (lambda (&rest _) '(:model test)))
               ((symbol-function 'mevedel-context-summary-generate)
-               (lambda (source _purpose callback &rest args)
+               (lambda (source purpose callback &rest args)
+                 ;; The digest format's "nothing noteworthy" rule emptied
+                 ;; real findings notes; chunk summaries keep open items.
+                 (should (eq 'continuation purpose))
                  (push source sources) (setq pending callback guidance (plist-get args :guidance)) #'ignore))
               ((symbol-function 'mevedel-memory-review--request)
                (lambda (scope entries callback &rest _)
@@ -100,7 +103,8 @@
           (should (string-search "Earlier finding." (car sources)))
           ;; Later chunks retire earlier items they resolve (real 2026-10-28
           ;; review kept three items the same note had resolved).
-          (should (string-search "mark that item RESOLVED" guidance))
+          (should (string-search "marked RESOLVED" guidance))
+          (should (string-search "Under Open Questions & Risks list every open item" guidance))
           (should-not final)
           (funcall pending '(:outcome success :summary "All findings and open handoff." :output-tokens 7 :output-bytes 120
                             :output-estimated-tokens 4))

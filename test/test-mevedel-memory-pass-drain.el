@@ -116,7 +116,10 @@
            (wait-for (lambda () pending))
            (let ((request (car pending)) (callback (cdr pending)))
              (setq pending nil)
-             (funcall callback "## Done\n- Observed: Compact findings.\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- Open handoff." (gptel-fsm-info request))
+             (funcall callback (concat "## Scope\n- Shared note.\n## Constraints & Preferences\n- (none)\n"
+                                     "## Work & Evidence\n- Compact findings.\n## Key Decisions\n- (none)\n"
+                                     "## Open Questions & Risks\n- Open handoff.\n## Critical Context\n- (none)\n"
+                                     "## Relevant Files\n- (none)\n## Skills Invoked\n- (none)\n## Next Steps\n- (none)") (gptel-fsm-info request))
              (gptel--fsm-transition request 'DONE)))
          (finish (&optional invalid)
            (wait-for (lambda () pending))
