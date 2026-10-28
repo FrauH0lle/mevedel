@@ -627,6 +627,38 @@ expiry only after freshly observing CLAIM's original target-clock deadline."
         (mevedel-journal-claim-outcome claim))
       (error "No durable memory operation fence")))
 
+(defun mevedel-memory-decision--recovery-successor-p (job predecessor)
+  "Whether JOB directly succeeds its fully recovered PREDECESSOR.
+This is a fresh claim-chain proof, not cached proposal or target authority.
+An intervening workspace claimant or a changed actor requires full recovery."
+  (let ((claim (plist-get job :claim))
+        (prior (plist-get predecessor :claim))
+        (outcome (plist-get predecessor :outcome)))
+    (when (and predecessor (not (plist-get job :decisions-only))
+               (integerp (plist-get prior :generation))
+               (memq (plist-get outcome :status) '(completed cancelled))
+               (equal (plist-get claim :directory) (plist-get prior :directory))
+               (= (plist-get claim :generation) (1+ (plist-get prior :generation)))
+               (cl-every (lambda (key) (equal (plist-get job key) (plist-get predecessor key)))
+                         '(:workspace :root :origin :workspace-id :origin-session :origin-workspace :origin-root)))
+      (let ((results
+             (mevedel-session-control-fs-run-program
+              (list (list :op 'verify-latest :path (mevedel-journal-claim--path claim nil) :content ".claim")
+                    (list :op 'verify :path (mevedel-journal-claim--path claim nil)
+                          :content (json-serialize (mevedel-journal-claim--record claim)))
+                    (list :op 'absent :path (mevedel-journal-claim--path claim t))
+                    (list :op 'before-time :path (plist-get claim :directory)
+                          :content (number-to-string (plist-get claim :expires-at)))
+                    (list :op 'verify :path (mevedel-journal-claim--path prior nil)
+                          :content (json-serialize (mevedel-journal-claim--record prior)))
+                    (list :op 'verify :path (mevedel-journal-claim--path prior t)
+                          :content (json-serialize
+                                    (plist-put (copy-sequence outcome) :status
+                                               (symbol-name (plist-get outcome :status))))))
+              (plist-get claim :directory))))
+        (and (= 6 (length results))
+             (cl-every (lambda (result) (eq (plist-get result :status) 'ok)) results))))))
+
 (defun mevedel-memory-decision--operation-finish (job result)
   "Release JOB and deliver RESULT exactly once, after any editor work unwinds."
   (unless (plist-get job :done)
@@ -669,6 +701,22 @@ expiry only after freshly observing CLAIM's original target-clock deadline."
         (let ((key (plist-get (plist-get job :claim) :directory)))
           (when (eq job (gethash key mevedel-memory-decision--operations))
             (remhash key mevedel-memory-decision--operations))))
+      (when (and fenced (plist-get job :recovered) (plist-get result :ok)
+                 (memq (plist-get fenced :status) '(completed cancelled))
+                 (not (plist-get job :decisions-only))
+                 (not failure) (not (plist-get result :error))
+                 (not (plist-get result :held)) (not (plist-get result :cancelled))
+                 (not (plist-get job :stopped))
+                 (let ((status (plist-get (plist-get result :value) :status)))
+                   (or (null status) (eq status 'skipped)
+                       (mevedel-memory-decision-terminal-status-p status))))
+        ;; Carry only an exact completed predecessor, never accepted bundles,
+        ;; public observations or target proofs.  The next distinct claim must
+        ;; freshly prove adjacency and these immutable bytes before skipping IO.
+        (plist-put result :recovery
+                   (append (list :claim (copy-tree (plist-get job :claim)) :outcome (copy-tree fenced))
+                           (cl-loop for key in '(:workspace :root :origin :workspace-id :origin-session :origin-workspace :origin-root)
+                                    append (list key (plist-get job key))))))
       (when failure
         (plist-put job :cleanup-error failure)
         (plist-put result :error (format "%sMemory operation cleanup failed: %s%s"
@@ -742,7 +790,7 @@ An executing editor transaction unwinds before delivering the final callback."
                    (signal 'mevedel-memory-decision-held '("Memory operation context changed")))
                  (mevedel-memory-store--assert-owned (plist-get job :claim))
                  (with-current-buffer (plist-get job :origin)
-                   (when (plist-get reply :synchronous)
+                   (when (and (plist-get reply :synchronous) (not (plist-get job :recovered)))
                      ;; Historical remote roots retain their original authority
                      ;; even after configuration changes.  Keep their recovery
                      ;; in the editor, under this same continuously held claim.
@@ -752,6 +800,7 @@ An executing editor transaction unwinds before delivering the final callback."
                      (unless (mevedel-memory-decision--operation-live-p job)
                        (signal 'mevedel-memory-decision-held '("Memory operation context changed")))
                      (mevedel-memory-store--assert-owned (plist-get job :claim)))
+                   (plist-put job :recovered t)
                    (when-let* ((start (plist-get job :recovery-started-at)))
                      (plist-put job :recovery-round-trip-ms
                                 (round (* 1000 (max 0 (- (mevedel-telemetry--monotonic-now) start)))))
@@ -771,7 +820,7 @@ An executing editor transaction unwinds before delivering the final callback."
       (plist-put job :executing nil)
       (mevedel-memory-decision--operation-finish job result))))
 
-(defun mevedel-memory-decision--start-operation (workspace function callback &optional currentp decisions-only payload)
+(defun mevedel-memory-decision--start-operation (workspace function callback &optional currentp decisions-only payload recovery)
   "Recover WORKSPACE in a child, then call FUNCTION under the same owned claim.
 FUNCTION receives the fresh claim, a live forward-admission predicate and reply.
 CALLBACK receives a successful :value, a normal :held or :cancelled result,
@@ -779,6 +828,9 @@ or an actionable :error, once.  Actual results survive later cancellation
 or cleanup failure, with additional metadata.  CURRENTP is an additional
 live admission gate.  DECISIONS-ONLY omits store recovery.
 PAYLOAD supplies additional read-only selection inputs, never accepted proofs.
+RECOVERY may identify this application sequence's fully completed predecessor.
+Only a fresh exact-successor claim proof omits redundant history recovery;
+proposal, status, original-target and live-editor checks are never reused.
 The fixed 180-second claim covers worker and editor phases; no target ownership
 crosses the child.  Unsupported targets recover synchronously in the editor."
   (let* ((context (mevedel-memory-decision--operation-context workspace (current-buffer)))
@@ -795,16 +847,27 @@ crosses the child.  Unsupported targets recover synchronously in the editor."
                       (max 0 (- (plist-get claim :expires-at)
                                 (mevedel-session-control-fs-target-time key))) nil
                       #'mevedel-memory-decision--operation-deadline job))
-          (plist-put job :recovery-started-at (mevedel-telemetry--monotonic-now))
-          (if (mevedel-journal-worker-supported-p workspace)
+          (when (and (or (null payload) (plist-get payload :pending-selection))
+                     (mevedel-memory-decision--recovery-successor-p job recovery))
+            (plist-put job :recovered t))
+          (unless (plist-get job :recovered)
+            (plist-put job :recovery-started-at (mevedel-telemetry--monotonic-now)))
+          (if (and (plist-get job :recovered) (null payload))
+              (mevedel-memory-decision--operation-ready
+               job (list :ok t :operation-id (plist-get claim :owner)))
+            (if (mevedel-journal-worker-supported-p workspace)
               (mevedel-journal-worker-start
                workspace 'memory-recover
                (lambda (reply) (mevedel-memory-decision--operation-ready job reply))
                nil (append (list :claim claim :operation-id (plist-get claim :owner)
-				 :decisions-only decisions-only) payload)
+				 :decisions-only decisions-only
+                                 :recovery-predecessor
+                                 (when (plist-get job :recovered)
+                                   (list :claim (plist-get recovery :claim) :outcome (plist-get recovery :outcome))))
+                           payload)
                job)
             (mevedel-memory-decision--operation-ready
-             job (list :ok t :operation-id (plist-get claim :owner) :synchronous t))))
+             job (list :ok t :operation-id (plist-get claim :owner) :synchronous t)))))
       ((error quit)
        ;; Synchronous fallback also delivers the consumer callback here.  Once
        ;; released, its condition is not a second operation result to swallow.

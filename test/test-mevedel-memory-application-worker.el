@@ -1158,14 +1158,16 @@ while constructing retained history.  Recovery still owns final pin release."
                  (lambda (&rest args) (cl-incf stores) (apply store args))))
         (mevedel-memory-pass--apply-async state nil (lambda (value) (setq result value)))
         (mevedel-test-application-wait (lambda () result))
-        (should (= 2 children recoveries stores))
+        ;; The selected proposal has an adjacent clean claim: its editor
+        ;; authorization is fresh, but repeating native history recovery is not.
+        (should (= 1 children recoveries stores))
         ;; The existing scheduled-recovery callback consumes the same worker
         ;; reply, so it too must perform native recovery rather than skip it.
         (mevedel-memory-decision--start-recovery workspace (lambda () (setq recovered t)) (current-buffer) #'always key)
         (mevedel-test-application-wait (lambda () recovered)))
       ;; The now-unmarked completed write needs no second owned recovery child.
-      (should (= 3 children recoveries))
-      (should (= 3 stores))
+      (should (= 2 children recoveries))
+      (should (= 2 stores))
       (should (cl-every (lambda (reply) (and (plist-get reply :synchronous) (not (plist-get reply :accepted)))) replies))
       (should (= 1 (plist-get result :applied-count)))
       (should (= 0 (plist-get result :unapplied-count)))
@@ -1713,6 +1715,148 @@ while constructing retained history.  Recovery still owns final pin release."
             (should-not (file-exists-p pin))
             (should-not (mevedel-memory-decision-recovering-p workspace)))
         (mevedel-memory-decision-stop-recovery)))))
+
+(mevedel-deftest mevedel-memory-pass--apply-async/recovery-chain ()
+  ,test
+  (test)
+  :doc "ten checked decisions recover history once; pending selection independently verifies continuity"
+  (let ((mevedel-test-application-items 10))
+    (mevedel-test-application-fixture
+      (let ((start (symbol-function 'mevedel-journal-worker-start)) (full 0) (selection 0))
+        (cl-letf (((symbol-function 'mevedel-journal-worker-start)
+                   (lambda (ws operation callback &optional force payload owner)
+                     (when (eq operation 'memory-recover)
+                       (if (plist-get payload :recovery-predecessor) (cl-incf selection) (cl-incf full)))
+                     (funcall start ws operation callback force payload owner))))
+          (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
+          (mevedel-test-application-wait (lambda () result)))
+        (should (= 1 full selection))
+        (should (= 10 (plist-get result :applied-count)))
+        (should (= 0 (plist-get result :unapplied-count)))
+        (should-not (plist-get result :error))
+        (dolist (item (plist-get accepted :proposals))
+          (let* ((decision (mevedel-memory-decision-status workspace (plist-get item :id)))
+                 (intent (plist-get (mevedel-memory-decision--published workspace decision) :intent)))
+            (should (eq 'applied (plist-get decision :status)))
+            (should (equal (plist-get item :before) (plist-get intent :before)))
+            (should-not (file-exists-p (plist-get (cdr (car (plist-get item :before))) :path))))))))
+
+  :doc "a foreign accepted publication between decisions forces new recovery and preserves its decision"
+  (let ((mevedel-test-application-items 2))
+    (mevedel-test-application-fixture
+      (let ((next (symbol-function 'mevedel-memory-pass--application-next))
+            (start (symbol-function 'mevedel-journal-worker-start))
+            (second (cadr (plist-get accepted :proposals))) (full 0) injected)
+        (cl-letf (((symbol-function 'mevedel-journal-worker-start)
+                   (lambda (ws operation callback &optional force payload owner)
+                     (when (and (eq operation 'memory-recover) (not (plist-get payload :recovery-predecessor))) (cl-incf full))
+                     (funcall start ws operation callback force payload owner)))
+                  ((symbol-function 'mevedel-memory-pass--application-next)
+                   (lambda (state job)
+                     (when (and (not injected) (= 1 (plist-get job :applied)))
+                       (setq injected t)
+                       (let ((claim (mevedel-journal-claim-acquire key 180)))
+                         (should claim)
+                         (mevedel-memory-decision--publish
+                          workspace (mevedel-memory-decision--accept workspace claim accepted second 'rejected "Foreign decision"))))
+                     (funcall next state job))))
+          (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
+          (mevedel-test-application-wait (lambda () result)))
+        (should injected)
+        (should (= 2 full))
+        (should (= 1 (plist-get result :applied-count)))
+        (should (eq 'rejected (plist-get (mevedel-memory-decision-status workspace (plist-get second :id)) :status)))
+        (should (file-exists-p (plist-get (cdr (car (plist-get second :before))) :path))))))
+
+  :doc "a failed operation cannot carry recovery continuity into the next decision"
+  (let ((mevedel-test-application-items 2))
+    (mevedel-test-application-fixture
+      (let ((apply-owned (symbol-function 'mevedel-memory-decision--apply-owned))
+            (start (symbol-function 'mevedel-journal-worker-start)) (full 0) injected)
+        (cl-letf (((symbol-function 'mevedel-journal-worker-start)
+                   (lambda (ws operation callback &optional force payload owner)
+                     (when (and (eq operation 'memory-recover) (not (plist-get payload :recovery-predecessor))) (cl-incf full))
+                     (funcall start ws operation callback force payload owner)))
+                  ((symbol-function 'mevedel-memory-decision--apply-owned)
+                   (lambda (&rest args)
+                     (unless injected (setq injected t) (error "Injected first application failure"))
+                     (apply apply-owned args))))
+          (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
+          (mevedel-test-application-wait (lambda () result)))
+        (should injected)
+        (should (= 2 full))
+        (should (= 1 (plist-get result :applied-count)))
+        (should (= 1 (plist-get result :unapplied-count)))
+        (should (string-match-p "Injected first application failure" (plist-get result :error)))
+        (should (file-exists-p path)))))
+
+  :doc "late access, disk changes and unsaved edits still protect a later note after successful recovery"
+  (dolist (late '(access edit disk))
+    (let ((mevedel-test-application-items 2))
+      (mevedel-test-application-fixture
+        (let* ((next (symbol-function 'mevedel-memory-pass--application-next))
+               (second (cadr (plist-get accepted :proposals)))
+               (second-path (plist-get (cdr (car (plist-get second :before))) :path))
+               (conversation (generate-new-buffer " *chain-note-user*")) buffer injected)
+          (unwind-protect
+              (progn
+                (with-current-buffer conversation
+                  (setq-local mevedel--session (mevedel-session--create :workspace workspace)))
+                (cl-letf (((symbol-function 'mevedel-memory-pass--application-next)
+                           (lambda (state job)
+                             (when (and (not injected) (= 1 (plist-get job :applied)))
+                               (setq injected t)
+                               (if (eq late 'access)
+                                   (with-current-buffer conversation
+                                     (mevedel-resource-prepare 'read (mevedel-memory-notes-address (plist-get second :file))
+                                                               (list :session mevedel--session)))
+                                 (if (eq late 'disk)
+                                     (write-region "Intervening disk change" nil second-path nil 'silent)
+                                   (setq buffer (find-file-noselect second-path))
+                                   (with-current-buffer buffer (goto-char (point-max)) (insert "unsaved")))))
+                             (funcall next state job))))
+                  (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
+                  (mevedel-test-application-wait (lambda () result)))
+                (should injected)
+                (should (= 1 (plist-get result :applied-count)))
+                (should (file-exists-p second-path))
+                (should-not (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get second :id)) :status)))
+                (if (eq late 'access)
+                    (should (= 1 (plist-get result :held-count)))
+                  (should (= 1 (plist-get result :unapplied-count)))
+                  (if (eq late 'disk)
+                      (should (equal "Intervening disk change" (mevedel-session-control-fs-read-file second-path)))
+                    (with-current-buffer buffer (should (buffer-modified-p))))))
+            (when (buffer-live-p buffer) (with-current-buffer buffer (set-buffer-modified-p nil)) (kill-buffer buffer))
+            (kill-buffer conversation)))))))
+
+(mevedel-deftest mevedel-memory-decision--recovery-successor-p ()
+  ,test
+  (test)
+  :doc "fresh exact tokens, outcome bytes, actor and complete pinned observations are mandatory"
+  (mevedel-test-application-fixture
+    (let* ((prior (mevedel-journal-claim-acquire key 180))
+           (outcome (mevedel-journal-claim-settle prior 'cancelled ""))
+           (claim (mevedel-journal-claim-acquire key 180))
+           (context (mevedel-memory-decision--operation-context workspace (current-buffer)))
+           (job (append (list :claim claim) context))
+           (predecessor (append (list :claim prior :outcome outcome) context)))
+      (unwind-protect
+          (progn
+            (should (mevedel-memory-decision--recovery-successor-p job predecessor))
+            (let ((changed (copy-tree predecessor)))
+              (plist-put (plist-get changed :outcome) :payload "Not the completed outcome")
+              (should-not (mevedel-memory-decision--recovery-successor-p job changed)))
+            (should-not (mevedel-memory-decision--recovery-successor-p (plist-put (copy-sequence job) :origin 'other) predecessor))
+            (should-not (mevedel-memory-decision--recovery-successor-p (append job '(:decisions-only t)) predecessor))
+            (let ((changed (copy-tree predecessor)))
+              (plist-put (plist-get changed :claim) :generation (- (plist-get prior :generation) 1))
+              (should-not (mevedel-memory-decision--recovery-successor-p job changed)))
+            (let ((program (symbol-function 'mevedel-session-control-fs-run-program)))
+              (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                         (lambda (&rest args) (cdr (apply program args)))))
+                (should-not (mevedel-memory-decision--recovery-successor-p job predecessor)))))
+        (mevedel-journal-claim-settle claim 'cancelled "")))))
 
 (provide 'test-mevedel-memory-application-worker)
 ;;; test-mevedel-memory-application-worker.el ends here

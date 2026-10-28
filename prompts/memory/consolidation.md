@@ -51,13 +51,15 @@ tools can read them. Dispose of each admitted note exactly once in Notes:
 - `condense`: rewrite the note to the part still in use, for example only its
   open handoff after its finding was extracted.
 
-Before choosing a disposition, list the note's open items: unresolved defects
+Before choosing a disposition, identify the note's open items: unresolved defects
 or findings, failed or unfinished checks, unverified hypotheses or leads,
 stated acceptance limits, and work it explicitly leaves for someone else
 ("not done", "remains", "handoff", "belongs to"). Do this even when the note's
 main task is complete; passing checks or completed fixes do not resolve a
 separate finding. Age, an absent next step, or a missing record is not
 resolution: "not established as unresolved" is not a reason to delete.
+Record them only in the disposition's `open-items` field, never as text
+between proposal blocks.
 
 An open item ends the note's continuing use only when it was resolved,
 superseded, or recorded elsewhere with its caveats and next-step conditions
@@ -124,6 +126,7 @@ Every action section contains one or more proposal blocks, or the single line
 The No action section contains plain bullets explaining why no changes
 are useful, or `- none` when there is nothing further to report. No preamble,
 other headings outside proposal bodies, or trailing commentary is permitted.
+Analysis, lists and explanations outside proposal blocks invalidate the reply.
 
 Each proposal uses a backtick fence labelled `proposal`, with at least four
 backticks. Use a longer outer fence if the replacement body contains one that
@@ -179,7 +182,8 @@ A Notes block uses the same fence with exactly these three header fields:
     reason: "Why this disposition fits"
     ---
 
-A delete adds exactly two more header fields after `reason`:
+A delete adds two more header fields after `reason`; keep and condense may
+include `open-items` too:
 
     open-items: ["Each open item listed above, one short string each"]
     resolved-by: ["docs/backlog.md: exact words of the entry recording the item"]

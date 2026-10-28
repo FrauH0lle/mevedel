@@ -125,12 +125,15 @@ Plain relative paths contain no colon, so the first one separates them."
 
 (defun mevedel-memory-proposal--fenced (text names)
   "Split fenced proposal TEXT into its decoded header plist and body.
-NAMES maps the closed header field names to keywords."
-  (unless (string-match "^---\n" text)
-    (error "Proposal lacks its header/body separator"))
-  (let ((header (substring text 0 (match-beginning 0)))
-        (body (string-remove-suffix "\n" (substring text (match-end 0))))
+NAMES maps the closed header field names to keywords.  Without a `---'
+separator the body is empty and every line must be a header line; the
+action's own body rule then decides whether an empty body is valid."
+  (let* ((separated (string-match "^-\\{3,\\}\\(?:\n\\|\\'\\)" text))
+         (header (if separated (substring text 0 (match-beginning 0)) text))
+         (body (if separated (string-remove-suffix "\n" (substring text (match-end 0))) ""))
         fields)
+    (when (string-blank-p header)
+      (error "Proposal lacks its header/body separator"))
     (dolist (line (split-string (string-remove-suffix "\n" header) "\n"))
       (unless (string-match "\\`\\([a-z-]+\\): \\(.+\\)\\'" line)
         (error "Invalid proposal header line"))
@@ -150,16 +153,18 @@ A delete also lists the note's OPEN-ITEMS (unresolved findings,
 hypotheses, limits or next steps) and RESOLVED-BY entries \"PATH: QUOTE\",
 exact words from a workspace file establishing their resolution or durable
 record, returned as (PATH . QUOTE).  Acceptance checks the quotes against the
-review's reads; this parser only validates shape."
+review's reads; this parser only validates shape.  Keep and condense may
+carry the same fields; they are validated and recorded but never required."
   (let* ((decoded (mevedel-memory-proposal--fenced text mevedel-memory-proposal--note-fields))
          (fields (car decoded)) (body (cdr decoded))
          (note (assoc (plist-get fields :note) notes))
          (action (cdr (assoc (plist-get fields :disposition) mevedel-memory-proposal--dispositions)))
          (reason (plist-get fields :reason)))
     (unless (and (cl-every (lambda (key) (plist-member fields key)) '(:note :disposition :reason))
-                 (= (length fields) (if (eq action 'note-delete) 10 6))
-                 (or (not (eq action 'note-delete))
-                     (and (plist-member fields :open-items) (plist-member fields :resolved-by))))
+                 ;; A delete must account for its open items.  Missing
+                 ;; resolution evidence is simply none: acceptance then keeps
+                 ;; any delete that lists an open item.
+                 (or (not (eq action 'note-delete)) (plist-member fields :open-items)))
       (error "Note disposition fields are incomplete"))
     (unless (and note action (stringp reason) (not (string-blank-p reason))
                  (not (string-match-p "[[:cntrl:]]" reason)))
@@ -170,12 +175,18 @@ review's reads; this parser only validates shape."
      (list :action action :root (cadr note) :file (cddr note) :note (car note)
            :type "note" :title (cddr note) :hook "" :reason reason
            :evidence (list (car note)) :body body)
-     (when (eq action 'note-delete)
-       (list :open-items (mevedel-memory-proposal--strings (plist-get fields :open-items) #'always)
-             :resolved-by (mapcar #'mevedel-memory-proposal--resolution
+     (when (plist-member fields :open-items)
+       (list :open-items (mevedel-memory-proposal--strings (plist-get fields :open-items) #'always)))
+     (cond
+      ((eq action 'note-delete)
+       (list :resolved-by (mapcar #'mevedel-memory-proposal--resolution
                                   (mevedel-memory-proposal--strings
-                                   (plist-get fields :resolved-by)
-                                   #'mevedel-memory-proposal--resolution)))))))
+                                   (if (plist-member fields :resolved-by) (plist-get fields :resolved-by) [])
+                                   #'mevedel-memory-proposal--resolution))))
+      ;; Resolution evidence only matters for a delete; elsewhere check shape.
+      ((plist-member fields :resolved-by)
+       (mevedel-memory-proposal--strings (plist-get fields :resolved-by) #'always)
+       nil)))))
 
 (defun mevedel-memory-proposal--item (text action roots evidence)
   "Decode proposal TEXT for ACTION against captured ROOTS and EVIDENCE."
@@ -237,6 +248,36 @@ review's reads; this parser only validates shape."
         (setq fields (plist-put fields :merged-files (append merged nil))))
       (append (list :action action) fields (list :body body)))))
 
+(defun mevedel-memory-proposal--block-end (fence)
+  "Find the end of the proposal block opened by FENCE, starting at point.
+Return the end of its content and leave point after the block.  The body
+of a block ends only at a line of exactly FENCE, so Markdown code blocks
+inside replacement bodies stay intact.  These unambiguous variants of real
+replies are accepted too: a separator of three or more dashes, and a
+backtick-only line, section heading or next proposal opener closing a block
+whose body is still empty.  An unterminated non-empty body is an error."
+  (let ((body nil) (empty t) end)
+    (while (not end)
+      (when (eobp) (error "Unclosed proposal fence"))
+      (cond
+       ((and empty (looking-at "`\\{3,\\}proposal$"))
+        (setq end (point)))
+       ((looking-at "`\\{3,\\}proposal$")
+        (error "Unclosed proposal fence"))
+       ((and empty (or (looking-at "`\\{3,\\}$") (looking-at "## ")))
+        (setq end (point))
+        (unless (looking-at "## ") (forward-line 1)))
+       ((and body (looking-at (concat (regexp-quote fence) "$")))
+        (setq end (point))
+        (forward-line 1))
+       ((and (not body) (looking-at "-\\{3,\\}$"))
+        (setq body t)
+        (forward-line 1))
+       (t
+        (when (and body (not (looking-at "[ \t]*$"))) (setq empty nil))
+        (forward-line 1))))
+    end))
+
 (defun mevedel-memory-proposal-parse (text roots evidence &optional notes)
   "Return proposals and no-action text from a fully validated reply TEXT.
 ROOTS maps opaque root IDs to captured scope plists. Each root has :kind
@@ -252,10 +293,12 @@ Notes section must dispose of every admitted note exactly once; otherwise
 it may be omitted or contain `- none'.
 
 Each ordered section contains `- none' or fenced proposal blocks. A block
-has JSON-valued header lines, a `---' separator, and the replacement body.
+has JSON-valued header lines, a `---' separator, and the replacement body;
+a block with an empty body may omit the separator.
 Its closing backtick fence must match its opener, allowing shorter fences
 inside Markdown bodies. Remove proposals have empty bodies. No action has
-plain bullets. Conflicting file operations make the entire reply invalid."
+plain bullets and, being commentary, may be omitted at the very end of the
+reply.  Conflicting file operations make the entire reply invalid."
   (unless (and (stringp text) (<= (string-bytes text) mevedel-memory-proposal--max-bytes)
                (not (string-blank-p text)))
     (error "Consolidation reply is empty or exceeds its byte limit"))
@@ -270,6 +313,10 @@ plain bullets. Conflicting file operations make the entire reply invalid."
         (dolist (section mevedel-memory-proposal--sections)
           (blank-lines)
           (cond
+           ((and (null (cdr section)) (eobp))
+            ;; A reply ending after its last action section: No action is
+            ;; commentary, every required disposition was already checked.
+            (setq no-action "- none"))
            ((not (looking-at (concat (regexp-quote (concat "## " (car section))) "\n")))
             ;; Only an optional Notes section may be absent.
             (unless (and (eq (cdr section) 'notes) (null notes))
@@ -294,10 +341,7 @@ plain bullets. Conflicting file operations make the entire reply invalid."
                         start end)
                     (forward-line 1)
                     (setq start (point))
-                    (unless (re-search-forward (concat "^" (regexp-quote fence) "$") nil t)
-                      (error "Unclosed proposal fence"))
-                    (setq end (match-beginning 0))
-                    (forward-line 1)
+                    (setq end (mevedel-memory-proposal--block-end fence))
                     (let* ((item (if (eq (cdr section) 'notes)
                                      (mevedel-memory-proposal--disposition
                                       (buffer-substring-no-properties start end) notes)

@@ -472,6 +472,7 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
                 (lambda (reply)
                   (plist-put job :operation nil)
                   (when (and (eq job (plist-get state :application)) (not (plist-get job :done)))
+                    (plist-put job :recovery (plist-get reply :recovery))
                     (mevedel-memory-pass--timing-add state :application-recovery-round-trip-ms
                                                    (plist-get reply :recovery-round-trip-ms))
                     (when (plist-get reply :cancelled)
@@ -486,7 +487,8 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
                      (t (plist-put job :items (plist-get reply :value))))
                     (mevedel-memory-pass--application-next state job)))
                 (lambda () (mevedel-memory-pass--application-live-p state job))
-                nil (list :pending-selection t :skip (plist-get job :pass))))))
+                nil (list :pending-selection t :skip (plist-get job :pass))
+                (plist-get job :recovery)))))
 
 (cl-defun mevedel-memory-pass--application-step (state job)
   "Run one owned recovery/commit operation for STATE's sequential JOB."
@@ -508,6 +510,7 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
 		(if (and (plist-get item :note)
 			 (mevedel-memory-notes-in-use-p workspace (plist-get item :file)))
 		    (progn
+                              (plist-put job :recovery nil)
 		      (mevedel-memory-pass--hold-file job (plist-get item :file))
 		      (cl-incf (plist-get job :held))
 		      (mevedel-memory-pass--application-next state job))
@@ -525,6 +528,7 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
 				(lambda (reply)
 				  (plist-put job :operation nil)
 				  (when (and (eq job (plist-get state :application)) (not (plist-get job :done)))
+					    (plist-put job :recovery (plist-get reply :recovery))
                                     (mevedel-memory-pass--timing-add state :application-recovery-round-trip-ms
                                                                    (plist-get reply :recovery-round-trip-ms))
 				    (when (plist-get reply :error)
@@ -546,10 +550,11 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
 					(cl-incf (plist-get job :held))
 					(when (plist-get item :note) (mevedel-memory-pass--hold-file job (plist-get item :file))))
 					       (t (cl-incf (plist-get job :unapplied)))))
-				    ;; No public/proof observation survives this attempt;
-				    ;; the next owned helper reads both afresh.
+					    ;; Only an exact recovery predecessor may survive;
+					    ;; accepted/status/target proofs are always read afresh.
 				    (mevedel-memory-pass--application-next state job)))
-				(lambda () (mevedel-memory-pass--application-live-p state job))))))
+					(lambda () (mevedel-memory-pass--application-live-p state job))
+                                        nil nil (plist-get job :recovery)))))
 	      (plist-put job :done t)
 	      (when (and (plist-get job :deferred) (not (plist-get state :stop-apply)))
 		(mevedel-memory-pass--defer-notes state (plist-get job :deferred)))
@@ -559,6 +564,7 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
 			     :applied-count (plist-get job :applied) :held-count (plist-get job :held)
 			     :unapplied-count (plist-get job :unapplied) :error (plist-get job :error)))))
 	((error quit)
+		 (plist-put job :recovery nil)
 	 (when (eq (car err) 'quit)
            (plist-put job :cancelled t)
            (plist-put state :stop-apply t)
@@ -708,6 +714,28 @@ The retry ends after an idle attempt or invalidation of its original actor."
                                            (error-message-string err))
                           :warning))))))
 
+(defconst mevedel-memory-pass--rejected-replies 8
+  "Number of rejected review replies retained for diagnosis.")
+
+(defun mevedel-memory-pass--retain-rejected-reply (workspace id result)
+  "Retain RESULT's rejected reply for pass ID in local WORKSPACE diagnostics.
+Only the newest `mevedel-memory-pass--rejected-replies' are kept.  The text
+is evidence for diagnosing the output contract, never proposals.  Failures
+here are diagnostic only."
+  (when-let* ((reply (plist-get result :rejected-reply))
+              (root (mevedel-workspace-root workspace))
+              ((not (file-remote-p root))))
+    (ignore-errors
+      (let ((directory (file-name-concat root ".mevedel" "state" "diagnostics" "rejected-replies")))
+        (make-directory directory t)
+        (let ((coding-system-for-write 'utf-8-unix))
+          (write-region (concat (format "<!-- pass %s; error: %s -->\n" id (plist-get result :error)) reply)
+                        nil (file-name-concat directory (concat id ".md")) nil 'silent))
+        (let ((files (sort (directory-files directory t "\\.md\\'")
+                           (lambda (a b) (time-less-p (file-attribute-modification-time (file-attributes b))
+                                                      (file-attribute-modification-time (file-attributes a)))))))
+          (mapc #'delete-file (nthcdr mevedel-memory-pass--rejected-replies files)))))))
+
 (cl-defun mevedel-memory-pass--finish (state result)
   "Settle STATE once from RESULT and publish only its accepted immutable reply."
   (unless (plist-get state :settled)
@@ -771,6 +799,7 @@ The retry ends after an idle attempt or invalidation of its original actor."
            (accepted (plist-get state :accepted))
            (entry (plist-get state :entry))
            recovery-error)
+      (mevedel-memory-pass--retain-rejected-reply workspace id result)
       (when (timerp (plist-get state :timer)) (cancel-timer (plist-get state :timer)))
       (plist-put state :timer nil)
       (when-let* ((worker (plist-get state :worker)))

@@ -319,10 +319,11 @@ Use a monotonic deadline for elapsed-time retries.
                      ("a/c.el" . "(defun keep-the-row: here)"))
                    (plist-get item :resolved-by)))
     (should-not (plist-member (car (plist-get (funcall parse "keep" "") :proposals)) :open-items))
+    ;; Missing resolution evidence is none, so this delete can only be kept.
+    (should-not (plist-get (car (plist-get (funcall parse "delete" "open-items: [\"A\"]\n") :proposals))
+                           :resolved-by))
     (dolist (invalid '(("delete" "")
-                       ("delete" "open-items: []\n")
                        ("delete" "resolved-by: []\n")
-                       ("keep" "open-items: []\nresolved-by: []\n")
                        ("delete" "open-items: \"Finding 2\"\nresolved-by: []\n")
                        ("delete" "open-items: [\"\"]\nresolved-by: []\n")
                        ("delete" "open-items: [\"A\", \"A\"]\nresolved-by: []\n")
@@ -334,6 +335,55 @@ Use a monotonic deadline for elapsed-time retries.
                        ("delete" "open-items: [\"A\"]\nresolved-by: [\"a/b/../c.el: escaping quote text\"]\n")
                        ("delete" "open-items: [\"A\"]\nresolved-by: [\"~/notes.md: home quote text here\"]\n")))
       (should-error (funcall parse (car invalid) (cadr invalid)))))
+  :doc "real reply shapes rejected in production parse without loosening dispositions"
+  ;; Shapes from real Codex gpt-6-luna replies, 2026-10-28: keep and condense
+  ;; carrying open items, a header-only delete without separator, and a reply
+  ;; that ends after its last proposal fence.
+  (let* ((notes '(("work://shared/a.md" "notes-root" . "a.md")
+                  ("work://shared/b.md" "notes-root" . "b.md")
+                  ("work://shared/c.md" "notes-root" . "c.md")))
+         (head "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## Notes\n")
+         (blocks (concat "````proposal\nnote: \"work://shared/a.md\"\ndisposition: \"keep\"\nreason: \"Open handoff\"\n"
+                         "open-items: [\"Duration undecided\"]\n---\n````\n"
+                         "````proposal\nnote: \"work://shared/b.md\"\ndisposition: \"condense\"\nreason: \"Partly open\"\n"
+                         "open-items: [\"Port the fix\"]\nresolved-by: [\"docs/backlog.md\"]\n---\nOpen: port the fix.\n````\n"
+                         "````proposal\nnote: \"work://shared/c.md\"\ndisposition: \"delete\"\nreason: \"Completed\"\n"
+                         "open-items: []\nresolved-by: []\n````\n"))
+         (parse (lambda (text) (mevedel-memory-proposal-parse text mevedel-test-memory-proposal--roots nil notes)))
+         (result (funcall parse (concat head blocks))))
+    (should (equal "- none" (plist-get result :no-action)))
+    (should (equal '(note-keep note-condense note-delete)
+                   (mapcar (lambda (item) (plist-get item :action)) (plist-get result :proposals))))
+    (should (equal '("Duration undecided") (plist-get (car (plist-get result :proposals)) :open-items)))
+    (should (equal "" (plist-get (nth 2 (plist-get result :proposals)) :body)))
+    (should (funcall parse (concat head blocks "## No action\n- Nothing further.\n")))
+    ;; Fence spellings from real replies: a four-dash separator, a shorter
+    ;; closing fence, and a missing close before the next empty-body block.
+    (dolist (variant (list (string-replace "Open handoff\"\nopen-items: [\"Duration undecided\"]\n---\n````"
+                                           "Open handoff\"\nopen-items: [\"Duration undecided\"]\n----\n```" blocks)
+                           (string-replace "Open handoff\"\nopen-items: [\"Duration undecided\"]\n---\n````\n"
+                                           "Open handoff\"\nopen-items: [\"Duration undecided\"]\n---\n" blocks)))
+      (should (equal '(note-keep note-condense note-delete)
+                     (mapcar (lambda (item) (plist-get item :action))
+                             (plist-get (funcall parse (concat head variant)) :proposals)))))
+    ;; A Markdown code block inside a condensed body survives intact.
+    (let ((coded (funcall parse (concat head (string-replace "Open: port the fix.\n" "Open:\n```\n(fix)\n```\n" blocks)))))
+      (should (equal "Open:\n```\n(fix)\n```" (plist-get (nth 1 (plist-get coded :proposals)) :body))))
+    (dolist (invalid
+             (list
+              ;; An unterminated non-empty body is ambiguous.
+              (concat head (string-replace "Open: port the fix.\n````\n" "Open: port the fix.\n" blocks))
+              ;; Analysis between blocks remains invalid.
+              (concat head "- Note a.md open items:\n  - Duration undecided\n" blocks)
+              ;; Without its separator a condense has no body.
+              (concat head (string-replace "---\nOpen: port the fix.\n" "" blocks))
+              ;; A delete still needs its open-item accounting.
+              (concat head (string-replace "open-items: []\nresolved-by: []\n" "" blocks))
+              ;; Truncation before every note is disposed of.
+              (concat head (substring blocks 0 (string-search "````proposal\nnote: \"work://shared/c.md\"" blocks)))
+              ;; Malformed open items on keep are still rejected.
+              (concat head (string-replace "[\"Duration undecided\"]" "\"Duration undecided\"" blocks))))
+      (should-error (funcall parse invalid))))
   :doc "resolution quotes match delivered Read text across line numbers and wrapping only"
   (let ((read "  352\t- **One viewport anchor per window (2026-10-18).** Logical window-start\n  353\t  restoration previously overrode\n"))
     (should (mevedel-memory-proposal-quoted-p "window (2026-10-18).** Logical window-start restoration previously" read))

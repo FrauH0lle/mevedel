@@ -85,15 +85,18 @@ reference checks admit more notes per request; inventory-first capture, batched
 decision authentication and operation-local proof reuse cut storage programs.
 Remaining:
 - Measure a sustained multi-session workload with a specified arrival cadence;
-  only component timings and single real reviews exist. Real provider reviews
-  took about 10-30 seconds each; checked application of one held note still
-  took about 20 seconds, dominated by per-proposal recovery.
+  only component timings and single real reviews exist. Adjacent application
+  claims now skip repeated full recovery (a copied ten-decision job took 63 s
+  instead of 272 s, one sample each); production confirmation is pending.
 - Over-retention: in real-model evaluation the reviewer kept or condensed an old
   failed review whose findings ADR 0126 had resolved, because it did not quote
   matching evidence for each item. Condensed notes are re-reviewed after the
   suppression period; check whether they ever reach deletion.
-- About one reply per seven-review round failed the output format (a missing
-  final section or malformed action section) and costs a later retry.
+- Reply format: unambiguous reply shapes are now accepted (0 of 8 rejected
+  against 3 of 8 before on matched real reviews). Prose between blocks and
+  unterminated condensed bodies still reject a whole review; rejected replies
+  are retained under `.mevedel/state/diagnostics/rejected-replies/` to check
+  whether that recurs.
 - Leases do not observe shell access by ordinary path, accesses before an editor
   restart, or sessions on another client.
 

@@ -269,6 +269,9 @@ cancellation releases the fence and leaves the machine retryable.
     dispatches through the editor continuation immediately before application
     or pending selection. This includes worker/preflight overhead, reply
     validation and synchronous recovery fallback, and nests inside application.
+    Adjacent-claim continuity checks and read-only pending selection that omit
+    history recovery contribute only to application duration, not this field;
+    it is not the cost of every application readiness check.
     Only yielding owned-operation application supplies this field; fully
     synchronous application leaves it absent.
   Interrupted parent-local intervals end at cancellation/failure settlement;

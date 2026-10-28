@@ -34,6 +34,7 @@
 (defvar mevedel-memory-history-max-age-days)
 
 ;; `mevedel-memory-decision'
+(declare-function mevedel-memory-decision--recovery-successor-p "mevedel-memory-decision" (job predecessor))
 (declare-function mevedel-memory-decision--worker-local-p "mevedel-memory-decision" (workspace))
 (declare-function mevedel-memory-decision-recover "mevedel-memory-decision" (workspace))
 
@@ -226,20 +227,28 @@ Deleting the process cancels work; durable claims fence interrupted attempts."
                   ('memory-recover
                    (require 'mevedel-memory-decision)
                    (mevedel-memory-store--assert-owned (plist-get (plist-get options :payload) :claim))
-                   (if (not (mevedel-memory-decision--worker-local-p workspace))
-                       (list :ok t :operation-id (plist-get (plist-get options :payload) :operation-id) :synchronous t)
-                     (let ((changed (mevedel-memory-decision-recover workspace)))
-                       (unless (plist-get (plist-get options :payload) :decisions-only)
-                         (when (mevedel-memory-store-recover workspace) (setq changed t)))
-                       (if (plist-get (plist-get options :payload) :pending-selection)
-                           (progn
-                             (require 'mevedel-memory-pass)
-                             (list :ok t :operation-id (plist-get (plist-get options :payload) :operation-id)
-                                   :changed changed :items
-                                   (mevedel-memory-pass--pending-items
-                                    workspace (plist-get (plist-get options :payload) :skip))))
-                         (list :ok t :operation-id (plist-get (plist-get options :payload) :operation-id)
-                               :changed changed)))))
+                   (let* ((payload (plist-get options :payload))
+                          (predecessor (plist-get payload :recovery-predecessor))
+                          (recovered
+                           (and predecessor
+                                (or (mevedel-memory-decision--recovery-successor-p
+                                     (list :claim (plist-get payload :claim)) predecessor)
+                                    (error "Memory recovery predecessor changed")))))
+                     (when (and recovered (not (plist-get payload :pending-selection)))
+                       (error "Recovery continuity only permits pending selection"))
+                     (if (and (not recovered) (not (mevedel-memory-decision--worker-local-p workspace)))
+                         (list :ok t :operation-id (plist-get payload :operation-id) :synchronous t)
+                       (let ((changed (unless recovered (mevedel-memory-decision-recover workspace))))
+                         (unless (or recovered (plist-get payload :decisions-only))
+                           (when (mevedel-memory-store-recover workspace) (setq changed t)))
+                         (if (plist-get payload :pending-selection)
+                             (progn
+                               (require 'mevedel-memory-pass)
+                               (list :ok t :operation-id (plist-get payload :operation-id)
+                                     :changed changed :items
+                                     (mevedel-memory-pass--pending-items workspace (plist-get payload :skip))))
+                           (list :ok t :operation-id (plist-get payload :operation-id)
+                                 :changed changed))))))
                   ((or 'memory-prepare 'memory-publish)
                    (require 'mevedel-memory-pass)
                    (if (eq (plist-get options :operation) 'memory-prepare)

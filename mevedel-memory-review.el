@@ -362,12 +362,13 @@ dispose of every admitted note."
                (error (finish 'error (error-message-string err))))))
          (complete-info (info)
            (unless settled
-             (condition-case err
-                 (progn
-                   (ensure-live)
-                   (record-usage info t)
-                   (check-output)
-                   (let ((reply (apply #'concat (nreverse chunks))))
+             (let (reply)
+               (condition-case err
+                   (progn
+                     (ensure-live)
+                     (record-usage info t)
+                     (check-output)
+                     (setq reply (apply #'concat (nreverse chunks)))
                      (check-limit 'proposal-bytes (string-bytes reply) mevedel-memory-proposal--max-bytes)
                      (finish 'success nil
                              (append (mevedel-memory-proposal-parse
@@ -376,8 +377,12 @@ dispose of every admitted note."
                                       (let ((index (mevedel-memory-notes-index scope)))
                                         (mapcar (lambda (note) (assoc (plist-get note :id) index))
                                                 admitted-notes)))
-                                     (list :reply reply)))))
-               (error (finish 'error (error-message-string err))))))
+                                     (list :reply reply))))
+                 ;; A rejected complete reply is diagnostic evidence for the
+                 ;; consumer; it never becomes proposals.
+                 (error (finish 'error (error-message-string err)
+                                (and reply (<= (string-bytes reply) mevedel-memory-proposal--max-bytes)
+                                     (list :rejected-reply reply))))))))
          (done-handler (fsm) (complete-info (gptel-fsm-info fsm)))
          (external-provider (response info)
            (pcase response

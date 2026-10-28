@@ -188,23 +188,39 @@ DIAGNOSTICS returns bounded details when the expected callback never arrives."
     (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get proposal :id)) :status)))
     (should-not warnings))
 
-  :doc "mode invalidation during pending discovery or item recovery holds quietly and fences real work"
+  :doc "mode invalidation during pending discovery or item continuation holds quietly and fences real work"
   (dolist (stage '(1 2))
     (mevedel-test-retry-fixture
       (mevedel-test-retry-defer state accepted)
-      (let ((start (symbol-function 'mevedel-journal-worker-start)) (launches 0) operation)
+      (let ((start (symbol-function 'mevedel-journal-worker-start))
+            (ready (symbol-function 'mevedel-memory-decision--operation-ready))
+            (launches 0) (continuations 0) operation)
         (cl-letf (((symbol-function 'mevedel-journal-worker-start)
                    (lambda (&rest args)
                      (let ((child (apply start args)))
-                       (when (= (cl-incf launches) stage)
+                       (cl-incf launches)
+                       (when (= stage 1)
                          (setq operation (gethash key mevedel-memory-decision--operations))
                          (with-current-buffer origin (setq mevedel-memory-consolidation-mode 'propose)))
-                       child))))
+                       child)))
+                  ((symbol-function 'mevedel-memory-decision--operation-ready)
+                   (lambda (job reply)
+                     (cl-incf continuations)
+                     (when (and (= stage 2) (= continuations 2))
+                       ;; Item execution can follow the adjacent-claim fast
+                       ;; path without a second child.  Invalidate its actor
+                       ;; at the actual continuation boundary, before admission.
+                       (should (plist-get job :recovered))
+                       (should-not (plist-get job :recovery-started-at))
+                       (setq operation job)
+                       (with-current-buffer origin (setq mevedel-memory-consolidation-mode 'propose)))
+                     (funcall ready job reply))))
           (with-current-buffer unrelated
             (apply (timer--function retry-timer) (timer--args retry-timer)))
           (mevedel-test-retry-wait (lambda () (not (gethash key mevedel-memory-pass--running)))))
         (should operation)
-        (should (= launches stage))
+        (should (= 1 launches))
+        (should (= continuations stage))
         (should (mevedel-journal-claim-outcome (plist-get operation :claim)))
         (should-not (process-live-p (plist-get operation :worker)))
         (should-not warnings)

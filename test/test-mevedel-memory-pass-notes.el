@@ -361,6 +361,22 @@
                    (should (proposal 'note-delete "done.md"))
                    (should-not (proposal 'note-delete "unread.md"))
                    (dotimes (index 4) (should (file-exists-p (nth index paths)))))
+                 :doc "a rejected review reply is retained for diagnosis and changes nothing"
+                 (let ((path (note "kept.md" "Open item.\n")))
+                   (should (start :automatic t))
+                   (funcall callback (list :outcome 'error :error "Note disposition fields are incomplete"
+                                           :rejected-reply "## Promote\n- none\n"
+                                           :policy (list :backend backend :model 'test-model)))
+                   (should (eq 'error (plist-get result :outcome)))
+                   (should (file-exists-p path))
+                   (let ((retained (directory-files
+                                    (file-name-concat root ".mevedel" "state" "diagnostics" "rejected-replies")
+                                    t "\\.md\\'")))
+                     (should (= 1 (length retained)))
+                     (with-temp-buffer
+                       (insert-file-contents (car retained))
+                       (should (string-match-p "Note disposition fields are incomplete" (buffer-string)))
+                       (should (string-match-p "## Promote" (buffer-string))))))
                  :doc "an attachment referenced by a note written after capture is not removed"
                  (let ((mevedel-memory-consolidation-mode 'propose)
                        (image (note "old.png" (unibyte-string 0 1 2 3))))

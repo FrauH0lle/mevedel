@@ -31,10 +31,24 @@ and discards proofs after applying a proposal. Completed pass recovery still
 authenticates every bundle and recovers accepted expiry under mutation ownership,
 but avoids republication when exact public bytes match and no spare pins remain.
 These operation-local observations do not survive a new application claim.
+An automatic sequence may retain only its clean recovery predecessor's exact
+claim/outcome identity, never those authenticated content observations.
 
 Local automatic application uses one parent-owned fixed-deadline workspace
-claim per proposal. The maintenance worker performs publication/store recovery;
-the editor freshly checks the current operation and ownership before acquiring
+claim per proposal. The first maintenance worker performs publication/store
+recovery. A clean operation may establish an ephemeral recovery predecessor for
+the same automatic job. Its next claim must be exactly the following generation,
+with both predecessor records freshly verified alongside the new claim's exact
+identity, latest generation, absence of outcome and unexpired deadline in one
+pinned program. Only that continuity proof omits repeated history recovery;
+the next proposal, current status and target authorization are still read anew.
+Intervening consolidation claims, context changes, failures, holds, cancellation,
+expired/failed outcomes or incomplete accounting discard continuity. New jobs and
+deferred retries begin with recovery. Pending discovery remains at the original
+tail of the sequence; its read-only child independently authenticates the same
+continuity proof before omitting recovery. Unsupported targets retain native
+recovery when no continuity proof exists. The editor freshly checks the current
+operation and ownership before acquiring
 target ownership and committing with live-buffer protections. Pending selection
 authenticates current status and omits every already-decided proposal, retaining
 undecided extractions and their waiting dependencies. It returns identities only,
@@ -1123,3 +1137,107 @@ intervals remain distinct from child-local preparation recovery and nested
 application recovery round trips. Review-request time includes prompt packing,
 tools and chunk summaries, so it is not labelled provider time. Missing intervals
 remain unknown rather than zero; cancellation closes only started intervals.
+
+### 2026-10-28: accept unambiguous reply shapes instead of discarding reviews
+
+After the open-item contract landed, three of five production reviews were
+rejected whole: one reply ended without `## No action`, two were "Note
+disposition fields are incomplete". No reply text was retained, so real
+multi-note reviews of copied notes reproduced them. The parser required
+exactly three fields on keep and condense, but reviewers usefully list open
+items there too; they also wrote header-only deletes without `---`, four-dash
+separators, and three-backtick closes for four-backtick openers. One
+malformed block discarded every other valid disposition.
+
+Keep and condense now accept validated `open-items` and are recorded with
+them. A delete still requires `open-items`; a missing `resolved-by` means no
+evidence, so acceptance keeps any delete that lists an open item. Empty-body
+blocks may omit the separator or close with any backtick-only line, a section
+heading or the next opener; separators may have three or more dashes; a
+trailing `## No action` may be absent. A non-empty body still ends only at its
+exact fence, so code blocks in condensed notes stay intact, and an unterminated
+non-empty body, prose between blocks and every field check still reject the
+reply. These rules accept stated grammar variants; they never rewrite a reply.
+Rejected replies are retained, newest eight, under
+`.mevedel/state/diagnostics/rejected-replies/`.
+
+Matched real reviews (Codex `gpt-6-luna`, medium; the same twelve copied real
+notes, ten admitted per review; eight reviews each):
+
+- Scenario: committed 081ffce9; metric: rejected replies; value: 3 of 8.
+- Scenario: this change; metric: rejected replies; value: 0 of 8; 15 accepted
+  deletes, each quote-checked, and no delete downgraded.
+- Replaying all ten retained real rejected replies: seven now parse; two with
+  prose between blocks and one unterminated condensed body remain rejected.
+
+Eight reviews per condition are a small sample, not a failure-rate estimate.
+One candidate review deleted the audit folder's README, whose ownership section
+calls itself historical, while the other seven kept it: deletion judgment
+remains model quality.
+
+### 2026-10-28: carry recovery continuity across adjacent application claims
+
+The first implementation deliberately recovered the full retained history for
+every automatic proposal. Production phase timing then attributed 269.910 seconds
+of one 306.220-second application phase to recovery round trips for eleven
+decisions, including older holds. Moving those scans to children had reduced
+editor blocking, but not that repeated work.
+
+Keeping a single decision claim for several writes would violate its immutable
+one-outcome contract. Instead, automatic application retains only the exact
+claim/outcome identity of its cleanly completed predecessor, within that job.
+Each next operation still acquires its own fixed 180-second claim. A pinned
+program must prove exact generation adjacency and authenticate both predecessor
+records alongside the new claim's current, unsettled, unexpired ownership. A
+new accepted pass, decision or write intent requires consolidation ownership;
+an intervening operation, including cleanup, therefore breaks this continuity.
+Public replay of already accepted immutable state does not mint a new decision;
+expiry replay likewise applies a manifest created under consolidation ownership.
+
+The predecessor is produced only after the operation's publication and marker
+retirement, when needed, and successful fencing, not merely a completed
+acceptance outcome.
+Errors, held/cancelled work, incomplete recovery and failed/expired outcomes
+cannot produce it. No proposal bodies, pass bundles, status observations or
+target proofs cross the claim boundary. The next operation still freshly reads
+its accepted proposal and current status, checks extraction requirements and
+original-root ownership, and rechecks snapshots, unsaved buffers, note-access
+protection and cancellation at the write boundary. Other workspaces can change a
+shared target without advancing this workspace's generation; these target
+checks remain mandatory. Deferred retries and separate jobs start recovery anew.
+
+Pending discovery stays after the current accepted proposals. Its read-only
+child receives only the predecessor's claim/outcome projection, independently
+authenticates continuity, and selects fresh pending identities; the parent owns
+the actor/context check. If continuity is absent, normal history recovery and
+historical-remote fallback remain unchanged. Missing or altered proof never
+authorizes the fast path.
+
+A matched compiled replay used identical private real history, eight newly
+constructed native fixture dispositions and two real older held proposals.
+It made no provider call, mounted the host read-only and disabled networking.
+Baseline was `081ffce9`; application source hashes match the measured candidate.
+
+- Scenario native ten-decision asynchronous job; metric application wall time;
+  baseline 272.426, updated 63.266; unit seconds; one sample per build.
+- Scenario same job; metric recovery round-trip time included in application;
+  baseline 240.930, updated 20.810; unit seconds; one sample per build.
+- Scenario same job; metric full recovery worker launches;
+  baseline 11, updated 1; unit workers; one sample per build.
+- Scenario same job; metric total maintenance worker launches;
+  baseline 11, updated 2; unit workers; one sample per build. The additional
+  updated worker performs only checked pending selection.
+- Scenario same job; metric applied decisions;
+  baseline 10, updated 10; unit decisions; one sample per build.
+- Scenario post-application audit; metric mutating decisions with source absence,
+  exact authenticated before-state and byte-matching retained undo blob;
+  baseline 10, updated 10; unit audited decisions; one sample per build.
+
+Fresh selected-decision and accepted-bundle read counts are unchanged; the saving
+is repeated all-history recovery, not reduced application authorization. This is
+one controlled workload, not a sustained-drain rate or a measurement of provider
+latency, editor responsiveness or live end-to-end throughput. Remaining
+application, pending discovery, preparation and provider work still contribute.
+The recovery round-trip field excludes the updated continuity checks and
+read-only selection; application wall time includes both, so the full phase is
+the matched measure of their net benefit.

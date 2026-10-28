@@ -231,7 +231,14 @@ establish current authority, freshness, or factual correctness. The request uses
 this parser at terminal settlement before accepting proposals into the durable
 review and decision lifecycle exposed by the memory cockpit.
 A note `delete` additionally requires `open-items` and `resolved-by` arrays;
-`keep` and `condense` must omit them. Each resolution entry is a plain
+`keep` and `condense` may carry them, validated as string arrays, and their
+open items are recorded. A block with an empty body may omit the `---`
+separator, and a reply may end after its last action section without
+`## No action`; every required disposition is still checked, and text between
+proposal blocks still invalidates the reply. These accept shapes real replies
+produced, which previously discarded whole reviews. A rejected reply is retained,
+newest eight, under `.mevedel/state/diagnostics/rejected-replies/` for
+diagnosis; it never becomes proposals. Each resolution entry is a plain
 workspace-relative path, `: `, and a quote of at least 12 characters; the path
 is normalized before acceptance compares the quote with the review's reads (see
 [Shared working-note lifecycle](#shared-working-note-lifecycle)).
