@@ -160,7 +160,16 @@ cancellation releases the fence and leaves the machine retryable.
 - `event-loop-lag` whenever the editor's event loop ran more than
   `mevedel-telemetry-lag-threshold` (0.5 s) late. Watching runs while a
   request runs and for two minutes after it settles, since journal,
-  collection and publication work follows settlement. Every timer delivered
+  collection and publication work follows settlement. Admitted sessionless
+  memory passes also watch from registration before preparation through terminal
+  completion (including publication and automatic application), followed by the
+  same two-minute tail. They reuse the process heartbeat, native worker or PGTK
+  fallback timer, never a separate sampler. Their lag events and summary go to
+  workspace diagnostics with `:pass-id` and `:workload memory`; no session is
+  manufactured. Overlapping session/pass windows can report the same process
+  stall, so deduplicate before counting editor stalls. Waiting before admission
+  is not watched by the pass. Disabled telemetry and noninteractive Emacs do not
+  start pass watching. Every timer delivered
   meanwhile reports how late it ran, since a stall delays every timer due
   during it. A 100 ms heartbeat samples the rest and reports the worst delay
   since the previous heartbeat, once. Busy Lisp, redisplay or collection makes
@@ -255,6 +264,18 @@ cancellation releases the fence and leaves the machine retryable.
   - `:review-request-duration-ms`: review request invocation through settlement,
     including input preparation, investigation tools and chunk summaries. This
     is **not provider time**.
+  - `:provider-duration-ms` and `:provider-call-count`: sum of observed native
+    gptel provider-call finish durations and number of observed dispatch starts for this
+    pass, including sequential note chunk summaries and the final review.
+    Tool execution, prompt packing before dispatch, application and publication
+    are excluded. Failed and aborted dispatches count, with their observed
+    elapsed time retained; duplicate completion/late callbacks cannot add another
+    finish. Cancellation during the start-event append can abort that span before
+    transport registration; a start is not proof of a provider HTTP request.
+    Totals are absent when no native call was observed, including
+    telemetry-disabled runs and external ACP engines whose transport boundaries
+    are not observed. They are wall time, not provider CPU or billing. The same
+    totals are available in the pass result and review usage snapshot.
   - `:publication-duration-ms`: asynchronous publication dispatch through reply,
     or synchronous acceptance and publication.
   - `:application-duration-ms`: automatic application invocation through actual
@@ -460,6 +481,11 @@ path (when applicable), backend name and concrete `:backend-type`, model,
 and workload (`root`, `agent`, `naming`, or `context-summary`). Context
 summaries also retain their categorical purpose. Helpers write into the owning
 session; sessionless journal/memory work keeps its separate workspace stream.
+Native memory review and its chunk-summary calls emit `provider-call` start/finish
+events there with `:pass-id` and `:workload memory`, using the same dispatch,
+parser, completion and abort boundaries and normalized usage fields. Chunk
+summaries additionally retain their summary `:purpose`. Correlation is internal
+request context, not model input, and never emits the workspace object or payload.
 Transient `/btw` conversational calls do not create per-call events.
 Only gptel dispatch is observed. Claude Code requests run through ACP and emit
 no `provider-call` events: root and child turns, and isolated text and workload

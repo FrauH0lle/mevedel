@@ -210,9 +210,9 @@ profile file larger and cost a little more per sample."
     :preparation-duration-ms :preparation-recovery-duration-ms :preparation-state
     :previous-owner :previous-status :proc :profile :profile-bytes-total
     :profile-file-names :prompt-chars :prompt-function :prompt-hash :proposed-count
-    :protected-path-count :provider-context-model :provider-context-status
+    :protected-path-count :provider-call-count :provider-context-model :provider-context-status
     :provider-context-tokens :provider-context-usage
-    :provider-context-window :provider-error-code :provider-error-type
+    :provider-context-window :provider-duration-ms :provider-error-code :provider-error-type
     :provider-status :publication-duration-ms :purpose :queue-depth
     :queue-depth-before :queue-duration-ms :read-only :reason
     :reason-class :reasoning-bytes :remaining-count :repair-count :reply-bytes
@@ -666,6 +666,12 @@ A window is (:request-id ID :until TIME :counts COUNTS).  UNTIL is nil
 while the request runs and the end of the tail afterwards; COUNTS is a
 plist of the delays counted for the running request.")
 
+(defvar mevedel-telemetry--lag-pass-windows nil
+  "Workspace memory-pass windows sharing the session heartbeat.
+Each entry is (WORKSPACE . (:pass-id ID :until TIME :counts COUNTS)).
+Entries are opaque lifecycle handles, compared by identity, so overlapping
+passes never replace one another or collide with session windows.")
+
 (defconst mevedel-telemetry--lag-closure-scan-limit 400
   "Most conses searched in an interpreted closure's body for its callee.")
 
@@ -864,7 +870,8 @@ sentinels or timers.  Ordinary `sleep-for' is unsafe in this worker."
         mevedel-telemetry--lag-gc nil
         mevedel-telemetry--lag-cpu nil
         mevedel-telemetry--lag-input nil
-        mevedel-telemetry--lag-windows nil)
+        mevedel-telemetry--lag-windows nil
+        mevedel-telemetry--lag-pass-windows nil)
   (advice-remove 'timer-event-handler #'mevedel-telemetry--lag-time-callback)
   (advice-remove 'mevedel--coalesced-timer-call #'mevedel-telemetry--lag-time-callback)
   (advice-remove 'mevedel-transport-call-as-remote-operation
@@ -906,11 +913,63 @@ sentinels or timers.  Ordinary `sleep-for' is unsafe in this worker."
                               (1+ (or (plist-get counts :input-pending) 0)))))
     (plist-put counts :max-ms (max ms (or (plist-get counts :max-ms) 0)))))
 
+(defun mevedel-telemetry--lag-record (entry event &rest props)
+  "Record lag EVENT and PROPS for window ENTRY's session or workspace."
+  (if-let* ((pass-id (plist-get (cdr entry) :pass-id)))
+      (apply #'mevedel-telemetry-record-workspace (car entry) event
+             :pass-id pass-id :workload 'memory props)
+    (apply #'mevedel-telemetry-record (car entry) event props)))
+
+;;;###autoload
+(defun mevedel-telemetry-memory-pass-start (workspace pass-id)
+  "Watch WORKSPACE's memory PASS-ID using the shared lag heartbeat.
+Return an opaque handle for `mevedel-telemetry-memory-pass-settle', or nil
+when telemetry is disabled or Emacs is noninteractive.  PASS-ID must be a
+string identifier, never evidence or focus text.  No session is required."
+  (when (and mevedel-telemetry-enabled (not noninteractive)
+             workspace (stringp pass-id))
+    (let ((handle (cons workspace
+                        (list :pass-id (mevedel-telemetry--truncate-string pass-id)
+                              :until nil :counts nil))))
+      (push handle mevedel-telemetry--lag-pass-windows)
+      (condition-case err
+          (progn (mevedel-telemetry--lag-start) handle)
+        (error
+         (setq mevedel-telemetry--lag-pass-windows
+               (delq handle mevedel-telemetry--lag-pass-windows))
+         (message "mevedel: memory pass lag watching failed: %s"
+                  (error-message-string err))
+         nil)))))
+
+;;;###autoload
+(defun mevedel-telemetry-memory-pass-settle (handle)
+  "Summarize HANDLE once and retain its ordinary post-settlement lag tail.
+HANDLE comes from `mevedel-telemetry-memory-pass-start'.  Nil, already
+settled, expired and stopped handles are harmless.  Return nil."
+  (when (memq handle mevedel-telemetry--lag-pass-windows)
+    (if (not mevedel-telemetry-enabled)
+        (mevedel-telemetry--lag-stop)
+      (let ((window (cdr handle)))
+        (unless (plist-get window :until)
+          (let ((counts (plist-get window :counts)))
+            ;; Close before appending: remote persistence may run timers.
+            (setf (plist-get window :until)
+                  (+ (float-time) mevedel-telemetry--lag-tail)
+                  (plist-get window :counts) nil)
+            (mevedel-telemetry--lag-record
+             handle 'event-loop-lag-summary
+             :over-200-ms (or (plist-get counts :over-200-ms) 0)
+             :over-500-ms (or (plist-get counts :over-500-ms) 0)
+             :over-1000-ms (or (plist-get counts :over-1000-ms) 0)
+             :max-ms (or (plist-get counts :max-ms) 0)
+             :input-pending (or (plist-get counts :input-pending) 0)))))))
+  nil)
+
 (defun mevedel-telemetry--lag-tick ()
   "Record the loop's worst delay since the previous heartbeat.
 The delay is the later of this heartbeat's own, any timer's and any
 blocking remote operation's since then, once per heartbeat for every
-watched session.  Input arriving since the previous sample is reported as
+watched session or memory pass.  Input since the previous sample is reported as
 pending.  Disabling telemetry stops watching: the request it would close
 never reports settling."
   (if (not mevedel-telemetry-enabled)
@@ -938,17 +997,26 @@ never reports settling."
                           (let ((until (plist-get (cdr entry) :until)))
                             (or (null until) (< now until))))
                         mevedel-telemetry--lag-windows))
+      (when mevedel-telemetry--lag-pass-windows
+        (setq mevedel-telemetry--lag-pass-windows
+              (seq-filter (lambda (entry)
+                            (let ((until (plist-get (cdr entry) :until)))
+                              (or (null until) (< now until))))
+                          mevedel-telemetry--lag-pass-windows)))
       (when (> delay mevedel-telemetry--lag-count-threshold)
         (let ((input-pending (> num-nonmacro-input-events input-before)))
-          (dolist (entry mevedel-telemetry--lag-windows)
+          (dolist (entry (if mevedel-telemetry--lag-pass-windows
+                            (append mevedel-telemetry--lag-windows
+                                    mevedel-telemetry--lag-pass-windows)
+                          mevedel-telemetry--lag-windows))
             (let ((window (cdr entry)))
               (unless (plist-get window :until)
                 (setf (plist-get (cdr entry) :counts)
                       (mevedel-telemetry--lag-count
                        (plist-get window :counts) delay input-pending)))
               (when (> delay mevedel-telemetry-lag-threshold)
-                (apply #'mevedel-telemetry-record
-                       (car entry) 'event-loop-lag
+                (apply #'mevedel-telemetry--lag-record
+                       entry 'event-loop-lag
                        :request-id (plist-get window :request-id)
                        :delay-ms (round (* 1000 delay))
                        :input-pending input-pending
@@ -967,7 +1035,8 @@ never reports settling."
                                   :timer-ms (round (* 1000 (plist-get slowest :seconds)))
                                   :timer-gc-count (plist-get slowest :gc-count)
                                   :timer-gc-ms (round (* 1000 (plist-get slowest :gc-seconds)))))))))))
-      (unless mevedel-telemetry--lag-windows
+      (unless (or mevedel-telemetry--lag-windows
+                  mevedel-telemetry--lag-pass-windows)
         (mevedel-telemetry--lag-stop)))))
 
 

@@ -17,6 +17,7 @@
 (require 'mevedel-memory-reference)
 (require 'mevedel-models)
 (require 'mevedel-reminders)
+(require 'mevedel-telemetry-usage)
 
 ;; `mevedel-auth'
 (declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
@@ -128,27 +129,58 @@ counts captured notes left for a later review."
    "" (gptel--json-encode (plist-get (gptel-fsm-info fsm) :data))))
 
 (cl-defun mevedel-memory-review-request
-    (scope entries callback &key focus rejections memory-only (currentp (lambda () t)))
+    (scope entries callback &key focus rejections memory-only workspace pass-id activep (currentp (lambda () t)))
   "Review SCOPE and ENTRIES, delivering the settled result to CALLBACK.
 FOCUS, REJECTIONS, MEMORY-ONLY and CURRENTP control the bounded review.
-An oversized shared note is summarized alone in sequential chunks first."
-  (if (cl-some (lambda (note) (plist-get note :chunked)) (mevedel-memory-notes-documents scope))
-      (mevedel-memory-notes-review
-       #'mevedel-memory-review--request scope
-       (lambda (result) (funcall callback (plist-put result :omitted-digests (length entries))))
-       :focus focus :rejections rejections :currentp currentp)
-    (mevedel-memory-review--request scope entries callback
-                                    :focus focus :rejections rejections :memory-only memory-only :currentp currentp)))
+An oversized shared note is summarized alone in sequential chunks first.
+WORKSPACE and PASS-ID enable correlated native provider-call telemetry and
+per-review provider totals, including chunk summaries.  External engines do
+not expose native dispatch boundaries, so their totals remain unavailable.
+ACTIVEP is a non-IO lifecycle check after telemetry appends; it defaults to
+CURRENTP without a separate check."
+  (let* ((totals (when (and workspace pass-id mevedel-telemetry-enabled)
+                   (list :provider-duration-ms 0 :provider-call-count 0)))
+         (context (when totals
+                    (mevedel-telemetry-usage-install)
+                    (list :mevedel-telemetry-workspace workspace
+                          :mevedel-telemetry-pass-id pass-id
+                          :mevedel-telemetry-workload 'memory
+                          :mevedel-telemetry-currentp (or activep currentp)
+                          :mevedel-telemetry-observer
+                          (lambda (stage props)
+                            (if (eq stage 'start)
+                                (cl-incf (plist-get totals :provider-call-count))
+                              (cl-incf (plist-get totals :provider-duration-ms)
+                                       (or (plist-get props :duration-ms) 0)))))))
+         (deliver (lambda (result)
+                    (funcall callback (append result (when (> (or (plist-get totals :provider-call-count) 0) 0)
+                                                       (copy-sequence totals))))))
+         (handle
+          (if (cl-some (lambda (note) (plist-get note :chunked)) (mevedel-memory-notes-documents scope))
+              (mevedel-memory-notes-review
+               #'mevedel-memory-review--request scope
+               (lambda (result) (funcall deliver (plist-put result :omitted-digests (length entries))))
+               :focus focus :rejections rejections :currentp currentp :telemetry-context context)
+            (mevedel-memory-review--request scope entries deliver
+                                            :focus focus :rejections rejections :memory-only memory-only
+                                            :currentp currentp :telemetry-context context)))
+         (usage (plist-get handle :usage)))
+    (plist-put handle :usage
+               (lambda ()
+                 (append (when usage (funcall usage))
+                         (when (> (or (plist-get totals :provider-call-count) 0) 0)
+                           (copy-sequence totals)))))))
 
 (cl-defun mevedel-memory-review--request
-    (scope entries callback &key focus rejections memory-only (currentp (lambda () t)))
+    (scope entries callback &key focus rejections memory-only telemetry-context (currentp (lambda () t)))
   "Run a bounded read-only review of captured SCOPE and candidate ENTRIES.
 CALLBACK receives :outcome success/error/aborted and the admitted :entries,
 :scope, :references, model :policy, and usage.  Success also carries the exact
 :reply, parsed :proposals, and :no-action.  It never writes coverage
 or proposals.
 
-CURRENTP checks the consumer's current ownership generation.  MEMORY-ONLY
+CURRENTP checks the consumer's current ownership generation.  TELEMETRY-CONTEXT
+supplies internal workspace provider-call correlation.  MEMORY-ONLY
 permits an explicitly requested empty digest batch.  FOCUS and REJECTIONS
 are optional bounded text.  Return a plist with :buffer for inspection,
 an idempotent :cancel function, and a :usage function returning a snapshot
@@ -546,7 +578,7 @@ dispose of every admitted note."
                     (when (and settled cancel-engine) (funcall cancel-engine)))
                 (progn (mevedel-auth-assert-ready gptel-backend)
                        (gptel-request input :buffer buffer :system system :stream stream :transforms nil
-				      :fsm (machine) :callback #'provider)))))
+				      :context telemetry-context :fsm (machine) :callback #'provider)))))
         (error (finish 'error (error-message-string err))))
       (list :buffer buffer :cancel (lambda () (finish 'aborted))
             :report (lambda ()

@@ -691,12 +691,13 @@ Prefer newline boundaries near the end; never split a UTF-8 character."
         (push text chunks)))
     (nreverse chunks)))
 
-(cl-defun mevedel-memory-notes-review (reviewer scope callback &key focus rejections currentp)
+(cl-defun mevedel-memory-notes-review (reviewer scope callback &key focus rejections currentp telemetry-context)
   "Review SCOPE's single oversized note in chunks, then call REVIEWER.
 CALLBACK receives the ordinary review result.  FOCUS, REJECTIONS and CURRENTP
 are forwarded to the final review.  Every chunk checks the whole-file hash;
 a change settles as `restart-required', discarding the running summary.
-The immutable before-state is never rebound to the changed file."
+The immutable before-state is never rebound to the changed file.
+TELEMETRY-CONTEXT correlates chunk and final provider calls with their pass."
   (let* ((scope (copy-tree scope))
          (root (cdr (mevedel-memory-notes-root scope)))
          (note (car (plist-get root :notes)))
@@ -766,7 +767,8 @@ The immutable before-state is never rebound to the changed file."
                                                 (condition-case err
                                                     (when (and (live) (current)) (finish result t))
                                                   (error (finish (list :outcome 'error :error (error-message-string err))))))
-                                              :focus focus :rejections rejections :currentp #'live)))
+                                              :focus focus :rejections rejections :currentp #'live
+                                              :telemetry-context telemetry-context)))
                        (unless settled (setq cancel (plist-get request :cancel))))
                    (let ((chunk (pop chunks)))
                      (setq active-summary nil)
@@ -801,6 +803,7 @@ The immutable before-state is never rebound to the changed file."
                                        (finish (list :outcome 'error :error "Running note summary exceeds 16 KiB"))
                                      (next)))))
                              :policy policy
+                             :telemetry-context telemetry-context
                              :output-guard
                              (lambda (observed)
                                (setq active-summary observed)

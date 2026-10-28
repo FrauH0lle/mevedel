@@ -1138,6 +1138,15 @@ application recovery round trips. Review-request time includes prompt packing,
 tools and chunk summaries, so it is not labelled provider time. Missing intervals
 remain unknown rather than zero; cancellation closes only started intervals.
 
+The acceptance instrumentation also reuses native provider-call transport
+observations for sessionless reviews and their chunk summaries, correlated by
+pass identity in workspace diagnostics. Terminal passes retain observed provider
+wall-time totals separately from review-request time. The existing shared lag
+heartbeat watches admitted memory passes through completion and its ordinary
+tail, without creating a session or another sampling timer. This closes timing
+and watching gaps, not a claim of sustained throughput, lower CPU, or graphical
+input latency; external engines still lack native provider-call boundaries.
+
 ### 2026-10-28: accept unambiguous reply shapes instead of discarding reviews
 
 After the open-item contract landed, three of five production reviews were

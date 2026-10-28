@@ -23,8 +23,12 @@
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry--monotonic-now "mevedel-telemetry" ())
+(declare-function mevedel-telemetry-memory-pass-settle "mevedel-telemetry" (handle))
+(declare-function mevedel-telemetry-memory-pass-start "mevedel-telemetry" (workspace pass-id))
 (declare-function mevedel-telemetry-record-workspace "mevedel-telemetry" (workspace event &rest props))
 (autoload 'mevedel-telemetry--monotonic-now "mevedel-telemetry")
+(autoload 'mevedel-telemetry-memory-pass-settle "mevedel-telemetry")
+(autoload 'mevedel-telemetry-memory-pass-start "mevedel-telemetry")
 (autoload 'mevedel-telemetry-record-workspace "mevedel-telemetry")
 
 (defcustom mevedel-memory-consolidation-mode 'propose
@@ -775,7 +779,8 @@ here are diagnostic only."
             state (append (list :outcome 'error :error (error-message-string err)) result)))))
       (cl-return-from mevedel-memory-pass--finish nil))
     (plist-put state :settled t)
-    (let* ((workspace (plist-get state :workspace))
+    (condition-case err
+      (let* ((workspace (plist-get state :workspace))
            (claim (plist-get state :claim))
            (id (plist-get claim :owner))
            (status (if (memq (plist-get result :outcome) '(aborted restart-required)) 'cancelled 'failed))
@@ -783,7 +788,12 @@ here are diagnostic only."
                          (funcall read-usage) result))
            ;; Freeze diagnostics before storage can replace RESULT with an error.
            ;; Cancellation has no review callback result, so use its live snapshot.
-           (usage (cl-loop for key in '(:input-tokens :cached-tokens :output-tokens
+           (usage (append
+                   (cl-loop for key in '(:provider-duration-ms :provider-call-count)
+                            when (or (plist-member result key) (plist-member reported key))
+                            append (list key (if (plist-member result key)
+                                                (plist-get result key) (plist-get reported key))))
+                   (cl-loop for key in '(:input-tokens :cached-tokens :output-tokens
                                                       :output-bytes :output-estimated-tokens :result-bytes
                                                       :reasoning-bytes :reply-bytes :tool-call-bytes
                                                       :tool-call-count :rounds
@@ -791,7 +801,7 @@ here are diagnostic only."
                            append (list key (if (plist-member result key)
                                                 (plist-get result key)
                                               (or (plist-get reported key)
-                                                  (unless (memq key '(:budget-kind :output-limit)) 0))))))
+                                                  (unless (memq key '(:budget-kind :output-limit)) 0)))))))
            (model (when (plist-get result :policy) (mevedel-model--provider-label (plist-get result :policy))))
            (failure-class (cond ((plist-get usage :budget-kind) 'output-limit)
                                 ((plist-get state :publishing) 'publication)
@@ -843,6 +853,17 @@ here are diagnostic only."
                 (mevedel-memory-store-release workspace id)))
           (error (setq recovery-error (error-message-string err)))))
       (mevedel-memory-pass--timing-end state :retirement-duration-ms)
+      (unless entry
+        ;; Preserve fence-before-abort ordering, but close the provider call
+        ;; before publishing its terminal timing totals.  Transport callbacks
+        ;; cannot reenter this already-settled pass.
+        (when-let* ((cancel (plist-get (plist-get state :request) :cancel)))
+          (funcall cancel))
+        (when-let* ((snapshot (plist-get (plist-get state :request) :usage)))
+          (let ((final-usage (funcall snapshot)))
+            (dolist (key '(:provider-duration-ms :provider-call-count))
+              (when (plist-member final-usage key)
+                (setq usage (plist-put usage key (plist-get final-usage key))))))))
       (when (plist-get state :publishing)
         (setf (mevedel-workspace-journal-observation workspace) nil))
       (cl-labels ((complete (applied)
@@ -898,18 +919,22 @@ here are diagnostic only."
 					 :proposed-count (length (plist-get entry :proposals))
 					 :updated-file-count (plist-get applied :updated-files)
 						 :remaining-count (plist-get (plist-get state :result) :remaining)))))
-		    (when-let* ((callback (plist-get state :callback)))
+			    (mevedel-telemetry-memory-pass-settle (plist-get state :lag-watch))
+			    (when-let* ((callback (plist-get state :callback)))
 		      (funcall callback (plist-get state :result)))))
 	(when entry
 	  (when (plist-get state :publication-finished)
 	    (mevedel-journal-cleanup-schedule workspace t))
 	  (when accepted (mevedel-memory-pass--supersede workspace accepted))
 	  (setf (mevedel-workspace-memory-observation workspace) nil))
-	(if (and entry (eq 'auto (plist-get (plist-get state :telemetry) :mode))
-		 (mevedel-memory-pass--async-application-p workspace accepted))
-	    (mevedel-memory-pass--apply-async state accepted #'complete)
-	  (complete (when (and entry (eq 'auto (plist-get (plist-get state :telemetry) :mode)))
-		      (mevedel-memory-pass--apply state accepted))))))))
+		(if (and entry (eq 'auto (plist-get (plist-get state :telemetry) :mode))
+			 (mevedel-memory-pass--async-application-p workspace accepted))
+		    (mevedel-memory-pass--apply-async state accepted #'complete)
+		  (complete (when (and entry (eq 'auto (plist-get (plist-get state :telemetry) :mode)))
+			      (mevedel-memory-pass--apply state accepted))))))
+      ((error quit)
+       (mevedel-telemetry-memory-pass-settle (plist-get state :lag-watch))
+       (signal (car err) (cdr err))))))
 
 (defun mevedel-memory-pass-cancel (workspace)
   "Cancel only this client's running consolidation for WORKSPACE.
@@ -1090,6 +1115,7 @@ Cancelled or expired storage replies never start a model request."
                 (plist-put state :timer nil)
                 (plist-put state :settled t)
                 (plist-put state :skipped t)
+                (mevedel-telemetry-memory-pass-settle (plist-get state :lag-watch))
                 (remhash (plist-get claim :directory) mevedel-memory-pass--running)
                 (when (plist-get bundle :empty)
                   (plist-put state :result
@@ -1116,13 +1142,19 @@ Cancelled or expired storage replies never start a model request."
                          (mevedel-memory-review-request
                           (plist-get prepared :scope) (plist-get prepared :entries)
                           (lambda (reply) (mevedel-memory-pass--finish state reply))
+                          :workspace workspace :pass-id (plist-get (plist-get state :claim) :owner)
+                          :activep (lambda () (not (plist-get state :settled)))
                           :focus focus :memory-only memory-only
                           :rejections (plist-get bundle :rejections)
                           :currentp (lambda ()
                                       (and (not (plist-get state :settled))
                                            (condition-case nil
                                                (progn (mevedel-memory-store--assert-owned claim) t)
-                                              (error nil))))))))))
+                                              (error nil))))))))
+            ;; Request construction can yield before publishing its handle.
+            (when (plist-get state :settled)
+              (when-let* ((cancel (plist-get (plist-get state :request) :cancel)))
+                (funcall cancel)))))
       (error (mevedel-memory-pass--finish
               state (list :outcome 'error :error (error-message-string err)))))))
 
@@ -1204,6 +1236,11 @@ from the automatic or drain queue owner; direct starts omit admission dwell."
 	(funcall finish '(:outcome error :error "Memory consolidation is already running"))
 	(cl-return-from mevedel-memory-pass-start nil))
       (puthash key state mevedel-memory-pass--running)
+      (plist-put state :lag-watch
+                 (mevedel-telemetry-memory-pass-start workspace (plist-get claim :owner)))
+      ;; Starting the shared native watcher may yield to cancellation.
+      (when (plist-get state :settled)
+        (mevedel-telemetry-memory-pass-settle (plist-get state :lag-watch)))
       (unless (funcall currentp)
 	;; Claim creation may have yielded to cancellation and a new drain.
 	;; Keep this exact state observed until its own new claim is fenced.
