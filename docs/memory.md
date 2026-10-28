@@ -558,17 +558,30 @@ observation was stale. Journaling can be disabled while existing digests remain
 eligible for consolidation. Exit cancels queued and active review work.
 
 In **auto** mode, a successful general review with ready notes or digests
-remaining makes the next idle/maintenance opportunity a catch-up batch, bypassing
-the ordinary time and digest-count thresholds. It does not start another review
-inside the completion callback. `mevedel-memory-consolidation-max-batches-per-day`
-defaults to **8** successful general batches per rolling 24 hours. Admission
+remaining makes the next idle/maintenance opportunity a catch-up batch only if
+that batch made measurable shared-note progress: at least one authenticated
+applied delete (including relocation to verified trash) or condense, or an applied
+keep that suppresses the reviewed note version. Proposal counts, aggregate
+application totals, digest coverage, older pending applications, empty-directory
+pruning, and rejected, held or unchanged unsuppressed notes do not establish
+progress. Application errors, recovery requirements and
+cancellation also prevent continuation. Catch-up bypasses the ordinary time and
+digest-count thresholds; completion never starts another review recursively.
+`mevedel-memory-consolidation-max-batches-per-day` remains a hard spend ceiling,
+defaulting to **48** successful general batches per rolling 24 hours. Admission
 counts published and retired general reviews on the target clock, including
 explicit reviews, under the existing workspace claim. Focused reviews do not
 count. Zero disables automatic review in auto mode. Propose retains the ordinary
-interval. A failed catch-up review ends the catch-up chain; later offers must
-pass the ordinary successful-review clock again. The cap bounds successful
+interval. A failed catch-up review or a successful batch with zero progress ends
+the catch-up chain; later offers must pass the ordinary successful-review clock
+again. Explicit general reviews also need progress to seed an unattended chain;
+explicit drain does not perform this catch-up-only observation. An observation
+failure prevents catch-up and records its class in completion telemetry without
+changing the accepted review result; an interrupted observation completes
+cancellation and releases this client's registration. Progress is the main
+catch-up throttle. The ceiling bounds successful
 batch admissions, not tokens or billing: catch-up can
-cost up to eight successful review batches per day rather than one. Ordinary
+cost up to 48 successful review batches per day rather than one. Ordinary
 batches keep the same note/digest/request bounds; an oversized note is a
 single batch with bounded additional sequential summary calls, followed by
 its final review, all sharing the review's deadline and output limits.
