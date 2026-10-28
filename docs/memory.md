@@ -1083,7 +1083,11 @@ needed for an unresolved follow-up) or condense (rewrite to the part still in
 use). The reviewer first lists the note's open items: unresolved findings,
 failed or unfinished checks, unverified hypotheses or leads, acceptance limits
 and work left to others, even when the note's main task is complete. Age or a
-missing record is not resolution. An open item ends continuing use only when
+missing record is not resolution. Work assigned to another owner and observations retained without an established
+cause count as open items, wherever they appear in the note; decision records
+are searched for them as well as the backlog. A condensed body keeps each open
+item's concrete operations, values with baselines and conditions, not a phrase
+that merely refers to it. An open item ends continuing use only when
 the reviewer establishes, with the workspace tools, that it was resolved,
 superseded or recorded elsewhere with its caveats and next step; otherwise the
 note is condensed to that item's dated evidence, caveats and next step, or kept.

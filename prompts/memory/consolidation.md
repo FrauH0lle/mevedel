@@ -58,6 +58,13 @@ stated acceptance limits, and work it explicitly leaves for someone else
 main task is complete; passing checks or completed fixes do not resolve a
 separate finding. Age, an absent next step, or a missing record is not
 resolution: "not established as unresolved" is not a reason to delete.
+Work assigned to another owner ("belongs to", "parent owns") and observations
+the note retains without an established cause are open items of this note too;
+assigning them elsewhere is not resolving or recording them.
+Open items appear throughout a note, not only in a closing handoff section:
+account for each statement that something remains, is retained, unattributed,
+unexplained or more expensive than its control. A completed section that a
+later section of the same note resolves is not open.
 Record them only in the disposition's `open-items` field, never as text
 between proposal blocks.
 
@@ -66,7 +73,10 @@ superseded, or recorded elsewhere with its caveats and next-step conditions
 intact. Establish that with the workspace tools: Grep maintained records such
 as `docs/backlog.md`, decision records under `docs/adr/`, documentation, and
 the code and tests the note names for the item's specific terms, then Read the
-matching lines with `offset` and `limit`. A Read returns at most 8 KiB, so a
+matching lines with `offset` and `limit`. Measurements, residual costs and
+acceptance limits are usually recorded in a decision record's measurements or
+consequences, not the backlog: search `docs/adr/` with the item's distinctive
+terms and numbers too. A Read returns at most 8 KiB, so a
 whole large file shows only its start; searches of the workspace root are
 partial, so search a directory or file. Issue independent searches and reads
 together in one tool round. These checks can change the proposal, so make them
@@ -74,6 +84,11 @@ even when other guidance favours brief investigation. If an open item remains
 unestablished, condense the note to that item's dated evidence, caveats and
 next step, stated as the note's observation at that date, not as a current
 defect or a user preference; or keep it when the whole note is still in use.
+A condensed body keeps each open item's concrete content: the operations,
+commands or files involved, measured values with their comparison baselines,
+and conditions. A phrase that only refers to an item, such as "remaining
+editing costs", loses it. Leave out completed measurements and items the note
+itself later resolved.
 Delete when every open item is established as resolved or recorded, or when the
 note has none.
 

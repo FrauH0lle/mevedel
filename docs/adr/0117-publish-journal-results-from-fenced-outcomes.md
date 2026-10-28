@@ -1241,3 +1241,40 @@ application, pending discovery, preparation and provider work still contribute.
 The recovery round-trip field excludes the updated continuity checks and
 read-only selection; application wall time includes both, so the full phase is
 the matched measure of their net benefit.
+
+### 2026-10-28: name residual details that reviewers miss
+
+The first production batch after the recovery change condensed two audit notes
+too vaguely: concrete residual costs (wrapped-draft Backspace, C-k/yank/
+transpose) became "remaining exact-path editing costs", and an explicitly
+retained, unexplained rise in exact-repair timings was dropped. Both were
+reversed natively. Both residuals were in fact recorded in ADR 0126, so the best
+disposition was a delete quoting that record; the reviewer had searched only the
+backlog. Replaying those five notes in one review showed the same failure class
+at the committed prompt, and more: reviewers deleted the performance note with
+no open items, reasoning that work assigned to another owner was not this
+note's concern. The quote check cannot catch an item that is never listed.
+
+The prompt now says that work assigned elsewhere and observations retained
+without an established cause are open items wherever they appear in a note,
+that decision records hold measurements and residual costs, and that a
+condensed body keeps each item's concrete operations, values with baselines and
+conditions. A deterministic list of marker lines was measured and rejected: it
+flagged a mean of 15 lines per real note, 48 of 147 notes over 12, mostly
+provenance wording.
+
+Real reviews (Codex `gpt-6-luna`, medium) of the five audited preimages in one
+review, scored on the two affected notes; a disposition is bad when it loses
+the residual details or deletes without listing open items:
+
+- Scenario: committed b0493f9c; metric: bad dispositions; value: 19 of 28
+  (14 reviews); performance-note deletes without open items: 10 of 14.
+- Scenario: this change; metric: bad dispositions; value: 12 of 26
+  (13 reviews; one provider reply was malformed JSON); deletes without open
+  items: 2 of 13; deletes quoting ADR 0126: 5.
+- Scenario: all five notes; metric: deletes per reviewed note; value: 46% at
+  b0493f9c, 35% after; condensations rose from 24% to 45%.
+
+Condensed bodies still lose concrete residual details in about a third of the
+reviews: recall of residual detail remains model quality, bounded by the
+condensation's undo window, not a guarantee.
