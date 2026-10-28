@@ -426,7 +426,7 @@ SHELL preserves headers and replaces bodies and terminators with spaces.
 BODIES contains only expanding bodies with escaped newlines joined; quoted
 delimiters disable expansion and preserve physical lines.
 This separation is only for detecting background work, not argv or authority."
-  (let ((shell (copy-sequence source))
+  (let ((shell (vconcat source))
         (index 0) quote escaped pending bodies)
     (while (< index (length source))
       (let ((char (aref source index)))
@@ -523,7 +523,7 @@ This separation is only for detecting background work, not argv or authority."
                        do (aset shell position ?\s))))
           (setq pending nil index (1- index)))))
       (setq index (1+ index)))
-    (list shell (nreverse bodies))))
+    (list (concat shell) (nreverse bodies))))
 
 (defun mevedel-bash-analysis--background-p (source)
   "Return non-nil when SOURCE contains executable shell background syntax.
@@ -537,14 +537,16 @@ in unquoted here-documents, including inside literal quote characters."
           (push fragment seen)
           (pcase-let ((`(,shell ,bodies)
                        (mevedel-bash-analysis--heredoc-context fragment)))
-            (let ((substitutions
+            (let ((masked (vconcat shell))
+                  (substitutions
                    (mevedel-bash-analysis--substitution-bodies shell nil 'spans)))
               ;; A nested substitution owns its own quoting and here-documents.
               ;; Hide it before normalizing the outer shell's continuations.
               (dolist (substitution substitutions)
                 (cl-loop for position from (nth 1 substitution) below (nth 2 substitution)
-                         do (aset shell position ?\s)))
-              (setq shell (mevedel-bash-analysis--normalize-line-continuations shell))
+                         do (aset masked position ?\s)))
+              (setq shell (mevedel-bash-analysis--normalize-line-continuations
+                           (concat masked)))
               (setq found
                     (member "Background execution is unsupported"
                             (cadr (mevedel-bash-analysis--scan-segments shell))))

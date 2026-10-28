@@ -93,7 +93,7 @@
                   (rules tool-name &rest keys))
 (declare-function mevedel-permission-rules-merge-resource-grant
                   "mevedel-permission-rules"
-                  (grants path access &optional recursive))
+                  (grants path access &optional recursive origin))
 (declare-function mevedel-permission-rules-network-decision
                   "mevedel-permission-rules" (buckets tool-name pattern))
 (declare-function mevedel-permission-rules-qualified-buckets
@@ -298,6 +298,9 @@ Fall back to direct queue admission for callers outside the tool pipeline."
                (funcall callback
                         (mevedel-permission--one-shot-prompt-outcome
                          outcome)))))))
+  (when-let* ((guard (plist-get permission-context :async-guard)))
+    (setq entry (plist-put entry :callback
+                           (funcall guard (plist-get entry :callback)))))
   (if-let* ((request (plist-get permission-context :permission-request)))
       (funcall request entry session (plist-get entry :callback))
     (if session
@@ -350,18 +353,26 @@ Fall back to direct queue admission for callers outside the tool pipeline."
           (apply #'mevedel-telemetry-record-audit
                  session 'permission-decision safe))))))
 
+(define-error 'mevedel-execution-policy-error "Invalid execution permission request")
+
+(defun mevedel-tool-exec-permission--policy-error (format-string &rest args)
+  "Reject an invalid policy request with FORMAT-STRING and ARGS."
+  (signal 'mevedel-execution-policy-error
+          (list (apply #'format format-string args))))
+
 (defun mevedel-tool-exec-permission--validate-additional-plist (value allowed label)
   "Return VALUE after validating its keys against ALLOWED for LABEL."
   (unless (and (listp value)
                (proper-list-p value)
                (zerop (% (length value) 2)))
-    (error "%s must be an object" label))
+    (mevedel-tool-exec-permission--policy-error "%s must be an object" label))
   (let ((tail value))
     (while tail
       (let ((key (pop tail)))
         (pop tail)
         (unless (memq key allowed)
-          (error "Unknown %s field: %s" label key)))))
+          (mevedel-tool-exec-permission--policy-error
+           "Unknown %s field: %s" label key)))))
   value)
 
 (defun mevedel-tool-exec-permission--filesystem-paths
@@ -373,13 +384,24 @@ TARGET and DIRECTORY bind target-native paths to their execution target."
           ((or (null value) (eq value :json-false)) nil)
           ((vectorp value) (append value nil))
           ((proper-list-p value) value)
-          (t (error "Filesystem %s permission must be an array" access)))))
+          (t (mevedel-tool-exec-permission--policy-error
+              "Filesystem %s permission must be an array" access)))))
     (mapcar
      (lambda (path)
        (unless (and (stringp path)
                     (not (string-empty-p path))
                     (file-name-absolute-p path))
-         (error "Filesystem permission path must be absolute: %S" path))
+         (mevedel-tool-exec-permission--policy-error
+          "Filesystem permission path must be absolute: %S" path))
+       ;; Only validation of the authored operand is a policy refusal.
+       ;; Expansion below also consumes target and directory state; failures
+       ;; there must remain internal errors rather than becoming denials.
+       (when target
+         (condition-case err
+             (mevedel-execution-target-native-path target path)
+           (mevedel-execution-target-error
+            (mevedel-tool-exec-permission--policy-error
+             "%s" (error-message-string err)))))
        (list :path (if target
                        (mevedel-execution-target-expand-path
                         target path directory)
@@ -397,7 +419,8 @@ TARGET and DIRECTORY bind target-native filesystem paths."
         (file-system (plist-get additional :file_system))
         grants profile)
     (unless (memq network '(nil t :json-false))
-      (error "Network permission must be true or false"))
+      (mevedel-tool-exec-permission--policy-error
+       "Network permission must be true or false"))
     (when (and file-system (not (eq file-system :json-false)))
       (mevedel-tool-exec-permission--validate-additional-plist
        file-system '(:read :write) "Filesystem permissions")
@@ -446,7 +469,8 @@ PERMISSION-CONTEXT supplies the session execution target."
             'use-default)
            ((equal raw-level "with_additional_permissions") 'additive)
            ((equal raw-level "require_escalated") 'escalated)
-           (t (error "Unknown sandbox permission level: %s" raw-level))))
+           (t (mevedel-tool-exec-permission--policy-error
+               "Unknown sandbox permission level: %s" raw-level))))
          (additional (plist-get args :additional_permissions))
          (normalized-additional
           (and additional
@@ -457,28 +481,34 @@ PERMISSION-CONTEXT supplies the session execution target."
     (pcase level
       ('use-default
        (when normalized-additional
-         (error "Default sandbox execution cannot include escalation arguments"))
+         (mevedel-tool-exec-permission--policy-error
+          "Default sandbox execution cannot include escalation arguments"))
        (list :level 'use-default :additional-permissions nil))
       ('additive
        (unless (and (stringp justification)
                     (not (string-empty-p (string-trim justification))))
-         (error "Additional permissions require a justification"))
+         (mevedel-tool-exec-permission--policy-error
+          "Additional permissions require a justification"))
        (when (and (eq tool 'eval) (not (eq eval-mode 'batch)))
-         (error "Additional permissions are available only to batch Eval"))
+         (mevedel-tool-exec-permission--policy-error
+          "Additional permissions are available only to batch Eval"))
        (list :level 'additive
              :additional-permissions
              (or normalized-additional
-                 (error
+                 (mevedel-tool-exec-permission--policy-error
                   "Additional permissions must contain a non-empty capability"))
              :justification (string-trim justification)))
       ('escalated
        (unless (and (stringp justification)
                     (not (string-empty-p (string-trim justification))))
-         (error "Full sandbox escalation requires a justification"))
+         (mevedel-tool-exec-permission--policy-error
+          "Full sandbox escalation requires a justification"))
        (when normalized-additional
-         (error "Full sandbox escalation cannot include additional permissions"))
+         (mevedel-tool-exec-permission--policy-error
+          "Full sandbox escalation cannot include additional permissions"))
        (when (and (eq tool 'eval) (not (eq eval-mode 'batch)))
-         (error "Full sandbox escalation is available only to batch Eval"))
+         (mevedel-tool-exec-permission--policy-error
+          "Full sandbox escalation is available only to batch Eval"))
        (list :level 'escalated
              :sandbox-permissions 'require-escalated
              :additional-permissions nil
@@ -538,7 +568,8 @@ PERMISSION-CONTEXT supplies the session execution target."
                  grants
                  (plist-get grant :path)
                  (plist-get grant :access)
-                 (plist-get grant :recursive))))))
+                 (plist-get grant :recursive)
+                 (plist-get grant :workspace-origin))))))
     (mevedel-tool-exec-permission--additional-profile network grants)))
 
 (defun mevedel-tool-exec-permission--direct-resource-grants (permission-context)
@@ -578,7 +609,8 @@ PERMISSION-CONTEXT supplies the session execution target."
                 (append candidates
                         (plist-get (cdr rule) :file-system))))))
     (mevedel-tool-exec-permission--merge-additional-profiles
-     (mevedel-tool-exec-permission--additional-profile network candidates))))
+     (mevedel-tool-exec-permission--additional-profile
+      network (mevedel-permission-origin-usable-grants candidates)))))
 
 (defun mevedel-tool-exec-permission-effective-sandbox-request
     (args tool-name operation &optional eval-mode permission-context)
@@ -617,12 +649,19 @@ remembered direct user authority."
                   (plist-put profile :file-system
                              (mapcar
                               (lambda (grant)
-                                (if (and (file-directory-p (plist-get grant :path))
-                                         (mevedel-execution-grants-covering-grant
-                                          (plist-get grant :path) (plist-get grant :access)
-                                          authority t target))
-                                    (plist-put (copy-sequence grant) :recursive t)
-                                  grant))
+                                (let* ((path (plist-get grant :path))
+                                       (access (plist-get grant :access))
+                                       (tree (and (file-directory-p path)
+                                                  (mevedel-execution-grants-covering-grant
+                                                   path access authority t target)))
+                                       (cover (or tree (mevedel-execution-grants-covering-grant
+                                                        path access authority
+                                                        (plist-get grant :recursive) target))))
+                                  (if cover
+                                      (mevedel-permission-origin-derive
+                                       cover path access (or (and tree t)
+                                                             (plist-get grant :recursive)))
+                                    grant)))
                               (plist-get profile :file-system))))))
         (if profile
             (let ((copy (copy-sequence request)))
@@ -666,20 +705,25 @@ remembered direct user authority."
          granted-grants
          (deny-via (and (eq network-action 'deny) 'sandbox-network)))
     (dolist (grant (plist-get requested :file-system))
-      (let ((action
+      (let* ((action
              (mevedel-tool-exec-permission--filesystem-resource-rule-action
-              tool-name grant permission-context)))
+              tool-name grant permission-context))
+             (cover
+              (and (not (memq action '(deny ask)))
+                   (mevedel-execution-grants-covering-grant
+                    (plist-get grant :path) (plist-get grant :access) grants
+                    (plist-get grant :recursive)
+                    (and (plist-get permission-context :session)
+                         (mevedel-session-execution-target
+                          (plist-get permission-context :session)))))))
         (cond
          ((eq action 'deny)
           (setq deny-via 'sandbox-filesystem))
-         ((and (not (eq action 'ask))
-               (mevedel-execution-grants-covering-grant
-                (plist-get grant :path) (plist-get grant :access) grants
-                (plist-get grant :recursive)
-                (and (plist-get permission-context :session)
-                     (mevedel-session-execution-target
-                      (plist-get permission-context :session)))))
-          (push grant granted-grants))
+         (cover
+          (push (mevedel-permission-origin-derive
+                 cover (plist-get grant :path) (plist-get grant :access)
+                 (plist-get grant :recursive))
+                granted-grants))
          (t (push grant missing-grants)))))
     (list
      :requested requested
@@ -787,7 +831,8 @@ OPERATION-PATTERN is the exact Bash command or Eval expression."
            outcome tool-name session workspace path
            :spec-key :path :spec-value path
            :resource-access access
-           :resource-recursive (plist-get grant :recursive)))))))
+           :resource-recursive (plist-get grant :recursive)
+           :resource-origin (plist-get grant :workspace-origin)))))))
 
 (defun mevedel-tool-exec-permission--log-additional-authority
     (tool-name state permission-context metadata-p)
@@ -1033,7 +1078,7 @@ once with the applied prompt result."
           (equal mode "live"))
       'live)
      ((equal mode "batch") 'batch)
-     (t (error "Unknown Eval mode: %s" mode)))))
+     (t (mevedel-tool-exec-permission--policy-error "Unknown Eval mode: %s" mode)))))
 
 (defun mevedel-tool-exec-permission-eval-preserve-ui-p (args)
   "Return non-nil when ARGS request restoring window state."
@@ -1167,11 +1212,8 @@ stays exact to avoid broad negative rules from a single rejection."
          (mevedel-tool-exec-permission--normalize-prompt-result
           outcome
           (lambda (stored-outcome)
-            (condition-case err
-                (mevedel-tool-exec-permission--apply-bash-prompt-result
-                 stored-outcome session workspace command allow-patterns)
-              (error
-               (format "Error: Bash rule write failed: %S" err))))
+            (mevedel-tool-exec-permission--apply-bash-prompt-result
+             stored-outcome session workspace command allow-patterns))
           "Command cancelled by user. Feedback: ")))
     (mevedel-tool-exec-permission--permission-decision-result
      metadata-p result 'bash-classifier
@@ -1339,13 +1381,18 @@ describe the complete authority needed at settlement."
        :outcome)))))
 
 (defun mevedel-tool-exec-permission--authorize-async
-    (tool-name detail input request cont)
+    (tool-name detail input request cont guard)
   "Authorize TOOL-NAME's DETAIL for REQUEST and call CONT once.
 INPUT supplies permission context, delegated trust, and metadata mode.
+GUARD protects callbacks that resume authorization after an approval.
 `mevedel-tool-exec-permission--decide' names what still stands in the way;
 this loop settles one need at a time through the shared approval boundary,
 then decides again until the invocation is allowed or denied."
-  (let* ((input (mevedel-tool-exec-permission--command-permission-input
+  (let* ((input (plist-put (copy-sequence input) :permission-context
+                           (plist-put (copy-sequence
+                                       (plist-get input :permission-context))
+                                      :async-guard guard)))
+         (input (mevedel-tool-exec-permission--command-permission-input
                  input request))
          (permission-context (plist-get input :permission-context))
          (metadata-p (plist-get input :permission-decision-metadata))
@@ -1369,195 +1416,199 @@ then decides again until the invocation is allowed or denied."
                 :specifier-value detail))
          settled operation-logged operation-result)
     (cl-labels
-        ((record (outcome via &rest props)
-           (when metadata-p
-             (apply #'mevedel-tool-exec-permission--log-permission-decision
-                    tool-name outcome via permission-context props)))
-         (result (outcome via &rest props)
-           (apply #'mevedel-tool-exec-permission--permission-decision-result
-                  metadata-p outcome via props))
-         (finish-allow (state &optional approval)
-           (when (plist-get request :additional-permissions)
-             (mevedel-tool-exec-permission--apply-remembered-authority
-              (or approval (car (plist-get request :approval-cell)))
-              tool-name request session workspace)
-             (mevedel-tool-exec-permission--log-additional-authority
-              tool-name state permission-context metadata-p))
-           (funcall cont (or operation-result
-                             (apply #'result 'allow operation-via
-                                    specifier-props))))
-         (after-operation (outcome)
-           (if (mevedel-tool-exec-permission--permission-allow-p outcome)
-               (progn
-                 (setq settled (plist-put settled :operation t)
-                       operation-result outcome)
-                 (step))
-             (funcall cont outcome)))
-         (step ()
-           (when session
-             (setq permission-context
-                   (plist-put permission-context :mode
-                              (mevedel-permission-mode-for-context permission-context))))
-           (let* ((decision (mevedel-tool-exec-permission--decide
-                             tool-name detail request permission-context
-                             settled))
-                  (outcome (plist-get decision :outcome))
-                  (via (plist-get decision :via))
-                  (needs (plist-get decision :needs))
-                  (operation (plist-get decision :operation)))
-             ;; Record the classifier's own allow once, before anything the
-             ;; operation still depends on is resolved.
-             (when (and (not escalation-p)
-                        (not operation-logged)
-                        (not (plist-get settled :operation))
-                        (eq (plist-get operation :outcome) 'allow))
-               (setq operation-logged t)
-               (apply #'record 'allow operation-via specifier-props))
-             (cond
-              ((eq outcome 'deny)
-               (pcase via
-                 ((or 'sandbox-network 'sandbox-filesystem)
-                  (funcall cont (mevedel-tool-exec-permission--additional-denial
-                                 metadata-p via)))
-                 ('sandbox-full-escalation
-                  (apply #'record 'deny via escalation-props)
-                  (funcall cont (mevedel-tool-exec-permission--full-escalation-denial
-                                 metadata-p)))
-                 (_
-                  (let ((props (if escalation-p escalation-props specifier-props))
-                        (via (if escalation-p via operation-via)))
-                    (apply #'record 'deny via props)
-                    (funcall cont (apply #'result 'deny via props))))))
-              ((eq needs 'operation)
-               (cond
-                (trust-literal-p
-                 (let ((denial
-                        (cons 'deny
-                              (if bash-p
-                                  "Shell expansion requires a pre-approved Bash rule; no prompt is shown while preparing skill bodies."
-                                "Elisp expansion requires a pre-approved Eval rule; no prompt is shown while preparing skill bodies."))))
-                   (apply #'record denial operation-via specifier-props)
-                   (funcall cont (apply #'result denial operation-via
-                                        specifier-props))))
-                (bash-p
-                 (mevedel-tool-exec-permission--bash-operation-prompt-async
-                  detail input via #'after-operation))
-                (t
-                 (mevedel-tool-exec-permission--eval-operation-prompt-async
-                  detail input (mevedel-tool-exec-permission-eval-mode input)
-                  via #'after-operation))))
-              ((and trust-literal-p escalation-p)
-               (funcall cont
-                        (result (cons 'deny "Delegated expansion cannot request full execution escalation")
-                                'sandbox-policy :sandbox-permissions level)))
-              ((and trust-literal-p (eq (plist-get request :level) 'additive))
-               (funcall cont
-                        (result (cons 'deny "Delegated expansion cannot request additional sandbox authority")
-                                'sandbox-policy)))
-              ((eq outcome 'allow)
-               (if escalation-p
-                   (progn
-                     (apply #'record 'allow via escalation-props)
-                     (funcall cont (apply #'result 'allow via escalation-props)))
-                 (finish-allow (plist-get decision :state))))
-              ((eq needs 'resources)
-               (funcall
-                cont
-                (result
-                 (cons 'deny
-                       (format
-                        (concat
-                         "Filesystem authority required for Bash resource: %s. "
-                         "Retry with sandbox_permissions=\"with_additional_permissions\" "
-                         "and additional_permissions.file_system.read containing "
-                         "the exact absolute path.")
-                        (mapconcat #'identity (plist-get decision :paths) ", ")))
-                 'workspace-boundary)))
-              ((eq needs 'capabilities)
-               (mevedel-tool-exec-permission--capabilities-prompt-async
-                tool-name detail input request (plist-get decision :state)
-                (lambda (outcome)
-                  (if (memq outcome '(allow allow-once allow-session always-allow))
-                      (finish-allow (plist-get decision :state) outcome)
-                    (funcall cont outcome)))))
-              (t
-               (mevedel-tool-exec-permission--escalation-prompt-async
-                tool-name detail input request via cont))))))
-      (step))))
+     ((record (outcome via &rest props)
+        (when metadata-p
+          (apply #'mevedel-tool-exec-permission--log-permission-decision
+                 tool-name outcome via permission-context props)))
+      (result (outcome via &rest props)
+        (apply #'mevedel-tool-exec-permission--permission-decision-result
+               metadata-p outcome via props))
+      (finish-allow (state &optional approval)
+        (when (plist-get request :additional-permissions)
+          (mevedel-tool-exec-permission--apply-remembered-authority
+           (or approval (car (plist-get request :approval-cell)))
+           tool-name request session workspace)
+          (mevedel-tool-exec-permission--log-additional-authority
+           tool-name state permission-context metadata-p))
+        (funcall cont (or operation-result
+                          (apply #'result 'allow operation-via
+                                 specifier-props))))
+      (after-operation (outcome)
+        (if (mevedel-tool-exec-permission--permission-allow-p outcome)
+            (progn
+              (setq settled (plist-put settled :operation t)
+                    operation-result outcome)
+              (step))
+          (funcall cont outcome)))
+      (step ()
+        (when session
+          (setq permission-context
+                (plist-put permission-context :mode
+                           (mevedel-permission-mode-for-context permission-context))))
+        (let* ((decision (mevedel-tool-exec-permission--decide
+                          tool-name detail request permission-context
+                          settled))
+               (outcome (plist-get decision :outcome))
+               (via (plist-get decision :via))
+               (needs (plist-get decision :needs))
+               (operation (plist-get decision :operation)))
+          ;; Record the classifier's own allow once, before anything the
+          ;; operation still depends on is resolved.
+          (when (and (not escalation-p)
+                     (not operation-logged)
+                     (not (plist-get settled :operation))
+                     (eq (plist-get operation :outcome) 'allow))
+            (setq operation-logged t)
+            (apply #'record 'allow operation-via specifier-props))
+          (cond
+           ((eq outcome 'deny)
+            (pcase via
+              ((or 'sandbox-network 'sandbox-filesystem)
+               (funcall cont (mevedel-tool-exec-permission--additional-denial
+                              metadata-p via)))
+              ('sandbox-full-escalation
+               (apply #'record 'deny via escalation-props)
+               (funcall cont (mevedel-tool-exec-permission--full-escalation-denial
+                              metadata-p)))
+              (_
+               (let ((props (if escalation-p escalation-props specifier-props))
+                     (via (if escalation-p via operation-via)))
+                 (apply #'record 'deny via props)
+                 (funcall cont (apply #'result 'deny via props))))))
+           ((eq needs 'operation)
+            (cond
+             (trust-literal-p
+              (let ((denial
+                     (cons 'deny
+                           (if bash-p
+                               "Shell expansion requires a pre-approved Bash rule; no prompt is shown while preparing skill bodies."
+                             "Elisp expansion requires a pre-approved Eval rule; no prompt is shown while preparing skill bodies."))))
+                (apply #'record denial operation-via specifier-props)
+                (funcall cont (apply #'result denial operation-via
+                                     specifier-props))))
+             (bash-p
+              (mevedel-tool-exec-permission--bash-operation-prompt-async
+               detail input via (funcall guard #'after-operation)))
+             (t
+              (mevedel-tool-exec-permission--eval-operation-prompt-async
+               detail input (mevedel-tool-exec-permission-eval-mode input)
+               via (funcall guard #'after-operation)))))
+           ((and trust-literal-p escalation-p)
+            (funcall cont
+                     (result (cons 'deny "Delegated expansion cannot request full execution escalation")
+                             'sandbox-policy :sandbox-permissions level)))
+           ((and trust-literal-p (eq (plist-get request :level) 'additive))
+            (funcall cont
+                     (result (cons 'deny "Delegated expansion cannot request additional sandbox authority")
+                             'sandbox-policy)))
+           ((eq outcome 'allow)
+            (if escalation-p
+                (progn
+                  (apply #'record 'allow via escalation-props)
+                  (funcall cont (apply #'result 'allow via escalation-props)))
+              (finish-allow (plist-get decision :state))))
+           ((eq needs 'resources)
+            (funcall
+             cont
+             (result
+              (cons 'deny
+                    (format
+                     (concat
+                      "Filesystem authority required for Bash resource: %s. "
+                      "Retry with sandbox_permissions=\"with_additional_permissions\" "
+                      "and additional_permissions.file_system.read containing "
+                      "the exact absolute path.")
+                     (mapconcat #'identity (plist-get decision :paths) ", ")))
+              'workspace-boundary)))
+           ((eq needs 'capabilities)
+            (mevedel-tool-exec-permission--capabilities-prompt-async
+             tool-name detail input request (plist-get decision :state)
+             (funcall guard (lambda (outcome)
+			      (if (memq outcome '(allow allow-once allow-session always-allow))
+				  (finish-allow (plist-get decision :state) outcome)
+				(funcall cont outcome))))))
+           (t
+            (mevedel-tool-exec-permission--escalation-prompt-async
+             tool-name detail input request via cont))))))
+     (step))))
 
 (defun mevedel-tool-exec-permission-check-bash-async
     (_tool-struct input cont)
   "Authorize Bash INPUT, then layer any requested child authority.
 CONT follows the async permission slot contract."
-  (condition-case err
-      (let* ((input (mevedel-tool-exec-permission--capture-permission-origin input))
-             (command (plist-get input :command))
-             (permission-context (plist-get input :permission-context))
-             (request
-              (mevedel-tool-exec-permission--prepare-additional-authority-request
-               "Bash"
-               (mevedel-tool-exec-permission-effective-sandbox-request
-                input "Bash" command nil permission-context)
-               permission-context command)))
-        (if (null command)
-            (funcall cont nil)
-          (mevedel-tool-exec-permission--authorize-async
-           "Bash" command input request cont)))
-    (error
-     (funcall
-      cont
-      (mevedel-tool-exec-permission--permission-decision-result
-       (plist-get input :permission-decision-metadata)
-       (cons 'deny (error-message-string err)) 'sandbox-policy)))))
+  (mevedel-permission--run-async
+   (lambda (cont guard)
+     (let* ((input (mevedel-tool-exec-permission--capture-permission-origin input))
+            (command (plist-get input :command))
+            (permission-context (plist-get input :permission-context))
+            (request
+             (mevedel-tool-exec-permission--prepare-additional-authority-request
+              "Bash"
+              (mevedel-tool-exec-permission-effective-sandbox-request
+               input "Bash" command nil permission-context)
+              permission-context command)))
+       (if (null command)
+           (funcall cont nil)
+         (mevedel-tool-exec-permission--authorize-async
+          "Bash" command input request cont guard))))
+   (lambda (decision)
+     (funcall cont
+              (if (or (plist-get input :permission-decision-metadata)
+                      (and (mevedel-permission-decision-metadata-p decision)
+                           (eq (plist-get decision :outcome) 'internal-error)))
+                  decision
+                (mevedel-permission-decision-raw-outcome decision))))))
 
 (defun mevedel-tool-exec-permission-check-eval-async
     (_tool-struct input cont)
   "Authorize Eval INPUT, then layer any requested child authority.
 CONT follows the async permission slot contract."
-  (condition-case err
-      (let* ((input (mevedel-tool-exec-permission--capture-permission-origin input))
-             (mode (mevedel-tool-exec-permission-eval-mode input))
-             (expression (plist-get input :expression))
-             (permission-context (plist-get input :permission-context))
-             (metadata-p (plist-get input :permission-decision-metadata))
-             (session (or (plist-get permission-context :session)
-                          (mevedel-queue--current-session)))
-             (target (and session
-                          (mevedel-session-execution-target session))))
-        (cond
-         ((and (eq mode 'batch)
-               target
-               (mevedel-execution-target-remote-p target))
-          (funcall
-           cont
-           (mevedel-tool-exec-permission--permission-decision-result
-            metadata-p
-            (cons 'deny
-                  "Batch Eval is unavailable for remote sessions; use Live Eval or Bash on the execution target")
-            'eval-policy)))
-         (t
-          (let ((request
-                 (mevedel-tool-exec-permission--prepare-additional-authority-request
-                  "Eval"
-                  (mevedel-tool-exec-permission-effective-sandbox-request
-                   input "Eval" expression mode permission-context)
-                  permission-context expression)))
-            (if (null expression)
-                (progn
-                  (when metadata-p
-                    (mevedel-tool-exec-permission--log-permission-decision
-                     "Eval" 'deny 'eval-policy permission-context))
-                  (funcall cont
-                           (mevedel-tool-exec-permission--permission-decision-result
-                            metadata-p 'deny 'eval-policy)))
-              (mevedel-tool-exec-permission--authorize-async
-               "Eval" expression input request cont))))))
-    (error
-     (funcall
-      cont
-      (mevedel-tool-exec-permission--permission-decision-result
-       (plist-get input :permission-decision-metadata)
-       (cons 'deny (error-message-string err)) 'sandbox-policy)))))
+  (mevedel-permission--run-async
+   (lambda (cont guard)
+     (let* ((input (mevedel-tool-exec-permission--capture-permission-origin input))
+            (mode (mevedel-tool-exec-permission-eval-mode input))
+            (expression (plist-get input :expression))
+            (permission-context (plist-get input :permission-context))
+            (metadata-p (plist-get input :permission-decision-metadata))
+            (session (or (plist-get permission-context :session)
+                         (mevedel-queue--current-session)))
+            (target (and session
+                         (mevedel-session-execution-target session))))
+       (cond
+        ((and (eq mode 'batch)
+              target
+              (mevedel-execution-target-remote-p target))
+         (funcall
+          cont
+          (mevedel-tool-exec-permission--permission-decision-result
+           metadata-p
+           (cons 'deny
+                 "Batch Eval is unavailable for remote sessions; use Live Eval or Bash on the execution target")
+           'eval-policy)))
+        (t
+         (let ((request
+                (mevedel-tool-exec-permission--prepare-additional-authority-request
+                 "Eval"
+                 (mevedel-tool-exec-permission-effective-sandbox-request
+                  input "Eval" expression mode permission-context)
+                 permission-context expression)))
+           (if (null expression)
+               (progn
+                 (when metadata-p
+                   (mevedel-tool-exec-permission--log-permission-decision
+                    "Eval" 'deny 'eval-policy permission-context))
+                 (funcall cont
+                          (mevedel-tool-exec-permission--permission-decision-result
+                           metadata-p 'deny 'eval-policy)))
+             (mevedel-tool-exec-permission--authorize-async
+              "Eval" expression input request cont guard)))))))
+   (lambda (decision)
+     (funcall cont
+              (if (or (plist-get input :permission-decision-metadata)
+                      (and (mevedel-permission-decision-metadata-p decision)
+                           (eq (plist-get decision :outcome) 'internal-error)))
+                  decision
+                (mevedel-permission-decision-raw-outcome decision))))))
 
 (provide 'mevedel-tool-exec-permission)
 

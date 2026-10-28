@@ -95,6 +95,10 @@ the base read-only filesystem already allows them."
              (lambda (grant)
                (let ((path (plist-get grant :path))
                      (access (plist-get grant :access)))
+                 (unless (mevedel-permission-origin-valid-p grant)
+                   (signal 'mevedel-sandbox-policy-error
+                           (list (format "Workspace-relative filesystem grant is no longer contained: %S"
+                                         path))))
                  (unless (and (stringp path)
                               (file-name-absolute-p path)
                               (file-exists-p path))
@@ -121,6 +125,12 @@ the base read-only filesystem already allows them."
                            (plist-put resolved :symlinks
                                       (mevedel-sandbox--symlink-chain path)))
                      (setq resolved (plist-put resolved :identity identity))
+                     ;; Resolution may yield to another writer.  Do not accept
+                     ;; a new outside snapshot captured after the first check.
+                     (unless (mevedel-permission-origin-valid-p grant canonical)
+                       (signal 'mevedel-sandbox-policy-error
+                               (list (format "Workspace-relative filesystem grant changed during resolution: %S"
+                                             path))))
                      (plist-put resolved :path canonical)))))
              (cl-remove-if
               (lambda (grant)

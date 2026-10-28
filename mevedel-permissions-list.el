@@ -43,7 +43,7 @@
                   "mevedel-permission-persistence" (workspace scope))
 (declare-function mevedel-permission-remove-persistent-resource-grant
                   "mevedel-permission-persistence"
-                  (workspace scope path access &optional recursive))
+                  (workspace scope path access &optional recursive origin))
 (declare-function mevedel-permission-remove-persistent-rule
                   "mevedel-permission-persistence" (workspace scope rule))
 (declare-function mevedel-permission-validate-persistent-stores
@@ -91,7 +91,10 @@
 (defun mevedel-permissions-list--grant-spec (grant)
   "Return GRANT's path with its exact or recursive extent."
   (let ((path (plist-get grant :path)))
-    (concat (if (stringp path) (abbreviate-file-name path) (format "%S" path))
+    (concat (if-let* ((origin (plist-get grant :workspace-origin)))
+                (format "%s [root %s]" (plist-get origin :relative)
+                        (abbreviate-file-name (plist-get origin :root)))
+              (if (stringp path) (abbreviate-file-name path) (format "%S" path)))
             (if (plist-get grant :recursive) " (recursive)" " (exact)"))))
 
 (defun mevedel-permissions-list--rule-item (scope rule)
@@ -245,7 +248,7 @@ An execution profile's remembered child grants follow the pattern."
        (mevedel-cockpit-call-in-data
         context #'mevedel-permission-remove-persistent-resource-grant
         workspace scope (plist-get value :path) (plist-get value :access)
-        (plist-get value :recursive))))
+        (plist-get value :recursive) (plist-get value :workspace-origin))))
     (mevedel-cockpit-surface-refresh)
     (message "mevedel: revoked %s" label)))
 

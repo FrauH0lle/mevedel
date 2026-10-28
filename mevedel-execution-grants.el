@@ -9,6 +9,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-execution-target)
+(require 'mevedel-permission-origin)
 (require 'mevedel-permission-rules)
 (require 'subr-x)
 
@@ -64,7 +65,8 @@ require already approved recursive authority, not an exact directory grant."
                         (or (eq access 'write) boundaries)))))
     (cl-find-if
      (lambda (grant)
-       (and (mevedel-permission-rules-resource-granted-p path access (list grant) tree)
+       (and (mevedel-permission-origin-valid-p grant path)
+            (mevedel-permission-rules-resource-granted-p path access (list grant) tree)
             (let ((root (directory-file-name (file-truename (plist-get grant :path))))
                   (source (directory-file-name (expand-file-name (plist-get grant :path)))))
               (and (mevedel-permission-rules-path-in-allowed-roots-p canonical (list root))

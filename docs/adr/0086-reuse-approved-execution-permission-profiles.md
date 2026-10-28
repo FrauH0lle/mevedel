@@ -37,6 +37,34 @@ selection of independent access. A selected path is stored in only one scope.
 Disabling command remembering clears command-scoped paths and network authority
 without converting them to independent grants.
 
+Workspace-persistent profiles and independent resource grants may use literal
+workspace-relative exact paths, bare or prefixed with `./`; `.` or `./` names
+the workspace root. Absolute/home-relative paths, global and session exact-path
+syntax, and tool `:path` globs retain their existing semantics. Relative grants
+carry a private runtime `:workspace-origin` record binding the store-owning
+canonical, target-qualified workspace root and relative spelling. Only marked
+entries write back as `./…`. Empty paths, any `..` component, foreign target or
+resource prefixes, and symlink components below that root are rejected.
+
+Bounded and ordinary absolute entries at the same path remain separate grant
+identities through union, remembering, promotion, revocation, and cockpit
+selection. Coverage transfers the authorizing grant's bound to the effective
+launch grant instead of leaving an unrestricted requested-path copy. Workspace
+remembering creates no redundant bounded session copy, and immediate queued
+rechecks use the updated persistent store. Frozen authority retains origin;
+permission files and durable session authority do not serialize it. A changed
+child or worktree cwd never re-anchors the source store's grants. External
+linked-worktree metadata still requires separate authority.
+
+Usability and containment checks precede pure matching. Native consumption
+rechecks the authorized canonical path without promising atomicity against
+concurrent filesystem replacement. Sandbox preparation rechecks the bound
+before canonical-path and inode capture; later replacement uses the existing
+descriptor-pinned launch seam. A malformed entry rejects its entire store with
+one precise warning per file version, not a partially usable profile.
+Transient filesystem ineligibility instead removes only the unusable grant
+from runtime authority; it does not erase configuration or unrelated denies.
+
 Target replacement strips filesystem entries from session profiles and invalidated
 frozen authority alongside session resource grants. It preserves command and
 network approvals and does not rewrite durable workspace/global configuration.
@@ -229,3 +257,21 @@ itself. Preparation is idempotent, so fallback shows the reviewed scope. Hooks
 keep the original request. A real confined Git fixture verifies one reviewed
 invocation staging through the prepared metadata tree, while a nested
 repository's metadata stays unwritable and no grant persists.
+
+### Preserve workspace-relative profile origin
+
+The October 2026 portable-grant change extends workspace-store I/O rather than
+making every exact path relative. A relative entry expanded into an ordinary
+absolute grant would lose its containment intent when profile union or coverage
+reused it. Copying that authority into session rules would also outlive a
+workspace-store revocation and discard the source needed for correct writeback.
+
+Profiles and independent grants therefore retain runtime origin through reuse,
+frozen snapshots, and launch preparation, and workspace remembering relies on
+the persistent store rather than installing redundant bounded session copies.
+Absolute and relative grants remain separate identities even at the same path.
+The durable format stores only relative spelling, never private origin records;
+session resume reloads persistent-derived authority. See
+[ADR 0096](0096-bind-each-session-to-one-execution-target.md) for store anchoring
+and target ownership. These bounds supplement the existing descriptor-pinned
+sandbox seam; they do not promise atomic native filesystem operations.

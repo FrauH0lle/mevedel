@@ -85,6 +85,9 @@ reads.
 
 Hook integration sits around this chain:
 
+Unexpected analyzer or checker errors stop the pipeline as errors, without
+running `PermissionRequest` or `PermissionDenied`; they are not policy denials.
+
 - `PreToolUse` runs before the chain. A hook `deny` is final. A hook
   `ask` can tighten an allow into a prompt in Ask or Edits. A hook `allow` can only skip
   a prompt when the normal resolver would have returned `ask`; explicit
@@ -228,9 +231,10 @@ Compound commands keep generalized operation rules for their segments but
 store the profile against the complete compound command, preventing one
 segment from inheriting another segment's capability.
 Filesystem entries are `(:path PATH :access read-or-write [:recursive t])`
-grants. `PATH` is either absolute or home-relative with `~`/`~/`; stored
-home-relative paths expand in the execution target. Grant paths are literal —
-`*`, `**`, and `?` carry no glob meaning; `:recursive t` extends an entry from
+grants. `PATH` is absolute or home-relative with `~`/`~/`; the workspace
+permission file also accepts workspace-relative exact paths as described below.
+Stored home-relative paths expand in the execution target. Grant paths are
+literal — `*`, `**`, and `?` carry no glob meaning; `:recursive t` extends an entry from
 the exact path to the directory and all its descendants, present and future.
 Project and session stores
 encode exact paths and absolute path rules without a client-specific TRAMP
@@ -241,8 +245,9 @@ access for matching executions. They need no companion `:resource-grants` entry
 and do not grant native tools or unrelated commands access. Independent resource
 grants remain sufficient for explicitly requested access, but are not
 automatically attached to every child. Multiple matching profiles
-are unioned, with write dominating read for the same path and scope; exact and
-recursive entries on the same path stay distinct. Only session, persistent,
+are unioned, with write dominating read for the same path, scope, and origin;
+exact and recursive entries on the same path stay distinct, as do bounded
+workspace-relative and ordinary absolute entries. Only session, persistent,
 and defcustom rules can contribute a reusable profile. Invocation- and
 request-scoped delegated rules may still authorize ordinary operations but
 never broaden the child sandbox.
@@ -344,9 +349,9 @@ The current invocation always receives the complete approved request.
 `.mevedel/permissions.el` stores a plist containing both `:rules` and
 `:resource-grants`. It lives with the project on its execution target and stores
 target-native paths, so reopening the same workspace through an equivalent
-TRAMP alias reuses its authority. Paths under the target's home directory are
-written abbreviated as `~/...` and expanded against the current target at
-load, so the file can be committed and shared between machines whose home
+TRAMP alias reuses its authority. Ordinary absolute paths under the target's
+home directory are written abbreviated as `~/...` and expanded against the
+current target at load, so the file can be committed and shared between machines whose home
 directories differ. A target-incarnation change never rewrites this file; only
 session filesystem grants, including paths embedded in command profiles, are
 revoked. Command and network approvals survive; invalidated frozen filesystem
@@ -366,6 +371,58 @@ the execution target, including `~` and filesystem requirements in command
 profiles. Durable files use native paths, without client-specific TRAMP prefixes.
 Local `mevedel-user-dir` customization does not relocate remote stores.
 
+### Workspace-relative exact grants
+
+Only the workspace permission file accepts relative exact grant paths, in both
+independent `:resource-grants` and command-profile `:file-system` entries. Bare
+`.git` and explicit `./.git` name the same workspace entry; `.` or `./` names
+the workspace root. Empty paths, any `..` component, and foreign target or
+resource-address prefixes are invalid. These are literal paths, not globs;
+optional `:recursive t` retains its ordinary directory-tree extent. Global and
+session exact-path syntax, absolute and home-relative grants, and tool `:path`
+glob rules are unchanged.
+
+Loading captures the store-owning workspace's canonical, target-qualified root
+and the relative spelling in a private runtime `:workspace-origin` record. The
+base is neither `.mevedel/` nor the current agent or child working directory.
+The workspace root itself is canonicalized; no symlink component below that
+captured root is permitted for relative authority, even if the link currently
+points inside the workspace. Missing paths remain bounded by the same root and
+component checks. Authority is checked for usability before pure permission
+matching, rather than treating a lexical prefix as proof of containment.
+Filesystem ineligibility does not make a syntactically valid store malformed:
+unusable entries remain available for editing and revocation, and unrelated
+rules (including denies) remain effective.
+
+Only origin-marked grants are written back as `./…` (`./` for the root).
+Existing absolute and home-relative entries are not inferred to be relative
+merely because they happen to lie inside the workspace. The private origin
+record is never written into a permission file or durable session authority;
+resume reloads it from the workspace store. Bounded and ordinary absolute
+grants remain distinct through deduplication, profile union, remembering,
+promotion, revocation, and cockpit selection. Promoting a bounded entry does
+not silently remove its bound or convert it into ordinary session authority.
+Workspace remembering does not create redundant bounded session copies;
+immediate queued rechecks see the updated persistent store.
+
+Coverage retains origin as well as access and extent. When a covering relative
+grant authorizes a requested path, the effective launch grant receives that
+bound instead of keeping an unrestricted copy of the request. Frozen authority
+snapshots retain the origin record. A child or fork using another worktree as
+cwd does not re-anchor grants from the source workspace store. Linked-worktree
+metadata outside the captured root needs separately authorized access; `./.git`
+does not grant its external Git directory or `commondir` target.
+
+Native consumption rechecks the authorized canonical path. This retains the
+existing native-operation concurrency boundary: it is not an OS-wide atomic
+guarantee against a concurrent filesystem replacement between checking and
+use. Confined launch rechecks the bound before canonical-path and inode capture,
+then uses the existing descriptor-pinned launch validation for later replacement.
+Relative grants do not introduce a second sandbox launcher or weaken its
+replacement checks.
+
+### Store validation and refresh
+
 A remote session does not inherit the client's global file, even if its target
 global file is missing or unavailable. Global authority is read at runtime,
 not copied into a project or portable session. Store replacement is atomic
@@ -374,8 +431,11 @@ fails closed before any linked target is changed.
 
 Global and project stores are validated when a fresh, resumed, or forked
 session initializes. Invalid files contribute no authority and produce one
-actionable warning per file version. Persistent permission changes refuse to
-overwrite an invalid file; fix it to the current
+actionable warning per file version. A malformed grant rejects the whole file,
+not just that entry. Grant diagnostics identify the store scope, rule/tool (or
+independent resource-grant section), grant index, rejected path, and reason, so
+the offending authority can be repaired without guessing. Persistent permission
+changes refuse to overwrite an invalid file; fix it to the current
 `(:rules (...) :resource-grants (...))` shape first. Missing files are valid
 empty stores.
 
@@ -401,13 +461,15 @@ writes. An exact grant does not cover siblings or descendants; a grant carrying
 `:recursive t` covers the directory and everything beneath it, present and
 future. Prompts and the cockpit label every grant `(exact)` or `(recursive)`,
 and a remembered execution profile's row lists its child grants after the
-pattern. Neither kind
-adds workspace roots or authorizes Bash/Eval code. Revoking the grant restores
-the underlying
-workspace/protected-path restriction unless another entry still grants access.
-Session-side paths use the same target-native codec as persistent authority;
-resume reloads the target's global and project stores. Invocation-only authority is consumed
-by the approved call and is not stored.
+pattern. Workspace-relative entries retain their origin in cockpit identity,
+so revoking one cannot accidentally remove an ordinary absolute entry at the
+same resolved path. Resource grants neither add workspace roots nor authorize
+Bash/Eval code. Revoking the grant restores the underlying workspace/protected-path
+restriction unless another entry still grants access. Session-side absolute and
+home-relative paths use the same target-native codec as persistent authority;
+relative syntax remains workspace-store-only. Resume reloads the target's
+global and project stores. Invocation-only authority is consumed by the approved
+call and is not stored.
 
 The permissions cockpit shows `session`, `workspace`, and `global` entries,
 including their backing store in the details. Refresh reads current stores.
@@ -470,9 +532,11 @@ tasks, Goals, skills, introspection tools, deferred tools, and arbitrary
 MCP tool schemas are absent.
 
 The side freezes session, workspace-persistent, global-rule, protected-path,
-sandbox, and additional-root authority at creation; later configuration changes
-cannot broaden or narrow it. Mutation approval warns when the parent request is
-still active because both requests affect the same workspace. The side owns a
+sandbox, and additional-root authority at creation, including relative grants'
+runtime origins; later configuration changes cannot broaden or narrow it.
+Freezing authority does not waive relative-path containment and usability checks.
+Mutation approval warns when the parent request is still active because both
+requests affect the same workspace. The side owns a
 separate permission queue and execution state, while allowlisted redacted audit
 events are attributed to `/btw` and written through the durable parent session.
 Side prompts, command text, paths, patch contents, results, and justifications
@@ -872,8 +936,10 @@ code; they do not add model-facing escalation arguments or another permission
 prompt. Live Emacs operations, long-lived language servers, hooks, and
 user-triggered Git, clipboard, and UI helpers are not external tool helpers.
 
-An exact filesystem grant may name a symlink. The launcher opens the granted
-path but mounts its canonical target, leaving the requested command and symlink
+An ordinary absolute or home-relative exact filesystem grant may name a
+symlink; workspace-relative authority rejects symlink components below its
+captured canonical root. The launcher opens the granted path but mounts its
+canonical target, leaving the requested command and symlink
 chain unchanged while avoiding Bubblewrap mounts onto symlink entries. Before
 Bubblewrap starts, the target-side launcher compares the device/inode identity
 of each already-open descriptor with the identity captured during grant
@@ -941,6 +1007,8 @@ changing any unrequested confinement boundary.
 
 Protected linked-worktree `.git` pointers resolve both the worktree metadata
 directory and its `commondir` target. Both retain the applicable protection.
+Workspace-relative grants cannot follow a pointer into metadata outside their
+captured root; those locations need separate authority.
 Failed confined results identify the discovered shared metadata location for
 objects and refs; this is repository-layout information, not a diagnosis
 inferred from stderr or an automatic grant. A new explicit invocation can
@@ -1136,7 +1204,9 @@ not this shared authority. The pipeline captures its conversation directory for
 file tools and execution; Bash resource analysis uses that captured directory
 even when the root session has a different cwd. Path rules match the resolved
 absolute target with their existing glob semantics; a directory selection does
-not rewrite or re-anchor shared rules. Sandbox writable roots are still derived
+not rewrite or re-anchor shared rules. Workspace-relative persistent grants
+remain anchored to their store-owning workspace, not that conversation cwd.
+Sandbox writable roots are still derived
 from session policy, never enlarged merely because an external Git worktree was
 selected. Native operations outside allowed roots need ordinary resource
 authority. Confined execution additionally retains the requirement that cwd
@@ -1205,6 +1275,23 @@ and writes within npm's cache directory is:
    :action allow))
  :resource-grants nil)
 ```
+
+For workspace-relative authority, the workspace store can instead contain:
+
+```elisp
+(:rules
+ (("Bash" :pattern "git add *"
+   :file-system ((:path "./.git" :access write :recursive t))
+   :action allow))
+ :resource-grants ((:path "./notes.txt" :access read)))
+```
+
+The profile grants this command access to the checkout's `.git` tree; it does
+not independently authorize native writes. The separate read grant covers only
+`notes.txt`. Both paths bind to the workspace owning this file, even when the
+requesting agent works elsewhere. For a linked worktree, external metadata
+needs separate grants; `./.git` alone is insufficient. Neither entry can be
+copied as relative syntax into a global or session store.
 
 A `:recursive t` entry grants a whole directory tree — here read access to
 the system Emacs installation for one Bash command. Its profile exposes the

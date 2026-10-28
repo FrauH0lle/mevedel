@@ -67,6 +67,7 @@ Data model
   mevedel-plan-handoff.el     durable accepted-plan preparation and kickoff
   mevedel-permission-mode.el  mode normalization, effective request/invocation projection, session transitions
   mevedel-permission-rules.el rule parsing, matching, buckets, resource grants
+  mevedel-permission-origin.el workspace-relative grant origin, containment and usable-authority projection
   mevedel-permission-persistence.el target-aware authority store codec
   mevedel-permissions.el      permission preflight and 8-step decision facade
   mevedel-tool-permission.el permission-step orchestration, hooks, prompts, logging

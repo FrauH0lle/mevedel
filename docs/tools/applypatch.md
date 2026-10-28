@@ -26,6 +26,11 @@ An Update may contain multiple `@@` hunks, ordered top-to-bottom. Include enough
 unchanged context to locate each change uniquely; three lines on either side
 are often sufficient. Adjacent hunks should not repeat overlapping context.
 
+Context and removal lines must contain **whole file lines**, not a prefix,
+suffix, or middle fragment. For a long line, read and copy the complete line;
+follow Read's character continuation if it was truncated. The whitespace and
+punctuation tolerances below do not enable substring editing.
+
 When context matches multiple locations, enlarge the hunk or add one anchor:
 
 - `@@ N` uses the line number of the hunk's first line in the most recent Read.
@@ -33,6 +38,7 @@ When context matches multiple locations, enlarge the hunk or add one anchor:
   reject an otherwise unique match and cannot force a content mismatch.
 - `@@ context anchor` names a line above the hunk, or a prefix of that line,
   such as an enclosing definition. The hunk starts below the anchor.
+  It does not let you replace part of the anchor line itself.
 
 ```text
 ApplyPatch(patch="*** Begin Patch
@@ -89,3 +95,17 @@ buffer edits produces an error rather than a guessed edit. Inspect current
 contents and correct the cause. Do not replay a user-rejected proposal unless
 their feedback asks for revision. A proposal is not evidence of application;
 use the tool's settled result and inspect the resulting change when needed.
+
+Mismatch diagnostics identify the operation and hunk. A **patch line** counts
+from `*** Begin Patch` and identifies the hunk's `@@` marker, or its first
+content line when there is no marker; it is not a file line. A **file line**
+hint refers to the original file before any proposed changes. When an unmatched
+context/removal line is a substring of exactly one file line, the error names
+that candidate and suggests a Read. The excerpt is shortened and escaped;
+neither the excerpt nor the candidate hint changes matching. Multiple candidates,
+sequence failures, and missing anchors do not produce a guessed file location.
+
+A matching failure rejects the entire proposal **before applying any operation**.
+Correct it and resend all operations still intended, or split the complete change
+into separate calls. Sending only the failing operation does not apply the other
+operations from the rejected proposal.

@@ -2786,7 +2786,7 @@ default Bash keeps bare dot inspection automatic"
      (equal '(("Bash" :pattern "make *" :action allow)
               ("Bash" :pattern "rm build" :action deny))
             (mevedel-session-permission-rules session))))
-  :doc "contains Bash rule-write failures in the permission result"
+  :doc "propagates Bash rule-write failures to the guarded permission boundary"
   (let* ((root (make-temp-file "mevedel-bash-prompt-" t))
          (workspace
           (mevedel-workspace--create
@@ -2797,11 +2797,9 @@ default Bash keeps bare dot inspection automatic"
           (make-directory (file-name-directory file) t)
           (with-temp-file file
             (insert "invalid"))
-          (should
-           (string-prefix-p
-            "Error: Bash rule write failed:"
+          (should-error
             (mevedel-tool-exec-permission--bash-prompt-result
-             'always-allow nil workspace "make test" nil nil))))
+             'always-allow nil workspace "make test" nil nil)))
       (delete-directory root t)))
   :doc "returns structured Bash metadata with the canonical specifier"
   (let ((result (mevedel-tool-exec-permission--bash-prompt-result

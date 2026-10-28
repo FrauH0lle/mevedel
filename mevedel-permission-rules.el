@@ -433,9 +433,13 @@ exact grant on PATH or a recursive grant containing PATH suffices."
                         (mevedel-permission-rules--path-contained-p
                          expanded (plist-get grant :path))
                       (and (not recursive)
-                           (string= expanded
-                                    (expand-file-name
-                                     (plist-get grant :path)))))
+                           (if (plist-get grant :workspace-origin)
+                               (string= (directory-file-name expanded)
+                                        (directory-file-name
+                                         (expand-file-name (plist-get grant :path))))
+                             (string= expanded
+                                      (expand-file-name
+                                       (plist-get grant :path))))))
                     (or (eq (plist-get grant :access) 'write)
                         (eq (plist-get grant :access) access)))))))
 
@@ -552,9 +556,10 @@ defcustom buckets may otherwise authorize or explicitly ask for LEVEL."
 ;;
 ;;; Session rule storage
 
-(defun mevedel-permission-rules-resource-grant (path access &optional recursive)
+(defun mevedel-permission-rules-resource-grant (path access &optional recursive origin)
   "Return normalized PATH ACCESS resource grant.
-RECURSIVE non-nil marks the grant as covering PATH and all descendants."
+RECURSIVE non-nil marks the grant as covering PATH and all descendants.
+ORIGIN preserves a private workspace-relative bound on runtime authority."
   (unless (and (stringp path) (not (string-empty-p path)))
     (error "Invalid resource path: %S" path))
   (unless (memq access '(read write))
@@ -562,19 +567,21 @@ RECURSIVE non-nil marks the grant as covering PATH and all descendants."
   (unless (memq recursive '(t nil))
     (error "Invalid resource recursive flag: %S" recursive))
   (append (list :path (expand-file-name path) :access access)
-          (and recursive '(:recursive t))))
+          (and recursive '(:recursive t))
+          (and origin (list :workspace-origin origin))))
 
 (defun mevedel-permission-rules-merge-resource-grant
-    (grants path access &optional recursive)
+    (grants path access &optional recursive origin)
   "Return GRANTS with PATH promoted to ACCESS within its RECURSIVE scope.
 Grant identity is the normalized path plus the recursive flag; access
 promotion and deduplication never cross between an exact and a
-recursive grant on the same path."
-  (let* ((grant (mevedel-permission-rules-resource-grant path access recursive))
+recursive grant on the same path.  ORIGIN is part of the grant identity."
+  (let* ((grant (mevedel-permission-rules-resource-grant path access recursive origin))
          (expanded (plist-get grant :path))
          (same-identity-p
           (lambda (item)
             (and (stringp (plist-get item :path))
+                  (equal origin (plist-get item :workspace-origin))
                  (string= expanded (expand-file-name (plist-get item :path)))
                  (eq (and (plist-get item :recursive) t) (and recursive t))))))
     (if (cl-find-if (lambda (item)
