@@ -244,15 +244,23 @@ malformed memory changes and unrecoverable reply structure reject the reply."
            (if (string-empty-p output) 0
              (mevedel-context-summary--estimated-tokens "" output)))
          (snapshot ()
-           (append (list :output-bytes (string-bytes output)
+           (let ((note-ids (seq-take
+                            (cl-loop for note in admitted-notes
+                                     for id = (plist-get note :id)
+                                     when (<= (string-bytes id) 256) collect (copy-sequence id))
+                            32)))
+            (append (list :output-bytes (string-bytes output)
                          :output-estimated-tokens (estimated)
                          :result-bytes reply-bytes
                          :reasoning-bytes reasoning-bytes :reply-bytes reply-total-bytes
                          :tool-call-bytes tool-call-bytes
                          :tool-call-count (if investigation (mevedel-memory-investigation-calls investigation) 0)
+                         :investigation (and investigation (mevedel-memory-investigation-summary investigation))
+                         :investigation-notes note-ids
+                         :investigation-notes-omitted (- (length admitted-notes) (length note-ids))
                          :rounds completed-rounds
                          :budget-kind budget-kind :output-limit output-limit)
-                   (copy-sequence usage)))
+                    (copy-sequence usage))))
          (check-limit (kind value limit)
            (when (> value limit)
              (setq budget-kind kind output-limit limit)

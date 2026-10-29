@@ -821,6 +821,9 @@ older pending applications and digest coverage alone do not."
            ;; Freeze diagnostics before storage can replace RESULT with an error.
            ;; Cancellation has no review callback result, so use its live snapshot.
            (usage (append
+                   (cl-loop for key in '(:investigation :investigation-notes :investigation-notes-omitted)
+                            append (list key (if (plist-member result key)
+                                                (plist-get result key) (plist-get reported key))))
                    (cl-loop for key in '(:provider-duration-ms :provider-call-count)
                             when (or (plist-member result key) (plist-member reported key))
                             append (list key (if (plist-member result key)
@@ -893,7 +896,7 @@ older pending applications and digest coverage alone do not."
           (funcall cancel))
         (when-let* ((snapshot (plist-get (plist-get state :request) :usage)))
           (let ((final-usage (funcall snapshot)))
-            (dolist (key '(:provider-duration-ms :provider-call-count))
+            (dolist (key '(:provider-duration-ms :provider-call-count :investigation))
               (when (plist-member final-usage key)
                 (setq usage (plist-put usage key (plist-get final-usage key))))))))
       (when (plist-get state :publishing)
