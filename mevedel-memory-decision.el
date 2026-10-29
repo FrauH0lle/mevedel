@@ -214,15 +214,26 @@ RECORD may supply this operation's freshly authenticated metadata from
 
 (defun mevedel-memory-decision--settled-p (workspace accepted)
   "Return non-nil when every proposal of ACCEPTED is terminal in WORKSPACE.
-Read the public journal once for the whole pass."
+Read the public journal once for the whole pass.  An incomplete terminal
+index can only refuse release; a complete index still needs private proofs."
   (let ((entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
-        (passes (make-hash-table :test #'equal)))
+        (passes (make-hash-table :test #'equal))
+        (terminal (make-hash-table :test #'equal))
+        (proposals (plist-get (plist-get accepted :review) :proposals)))
+    ;; Publication calls this after each decision.  Authenticating a growing
+    ;; prefix before discovering the next absent proposal is quadratic IO.
+    ;; Public metadata cannot prove settlement, but absence can refuse it.
+    (dolist (entry entries)
+      (when (and (eq (plist-get entry :kind) 'decision)
+                 (mevedel-memory-decision-terminal-status-p (plist-get entry :status)))
+        (puthash (plist-get entry :proposal-id) t terminal)))
     ;; This check can follow publication.  Read its pass proof afresh rather
     ;; than seeding from the bundle supplied before that mutation.
-    (cl-every (lambda (id)
-                (mevedel-memory-decision-terminal-status-p
-                 (plist-get (mevedel-memory-decision-status workspace id entries passes) :status)))
-              (plist-get (plist-get accepted :review) :proposals))))
+    (and (cl-every (lambda (id) (gethash id terminal)) proposals)
+         (cl-every (lambda (id)
+                     (mevedel-memory-decision-terminal-status-p
+                      (plist-get (mevedel-memory-decision-status workspace id entries passes) :status)))
+                   proposals))))
 
 (defun mevedel-memory-decision--publish (workspace decision)
   "Publish accepted DECISION in WORKSPACE, then release unneeded evidence.
