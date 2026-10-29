@@ -975,7 +975,10 @@ Each change carries its exact :before and :after snapshot."
        (let ((bytes (mevedel-memory-proposal-condensed-bytes (plist-get proposal :body))))
          (when (or (plist-get before :directory) (null (plist-get before :bytes)))
            (error "Only captured text notes can be condensed"))
-         (when (> (length bytes) mevedel-memory-notes--max-note-bytes)
+         ;; Authenticated acceptance may append captured paragraphs to the
+         ;; bounded model body; those bytes are not model-generated output.
+         (when (and (not (plist-get proposal :guard-preserved))
+                    (> (length bytes) mevedel-memory-notes--max-note-bytes))
            (error "Condensed note exceeds its readable byte limit"))
          (list (list :path path :before before :action 'write
                      :content (decode-coding-string bytes 'utf-8-unix) :bytes bytes

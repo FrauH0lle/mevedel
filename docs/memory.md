@@ -1176,24 +1176,31 @@ neither suppresses nor authorizes changes and requires no new persistent store.
 The zero-applied-progress guard still stops automatic catch-up on an all-no-op
 batch instead of inventing a decision.
 
-Delete and condensation acceptance also compare the captured preimage's numeric measurement
-paragraphs with the replacement. It conservatively protects whole paragraphs
-containing numeric program/read/sample counts, timings, sizes, percentages and
-similar units, not bare numbers stripped of their operations and conditions.
-Markdown and whitespace changes are ignored. A missing paragraph makes the
-disposition a keep unless an extraction citing the note preserves it, or a
+Delete and condensation acceptance also compare the captured preimage's numeric
+measurement paragraphs with the replacement. Recognition is structural: standalone
+multi-digit counts, decimals, percentages and durations need no domain-specific
+unit vocabulary. Dates, times of day, hashes, paths, file-line references,
+versions, list ordinals and numbers inside identifiers alone are masked.
+Whole original paragraphs retain their operations and conditions; Markdown and
+whitespace changes in preservation evidence are ignored. A paragraph needs no
+additional retention when an extraction citing the note preserves it, or a
 `resolved-by` entry contains that paragraph and its quote and paragraph both occur
-in workspace text actually read by the review. Extraction dependencies still
-apply. This is a conservative loss guard, not a general measurement parser or
-semantic proof that a quote resolves an item; unlabeled numbers and conditions
-outside the protected paragraphs still require reviewer judgement. Completed
-notes can still be deleted with their measurements accounted for by authenticated
-quotes or applied extractions, under the open-item resolution contract above.
-The guard deliberately prefers retention when a completed numeric paragraph has
-no authenticated resolution quote. This can also keep a large sequentially
-summarized note whose completed measurement history would exceed the final reply
-limit; the summary is not authority to erase the captured measurement preimage.
-Such conservative keeps are a quality cost, not useful-service credit.
+in workspace text actually read by the review. Otherwise a condense appends the
+dropped paragraphs verbatim, in source order, under `## Preserved measurements`.
+A delete becomes a condense containing a one-line source-address provenance
+header followed by those paragraphs. Non-measurement paragraphs are not appended.
+These proposals record `:guard-preserved`, distinct from keeps marked
+`:guard-converted`; pass results and telemetry expose
+`guard-preserved-condense-count` for accepted proposals. Authenticated captured
+paragraphs may exceed the model's ordinary condensed-body limit; private records
+remain bounded. Citation, source-handoff, anchor and explicit unresolved-item
+guards still convert deletes to keep before numeric preservation. Extraction
+dependencies, exact result hashing, checked writes, recovery and byte-exact undo
+still apply. This is a conservative lexical boundary, not semantic proof of
+resolution. Single-digit counts without a recognized suffix, nonnumeric caveats
+and conditions outside recognized paragraphs still require reviewer judgement.
+Completed numeric history can be retained unnecessarily, and preserved paragraphs
+do not establish useful cleanup or a measured throughput improvement.
 
 **Housekeeping.** Quiet attachments that no surviving text file references
 (conservatively by root-relative, note-relative, URL-encoded or address

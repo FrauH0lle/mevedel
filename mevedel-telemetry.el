@@ -193,7 +193,8 @@ profile file larger and cost a little more per sample."
     :exit-status :failure-class :failure-stage :fallback :filesystem :first-byte-seen
     :fresh-visible-prompt-estimate
     :gc-count :gc-ms :git-head :goal-id
-    :gptel-commit :gptel-file-hash :gptel-version :guard-converted-keep-count :handler-count
+    :gptel-commit :gptel-file-hash :gptel-version :guard-converted-keep-count
+    :guard-preserved-condense-count :handler-count
     :handler-id :handler-source :handler-type :hook-event
     :ineligible-reason :input-bytes :input-p :input-pending :input-tokens
     :interaction-id :issue-count

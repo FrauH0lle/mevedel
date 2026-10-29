@@ -902,7 +902,9 @@ older pending applications and digest coverage alone do not."
 			    (mevedel-memory-pass--timing-end state :application-duration-ms)
 			    (let* ((keeps (seq-filter (lambda (proposal) (eq 'note-keep (plist-get proposal :action)))
                                                      (plist-get accepted :proposals)))
-                                   (converted (cl-count-if (lambda (proposal) (plist-get proposal :guard-converted)) keeps)))
+	                                   (converted (cl-count-if (lambda (proposal) (plist-get proposal :guard-converted)) keeps))
+                                           (preserved (cl-count-if (lambda (proposal) (plist-get proposal :guard-preserved))
+                                                                   (plist-get accepted :proposals))))
 		    (plist-put state :result
 			       (append (list :outcome (if entry 'success (plist-get result :outcome))
 					     :id id :entry entry :error (or (plist-get result :error) (plist-get applied :error))
@@ -917,6 +919,7 @@ older pending applications and digest coverage alone do not."
 					     :notes-reviewed (- (length (plist-get result :notes)) skipped-note-count)
 					     :note-format-failure-count note-format-failures
 					     :guard-converted-keep-count converted
+                                             :guard-preserved-condense-count preserved
 					     :model-keep-count (- (length keeps) converted)
 					     :notes-remaining (+ (or (plist-get (plist-get state :notes) :remaining) 0)
 									 (or (plist-get result :omitted-notes) 0)
@@ -978,6 +981,7 @@ older pending applications and digest coverage alone do not."
 					 :proposed-count (length (plist-get entry :proposals))
 					 :note-format-failure-count note-format-failures
 					 :guard-converted-keep-count (plist-get (plist-get state :result) :guard-converted-keep-count)
+                                         :guard-preserved-condense-count (plist-get (plist-get state :result) :guard-preserved-condense-count)
 					 :model-keep-count (plist-get (plist-get state :result) :model-keep-count)
 					 :updated-file-count (plist-get applied :updated-files)
 						 :remaining-count (plist-get (plist-get state :result) :remaining)))))

@@ -345,10 +345,17 @@ those extractions are applied. Quiet attachments no surviving note references
 and quiet empty folders receive structured decisions without inference. Files
 that memory or instructions cite are not removed silently. Accepted reviews
 require a model keep to identify nonempty open items and explain missing
-resolution evidence. Deletes and condensations that drop numeric measurement paragraphs from
-the captured preimage become keeps unless a citing extraction preserves them or
-authenticated read quotes contain and account for them. Matching ignores Markdown
-and whitespace, not conditions within the paragraphs; semantic resolution and
+resolution evidence. Numeric recognition protects whole captured paragraphs
+containing standalone multi-digit counts, decimals, percentages or durations,
+after masking metadata such as dates, paths, hashes and versions. A condense
+appends dropped protected paragraphs verbatim under a fixed heading; a delete
+becomes a condense with a source-address provenance header and those paragraphs.
+An intact citing extraction or authenticated read quote can account for a
+paragraph without appending it. Matching ignores Markdown and whitespace, not
+conditions within the paragraphs. These authenticated transformations record
+`:guard-preserved`, distinct from `:guard-converted` keeps, and may exceed the
+model body limit within bounded private records. Citation, source-handoff,
+anchor and unresolved-item guards still produce keeps. Semantic resolution and
 conditions outside recognized paragraphs remain reviewer responsibilities.
 These checks address a replay that replaced concrete operation counts with
 "supplied instrumentation counts", alongside unjustified completed-case keeps;
@@ -409,6 +416,21 @@ longer than ordinary recall when evidence or recovery still needs it; the recall
 limit is not an erasure guarantee.
 
 ## Decision history
+
+### 2026-10-29: Preserve numeric paragraphs structurally instead of keeping whole notes
+
+The generic numeric detector closed a vocabulary gap for cold-result counts and
+ratios, but matched replays of the structural reply contract still applied only
+unchanged keeps. Protecting measurements by blocking disposal retained completed
+background alongside the evidence. Numeric-only losses now produce condenses
+that retain the missing whole paragraphs verbatim, rather than keeps. The model
+can discard unrelated completed prose without having to reproduce every measured
+paragraph in its output. Other delete guards still retain their keep behavior.
+This changes retention mechanics, not semantic resolution proof or undo authority.
+Generated preservation can exceed the model body limit; the private record bound
+accounts for duplicated escaped before/after bytes of a large captured note.
+Useful cleanup and semantic preservation require independent applied-outcome
+grading; a preservation flag alone is not service evidence.
 
 ### 2026-10-28: Progress guards automatic catch-up; the cap is a ceiling
 
