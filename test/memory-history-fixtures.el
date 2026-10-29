@@ -34,8 +34,8 @@ PENDING leaves their proposals undecided."
       (dotimes (item items)
         (let ((path (file-name-concat shared (format "note-%d-%d.md" batch item))))
           (write-region (make-string bytes ?x) nil path nil 'silent)
-          (set-file-times path (seconds-to-time (- (float-time) 3600)))))
-      (let* ((capture (mevedel-memory-notes-capture workspace nil :mode 'auto :quiet-hours 0))
+          (set-file-times path (seconds-to-time (- (float-time) (* 15 86400))))))
+      (let* ((capture (mevedel-memory-notes-capture workspace nil :mode 'auto))
              (scope (mevedel-memory-scope-capture workspace))
              (claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180)))
         (unwind-protect

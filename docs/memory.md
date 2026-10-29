@@ -1008,8 +1008,11 @@ and digest backlog. Drain runs successive general reviews, with ordinary-note
 batches bounded to 16 notes / 96 KiB and oversized notes reviewed alone in
 bounded chunks; digest/request limits remain unchanged. It stops when a fresh
 selection finds no ready shared notes, housekeeping or uncovered digests. It
-does not request an empty current-memory review. Pending, kept and blocked
-notes are not ready; propose/manual drain leaves decisions for approval rather
+does not request an empty current-memory review. A drain remembers exact shared
+root/path/version identities from its authenticated accepted passes and attempts
+each version at most once during that drain, even when the result is retention
+or an invalid/missing acknowledgement. Attempted is not reviewed or deleted.
+Pending/recovery-required and blocked notes remain held; propose/manual drain leaves decisions for approval rather
 than deleting their files. Other sessions' turns do not stop the drain; notes
 they use wait (see Readiness). Running local consolidation, application or
 cleanup and a busy transport wait with a 60-second retry, so drain neither
@@ -1096,15 +1099,21 @@ extract lasting knowledge from quiet files into memory and then dispose of
 them. Focused reviews do not include notes. Accepted reviews and decisions are
 the only processing record.
 
-**Readiness.** A file is ready once unchanged for
-`mevedel-memory-notes-quiet-hours` (default 24) on the target clock. A note
-version is its path and content hash; an edit creates a new version. A pending
-decision suppresses a version. Kept or condensed versions, and versions a user
-rejected or restored, are reconsidered after `mevedel-memory-notes-review-days`
-(default 7). Stale, unavailable and deleted outcomes impose no wait. A review
-leaves notes that open sessions are using for later. A note is in use while a
+**Readiness.** Use the target clock and actual last modification time, not the
+authored creation timestamp. Managed scratch notes (either status) and any done
+note reach age-readiness after 7 elapsed days; open handoffs/reports, unmanaged
+Markdown and attachments use 14 elapsed days. Boundaries are inclusive multiples
+of 86,400 seconds; future mtimes wait. External headerless/invalid Markdown is
+listed as unmanaged with a bounded format diagnostic, not permanently exempted;
+its next tool write supplies metadata as described above. A note version is its
+path and content hash; an actual edit restarts modification age, including a
+status change. A pending/recovery-required decision suppresses its exact version.
+Prior keep/condense, rejection or reversal outcomes do not start an additional
+seven-day reconsideration timer; rejection evidence remains available to later
+reviews. A review leaves notes that open sessions are using for later. A note is in use while a
 session whose buffer is live, or one of its sub-agents, named that file in a
-`work://shared/` Read, Glob, Grep or ApplyPatch within the quiet period. Folder
+`work://shared/` Read, Glob, Grep or ApplyPatch within a separate 24-hour access
+window. Folder
 listings and searches do not count, and neither does another session merely
 running a turn. This evidence lives in the editor that ran the tool and is not
 retained across restarts or shared between clients; access through ordinary
@@ -1113,9 +1122,17 @@ inventory first and authenticates prior disposition status only for paths
 present in it: a deleted path cannot be admitted, and a recreated one is
 checked like any other.
 
+Shared-directory Read exposes generated bounded kind/status, owner,
+modification-age and age-readiness rows with a first-heading/body summary that
+excludes frontmatter. It says capture/application safety checks remain pending;
+these rows do not certify current dependency/reference absence. Incomplete
+observations stay visible. Listing never writes an index or marks all entries
+in use, and direct Read/Glob/Grep keep their existing contracts.
+
 **Capture.** Each general review walks the folder without following links
-(at most 4,096 entries). Text is complete UTF-8 without NUL bytes; anything
-else is an attachment. At most 16 ordinary text notes and 96 KiB are captured,
+(at most 4,096 entries). Only Markdown (`.md`, case-insensitive) enters model
+review; complete UTF-8 without NUL bytes is required. All non-Markdown files are
+attachments, including readable scripts, JSON and plain text. At most 16 ordinary text notes and 96 KiB are captured,
 oldest first, each at most 32 KiB; the review request admits them beside
 digests (one of each when both fit, then oldest first). A larger text note is
 captured alone, leaving eligible digests unpinned for the next batch, up to

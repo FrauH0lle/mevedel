@@ -783,26 +783,36 @@ here are diagnostic only."
 (defun mevedel-memory-pass--progress-p (workspace accepted)
   "Return non-nil if ACCEPTED's batch made shared-note progress in WORKSPACE.
 Authenticate applied decisions, not proposal or aggregate application counts.
-Only this batch's delete, condense or newly suppressing keep qualifies;
+Only this batch's delete or condense qualifies;
 older pending applications and digest coverage alone do not."
   (let ((entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
         (passes (make-hash-table :test #'equal)))
     (seq-some
      (lambda (proposal)
        (let ((action (plist-get proposal :action)))
-         (when (memq action '(note-delete note-condense note-keep))
+         (when (memq action '(note-delete note-condense))
            (let ((decision (mevedel-memory-decision-status workspace (plist-get proposal :id) entries passes)))
-             (and (eq (plist-get decision :status) 'applied)
-                  (or (not (eq action 'note-keep))
-                      (let ((before (cdr (assoc (plist-get proposal :file) (plist-get proposal :before)))))
-                        (and (mevedel-memory-notes-current-p before)
-                             (mevedel-memory-notes--suppressed
-                              (list (list :action action :status 'applied :hash (plist-get before :hash)
-                                          :at (float-time (date-to-time (plist-get decision :created)))))
-                              (plist-get before :hash)
-                              (mevedel-session-control-fs-target-time (mevedel-workspace-root workspace))
-                              mevedel-memory-notes-review-days)))))))))
+             (eq (plist-get decision :status) 'applied)))))
      (plist-get accepted :proposals))))
+
+(defun mevedel-memory-pass--record-attempts (state accepted admitted)
+  "Record STATE's exact accepted drain attempts, without granting service credit.
+Authenticate ACCEPTED and its original claim before projecting ADMITTED
+request IDs and captured housekeeping into the current drain's attempt set."
+  (when-let* ((drain (plist-get state :drain))
+              (workspace (plist-get state :workspace))
+              (id (plist-get (plist-get state :prepared) :id)))
+    (let ((authenticated (mevedel-memory-store-accepted workspace id)))
+      (unless (and authenticated (equal accepted authenticated)
+                   (equal (plist-get authenticated :prepared) (plist-get state :prepared))
+                   (equal (plist-get (plist-get authenticated :prepared) :claim) (plist-get state :claim)))
+        (error "Drain attempt evidence does not match this accepted pass"))
+      ;; Authentication can yield to cancellation or a replacement drain.
+      (when (eq drain (gethash (plist-get drain :key) mevedel-memory-pass--drains))
+        (plist-put drain :attempted
+                   (delete-dups (append (plist-get drain :attempted)
+                                        (mevedel-memory-notes-attempts
+                                         (plist-get (plist-get authenticated :prepared) :scope) admitted))))))))
 
 (cl-defun mevedel-memory-pass--finish (state result)
   "Settle STATE once from RESULT and publish only its accepted immutable reply."
@@ -962,6 +972,10 @@ older pending applications and digest coverage alone do not."
 									 skipped-note-count)
 					     :notes-blocked (or (plist-get (plist-get state :notes) :blocked-count) 0))
 				       applied usage)))
+                            (when (and entry (plist-get state :drain))
+                              (condition-case err
+                                  (mevedel-memory-pass--record-attempts state accepted (plist-get result :notes))
+                                (error (plist-put (plist-get state :result) :error (error-message-string err)))))
 		    (when (and entry
 				       (not (plist-get state :drain))
 			       (not (plist-get state :stop-apply))
@@ -1108,8 +1122,6 @@ inference and is marked :housekeeping-only."
          (mevedel-memory-consolidation-min-digests (plist-get payload :min-digests))
          (mevedel-memory-consolidation-max-batches-per-day (plist-get payload :max-batches))
          (mevedel-memory-consolidation-mode (plist-get payload :mode))
-         (mevedel-memory-notes-quiet-hours (plist-get payload :notes-quiet-hours))
-         (mevedel-memory-notes-review-days (plist-get payload :notes-review-days))
          (mevedel-memory-notes-undo-quota (plist-get payload :notes-quota))
          (mevedel-memory-notes-max-review-bytes (plist-get payload :notes-max-review-bytes))
          recovery-duration notes scope)
@@ -1135,7 +1147,7 @@ inference and is marked :housekeeping-only."
                       notes (or (mevedel-memory-pass--capture-notes
                                  workspace observed (plist-get payload :mode)
                                  (mevedel-memory-pass--cited-texts scope)
-                                 (plist-get payload :in-use-notes))
+                                 (plist-get payload :in-use-notes) (plist-get payload :attempted-notes))
                                 (list :root nil))))
               (plist-get notes :root)))
            (selection (if automatic
@@ -1179,10 +1191,11 @@ inference and is marked :housekeeping-only."
                            when (plist-get (cdr file) :bytes)
                            collect (decode-coding-string (plist-get (cdr file) :bytes) 'utf-8-unix))))
 
-(defun mevedel-memory-pass--capture-notes (workspace entries mode cited &optional in-use)
+(defun mevedel-memory-pass--capture-notes (workspace entries mode cited &optional in-use attempted)
   "Capture WORKSPACE's ready shared files from public ENTRIES under MODE.
 CITED are memory and instruction texts whose citations protect files.
 IN-USE lists relative paths open sessions are using; they wait.
+ATTEMPTED lists exact shared-file versions already offered by this drain.
 First collect undo blobs no retained write needs.  The caller holds the
 consolidation claim, which also excludes concurrent application."
   (when-let* ((configured (mevedel-memory-notes-directory workspace))
@@ -1192,7 +1205,7 @@ consolidation claim, which also excludes concurrent application."
     (ignore-errors
       (mevedel-memory-notes-collect-blobs
        workspace (mevedel-memory-notes-blob-directory (file-truename configured))))
-    (mevedel-memory-notes-capture workspace entries :mode mode :external cited :in-use in-use)))
+    (mevedel-memory-notes-capture workspace entries :mode mode :external cited :in-use in-use :attempted attempted)))
 
 (defun mevedel-memory-pass--prepared (state result focus memory-only)
   "Start STATE's configured review from prepared RESULT, FOCUS and MEMORY-ONLY.
@@ -1381,13 +1394,12 @@ from the automatic or drain queue owner; direct starts omit admission dwell."
 	    (let* ((roots (mevedel-system--memory-roots workspace))
 		   (payload (list :claim claim :focus focus :automatic automatic :memory-only memory-only
 				  :drain (and drain t)
+				  :attempted-notes (copy-tree (plist-get drain :attempted))
 				  :catch-up (plist-get (mevedel-workspace-memory-schedule workspace) :catch-up)
 				  :max-batches mevedel-memory-consolidation-max-batches-per-day
 				  :min-hours mevedel-memory-consolidation-min-hours
 				  :min-digests mevedel-memory-consolidation-min-digests
 				  :mode mevedel-memory-consolidation-mode
-				  :notes-quiet-hours mevedel-memory-notes-quiet-hours
-				  :notes-review-days mevedel-memory-notes-review-days
 				  :notes-quota mevedel-memory-notes-undo-quota
 				  :notes-max-review-bytes mevedel-memory-notes-max-review-bytes
 				  ;; Notes that open sessions are using wait; others proceed.

@@ -137,5 +137,40 @@
                 "(progn (require 'mevedel-working-note) (when (or (featurep 'mevedel-memory-notes) (featurep 'mevedel-structs) (featurep 'gptel)) (kill-emacs 1)) (unless (eq 'managed (plist-get (mevedel-working-note-classify \"x.md\" (mevedel-working-note-normalize \"body\" \"owner\" \"2026-10-29T00:00:00Z\")) :classification)) (kill-emacs 2)))")))
       (should (string-empty-p (buffer-string))))))
 
+(mevedel-deftest mevedel-working-note-eligibility ()
+  ,test
+  (test)
+  :doc "Every kind/status uses inclusive modification age, not creation time"
+  (let ((now 1800000000))
+    (dolist (kind '(scratch handoff report))
+      (dolist (status '(open done))
+        (let* ((metadata (list :classification 'managed :kind kind :status status
+                               :created "2000-01-01T00:00:00Z"))
+               (days (if (or (eq kind 'scratch) (eq status 'done)) 7 14))
+               (boundary (- now (* days 86400))))
+          (should-not (plist-get (mevedel-working-note-eligibility metadata (+ boundary 3600) now) :eligible))
+          (should (plist-get (mevedel-working-note-eligibility metadata boundary now) :eligible))
+          (should-not (plist-get (mevedel-working-note-eligibility metadata now now) :eligible)))))
+    (dolist (classification '(unmanaged attachment))
+      (let ((metadata (list :classification classification :kind 'scratch :status 'done)))
+        (should-not (plist-get (mevedel-working-note-eligibility metadata (- now (* 13 86400) (* 23 3600)) now) :eligible))
+        (should (plist-get (mevedel-working-note-eligibility metadata (- now (* 14 86400)) now) :eligible))))
+    (should (eq 'future-mtime (plist-get (mevedel-working-note-eligibility nil (1+ now) now) :reason)))
+    (should (eq 'unknown-mtime (plist-get (mevedel-working-note-eligibility nil nil now) :reason)))
+    (should (eq 'unknown-mtime (plist-get (mevedel-working-note-eligibility nil now nil) :reason)))))
+
+(mevedel-deftest mevedel-working-note-summary ()
+  ,test
+  (test)
+  :doc "Heading and paragraph summaries never expose malformed or unclosed YAML"
+  (progn
+    (should (equal "Actual heading" (mevedel-working-note-summary
+                                    "---\nkind: invalid\nsecret: YAML-SECRET\n---\nIntro paragraph.\n\n# Actual heading\n")))
+    (should (equal "First paragraph continued." (mevedel-working-note-summary "\nFirst paragraph\ncontinued.\n\nSecond.")))
+    (should (equal "" (mevedel-working-note-summary "---\nowner: YAML-SECRET\n")))
+    (should (equal "Real heading" (mevedel-working-note-summary "---\n# Real heading\nbody\n---\n")))
+    (should (equal "Real heading" (mevedel-working-note-summary "---\n# Real heading\nbody\n")))
+    (should (<= (string-width (mevedel-working-note-summary (make-string 1000 ?x))) 160))))
+
 (provide 'test-mevedel-working-note)
 ;;; test-mevedel-working-note.el ends here

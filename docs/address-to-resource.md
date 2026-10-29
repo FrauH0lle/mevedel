@@ -193,6 +193,18 @@ session scope is empty. A missing session or workspace owner is still an error.
 An explicit missing descendant, including an arbitrary directory descendant,
 is an error rather than an empty discovery root.
 
+Shared-directory Read (root or descendant) generates a bounded listing with
+canonical address, kind/status or unmanaged/attachment, owner, modification age,
+age-readiness reason and first-heading/body summary. Bare `work://` includes
+these same shared rows. Summaries exclude lifecycle frontmatter and are not
+model-generated. Incomplete inventory/header reads are explicit; no maintained
+index is written. Age-readiness uses the target clock and actual mtime: scratch
+or done notes need 7 days, other notes/attachments need 14 days, inclusive at the
+boundary. It does not certify dependency/reference absence or authorize mutation:
+capture/application safety checks remain pending. Directory discovery does not
+mark all returned files used or refresh their modification age. Glob/Grep and
+direct-file Read retain their existing output and access contracts.
+
 - `work://shared/...` maps to `WORKSPACE-ROOT/.mevedel/shared/`. All agents and
   sessions in that workspace see the same files. The directory is created only
   by a permitted write and has no prescribed children. Working notes, drafts,

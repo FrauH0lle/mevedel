@@ -354,6 +354,14 @@ before the operation ran."
    "      test ! -L \"$leaf\" || exit 69\n"
    "      rm -rf -- \"$leaf\" || exit 67\n"
    "      ;;\n"
+   "    observation-clock)\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      test -d \"$leaf\" || exit 68\n"
+   "      exec 8<\"$leaf\" || exit 67\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      cd -- /proc/self/fd/8 || exit 70\n"
+   "      printf '%s' \"${EPOCHREALTIME-}\" | base64 -w0 || exit 67\n"
+   "      ;;\n"
    "    clock|before-time)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      exec 8<\"$leaf\" || exit 67\n"
@@ -650,6 +658,7 @@ parent must not turn into a `Setting current directory' failure."
     (delete-directory . "delete-directory")
     (delete-empty-directory . "delete-empty-directory")
     (target-time . "clock")
+    (observation-time . "observation-clock")
     (list-directory . "list")
     (verify-list . "verify-list")
     (tree-size . "tree-size")
@@ -674,6 +683,10 @@ parent must not turn into a `Setting current directory' failure."
     ('read (decode-coding-string payload
                                  (or (plist-get op :coding) 'utf-8-unix)))
     ('list-directory (split-string payload "\0" t))
+    ('observation-time
+     (unless (string-match-p "\\`[0-9]+\\.[0-9]+\\'" payload)
+       (signal 'file-error (list "Target observation clock is unavailable" (plist-get op :path))))
+     (string-to-number payload))
     ('target-time
      (let ((text (string-trim payload)))
        (unless (string-match-p "\\`[0-9]+\\'" text)
@@ -1825,6 +1838,13 @@ silently substituted zero would make every stored deadline look live to
 this client and every deadline it writes look expired to every other
 client."
   (mevedel-session-control-fs--run-1 'target-time directory))
+
+(defun mevedel-session-control-fs-observation-time (directory)
+  "Return target host seconds without writing inside DIRECTORY.
+This read-only clock is for age observations, not lease ownership.  The
+directory and its parent are descriptor-proved by the native program;
+missing or linked paths and invalid clock output fail closed."
+  (mevedel-session-control-fs--run-1 'observation-time directory))
 
 (provide 'mevedel-session-control-fs)
 

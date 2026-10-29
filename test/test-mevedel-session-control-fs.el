@@ -2272,5 +2272,37 @@ streams over stdin."
           (should-not (file-exists-p blob)))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-session-control-fs-observation-time ()
+  ,test
+  (test)
+  :doc "the native observation clock works in read-only directories without creating files or changing age"
+  (let* ((root (make-temp-file "mevedel-observation-clock-" t))
+         (path (file-name-concat root "read-only"))
+         (link (file-name-concat root "linked")))
+    (unwind-protect
+        (progn
+          (make-directory path)
+          (set-file-times path (seconds-to-time 100))
+          (set-file-modes path #o555)
+          (let* ((modified (file-attribute-modification-time (file-attributes path)))
+                 (before (float-time))
+                 (observed (mevedel-session-control-fs-observation-time path)))
+            (should (floatp observed))
+            (should (<= before observed))
+            (should (<= observed (ceiling (float-time))))
+            (should (equal modified (file-attribute-modification-time (file-attributes path))))
+            (should (= #o555 (file-modes path)))
+            (should-not (directory-files path nil directory-files-no-dot-files-regexp)))
+          (make-symbolic-link path link)
+          (should-error (mevedel-session-control-fs-observation-time link))
+          (should-error (mevedel-session-control-fs-observation-time (file-name-concat root "missing")))
+          (dolist (payload '("" "not-a-clock" "-1" "1; true"))
+            (should-error (mevedel-session-control-fs--program-value
+                           (list :op 'observation-time :path path) payload) :type 'file-error))
+          (should (= 1234.5 (mevedel-session-control-fs--program-value
+                            (list :op 'observation-time :path path) "1234.500000"))))
+      (when (file-directory-p path) (set-file-modes path #o755))
+      (delete-directory root t))))
+
 (provide 'test-mevedel-session-control-fs)
 ;;; test-mevedel-session-control-fs.el ends here

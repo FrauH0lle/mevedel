@@ -9,6 +9,7 @@
 (require 'helpers
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
+(require 'mevedel-session-control-fs)
 (require 'mevedel-memory-pass)
 (require 'mevedel-journal-capture)
 (require 'mevedel)
@@ -37,6 +38,7 @@
                                       (delete-directory root t)))
                  (cl-letf (((symbol-value 'mevedel-journal-worker--child-p) t)
                            ((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) now))
+            ((symbol-function 'mevedel-session-control-fs-observation-time) (lambda (_) now))
                            ((symbol-function 'mevedel-memory-review-request)
                             (lambda (_scope entries cb &rest _)
                               (cl-incf calls)
@@ -352,7 +354,7 @@
                        (note (file-name-concat root ".mevedel" "shared" "handoff.md")))
                    (make-directory (file-name-directory note) t)
                    (write-region "Finding to review.\n" nil note nil 'silent)
-                   (set-file-times note (seconds-to-time (- now (* 2 86400))))
+                   (set-file-times note (seconds-to-time (- now (* 15 86400))))
                    (mevedel-memory-pass-schedule workspace)
                    (drain)
                    (should (= 1 calls))

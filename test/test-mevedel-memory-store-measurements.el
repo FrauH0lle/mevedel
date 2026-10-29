@@ -160,9 +160,9 @@
           (dolist (case cases)
             (let ((path (file-name-concat shared (car case))))
               (write-region original nil path nil 'silent)
-              (set-file-times path (seconds-to-time (- (float-time) 172800)))))
+              (set-file-times path (seconds-to-time (- (float-time) (* 15 86400))))))
           (let* ((scope (mevedel-memory-scope-capture workspace))
-                 (capture (mevedel-memory-notes-capture workspace nil :quiet-hours 0))
+                 (capture (mevedel-memory-notes-capture workspace nil))
                  (reply (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n"
                                 "## Remove\n- none\n## Instructions\n- none\n## Notes\n"
                                 (mapconcat
@@ -226,9 +226,9 @@
           (mevedel-workspace-identity-ensure root)
           (make-directory shared t)
           (let ((coding-system-for-write 'no-conversion)) (write-region original nil path nil 'silent))
-          (set-file-times path (seconds-to-time (- (float-time) 172800)))
+          (set-file-times path (seconds-to-time (- (float-time) (* 15 86400))))
           (let* ((scope (mevedel-memory-scope-capture workspace))
-                 (capture (mevedel-memory-notes-capture workspace nil :quiet-hours 0)))
+                 (capture (mevedel-memory-notes-capture workspace nil)))
             (should (= 1 (plist-get capture :notes)))
             (push (plist-get capture :root) (plist-get scope :roots))
             (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))

@@ -273,7 +273,7 @@
              (workspace (mevedel-workspace--create :root directory))
              (mevedel-memory-dirs nil)
              (mevedel-memory-consolidation-mode 'manual)
-             (mevedel-memory-notes-quiet-hours 0)
+
              (mevedel-telemetry-enabled t)
              (gptel--known-backends nil)
              (model (make-symbol "summary-pass-model"))
@@ -313,7 +313,7 @@
            ;; Target clocks can have whole-second precision.  A just-written
            ;; subsecond mtime must not accidentally look newer than that clock.
            (set-file-times (file-name-concat directory ".mevedel" "shared" "note.md")
-                           (time-subtract (current-time) 3600))
+                           (time-subtract (current-time) (* 15 86400)))
            (setq state (mevedel-memory-pass-start workspace (lambda (value) (setq result value)) :memory-only t))
            (with-timeout (20 (ert-fail "Pass did not start its review"))
              (while (and state (not fsm) (not result)) (accept-process-output nil 0.01)))

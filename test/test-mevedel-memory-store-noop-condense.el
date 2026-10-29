@@ -22,13 +22,14 @@
              (shared (file-name-concat root ".mevedel" "shared"))
              (path (file-name-concat shared "handoff.md"))
              (mevedel-memory-dirs nil)
-             (mevedel-memory-notes-review-days 7)
+
              (now 1800000000)
              claim accepted item pass scope)
      :before-each ((mevedel-workspace-identity-ensure root) (make-directory shared t))
      :after-each ((when claim (mevedel-journal-claim-settle claim 'cancelled ""))
                   (delete-directory root t)))
-  (cl-letf (((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) now)))
+  (cl-letf (((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) now))
+            ((symbol-function 'mevedel-session-control-fs-observation-time) (lambda (_) now)))
     (cl-labels
         ((bytes () (mevedel-session-control-fs-read-file path 'no-conversion))
          (capture () (mevedel-memory-notes-capture workspace (mevedel-journal-store-entries root)))
@@ -36,7 +37,7 @@
            (let ((coding-system-for-write 'utf-8-unix))
              (write-region original nil path nil 'silent))
            (set-file-modes path #o640)
-           (set-file-times path (seconds-to-time (- now (* 48 3600))))
+           (set-file-times path (seconds-to-time (- now (* 15 86400))))
            (setq scope (mevedel-memory-scope-capture workspace))
            (setf (plist-get scope :roots) (list (plist-get (capture) :root)))
            (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
@@ -60,7 +61,7 @@
            (plist-get (mevedel-memory-decision--published workspace decision) :intent)))
       ,test))
   (test)
-  :doc "canonical newline equality becomes an applied unchanged keep with ordinary version suppression"
+  :doc "canonical newline equality becomes an unchanged keep without an extra review-age wait"
   (let* ((body "Open: verify the remote case with caf\u00e9 input.")
          (original (encode-coding-string (concat body "\n") 'utf-8-unix))
          notifications)
@@ -87,13 +88,13 @@
       (should-not (file-exists-p (mevedel-memory-write--pin write)))
       (should-not (mevedel-memory-write-pending workspace (plist-get item :id)))
       (should-not (mevedel-memory-write-recovery-candidates workspace))
-      (should (= 0 (plist-get (capture) :notes)))
+      (should (= 1 (plist-get (capture) :notes)))
       (cl-incf now (* 8 86400))
       (should (= 1 (plist-get (capture) :notes)))
       (cl-decf now (* 8 86400))
-      ;; A changed version bypasses retention once it is quiet.
+      ;; A changed version follows modification age, not the old decision.
       (write-region "Open: verify a different remote case.\n" nil path nil 'silent)
-      (set-file-times path (seconds-to-time (- now (* 48 3600))))
+      (set-file-times path (seconds-to-time (- now (* 15 86400))))
       (should (= 1 (plist-get (capture) :notes)))))
   :doc "a genuinely shorter condensation still writes exact bytes and retains checked undo"
   (let ((original "Finished background.\n\nOpen: verify the remote case.\n") notifications)
@@ -111,8 +112,8 @@
       (should (= 1 (length (plist-get write :changes))))
       (should (eq 'after (mevedel-memory-write-state write)))
       (should-not (file-exists-p (mevedel-memory-write--pin write)))
-      (set-file-times path (seconds-to-time (- now (* 48 3600))))
-      (should (= 0 (plist-get (capture) :notes)))
+      (set-file-times path (seconds-to-time (- now (* 15 86400))))
+      (should (= 1 (plist-get (capture) :notes)))
       (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get item :id)) :status)))
       (should (equal original (bytes)))))
   :doc "a missing original newline is a real byte change, not an unchanged keep"

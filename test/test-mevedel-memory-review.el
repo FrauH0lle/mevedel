@@ -234,7 +234,7 @@
          scope)
     (make-directory shared t)
     (write-region "Finding: index destinations must be unique.\n" nil path nil 'silent)
-    (set-file-times path (time-subtract nil (* 3 86400)))
+    (set-file-times path (time-subtract nil (* 15 86400)))
     (mevedel-workspace-identity-ensure directory)
     (setq scope (mevedel-memory-scope-capture workspace))
     (setq scope (plist-put scope :roots (append (plist-get scope :roots)
@@ -272,7 +272,7 @@
     (dotimes (index 3)
       (let ((path (file-name-concat shared (format "note-%d.md" index))))
         (write-region (make-string 30000 ?x) nil path nil 'silent)
-        (set-file-times path (time-subtract nil (* (- 4 index) 86400)))))
+        (set-file-times path (time-subtract nil (* (- 18 index) 86400)))))
     (mevedel-workspace-identity-ensure directory)
     (setq scope (mevedel-memory-scope-capture workspace))
     (setq scope (plist-put scope :roots

@@ -1053,7 +1053,10 @@
                                 "defaulting to `scratch/open`"
                                 "real handoffs as `kind: handoff`"
                                 "reports as `kind: report`"
-                                "finished notes as `status: done`"))
+                                "finished notes as `status: done`"
+                                "after 7 days untouched"
+                                "unmanaged Markdown after 14 days"
+                                "capture/application safety checks remain pending"))
               (should (string-search guidance prompt))))
           (let ((prompt (mevedel-system-build-prompt 'main :retained t
                                                     :workspace workspace :session session)))
@@ -1079,7 +1082,10 @@
                                     "defaulting to `scratch/open`"
                                     "real handoffs as `kind: handoff`"
                                     "reports as `kind: report`"
-                                    "finished notes as `status: done`"))
+                                    "finished notes as `status: done`"
+                                    "after 7 days untouched"
+                                    "unmanaged Markdown after 14 days"
+                                    "capture/application safety checks remain pending"))
                   (should (string-search guidance context))))
               (if (equal name "worker")
                   (should (string-search "Persistent memory" prompt))

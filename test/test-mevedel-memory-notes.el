@@ -16,18 +16,18 @@
 (require 'mevedel-session-control-fs)
 (require 'mevedel-workspace-identity)
 
-(mevedel-deftest mevedel-memory-notes--text ()
+(mevedel-deftest mevedel-working-note-files-text ()
   ,test
   (test)
   :doc "decodes UTF-8 text and rejects NUL bytes and invalid sequences"
   (progn
-    (should (equal "café\n" (mevedel-memory-notes--text (encode-coding-string "café\n" 'utf-8))))
-    (should-not (mevedel-memory-notes--text (unibyte-string ?a 0 ?b)))
-    (should-not (mevedel-memory-notes--text (unibyte-string ?a 255 ?b))))
+    (should (equal "café\n" (mevedel-working-note-files-text (encode-coding-string "café\n" 'utf-8))))
+    (should-not (mevedel-working-note-files-text (unibyte-string ?a 0 ?b)))
+    (should-not (mevedel-working-note-files-text (unibyte-string ?a 255 ?b))))
   :doc "a truncated prefix drops only its incomplete final character"
   (let ((bytes (encode-coding-string "ab界" 'utf-8)))
-    (should (equal "ab" (mevedel-memory-notes--text (substring bytes 0 4) t)))
-    (should-not (mevedel-memory-notes--text (substring bytes 0 4)))))
+    (should (equal "ab" (mevedel-working-note-files-text (substring bytes 0 4) t)))
+    (should-not (mevedel-working-note-files-text (substring bytes 0 4)))))
 
 (mevedel-deftest mevedel-memory-notes--referenced ()
   ,test
@@ -57,20 +57,15 @@
 (mevedel-deftest mevedel-memory-notes--suppressed ()
   ,test
   (test)
-  :doc "pending and recently retained versions wait; other outcomes do not"
+  :doc "only exact pending and recovery versions wait; completed outcomes never add an age clock"
   (let ((now 1000000) (day 86400))
     (cl-flet ((seen (action status &rest keys)
                 (list (append (list :action action :hash "v1" :status status :at (- now day)) keys))))
-      (should (mevedel-memory-notes--suppressed (seen 'note-delete 'pending) "v1" now 7))
-      (should (mevedel-memory-notes--suppressed (seen 'note-keep 'applied) "v1" now 7))
-      (should-not (mevedel-memory-notes--suppressed (seen 'note-keep 'applied) "v1" (+ now (* 7 day)) 7))
-      (should (mevedel-memory-notes--suppressed (seen 'note-condense 'applied :result "v2") "v2" now 7))
-      (should (mevedel-memory-notes--suppressed (seen 'note-delete 'rejected) "v1" now 7))
-      (should-not (mevedel-memory-notes--suppressed (seen 'note-delete 'rejected :superseded t) "v1" now 7))
-      (should (mevedel-memory-notes--suppressed (seen 'note-delete 'reversed) "v1" now 7))
-      (should-not (mevedel-memory-notes--suppressed (seen 'note-delete 'stale) "v1" now 7))
-      (should-not (mevedel-memory-notes--suppressed (seen 'note-delete 'applied) "v1" now 7))
-      (should-not (mevedel-memory-notes--suppressed (seen 'note-keep 'applied) "v9" now 7)))))
+      (should (mevedel-memory-notes--suppressed (seen 'note-delete 'pending) "v1"))
+      (should (mevedel-memory-notes--suppressed (seen 'note-delete 'recovery-required) "v1"))
+      (dolist (status '(applied rejected reversed stale unavailable))
+        (should-not (mevedel-memory-notes--suppressed (seen 'note-keep status) "v1")))
+      (should-not (mevedel-memory-notes--suppressed (seen 'note-delete 'pending) "v9")))))
 
 (mevedel-deftest mevedel-memory-notes--ancestors ()
   ,test
@@ -106,14 +101,15 @@
      :before-each ((mevedel-workspace-identity-ensure root) (make-directory shared t))
      :after-each ((when claim (mevedel-journal-claim-settle claim 'cancelled ""))
                   (delete-directory root t)))
-  (cl-letf (((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) now)))
+  (cl-letf (((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) now))
+            ((symbol-function 'mevedel-session-control-fs-observation-time) (lambda (_) now)))
     (cl-labels
         ((note (name index &optional text)
            (let ((path (file-name-concat shared name)))
              (write-region (or text "Completed observation.\n") nil path nil 'silent)
-             (set-file-times path (seconds-to-time (+ (- now (* 100 3600)) index)))
+             (set-file-times path (seconds-to-time (+ (- now (* 500 3600)) index)))
              path))
-         (capture () (mevedel-memory-notes-capture workspace nil :review-days 0))
+         (capture () (mevedel-memory-notes-capture workspace nil))
          (files (capture) (plist-get (cdr (plist-get capture :root)) :files))
          (accept (capture &optional reply admitted)
            (let* ((scope (mevedel-memory-scope-capture workspace))
@@ -185,7 +181,7 @@
       (should (= 1 (hash-table-count history)))
       (should (eq 'captured-without-proposal (plist-get observation :capture)))
       (should-not (plist-get observation :status))
-      (should-not (mevedel-memory-notes--suppressed (list observation) (plist-get observation :hash) now 7))))
+      (should-not (mevedel-memory-notes--suppressed (list observation) (plist-get observation :hash)))))
   :doc "another client's accepted omission cannot rank the same absolute path and hash"
   (progn
     (note "old.md" 0)
@@ -220,7 +216,7 @@
     (:vars* ((root (file-name-as-directory (file-truename (make-temp-file "mevedel-in-use-" t))))
              (other-root (file-name-as-directory (file-truename (make-temp-file "mevedel-in-use-other-" t))))
              (workspace (mevedel-workspace--create :root root))
-             (mevedel-memory-notes-quiet-hours 24)
+
              (buffers nil))
      :before-each ((dolist (directory (list root other-root))
                      (make-directory (file-name-concat directory ".mevedel" "shared" "audit") t)))
@@ -258,7 +254,8 @@
       (should (eq t (mevedel-memory-notes-in-use-p workspace "audit/report.md")))
       (should-not (mevedel-memory-notes-in-use-p workspace "audit/other.md"))
       ;; Use ends with the quiet period.
-      (let ((mevedel-memory-notes-quiet-hours 0))
+      (cl-letf (((symbol-function 'float-time)
+                 (let ((future (+ (float-time) 86401))) (lambda (&optional _) future))))
         (should-not (mevedel-memory-notes-in-use workspace)))
       (kill-buffer reader)
       (should-not (mevedel-memory-notes-in-use workspace)))))
@@ -352,13 +349,14 @@
     (let ((capture (mevedel-memory-notes-capture workspace nil)))
       (should-not (plist-get capture :root))
       (should (= 0 (plist-get capture :notes))))
-    (should (= 0 (plist-get (mevedel-memory-notes-capture workspace nil :quiet-hours 0) :remaining)))
-    (should (= 1 (plist-get (mevedel-memory-notes-capture workspace nil :quiet-hours 0) :notes))))
+    (should (= 0 (plist-get (mevedel-memory-notes-capture workspace nil) :remaining)))
+    (set-file-times (file-name-concat shared "fresh.md") (seconds-to-time (- (float-time) (* 15 86400))))
+    (should (= 1 (plist-get (mevedel-memory-notes-capture workspace nil) :notes))))
   :doc "every blocked item is counted while the listed reasons stay bounded"
   (let ((mevedel-memory-notes-max-review-bytes mevedel-memory-notes--max-note-bytes))
     (dotimes (index 70)
       (write-region (make-string (* 33 1024) ?x) nil (file-name-concat shared (format "big-%02d.md" index)) nil 'silent))
-    (let ((capture (mevedel-memory-notes-capture workspace nil :quiet-hours 0)))
+    (let ((capture (mevedel-memory-notes-capture workspace nil)))
       (should (= 70 (plist-get capture :blocked-count)))
       (should (= mevedel-memory-notes--max-blocked (length (plist-get capture :blocked))))
       (should (= 70 (plist-get (mevedel-memory-notes-observation workspace) :blocked-count)))))
@@ -367,7 +365,7 @@
     (dotimes (index 18)
       (let ((path (file-name-concat shared (format "n%02d.md" index))))
         (write-region "Short note.\n" nil path nil 'silent)
-        (set-file-times path (seconds-to-time (- (float-time) (* 3600 (- 100 index)))))))
+        (set-file-times path (seconds-to-time (- (float-time) (* 3600 (- 500 index)))))))
     (let* ((capture (mevedel-memory-notes-capture workspace nil))
            (root-row (cdr (plist-get capture :root))))
       (should (= mevedel-memory-notes--max-notes (plist-get capture :notes)))

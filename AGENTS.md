@@ -61,6 +61,9 @@ For interactive commands, see [README.md](README.md#usage).
   as `kind: handoff`, reports as `kind: report`, and finished notes as
   `status: done`. Attribution is not a retention lock. Keep actionable open work
   in the tracker/backlog rather than relying on temporary notes as a task store.
+  Scratch or done notes reach age-readiness after 7 days without modification;
+  open handoffs/reports and unmanaged external Markdown use 14 days. Reading
+  does not reset modification age; observed active use still prevents cleanup.
 - Keep managed session plans in `work://plans/`; curate selected durable lessons
   into memory. Read-only requests and Plan-mode write restrictions still apply.
 - Preserve explicitly invoked skills' configured workflows and destinations,

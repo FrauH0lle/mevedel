@@ -23,6 +23,9 @@ and re-read concurrent edits before patching. ApplyPatch supplies lifecycle
 frontmatter, defaulting to `scratch/open`; explicitly mark real handoffs as
 `kind: handoff`, reports as `kind: report`, and finished notes as `status: done`.
 Keep actionable work in the tracker/backlog, not only in temporary notes.
+Scratch/done notes reach age-readiness after 7 days without modification; open
+handoffs/reports and unmanaged external Markdown use 14 days. Reading does not
+reset modification age, and observed active use prevents cleanup.
 Distinguish observations, user
 corrections, and hypotheses; preserve unresolved constraints and useful lessons
 reported by read-only agents. Shared files are temporary and machine-local:

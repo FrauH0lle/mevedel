@@ -349,7 +349,17 @@ groups. Later mutations finish accepted expiry before pinning new evidence.
 Curated memory is outside journal expiry. Public retrieval uses `memory://journal/`.
 
 Shared working files are not journal input. They are untracked, machine-local
-and temporary; general consolidation reviews quiet versions directly. Each
+and temporary. Only Markdown notes (`.md`, case-insensitive) enter model review;
+other files are attachments even when readable text. Managed scratch or done
+notes reach age-readiness after seven days without modification; open handoffs,
+open reports, unmanaged external Markdown and attachments use fourteen days.
+The target clock and actual mtime determine age, inclusively at the boundary;
+future mtimes wait. Creation metadata and reads do not reset age. Exact-version
+pending/recovery holds remain; prior retention/rejection/reversal outcomes do
+not start an additional seven-day reconsideration clock. Local observed use
+retains its independent 24-hour access window. Shared-directory Read generates
+bounded kind/status, owner, age and summary rows, explicitly reporting only
+age-readiness with capture/application safety checks pending. Each
 admitted note receives one disposition (delete, keep, or condense) beside
 ordinary extraction proposals citing it, and a disposal applies only after
 those extractions are applied. Quiet attachments no surviving note references
@@ -427,6 +437,27 @@ longer than ordinary recall when evidence or recovery still needs it; the recall
 limit is not an erasure guarantee.
 
 ## Decision history
+
+### 2026-10-29: Metadata and modification age replace quiet-hour readiness
+
+The next lifecycle direction is recorded in
+[ADR 0128](0128-extract-memory-and-expire-working-notes.md). Its first slices
+replace arbitrary UTF-8 admission and 24-hour quiet readiness with Markdown-only
+notes and seven/fourteen-day modification ages, and remove retention-specific
+seven-day reconsideration branches. Metadata is supplied in the visible tool
+transaction, defaulting to scratch/open; real handoffs are explicitly labelled.
+External unmanaged Markdown keeps the longer fourteen-day margin. Discovery
+shares the age calculation but does not pretend to certify application safety.
+The former quiet setting also controlled local resource-use protection; that
+protection remains as a separate 24-hour observation window. The longer
+modification margins make disposable scratch distinct from genuine open handoffs
+without turning missing metadata or prior retention decisions into immortality.
+Explicit drains exclude exact versions already attempted by their authenticated
+accepted passes, including malformed note acknowledgements and housekeeping;
+otherwise removing retention timers would repeatedly select unchanged keeps
+forever. This local attempt set grants no service credit or write authority.
+The disposition, scheduling and private retention contracts below remain until
+their corresponding implementation slices replace them.
 
 ### 2026-10-29: Catch-up follows fresh arrivals; identical condensation is retention
 

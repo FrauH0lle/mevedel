@@ -42,8 +42,8 @@
                           (mevedel-memory-consolidation-mode 'auto)
                           (mevedel-memory-consolidation-min-hours 24)
                           (mevedel-memory-consolidation-min-digests 5)
-                          (mevedel-memory-notes-quiet-hours 24)
-                          (mevedel-memory-notes-review-days 7)
+
+
                           (mevedel-memory-notes-undo-quota (* 1024 1024))
                           (mevedel-memory-pass--inhibit-scheduling nil)
                           (gptel--known-backends nil)
@@ -56,6 +56,7 @@
                                       (delete-directory root t)))
                  (cl-letf (((symbol-value 'mevedel-journal-worker--child-p) t)
                            ((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) now))
+            ((symbol-function 'mevedel-session-control-fs-observation-time) (lambda (_) now))
                            ((symbol-function 'mevedel-memory-review-request)
                            (lambda (scope entries cb &rest _)
                               (cl-incf calls)
@@ -66,7 +67,7 @@
                                    (make-directory (file-name-directory path) t)
                                    (let ((coding-system-for-write 'no-conversion))
                                      (write-region text nil path nil 'silent))
-                                   (set-file-times path (seconds-to-time (- now (* 3600 (or age-hours 48)))))
+                                   (set-file-times path (seconds-to-time (- now (* 3600 (or age-hours 360)))))
                                    path))
                                (bytes (path)
                                  (with-temp-buffer
@@ -259,17 +260,17 @@
                                 (lambda (ws id &rest args)
                                   (push id observed)
                                   (apply reader ws id args))))
-                       (should (= 0 (plist-get (capture) :notes)))
+                       (should (= 1 (plist-get (capture) :notes)))
                        (should (equal (list (plist-get (proposal 'note-keep) :id)) observed))
                        ;; Both identical and changed recreations must reenter
                        ;; history authentication; absence is not cached.
                        (dolist (body '("Completed investigation.\n" "New investigation.\n"))
                          (note "gone.md" body)
                          (setq observed nil)
-                         (should (= 1 (plist-get (capture) :notes)))
+                         (should (= 2 (plist-get (capture) :notes)))
                          (should (member (plist-get (proposal 'note-delete) :id) observed))
                          (should (member (plist-get (proposal 'note-keep) :id) observed))))))
-                 :doc "keep and condense retain their versions until reconsideration or an edit"
+                 :doc "keep adds no wait while condensation follows its actual modification age"
                  (let ((kept (note "kept.md" "Open handoff: continue the parser fix tomorrow.\n"))
                        (condensed (note "long.md" "Finding: obsolete detail.\nOpen: verify the remote case.\n")))
                    (should (start :automatic t))
@@ -278,16 +279,20 @@
                    (finish)
                    (should (equal "Open handoff: continue the parser fix tomorrow.\n" (bytes kept)))
                    (should (equal "Open: verify the remote case.\n" (bytes condensed)))
-                   (set-file-times condensed (seconds-to-time (- now (* 3600 48))))
-                   (should (= 0 (plist-get (capture) :notes)))
+                   (set-file-times condensed (seconds-to-time now))
+                   (should (= 1 (plist-get (capture) :notes)))
+                   (set-file-times condensed (seconds-to-time (- now (* 15 86400))))
+                   (should (= 2 (plist-get (capture) :notes)))
                    (cl-incf now (* 8 86400))
                    (should (= 2 (plist-get (capture) :notes)))
                    (cl-decf now (* 8 86400))
                    ;; An edit is a new version, eligible once quiet again.
                    (note "kept.md" "Open handoff: parser fix moved to Friday.\n" 1)
-                   (should (= 0 (plist-get (capture) :notes)))
+                   (should (= 1 (plist-get (capture) :notes)))
                    (set-file-times kept (seconds-to-time (- now (* 3600 25))))
-                   (should (= 1 (plist-get (capture) :notes))))
+                   (should (= 1 (plist-get (capture) :notes)))
+                   (set-file-times kept (seconds-to-time (- now (* 14 86400))))
+                   (should (= 2 (plist-get (capture) :notes))))
                  :doc "condensation cannot discard measurements or their scenario but may preserve them"
                  (let* ((measurements (concat "Scenario: batch-16, 4 passes, 64 decisions, one sample.\n\n"
                                              "- Reads: 4,294 programs in 1 sample.\n"
@@ -616,7 +621,7 @@
                     (set-file-modes orphan #o640)
                     (note "draft.md" "Uses kept.bin for the screenshot.\n" 1)
                     (make-directory empty t)
-                    (set-file-times empty (seconds-to-time (- now (* 3600 48))))
+                    (set-file-times empty (seconds-to-time (- now (* 15 86400))))
                     (should (start :automatic t))
                     (should (= 0 calls))
                     (should (eq 'success (plist-get result :outcome)))
@@ -864,9 +869,9 @@
                    (should-not (mevedel-memory-store-accepted workspace (pass)))
                    (should (= 2 (plist-get (capture) :notes))))
                  :doc "sixteen repeated no-op notes cannot starve a seventeenth valid note"
-                 (let (invalid (good (note "z-good.md" "Completed and verified.\n" 48)))
+                 (let (invalid (good (note "z-good.md" "Completed and verified.\n" 360)))
                    (dotimes (index 16)
-                     (push (note (format "bad-%02d.md" index) "Finished context awaiting review.\n" 72) invalid))
+                     (push (note (format "bad-%02d.md" index) "Finished context awaiting review.\n" 384) invalid))
                    (should (start :automatic t))
                    (should-not (member "z-good.md" (plist-get (cdr (mevedel-memory-notes-root scope-seen)) :files)))
                    (setq reply (text nil nil))
@@ -1114,7 +1119,7 @@
                  (let ((mevedel-memory-consolidation-mode 'propose)
                        (folder (file-name-concat shared "later")))
                    (make-directory folder)
-                   (set-file-times folder (seconds-to-time (- now (* 3600 48))))
+                   (set-file-times folder (seconds-to-time (- now (* 15 86400))))
                    (should (start :automatic t))
                    (write-region "New work.\n" nil (file-name-concat folder "new.md") nil 'silent)
                    (should (eq 'stale (plist-get (mevedel-memory-decision-apply

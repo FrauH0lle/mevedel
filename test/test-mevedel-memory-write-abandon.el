@@ -40,7 +40,7 @@
 
 (defun mevedel-test-abandon-directory-accepted (workspace)
   "Accept real native empty-directory housekeeping for WORKSPACE without applying."
-  (let* ((capture (mevedel-memory-notes-capture workspace nil :mode 'auto :quiet-hours 0))
+  (let* ((capture (mevedel-memory-notes-capture workspace nil :mode 'auto))
          (scope (mevedel-memory-scope-capture workspace))
          (scope (plist-put scope :roots (append (plist-get scope :roots) (list (plist-get capture :root)))))
          (claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180)))
@@ -64,7 +64,7 @@
           (_folder (when mevedel-test-abandon-directory
                      (let ((path (file-name-concat root ".mevedel" "shared" "empty")))
                        (make-directory path t)
-                       (set-file-times path (seconds-to-time (- (float-time) (* 72 3600)))))))
+                       (set-file-times path (seconds-to-time (- (float-time) (* 15 86400)))))))
           (accepted (cond (mevedel-test-abandon-memory (mevedel-test-abandon-memory-accepted workspace))
                           (mevedel-test-abandon-directory (mevedel-test-abandon-directory-accepted workspace))
                           (t (car (mevedel-test-memory-history-create workspace 1 1 100 t)))))

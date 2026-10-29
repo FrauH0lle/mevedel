@@ -68,7 +68,7 @@
      :vars* ((directory (make-temp-file "mevedel-review-provider-" t))
              (workspace (mevedel-workspace--create :root directory))
              (mevedel-memory-dirs nil)
-             (mevedel-memory-notes-quiet-hours 0)
+
              (gptel--known-backends nil)
              (gptel--request-alist nil)
              (gptel-use-curl nil)
@@ -177,7 +177,7 @@
              (make-directory shared t)
              (write-region (concat (make-string (* 33 1024) ?x) "\nLast finding.\n")
                            nil path nil 'silent)
-             (set-file-times path (seconds-to-time (- (float-time) (* 3 86400))))
+             (set-file-times path (seconds-to-time (- (float-time) (* 15 86400))))
              (let ((capture (mevedel-memory-notes-capture workspace nil)))
                (should (= 1 (plist-get capture :notes)))
                (let ((scope (list :workspace-root directory :roots (list (plist-get capture :root)))))

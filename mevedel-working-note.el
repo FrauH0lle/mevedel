@@ -147,5 +147,41 @@ replaced on first edit, not treated as newly authored metadata."
     (mevedel-working-note--parse result)
     result))
 
+(defun mevedel-working-note-eligibility (classification modified now)
+  "Return modification-age readiness for CLASSIFICATION at target time NOW.
+MODIFIED and NOW are seconds on the same target clock.  Creation and review
+times never affect readiness.  The returned :reason is `age-ready',
+`age-wait', `future-mtime' or `unknown-mtime'; :eligible describes age only,
+not capture or application safety.  Boundaries include exactly 7/14 days."
+  (let* ((days (if (and (eq (plist-get classification :classification) 'managed)
+                        (or (eq (plist-get classification :kind) 'scratch)
+                            (eq (plist-get classification :status) 'done)))
+                   7 14))
+         (age (and (numberp modified) (numberp now) (- now modified)))
+         (reason (cond ((null age) 'unknown-mtime)
+                       ((< age 0) 'future-mtime)
+                       ((>= age (* days 86400)) 'age-ready)
+                       (t 'age-wait))))
+    (list :age-seconds age :minimum-days days :reason reason
+          :eligible (eq reason 'age-ready))))
+
+(defun mevedel-working-note-summary (content)
+  "Return a bounded one-line body summary of CONTENT, without frontmatter.
+Prefer the first heading, otherwise the first nonempty paragraph.  Even
+malformed leading YAML is omitted; an unclosed header yields no summary."
+  (let ((body (condition-case nil
+                  (plist-get (mevedel-working-note--parse content) :body)
+                (error
+                 (if (and (string-match "\\`---\r?\n" content)
+                          (string-match "^---\r?\\(?:\n\\|\\'\\)" content (match-end 0)))
+                     (substring content (match-end 0)) "")))))
+    (let ((summary
+           (if (string-match "^#+[ \t]+\\(.+\\)$" body)
+               (match-string 1 body)
+             (car (split-string (string-trim body) "\n[ \t\r]*\n" t)))))
+      (truncate-string-to-width
+       (string-trim (replace-regexp-in-string "[[:space:][:cntrl:]]+" " " (or summary "")))
+       160 nil nil t))))
+
 (provide 'mevedel-working-note)
 ;;; mevedel-working-note.el ends here
