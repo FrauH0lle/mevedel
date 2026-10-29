@@ -2770,7 +2770,16 @@ related input bindings are:
 - `Shift-TAB` / `<backtab>`: cycle `ask`, `edits`, and `full-auto`
 - `C-<tab>` in the composer: toggle Plan without changing the permission mode
 
-These bindings apply only while point is in the editable composer.
+These bindings apply only while point is in the editable composer. They use
+lookup-time keyboard routing rather than an overlay keymap, so an overlapping
+word or text-property keymap cannot hide composer commands it does not bind.
+An explicit contextual `keymap` binding still wins, as do transient overriding
+maps. Ordinary minor-mode maps remain below the composer keyboard map. The
+composer's presentation overlay supplies indentation and cursor alignment only.
+Evil retains its additional empty-prompt controls in normal and insert states.
+Configure additional top-level composer keys before opening or reinitializing
+a view; registration derives the available entry points from the composer maps.
+
 History persists at the workspace level as
 `<workspace-root>/.mevedel/input-history.el`, so new and resumed
 sessions in the same project share prompt recall. When persistence is not

@@ -1773,7 +1773,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
                    prompt (buffer-substring
                            mevedel-view--input-marker (mevedel-view--input-start))))
           (should (equal "" (mevedel-view--input-text)))
-          (should (= (overlay-start mevedel-view--composer-keymap-overlay)
+          (should (= (overlay-start mevedel-view--composer-display-overlay)
                      (mevedel-view--input-start)))))))
 
   :doc "a real deletion at the draft boundary remains undoable after prompt refresh"
@@ -1791,7 +1791,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
       (undo-start)
       (undo-more 1)
       (should (equal "> quoted\nsecond" (mevedel-view--input-text)))
-      (should (= (overlay-start mevedel-view--composer-keymap-overlay)
+      (should (= (overlay-start mevedel-view--composer-display-overlay)
                  (mevedel-view--input-start)))))
 
   :doc "drops render-only history and multiline drafts starting with >"
@@ -2488,8 +2488,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (mevedel-view--render-status)
           (mevedel-view--interaction-rebuild)
           (let ((start (mevedel-view--input-start)))
-            (should (= start (overlay-start mevedel-view--composer-keymap-overlay)))
-            (should (= (point-max) (overlay-end mevedel-view--composer-keymap-overlay)))
+            (should (= start (overlay-start mevedel-view--composer-display-overlay)))
+            (should (= (point-max) (overlay-end mevedel-view--composer-display-overlay)))
             (should (equal draft (buffer-substring-no-properties start (point-max))))
             (should-not (text-property-not-all
                          (point-min) mevedel-view--input-marker
@@ -2544,8 +2544,8 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           (should (= (point) (+ start 3)))
           (should (= (mark) (+ start 10)))
           (should mark-active)
-          (should (= (overlay-start mevedel-view--composer-keymap-overlay) start))
-          (should (= (overlay-end mevedel-view--composer-keymap-overlay) (point-max)))
+          (should (= (overlay-start mevedel-view--composer-display-overlay) start))
+          (should (= (overlay-end mevedel-view--composer-display-overlay) (point-max)))
           (should (equal indent (get-char-property (+ start 8) 'line-prefix)))
           (should (equal indent (get-char-property (+ start 8) 'wrap-prefix)))
           (should-not (get-char-property (1- start) 'line-prefix)))))))
@@ -2557,20 +2557,20 @@ Policy tests use terminal rows, not production's pixel measurement helper."
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (goto-char (mevedel-view--input-start))
-      (should-not (overlay-get mevedel-view--composer-keymap-overlay 'after-string))
+      (should-not (overlay-get mevedel-view--composer-display-overlay 'after-string))
       (insert "> draft\n")
-      (let ((display (overlay-get mevedel-view--composer-keymap-overlay 'after-string)))
+      (let ((display (overlay-get mevedel-view--composer-display-overlay 'after-string)))
         (should (equal "   " display))
         (should (get-text-property 2 'cursor display)))
       (should (equal "> draft\n"
                      (buffer-substring-no-properties
                       (mevedel-view--input-start) (point-max))))
       (insert "x")
-      (should-not (overlay-get mevedel-view--composer-keymap-overlay 'after-string))
+      (should-not (overlay-get mevedel-view--composer-display-overlay 'after-string))
       (delete-char -1)
-      (should (overlay-get mevedel-view--composer-keymap-overlay 'after-string))
+      (should (overlay-get mevedel-view--composer-display-overlay 'after-string))
       (delete-char -1)
-      (should-not (overlay-get mevedel-view--composer-keymap-overlay 'after-string))))
+      (should-not (overlay-get mevedel-view--composer-display-overlay 'after-string))))
 
   :doc "silently restored drafts refresh the empty-line display too"
   (mevedel-view-test--with-buffers
@@ -2579,7 +2579,7 @@ Policy tests use terminal rows, not production's pixel measurement helper."
         (dolist (text '("draft\n" "other" "\n" ""))
           (mevedel-view--restore-composer-snapshot
            (list :text text :point-offset (length text)) session t)
-          (should (eq (and (overlay-get mevedel-view--composer-keymap-overlay
+          (should (eq (and (overlay-get mevedel-view--composer-display-overlay
                                         'after-string) t)
                       (string-suffix-p "\n" text)))))))
 

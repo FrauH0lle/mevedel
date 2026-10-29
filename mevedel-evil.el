@@ -30,14 +30,14 @@
 (declare-function mevedel--create-instruction "mevedel-overlays" (type &optional span))
 
 ;; `mevedel-view'
-(defvar mevedel-view--input-marker)
 (defvar mevedel-view-mode-map)
 
 ;; `mevedel-view-composer'
+(declare-function mevedel-view--active-composer-keymap "mevedel-view-composer" (&optional include-prompt))
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
+(declare-function mevedel-view--register-composer-keymap "mevedel-view-composer" ())
 (defvar mevedel-view--composer-keymap)
 (defvar mevedel-view--side-conversation-keymap)
-(defvar mevedel-view--side-conversation-p)
 
 (defconst mevedel-evil--cockpit-modes
   '(mevedel-artifacts-list-mode mevedel-background-list-mode
@@ -188,16 +188,16 @@ conflicting native actions, preserving vanilla behavior in other states."
 
 (defun mevedel-evil--in-composer-p ()
   "Return non-nil in a live view's composer, including its prompt."
-  (and (derived-mode-p 'mevedel-view-mode)
-       (markerp mevedel-view--input-marker)
-       (marker-position mevedel-view--input-marker)
-       (>= (point) (marker-position mevedel-view--input-marker))))
+  (and (fboundp 'mevedel-view--active-composer-keymap)
+       (mevedel-view--active-composer-keymap t)))
 
 (defun mevedel-evil--composer-keys ()
   "Keep composer controls reachable when normal point sits on its prompt.
 An empty composer's overlay has no character on which Evil can leave its
 normal cursor.  Mirror its controls in the view's state maps, retaining
 the ordinary view action outside the composer."
+  ;; Evil may have loaded after the composer registered its fallback.
+  (mevedel-view--register-composer-keymap)
   (dolist (entry (append (accessible-keymaps mevedel-view--composer-keymap)
                          (accessible-keymaps mevedel-view--side-conversation-keymap)))
     (let ((prefix (car entry)))
@@ -210,13 +210,8 @@ the ordinary view action outside the composer."
                (evil-define-key* '(normal insert) mevedel-view-mode-map key
                  `(menu-item "" ,command
                              :filter ,(lambda (_action)
-                                        (if (mevedel-evil--in-composer-p)
-                                            (let ((active
-                                                   (lookup-key
-                                                    (if mevedel-view--side-conversation-p
-                                                        mevedel-view--side-conversation-keymap
-                                                      mevedel-view--composer-keymap)
-                                                    key)))
+                                        (if-let* ((map (mevedel-view--active-composer-keymap t)))
+                                            (let ((active (lookup-key map key)))
                                               (and (commandp active) active))
                                           (and (commandp fallback) fallback))))))))
          (cdr entry))))))
@@ -283,8 +278,13 @@ to cover whole lines.  Block selections are deliberately unsupported."
   (mevedel-instruction-replacement-end))
 
 (defun mevedel-evil--local-mode ()
-  "Finalize a replacement when local Evil mode is disabled."
-  (unless evil-local-mode (mevedel-instruction-replacement-end)))
+  "Keep composer precedence on enable and finalize replacements on disable."
+  (if evil-local-mode
+      ;; First activation can prepend Evil's emulation map after view setup.
+      (when (and (derived-mode-p 'mevedel-view-mode)
+                 (featurep 'mevedel-view-composer))
+        (mevedel-view--register-composer-keymap))
+    (mevedel-instruction-replacement-end)))
 
 ;;;###autoload
 (defun mevedel-evil-setup ()

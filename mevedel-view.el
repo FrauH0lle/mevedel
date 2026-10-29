@@ -187,7 +187,7 @@
 (declare-function mevedel-view-abort "mevedel-view-composer" ())
 (declare-function mevedel-view-composer-initialize
                   "mevedel-view-composer" ())
-(defvar mevedel-view--composer-keymap-overlay)
+(defvar mevedel-view--composer-display-overlay)
 (defvar mevedel-view--composer-scope)
 (defvar mevedel-view--input-marker)
 
@@ -847,8 +847,8 @@ existing `mevedel--view-buffer' binding untouched.  A
   (require 'mevedel-view-interaction)
   (require 'mevedel-view-render)
   (with-current-buffer view-buf
-    (when (overlayp mevedel-view--composer-keymap-overlay)
-      (delete-overlay mevedel-view--composer-keymap-overlay))
+    (when (overlayp mevedel-view--composer-display-overlay)
+      (delete-overlay mevedel-view--composer-display-overlay))
     (mevedel-view-mode)
     (mevedel-surface--enforce-ephemeral)
     (setq-local mevedel-view--side-conversation-p

@@ -915,17 +915,65 @@ ALLOW-ARMED-FORK permits submission of an already armed session fork."
             [remap move-beginning-of-line]
             #'mevedel-view-history-beginning-of-line)
 
-(defvar-local mevedel-view--composer-keymap-overlay nil
-  "Overlay over the editable composer.
-It supplies the composer keymap and the continuation indent that aligns
-later draft lines under the first character after the prompt.")
+(defun mevedel-view--active-composer-keymap (&optional include-prompt)
+  "Return the composer map at point, or nil outside editable input.
+INCLUDE-PROMPT also accepts point on the read-only input prompt, for modal
+editing whose normal cursor cannot sit after an empty prompt."
+  (when (and (derived-mode-p 'mevedel-view-mode)
+             (not mevedel-view--agent-transcript-p)
+             (markerp mevedel-view--input-marker)
+             (eq (marker-buffer mevedel-view--input-marker) (current-buffer))
+             (>= (point) (if include-prompt
+                             (marker-position mevedel-view--input-marker)
+                           (mevedel-view--input-start))))
+    (if mevedel-view--side-conversation-p
+        mevedel-view--side-conversation-keymap
+      mevedel-view--composer-keymap)))
+
+(defun mevedel-view--composer-routing-map ()
+  "Build a filtered keyboard map from the current composer entry points.
+Bindings below each entry point resolve from the authoritative map at lookup."
+  (let ((map (make-sparse-keymap)))
+    (dolist (source (list mevedel-view--composer-keymap
+                         mevedel-view--side-conversation-keymap))
+      (map-keymap
+       (lambda (event _binding)
+         (let ((key (vector event)))
+           (define-key map key
+                       `(menu-item "" nil
+                                   :filter ,(lambda (_)
+                                              (when-let* ((active
+                                                           (mevedel-view--active-composer-keymap)))
+                                                (lookup-key active key)))))))
+       source))
+    map))
+
+(defvar-local mevedel-view--composer-keys-enabled nil
+  "Non-nil when this buffer owns an interactive composer.")
+
+(defvar mevedel-view--composer-emulation-maps nil
+  "Keyboard fallback below contextual property maps and above minor modes.")
+
+(defun mevedel-view--register-composer-keymap ()
+  "Refresh composer entry points and register before other emulation maps."
+  (setq mevedel-view--composer-emulation-maps
+        `((mevedel-view--composer-keys-enabled . ,(mevedel-view--composer-routing-map))))
+  (setq emulation-mode-map-alists
+        (cons 'mevedel-view--composer-emulation-maps
+              (remq 'mevedel-view--composer-emulation-maps
+                    emulation-mode-map-alists))))
+
+(defvar-local mevedel-view--composer-display-overlay nil
+  "Presentation overlay over the editable composer.
+It supplies the continuation indent that aligns later draft lines under
+the first character after the prompt, without participating in key lookup.")
 
 (defun mevedel-view--update-composer-indent ()
   "Align composer continuation lines with the end of the prompt.
 The prefix is display-only: the draft text, submission, and kills never
 contain it.  The first draft line starts inside the read-only prompt, so
 only explicit and soft-wrapped continuation lines receive it."
-  (when (overlayp mevedel-view--composer-keymap-overlay)
+  (when (overlayp mevedel-view--composer-display-overlay)
     (let* ((start (mevedel-view--input-start))
            (indent (make-string
                     (string-width
@@ -933,8 +981,8 @@ only explicit and soft-wrapped continuation lines receive it."
                       (save-excursion (goto-char start) (line-beginning-position))
                       start))
                     ?\s)))
-      (overlay-put mevedel-view--composer-keymap-overlay 'line-prefix indent)
-      (overlay-put mevedel-view--composer-keymap-overlay 'wrap-prefix indent)
+      (overlay-put mevedel-view--composer-display-overlay 'line-prefix indent)
+      (overlay-put mevedel-view--composer-display-overlay 'wrap-prefix indent)
       (mevedel-view--update-composer-end))))
 
 (defun mevedel-view--update-composer-end (&rest _)
@@ -942,11 +990,11 @@ only explicit and soft-wrapped continuation lines receive it."
 Emacs does not apply an overlay's line prefix at end of buffer.  Supply
 that prefix as display text only after a trailing newline; an ordinary
 nonempty final line needs no extra display characters that could wrap."
-  (when (overlayp mevedel-view--composer-keymap-overlay)
-    (overlay-put mevedel-view--composer-keymap-overlay 'after-string
+  (when (overlayp mevedel-view--composer-display-overlay)
+    (overlay-put mevedel-view--composer-display-overlay 'after-string
                  (when (eq (char-before (point-max)) ?\n)
                    (concat
-                    (overlay-get mevedel-view--composer-keymap-overlay 'line-prefix)
+                    (overlay-get mevedel-view--composer-display-overlay 'line-prefix)
                     (propertize " " 'cursor t))))))
 
 
@@ -1567,7 +1615,7 @@ defeat the character-width bound."
                         (or (text-property-not-all
                              (max start (mevedel-view--input-start)) limit property nil)
                             (seq-some (lambda (overlay)
-                                        (and (not (and (eq overlay mevedel-view--composer-keymap-overlay)
+                                        (and (not (and (eq overlay mevedel-view--composer-display-overlay)
                                                        (memq property '(line-prefix wrap-prefix))))
                                              (overlay-get overlay property)))
                                       (overlays-in start limit))))
@@ -1575,8 +1623,8 @@ defeat the character-width bound."
                 (seq-every-p
                  (lambda (window)
                    (and (< (+ (- limit start)
-                              (if (overlayp mevedel-view--composer-keymap-overlay)
-                                  (length (overlay-get mevedel-view--composer-keymap-overlay
+                              (if (overlayp mevedel-view--composer-display-overlay)
+                                  (length (overlay-get mevedel-view--composer-display-overlay
                                                        'line-prefix))
                                 0))
                            (- (window-body-width window) 2))
@@ -1986,9 +2034,11 @@ and other input properties remain untouched."
 
 (defun mevedel-view-composer-initialize ()
   "Initialize composer editing support in the current chat view."
+  (setq mevedel-view--composer-keys-enabled (not mevedel-view--agent-transcript-p))
   ;; A transcript inspection view has nothing a user could undo.
   (when mevedel-view--agent-transcript-p (buffer-disable-undo))
   (unless mevedel-view--agent-transcript-p
+    (mevedel-view--register-composer-keymap)
     ;; Renders between commands leave their own entries; drop them before
     ;; a command such as `undo' can see them.
     (add-hook 'pre-command-hook #'mevedel-view--sanitize-undo nil t)
@@ -2018,15 +2068,10 @@ and other input properties remain untouched."
                 #'mevedel-view--refresh-skill-argument-hint nil t))
     (add-hook 'kill-buffer-hook
               #'mevedel-view--cancel-pending-submission nil t)
-    (setq mevedel-view--composer-keymap-overlay
+    (setq mevedel-view--composer-display-overlay
           (make-overlay
            (mevedel-view--input-start) (point-max)
            (current-buffer) nil t))
-    (overlay-put mevedel-view--composer-keymap-overlay
-                 'keymap
-                 (if mevedel-view--side-conversation-p
-                     mevedel-view--side-conversation-keymap
-                   mevedel-view--composer-keymap))
     (add-hook 'after-change-functions #'mevedel-view--update-composer-end nil t)
     (add-hook 'before-change-functions
               #'mevedel-view--capture-draft-window-state nil t)
@@ -2231,9 +2276,9 @@ follows `mevedel-view--input-marker'."
                      mevedel-view--interaction-marker interaction-type))
 		  (set-marker-insertion-type
                    mevedel-view--input-marker input-type)))
-              (when (overlayp mevedel-view--composer-keymap-overlay)
+              (when (overlayp mevedel-view--composer-display-overlay)
 		(move-overlay
-		 mevedel-view--composer-keymap-overlay
+		 mevedel-view--composer-display-overlay
 		 (mevedel-view--input-start) (point-max))
 		(mevedel-view--update-composer-indent))
               (mevedel-view--render-request-progress)))))))))

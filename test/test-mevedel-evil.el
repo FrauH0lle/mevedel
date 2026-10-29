@@ -60,7 +60,8 @@
                    (cons command (copy-tree (symbol-plist command))))
                  '(mevedel-create-reference mevedel-create-directive
                    mevedel-delete-instructions))
-         mevedel--instruction-command-active))
+         mevedel--instruction-command-active
+         (copy-sequence emulation-mode-map-alists)))
   (mevedel-evil-setup))
 
 (defun mevedel-evil-test--teardown ()
@@ -74,6 +75,7 @@
     (setplist (car pair) (cdr pair)))
   (setq mevedel--instruction-command-active
         (nth 4 mevedel-evil-test--snapshot))
+  (setq emulation-mode-map-alists (nth 5 mevedel-evil-test--snapshot))
   (advice-remove 'mevedel-cockpit-setup-tabulated-surface #'mevedel-evil--cockpit)
   (advice-remove 'mevedel-cockpit-surface-key-help-text #'mevedel-evil--key-help)
   (advice-remove 'mevedel-view--display-fragment-keymap #'mevedel-evil--fragment-maps)
@@ -129,6 +131,193 @@
 (defun mevedel-evil-test--keys (keys)
   "Execute real KEYS through Emacs's keyboard-macro command loop."
   (execute-kbd-macro (kbd keys)))
+
+(defmacro mevedel-evil-test--view (side &rest body)
+  "Run BODY in an initialized view, using a side composer when SIDE is non-nil.
+Keep the real transcript alive and leave recovery and geometry functions intact."
+  (declare (indent 1) (debug t))
+  `(with-temp-buffer
+     (org-mode)
+     (let ((data (current-buffer)))
+       (mevedel-evil-test--buffer
+         (mevedel-view--setup (current-buffer) data
+                              (list :side-conversation-p ,side))
+         (evil-local-mode 1)
+         ,@body))))
+
+(defun mevedel-evil-test--composer-fallback (side state)
+  "Check real composer routing in STATE for an initialized SIDE view."
+  (evil-change-state state)
+  (goto-char (point-min))
+  (let ((history-yank (key-binding (kbd "C-y")))
+        (draft "`word`\nsecond line"))
+    (should-not (eq history-yank #'mevedel-view-yank-dwim))
+    (when (eq state 'normal)
+      (should (eq history-yank #'evil-scroll-line-up)))
+    (goto-char (point-max))
+    (insert draft)
+    (let* ((start (mevedel-view--input-start))
+           (word (make-overlay (1+ start) (+ start 5)))
+           (map (define-keymap "<mouse-3>" #'ignore "C-c C-v" #'forward-char)))
+      (overlay-put word 'keymap map)
+      (goto-char (+ start 3))
+      (dolist (entry `(("C-c RET" . mevedel-view-send)
+                       ("C-c TAB" . mevedel-view-send-follow-up)
+                       ("C-y" . mevedel-view-yank-dwim)
+                       ("C-c C-k" . ,(if side #'mevedel-view-abort
+                                        #'mevedel-view-cancel-composer-state))))
+        (should (eq (key-binding (kbd (car entry))) (cdr entry))))
+      (should (eq (key-binding (kbd "C-c C-v")) #'forward-char))
+      (should (eq (key-binding [mouse-3]) #'ignore))
+      (if side
+          (progn
+            (should (eq (key-binding (kbd "C-c C-z"))
+                        #'mevedel-side-conversation-close))
+            (dolist (entry '(("C-c C-u" . mevedel-view-history-clear-input)
+                             ("C-c C-w" . mevedel-view-retract-pending)
+                             ("M-p" . mevedel-view-history-previous)))
+              (should-not (eq (key-binding (kbd (car entry))) (cdr entry)))))
+        (should-not (eq (key-binding (kbd "C-c C-z"))
+                        #'mevedel-side-conversation-close))
+        (should (eq (key-binding (kbd "M-p")) #'mevedel-view-history-previous)))
+      (let* ((kill-ring '("PASTE"))
+             (kill-ring-yank-pointer kill-ring)
+             (interprogram-paste-function nil))
+        (mevedel-evil-test--keys "C-y"))
+      (should (equal (mevedel-view--input-text) "`woPASTErd`\nsecond line"))
+      ;; Programmatic motion must change routing without a command-hook refresh.
+      (goto-char (point-min))
+      (should (eq (key-binding (kbd "C-y")) history-yank))
+      (should-not (eq (key-binding (kbd "C-c RET")) #'mevedel-view-send))
+      (goto-char (+ start 2))
+      (should (eq (key-binding (kbd "C-y")) #'mevedel-view-yank-dwim))
+      (unless side
+        (mevedel-evil-test--keys "C-c C-u")
+        (should (equal (mevedel-view--input-text) ""))))))
+
+(defun mevedel-evil-test--cold-composer (evil-first)
+  "Check a genuinely cold composer with Evil setup first when EVIL-FIRST."
+  (let ((file (symbol-file 'mevedel-evil-test--cold-composer 'defun)))
+    (should file)
+    (with-temp-buffer
+      (let ((process
+             (make-process
+              :name "mevedel-evil-cold" :buffer (current-buffer) :noquery t
+              :connection-type 'pipe :sentinel #'ignore
+              :command
+              (list (expand-file-name invocation-name invocation-directory)
+                    "--batch" "-Q" "--eval"
+                    (prin1-to-string
+                     `(progn
+                        (setq load-path ',load-path
+                              native-comp-jit-compilation nil)
+                        (require 'ert)
+                        (should-not (featurep 'evil))
+                        (should-not (featurep 'mevedel-view-composer))
+                        ,@(when evil-first
+                            '((require 'mevedel-evil)
+                              (mevedel-evil-setup)
+                              (should-not (featurep 'mevedel-view-composer))))
+                        (require 'mevedel-view)
+                        (save-window-excursion
+                          (with-temp-buffer
+                            (org-mode)
+                            (let ((data (current-buffer)))
+                              (with-temp-buffer
+                                (switch-to-buffer (current-buffer))
+                                (mevedel-view--setup (current-buffer) data)
+                                ,@(unless evil-first
+                                    '((should-not (featurep 'evil))
+                                      (require 'mevedel-evil)
+                                      (mevedel-evil-setup)))
+                                ;; Only load the ordinary test fixtures after
+                                ;; the cold installation boundary is exercised.
+                                (load ,file nil t)
+                                (let (messages)
+                                  (mevedel-test--with-captured-messages messages
+                                    (evil-local-mode 1)
+                                    (dolist (state '(normal insert))
+                                      (mevedel-evil-test--composer-fallback nil state)))
+                                  ;; Evil clears its state echo with empty
+                                  ;; messages; no other diagnostics are expected.
+                                  (should (string-match-p "\\`\n*\\'" messages)))))))))))))
+        (unwind-protect
+            (progn
+              (with-timeout (60 (ert-fail "Cold Evil composer timed out"))
+                (while (process-live-p process)
+                  (accept-process-output process 0.05)))
+              (accept-process-output process 0)
+              (ert-info ((buffer-string))
+                (should (equal 0 (process-exit-status process)))
+                (should (equal "" (buffer-string)))))
+          (when (process-live-p process) (delete-process process)))))))
+
+(mevedel-deftest mevedel-evil-composer-routing
+  (:before-each (mevedel-evil-test--setup)
+   :after-each (mevedel-evil-test--teardown)
+   :quiet t)
+  ,test
+  (test)
+  :doc "Mouse-only word overlays preserve normal and insert composer fallback"
+  (dolist (side '(nil t))
+    (dolist (state '(normal insert))
+      (ert-info ((format "side=%S state=%S" side state))
+        (mevedel-evil-test--view side
+          (mevedel-evil-test--composer-fallback side state)))))
+  :doc "Explicit contextual commands beat composer fallback in both Evil states"
+  (dolist (side '(nil t))
+    (dolist (state '(normal insert))
+      (dolist (property '(overlay text))
+        (ert-info ((format "side=%S state=%S property=%S" side state property))
+          (mevedel-evil-test--view side
+            (insert "word")
+            (evil-change-state state)
+            (let* ((start (mevedel-view--input-start))
+                   (map (define-keymap "C-y" #'backward-char
+                                      "C-c RET" #'forward-char
+                                      "<mouse-3>" #'ignore)))
+              (if (eq property 'overlay)
+                  (overlay-put (make-overlay start (point-max)) 'keymap map)
+                (put-text-property start (point-max) 'keymap map))
+              (goto-char (+ start 2))
+              (should (eq (key-binding (kbd "C-y")) #'backward-char))
+              (should (eq (key-binding (kbd "C-c RET")) #'forward-char))
+              (should (eq (key-binding [mouse-3]) #'ignore))
+              (mevedel-evil-test--keys "C-y")
+              (should (= (point) (1+ start)))
+              (mevedel-evil-test--keys "C-c RET")
+              (should (= (point) (+ start 2)))
+              (should (equal (mevedel-view--input-text) "word"))))))))
+  :doc "Empty prompt controls and literal i/R typing keep root and side semantics"
+  (dolist (side '(nil t))
+    (dolist (command '("i" "R"))
+      (mevedel-evil-test--view side
+        (let* ((start (mevedel-view--input-start))
+               (prompt (buffer-substring-no-properties (point-min) start)))
+          (dolist (state '(normal insert))
+            (evil-change-state state)
+            (goto-char (1- start))
+            (dolist (entry `(("C-c RET" . mevedel-view-send)
+                             ("C-c TAB" . mevedel-view-send-follow-up)
+                             ("C-c C-k" . ,(if side #'mevedel-view-abort
+                                              #'mevedel-view-cancel-composer-state))))
+              (should (eq (key-binding (kbd (car entry))) (cdr entry))))
+            (when side
+              (should (eq (key-binding (kbd "C-c C-z"))
+                          #'mevedel-side-conversation-close))))
+          (evil-normal-state)
+          (goto-char (1- start))
+          (mevedel-evil-test--keys (concat command " h j k l g G <escape>"))
+          (should (equal (buffer-substring-no-properties (point-min) start) prompt))
+          (should (equal (mevedel-view--input-text) "hjklgG")))))))
+
+(mevedel-deftest mevedel-evil-composer-cold-order ()
+  ,test
+  (test)
+  :doc "Evil setup before the composer preserves real normal/insert routing"
+  (mevedel-evil-test--cold-composer t)
+  :doc "An initialized composer before Evil preserves real normal/insert routing"
+  (mevedel-evil-test--cold-composer nil))
 
 (defmacro mevedel-evil-test--file-buffer (text &rest body)
   "Run BODY in a real visited temporary source file containing TEXT."

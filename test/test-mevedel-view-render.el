@@ -2671,7 +2671,7 @@
                                      mevedel-view--input-marker start)))
               (should (equal draft (buffer-substring-no-properties start (point-max))))
               (should (= (point) (+ start 5)))
-              (should (= start (overlay-start mevedel-view--composer-keymap-overlay)))
+              (should (= start (overlay-start mevedel-view--composer-display-overlay)))
               (should-not (get-char-property (point-min) 'line-prefix)))
             (should (= history-end tail)))))))
 
