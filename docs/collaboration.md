@@ -711,8 +711,14 @@ configuration files read in place. A project file has no discussions and no
 Delete there; for an owner link, **Ask** opens the new-session dialog with
 the file's path in the first prompt.
 
-**Upload** adds files to the folder on screen, from the picker or dropped on
-the tree. A file travels in acknowledged chunks of 512 KiB (`file-upload`):
+Each file row also has **Download**, which saves the original bytes under the
+file's name without opening a preview or leaving the current folder. It uses
+the same authorized `file-get` transfer and 16 MiB limit as the preview.
+
+**Upload** adds files to the folder on screen, from the picker or dropped
+anywhere in the lobby while the **Files** tab is shown, including its header
+and empty tree. The drop area is marked while dragging files over it.
+A file travels in acknowledged chunks of 512 KiB (`file-upload`):
 the first announces folder, name and size, and the browser sends the next
 only after the host took the previous one, so a refusal stops the transfer
 and the socket never queues a whole file. The host keeps one unfinished

@@ -36,6 +36,8 @@ jobs:
         run: |
           npm test --prefix shared-editing
           node test/collaboration-viewer-test.js
+          node test/collaboration-viewer-files-test.js
+          node test/collaboration-viewer-artifact-test.js
           node test/collaboration-tool-presentation-test.js
           node test/collaboration-viewer-agent-test.js
           node test/collaboration-viewer-content-links-test.js
@@ -47,6 +49,7 @@ jobs:
           test/collaboration-markdown.browser.mjs
           test/collaboration-activity.browser.mjs
           test/collaboration-viewer-requests.browser.mjs
+          test/collaboration-viewer-files.browser.mjs
           test/collaboration-viewer-agents.browser.mjs
           test/collaboration-discussions.browser.mjs
           shared-editing/test/design.browser.mjs

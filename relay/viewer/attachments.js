@@ -214,7 +214,7 @@
   /* Feed TRAY from the file picker behind BUTTON, from files pasted into
      INPUT, and from files dropped on TARGET, which is marked while a file
      drag is over it.  Other drags keep the browser default. */
-  function bind(tray, {target, input, button, picker}) {
+  function bind(tray, {target, input, button, picker, enabled = () => true}) {
     if (button && picker) {
       button.addEventListener('click', () => picker.click());
       picker.addEventListener('change', () => {
@@ -236,17 +236,23 @@
       let depth = 0;
       const settle = () => { depth = 0; delete target.dataset.dropping; };
       target.addEventListener('dragenter', event => {
+        if (!enabled()) { settle(); return; }
         if (!carriesFiles(event)) return;
         depth += 1;
         target.dataset.dropping = '';
       });
       target.addEventListener('dragover', event => {
-        if (carriesFiles(event)) event.preventDefault();
+        if (!enabled()) { settle(); return; }
+        if (carriesFiles(event)) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+        }
       });
       target.addEventListener('dragleave', event => {
         if (carriesFiles(event) && --depth <= 0) settle();
       });
       target.addEventListener('drop', event => {
+        if (!enabled()) { settle(); return; }
         if (!carriesFiles(event)) return;
         event.preventDefault();
         // An editor canvas below takes dropped images itself.

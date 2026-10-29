@@ -322,7 +322,8 @@
      notice: flashNotice});
   const uploads = window.mevedelFilesView.uploader({send});
   const files = window.mevedelFilesView.create(
-    {send, el, notice: flashNotice, uploads, openFile: artifacts.openFile, href: destinationURL});
+    {send, el, notice: flashNotice, uploads, openFile: artifacts.openFile,
+     downloadFile: artifacts.download, href: destinationURL});
   // The workspace artifact store: the room's Project artifacts sheet and
   // the lobby's Artifacts tab; one is active at a time.
   const storeSheet = document.getElementById('store-sheet');
