@@ -312,6 +312,10 @@ examines at most 256 entries, copies at most 2 MiB, and omits files larger than
 512 KiB. Directory batches rotate one entry at a time, so pending root siblings
 do not consume all descendant visits. Each directory listing is bounded by the
 remaining visit allowance; this is a partial snapshot, not an exhaustive search.
+Traversal and copy writes yield between short timer slices (at most eight steps
+or 20 ms before the next step). A single pinned read or filesystem operation can
+still take longer. Each source admission rechecks authority; yielding does not
+cache a path's permission or make the whole search an atomic snapshot.
 Omitted, unavailable, and excluded source paths produce a partial-search
 notice. Narrowing the subtree or reading a named source file supports further
 investigation. Results use relative filenames and omit private copy paths.

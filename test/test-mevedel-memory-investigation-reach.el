@@ -15,6 +15,18 @@
 (require 'mevedel-memory-scope)
 (require 'mevedel-sandbox)
 
+(defun mevedel-test-investigation-reach--documents (state root path contents)
+  "Collect STATE's ROOT/PATH document iterator with CONTENTS."
+  (let ((iterator (mevedel-memory-investigation--documents state root path contents))
+        result ready)
+    (unwind-protect
+        (while (not ready)
+          (let ((value (iter-next iterator)))
+            (when (plist-member value :ready)
+              (setq ready t result (plist-get value :ready)))))
+      (iter-close iterator))
+    result))
+
 (mevedel-deftest mevedel-memory-investigation--documents ()
   ,test
   (test)
@@ -74,7 +86,7 @@
                        (lambda (&rest args)
                          (cl-incf visits)
                          (apply original args))))
-              (let ((snapshot (mevedel-memory-investigation--documents state "workspace" "." nil)))
+              (let ((snapshot (mevedel-test-investigation-reach--documents state "workspace" "." nil)))
                 (should (cdr snapshot))
                 (should (<= (length (car snapshot)) 256))
                 ;; One resolution initializes the queue; each visit revalidates.
@@ -82,8 +94,8 @@
                 (should-not (assoc "zroot288.el" (car snapshot)))))
             ;; Negative controls: a missing match remains absent; targeted
             ;; exclusion cannot become readable through the fair traversal.
-            (should-error (mevedel-memory-investigation--documents state "workspace" "memory" t))
-            (let ((snapshot (mevedel-memory-investigation--documents state "workspace" "docs" t)))
+            (should-error (mevedel-test-investigation-reach--documents state "workspace" "memory" t))
+            (let ((snapshot (mevedel-test-investigation-reach--documents state "workspace" "docs" t)))
               (should-not (cdr snapshot))
               (should (= 2 (length (car snapshot))))
               (should-not (assoc "src/completion.el" (car snapshot))))))
