@@ -816,6 +816,8 @@ older pending applications and digest coverage alone do not."
            (status (if (memq (plist-get result :outcome) '(aborted restart-required)) 'cancelled 'failed))
            (reported (if-let* ((read-usage (plist-get (plist-get state :request) :usage)))
                          (funcall read-usage) result))
+           (skipped-note-count (length (plist-get result :skipped-notes)))
+           (note-format-failures (or (plist-get result :note-format-failure-count) 0))
            ;; Freeze diagnostics before storage can replace RESULT with an error.
            ;; Cancellation has no review callback result, so use its live snapshot.
            (usage (append
@@ -860,7 +862,7 @@ older pending applications and digest coverage alone do not."
               (setq entry (mevedel-memory-store-publish workspace id)))
             (when (string-empty-p (plist-get entry :focus))
               (setf (mevedel-workspace-memory-schedule workspace) nil)))
-        (error (setq result (list :outcome 'error :error (error-message-string err)))))
+        (error (setq result (append (list :outcome 'error :error (error-message-string err)) result))))
       (mevedel-memory-pass--timing-end state :publication-duration-ms)
       (unless entry
         (mevedel-memory-pass--timing-start state :retirement-duration-ms)
@@ -898,6 +900,9 @@ older pending applications and digest coverage alone do not."
         (setf (mevedel-workspace-journal-observation workspace) nil))
       (cl-labels ((complete (applied)
 			    (mevedel-memory-pass--timing-end state :application-duration-ms)
+			    (let* ((keeps (seq-filter (lambda (proposal) (eq 'note-keep (plist-get proposal :action)))
+                                                     (plist-get accepted :proposals)))
+                                   (converted (cl-count-if (lambda (proposal) (plist-get proposal :guard-converted)) keeps)))
 		    (plist-put state :result
 			       (append (list :outcome (if entry 'success (plist-get result :outcome))
 					     :id id :entry entry :error (or (plist-get result :error) (plist-get applied :error))
@@ -909,11 +914,15 @@ older pending applications and digest coverage alone do not."
 							    (+ (or (plist-get (plist-get state :selection) :remaining) 0)
 							       (or (plist-get result :omitted-digests) 0))
 							  (or (plist-get (plist-get state :selection) :eligible) 0))
-					     :notes-reviewed (length (plist-get result :notes))
+					     :notes-reviewed (- (length (plist-get result :notes)) skipped-note-count)
+					     :note-format-failure-count note-format-failures
+					     :guard-converted-keep-count converted
+					     :model-keep-count (- (length keeps) converted)
 					     :notes-remaining (+ (or (plist-get (plist-get state :notes) :remaining) 0)
-								 (or (plist-get result :omitted-notes) 0))
+									 (or (plist-get result :omitted-notes) 0)
+									 skipped-note-count)
 					     :notes-blocked (or (plist-get (plist-get state :notes) :blocked-count) 0))
-				       applied usage))
+				       applied usage)))
 		    (when (and entry
 				       (not (plist-get state :drain))
 			       (not (plist-get state :stop-apply))
@@ -967,6 +976,9 @@ older pending applications and digest coverage alone do not."
 					 :covered-count (if (eq 'general (plist-get (plist-get state :telemetry) :scope))
 							    (length (plist-get entry :digests)) 0)
 					 :proposed-count (length (plist-get entry :proposals))
+					 :note-format-failure-count note-format-failures
+					 :guard-converted-keep-count (plist-get (plist-get state :result) :guard-converted-keep-count)
+					 :model-keep-count (plist-get (plist-get state :result) :model-keep-count)
 					 :updated-file-count (plist-get applied :updated-files)
 						 :remaining-count (plist-get (plist-get state :result) :remaining)))))
 	                      ;; Async completion runs after this function's outer

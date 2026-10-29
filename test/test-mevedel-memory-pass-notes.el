@@ -16,9 +16,11 @@
 (require 'mevedel-memory-decision)
 (require 'mevedel-memory-notes)
 (require 'mevedel-memory-review)
+(require 'mevedel-memory-store)
 (require 'mevedel-resource)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-system)
+(require 'mevedel-telemetry)
 (require 'gptel-openai)
 
 (defmacro mevedel-test-memory-pass-notes--without-prompts (&rest body)
@@ -111,6 +113,8 @@
                                                        (cond ((nth 3 disposition))
                                                              ((equal (nth 1 disposition) "delete")
                                                               "open-items: []\nresolved-by: []\n")
+                                                             ((equal (nth 1 disposition) "keep")
+                                                              "open-items: [\"The note's handoff still lacks completion evidence\"]\n")
                                                              (t ""))
                                                        (if (nth 2 disposition) (concat (nth 2 disposition) "\n") "")))
                                              dispositions "")))
@@ -120,11 +124,14 @@
                                                                (lambda (value) (setq result value)) args)))
                                (finish (&optional inspected)
                                  (funcall callback
-                                          (list :outcome 'success :entries nil :reply reply
+                                          (append (list :outcome 'success :entries nil :reply reply
                                                 :notes (mapcar (lambda (document) (plist-get document :id))
                                                                (mevedel-memory-notes-documents scope-seen))
                                                 :inspected inspected
-                                                :policy (list :backend backend :model 'test-model))))
+                                                :policy (list :backend backend :model 'test-model))
+                                                  (mevedel-memory-proposal-parse
+                                                   reply (plist-get scope-seen :roots) nil
+                                                   (mevedel-memory-notes-index scope-seen)))))
                                (pass () (plist-get (plist-get state :claim) :owner))
                                (proposals () (plist-get (mevedel-memory-store-accepted workspace (pass)) :proposals))
                                (proposal (action &optional file)
@@ -231,6 +238,130 @@
                    (should (= 0 (plist-get (capture) :notes)))
                    (set-file-times kept (seconds-to-time (- now (* 3600 25))))
                    (should (= 1 (plist-get (capture) :notes))))
+                 :doc "condensation cannot discard measurements or their scenario but may preserve them"
+                 (let* ((measurements (concat "Scenario: batch-16, 4 passes, 64 decisions, one sample.\n\n"
+                                             "- Reads: 4,294 programs in 1 sample.\n"
+                                             "- Existence: 680 programs in 1 sample.\n\n"
+                                             "Correction: 64 and 192 belong to separate scenarios, not the 2,736-program leaf.\n"))
+                        (original (concat "Finished introduction.\n\n" measurements "\nOpen: batch existence probes.\n"))
+                        (path (note "counts.md" original)))
+                   (should (start :automatic t))
+                   ;; Bare numbers, even all of them, do not retain conditions.
+                   (setq reply (text nil (list (list (address "counts.md") "condense"
+                                                    "Open: batch probes; 16, 4, 64, 4,294, 680, 1, 192, 2,736."))))
+                   (finish)
+                   (should (eq 'success (plist-get result :outcome)))
+                   (should (proposal 'note-keep))
+                   (should (string-match-p "drops measurement paragraphs" (plist-get (proposal 'note-keep) :reason)))
+                   (should (equal original (bytes path)))
+                   ;; A new version enters native admission; intact measured
+                   ;; paragraphs can be condensed without the finished intro.
+                   (note "counts.md" (concat original "New context.\n"))
+                   (should (start))
+                   (setq reply (text nil (list (list (address "counts.md") "condense"
+                                                    (concat measurements "\nOpen: batch existence probes.")))))
+                   (finish)
+                   (should (eq 'success (plist-get result :outcome)))
+                   (should (proposal 'note-condense))
+                   (should (equal (concat measurements "\nOpen: batch existence probes.\n") (bytes path))))
+                 :doc "raw tab-separated counts cannot disappear as if they were Read line numbers"
+                 (let ((path (note "tabs.md" "512\treads on target A.\n")))
+                   (should (start :automatic t))
+                   (setq reply (text nil (list (list (address "tabs.md") "condense" "1512\treads on target A."))))
+                   (finish)
+                   (should (proposal 'note-keep "tabs.md"))
+                   (should (equal "512\treads on target A.\n" (bytes path))))
+                 :doc "delete cannot drop measurement baselines without authenticated preservation evidence"
+                 (let* ((measurement "Measured update: 12.25 ms median before, 2.5 ms after, 6 paired samples with the same visible state.")
+                        (lost (note "lost.md" (concat measurement "\n")))
+                        (recorded (note "recorded.md" (concat measurement "\n"))))
+                   (should (start :automatic t))
+                   (setq reply (text nil (list (list (address "lost.md") "delete")
+                                               (list (address "recorded.md") "delete" nil
+                                                     (format "open-items: []\nresolved-by: [%S]\n"
+                                                             (concat "docs/measurements.md: \"" measurement "\""))))))
+                   (finish (list (cons "docs/measurements.md" measurement)))
+                   (should (proposal 'note-keep "lost.md"))
+                   (should (plist-get (proposal 'note-keep "lost.md") :guard-converted))
+                   (should (= 1 (plist-get result :guard-converted-keep-count)))
+                   (should (= 0 (plist-get result :model-keep-count)))
+                   (should (equal (concat measurement "\n") (bytes lost)))
+                   (should (proposal 'note-delete "recorded.md"))
+                   (should-not (file-exists-p recorded)))
+                 :doc "delete accounts for source handoffs with an anchor in each authenticated resolution"
+                 (let* ((source "Handoff: activation on target C.\n")
+                        (names '("omitted.md" "unrelated.md" "unresolved.md" "resolved.md"))
+                        (paths (mapcar (lambda (name) (note name source)) names))
+                        (quote "The activation on target C completed with the owner present.")
+                        (fields (format "open-items: [\"activation on target C\"]\nresolution-anchors: [\"activation\"]\nresolved-by: [%S]\n"
+                                        (concat "docs/handoff.md: " quote))))
+                   (should (start :automatic t))
+                   (setq reply (text nil (list
+                                          (list (address "omitted.md") "delete")
+                                          (list (address "unrelated.md") "delete" nil
+                                                "open-items: [\"activation on target C\"]\nresolution-anchors: [\"activation\"]\nresolved-by: [\"docs/handoff.md: The implementation commit is contained in HEAD.\"]\n")
+                                          (list (address "unresolved.md") "delete" nil
+                                                (concat fields "unresolved-items: [\"activation confirmation\"]\n"))
+                                          (list (address "resolved.md") "delete" nil fields))))
+                   (finish (list (cons "docs/handoff.md" (concat quote "\nThe implementation commit is contained in HEAD."))))
+                   (dolist (name (butlast names))
+                     (should (proposal 'note-keep name))
+                     (should (file-exists-p (file-name-concat shared name))))
+                   (should (proposal 'note-delete "resolved.md"))
+                   (should-not (file-exists-p (car (last paths)))))
+                 :doc "without the acceptance guard the unsafe condensation reaches the actual note"
+                 (let* ((path (note "counts.md" "Baseline: 512 reads in 2 samples on target A.\n\nOpen: verify target B.\n")))
+                   (should (start :automatic t))
+                   (setq reply (text nil (list (list (address "counts.md") "condense" "Open: verify target B."))))
+                   (cl-letf (((symbol-function 'mevedel-memory-store--lost-measurements) (lambda (&rest _) nil)))
+                     (finish))
+                   (should (proposal 'note-condense))
+                   (should (equal "Open: verify target B.\n" (bytes path))))
+                 :doc "a measurement can move into a citing extraction but not an unrelated one"
+                 (let* ((measurement "Probe baseline: 512 reads in 2 samples on target A.")
+                        (original (concat measurement "\n\nOpen: verify target B.\n"))
+                        (path (note "counts.md" original)))
+                   (should (start :automatic t))
+                   (setq reply (text (list (list "counts.md" measurement nil))
+                                     (list (list (address "counts.md") "condense" "Open: verify target B."))))
+                   (finish)
+                   (should (proposal 'note-keep))
+                   (should (equal original (bytes path)))
+                   (note "counts.md" (concat original "New context.\n"))
+                   (should (start))
+                   (setq reply (text (list (list "counts-record.md" measurement (list (address "counts.md"))))
+                                     (list (list (address "counts.md") "condense" "Open: verify target B."))))
+                   (finish)
+                   (should (proposal 'note-condense))
+                   (should (equal "Open: verify target B.\n" (bytes path)))
+                   (should (equal (list (plist-get (proposal 'promote) :id))
+                                  (plist-get (proposal 'note-condense) :requires))))
+                 :doc "removing a measurement requires its complete quote from an actual read"
+                 (let* ((measurement "Probe baseline: 512 reads in 2 samples on target A.")
+                        (original (concat measurement "\n\nOpen: verify target B.\n"))
+                        (path (note "counts.md" original))
+                        (fields (format "resolved-by: [%S]\n" (concat "docs/adr/counts.md: " measurement))))
+                   (should (start :automatic t))
+                   (setq reply (text nil (list (list (address "counts.md") "condense" "Open: verify target B." fields))))
+                   (finish '(("docs/adr/counts.md" . "The baseline is now recorded without any counts.")))
+                   (should (proposal 'note-keep))
+                   (should (equal original (bytes path)))
+                   ;; A valid quoted segment cannot authenticate measurement
+                   ;; text fabricated outside the quotation marks.
+                   (note "counts.md" (concat original "Changed context.\n"))
+                   (should (start))
+                   (setq reply (text nil (list (list (address "counts.md") "condense" "Open: verify target B."
+                                                    (format "resolved-by: [%S]\n"
+                                                            (concat "docs/adr/counts.md: \"Unrelated recorded result\" " measurement))))))
+                   (finish '(("docs/adr/counts.md" . "Unrelated recorded result")))
+                   (should (proposal 'note-keep))
+                   (should (equal (concat original "Changed context.\n") (bytes path)))
+                   (note "counts.md" (concat original "New context.\n"))
+                   (should (start))
+                   (setq reply (text nil (list (list (address "counts.md") "condense" "Open: verify target B." fields))))
+                   (finish (list (cons "docs/adr/counts.md" measurement)))
+                   (should (proposal 'note-condense))
+                   (should (equal "Open: verify target B.\n" (bytes path))))
                  :doc "housekeeping removes quiet unreferenced attachments and empty folders without inference"
                  (mevedel-test-memory-pass-notes--without-prompts
                   (let* ((binary (apply #'unibyte-string (number-sequence 0 255)))
@@ -344,7 +475,7 @@
                                                (format "open-items: [\"Finding 1B\", \"Finding 7\"]\nresolved-by: [%S]\n" anchor))
                                          ;; Quotes span a line break and ignore line numbers.
                                          (list (address "resolved.md") "delete" nil
-                                               (format "open-items: [\"Finding 1B\"]\nresolved-by: [%S]\n" anchor))
+                                               (format "open-items: [\"Finding 1B viewport anchor\"]\nresolution-anchors: [\"viewport anchor\"]\nresolved-by: [%S]\n" anchor))
                                          (list (address "done.md") "delete"))))
                    (finish (list (cons "docs/adr/0126.md"
                                        (concat "  352\t- **One viewport anchor per window (2026-10-18).** Logical window-start\n"
@@ -352,7 +483,7 @@
                                  (cons "mevedel-view-zone.el" "  1\t;;; mevedel-view-zone.el\n")))
                    (should (eq 'success (plist-get result :outcome)))
                    (should (string-prefix-p
-                            "Kept: the review did not quote read workspace evidence resolving or recording each of these open items: Finding 2; Finding 1B. Reviewer: "
+                            "Kept: the review did not quote read workspace evidence with a matching resolution anchor for each item, or still lists unresolved items: Finding 2; Finding 1B. Reviewer: "
                             (plist-get (proposal 'note-keep "unread.md") :reason)))
                    (should (proposal 'note-keep "claimed.md"))
                    (should (proposal 'note-keep "elsewhere.md"))
@@ -361,6 +492,156 @@
                    (should (proposal 'note-delete "done.md"))
                    (should-not (proposal 'note-delete "unread.md"))
                    (dotimes (index 4) (should (file-exists-p (nth index paths)))))
+                 :doc "a missing note disposition leaves no decision while valid notes apply and failures stay visible"
+                 (let* ((mevedel-telemetry-enabled t)
+                        (missing (note "missing.md" "Finished context awaiting an ordinary review.\n"))
+                        (good (note "good.md" "Completed and verified.\n")))
+                   (should (start :automatic t))
+                   (setq reply (text nil (list (list (address "good.md") "delete"))))
+                   (finish)
+                   (should (eq 'success (plist-get result :outcome)))
+                   (should (equal 1 (plist-get result :note-format-failure-count)))
+                   (should (equal 1 (plist-get result :notes-reviewed)))
+                   (should (equal 1 (plist-get result :notes-remaining)))
+                   (should-not (file-exists-p good))
+                   (should (file-exists-p missing))
+                   (should-not (seq-find (lambda (item) (equal "missing.md" (plist-get item :file))) (proposals)))
+                   ;; No invented keep decision suppresses the failed note.
+                   (should (equal 1 (plist-get (capture) :notes)))
+                   (let* ((path (file-name-concat root ".mevedel" "state" "diagnostics" mevedel-telemetry-file-name))
+                          (events (with-temp-buffer
+                                    (insert-file-contents path)
+                                    (mapcar (lambda (line) (car (read-from-string line)))
+                                            (split-string (buffer-string) "\n" t))))
+                          (completed (car (last (seq-filter
+                                                (lambda (event)
+                                                  (eq 'memory-consolidation-completed (plist-get event :event)))
+                                                events)))))
+                     (should (equal 1 (plist-get completed :note-format-failure-count))))
+                   ;; A repeated omission still yields no proposal and no progress.
+                   (should (start))
+                   (setq reply (text nil nil))
+                   (finish)
+                   (should (equal 1 (plist-get result :note-format-failure-count)))
+                   (should-not (proposals))
+                   (should-not (mevedel-memory-pass--progress-p workspace (mevedel-memory-store-accepted workspace (pass))))
+                   (should (equal 1 (plist-get (capture) :notes))))
+                 :doc "bodyless missing closers and whitespace fence lines preserve valid note actions"
+                 (let ((kept (note "kept.md" "Open handoff: confirm target activation.\n"))
+                       (done (note "done.md" "Completed and verified.\n")))
+                   (should (start :automatic t))
+                   (setq reply (replace-regexp-in-string
+                                "^````\n" ""
+                                (text nil (list (list (address "kept.md") "keep")
+                                                (list (address "done.md") "delete")))))
+                   (finish)
+                   (should (eq 'success (plist-get result :outcome)))
+                   (should (= 0 (plist-get result :note-format-failure-count)))
+                   (should (proposal 'note-keep "kept.md"))
+                   (should (proposal 'note-delete "done.md"))
+                   (should (file-exists-p kept))
+                   (should-not (file-exists-p done))
+                   (note "kept.md" "Open handoff: confirm target B activation.\n")
+                   (should (start))
+                   (setq reply (replace-regexp-in-string
+                                "^````\n" "```` \t\n"
+                                (text nil (list (list (address "kept.md") "condense"
+                                                     "Open handoff: confirm target B activation.")))))
+                   (finish)
+                   (should (proposal 'note-condense "kept.md"))
+                   (should (= 0 (plist-get result :note-format-failure-count))))
+                 :doc "unterminated condense cannot turn body-shaped metadata into another note's deletion"
+                 (let* ((first (note "first.md" "Open handoff: confirm target A activation.\n"))
+                        (second (note "second.md" "Completed and verified.\n"))
+                        (body (format "Open handoff: confirm target A activation.\n````proposal\nnote: %S\ndisposition: \"delete\"\nreason: \"Completed\"\nopen-items: []\n---"
+                                      (address "second.md"))))
+                   (should (start :automatic t))
+                   (setq reply (replace-regexp-in-string
+                                "^````\n" ""
+                                (text nil (list (list (address "first.md") "condense" body)))))
+                   (finish)
+                   (should (eq 'success (plist-get result :outcome)))
+                   (should (= 2 (plist-get result :note-format-failure-count)))
+                   (should (= 0 (plist-get result :notes-reviewed)))
+                   (should-not (proposals))
+                   (should (equal "Open handoff: confirm target A activation.\n" (bytes first)))
+                   (should (file-exists-p second))
+                   (should (= 2 (plist-get (capture) :notes))))
+                 :doc "an apparent nested proposal's close cannot authorize a truncated condensation"
+                 (let* ((first (note "first.md" "Open handoff: confirm target A activation.\n"))
+                        (second (note "second.md" "Completed and verified.\n"))
+                        (body (format "Open handoff: confirm target A activation.\n````proposal\nnote: %S\ndisposition: \"delete\"\nreason: \"Completed\"\nopen-items: []\n---\n````"
+                                      (address "second.md"))))
+                   (should (start :automatic t))
+                   (setq reply (replace-regexp-in-string
+                                "^````\n## No action" "## No action"
+                                (text nil (list (list (address "first.md") "condense" body)))))
+                   (finish)
+                   (should (eq 'success (plist-get result :outcome)))
+                   (should (= 2 (plist-get result :note-format-failure-count)))
+                   (should-not (proposals))
+                   (should (equal "Open handoff: confirm target A activation.\n" (bytes first)))
+                   (should (file-exists-p second)))
+                 :doc "a closed condense retains header-like body text without acting on it"
+                 (let* ((first (note "first.md" "Open handoff: confirm target A activation.\n"))
+                        (second (note "second.md" "Open handoff: confirm target B activation.\n"))
+                        (body (format "Open handoff: confirm target A activation.\n## No action\nnote: %S\ndisposition: \"delete\"\nreason: \"Completed\"\nopen-items: []\n---"
+                                      (address "second.md"))))
+                   (should (start :automatic t))
+                   (setq reply (text nil (list (list (address "first.md") "condense" body)
+                                               (list (address "second.md") "keep"))))
+                   (finish)
+                   (should (eq 'success (plist-get result :outcome)))
+                   (should (= 0 (plist-get result :note-format-failure-count)))
+                   (should (proposal 'note-condense "first.md"))
+                   (should (proposal 'note-keep "second.md"))
+                   (should-not (proposal 'note-delete "second.md"))
+                   (should (equal (concat body "\n") (bytes first)))
+                   (should (file-exists-p second)))
+                 :doc "publication failure preserves partial-review diagnostics without negative counts"
+                 (let ((missing (note "missing.md" "Finished context awaiting review.\n"))
+                       (good (note "good.md" "Completed and verified.\n"))
+                       (accept-calls 0))
+                   (should (start :automatic t))
+                   (setq reply (text nil (list (list (address "good.md") "delete"))))
+                   (cl-letf (((symbol-function 'mevedel-memory-store-accept)
+                              (lambda (&rest _)
+                                (cl-incf accept-calls)
+                                (error "Injected note acceptance failure"))))
+                     (finish))
+                   (should (= 1 accept-calls))
+                   (should (eq 'error (plist-get result :outcome)))
+                   (should (equal "Injected note acceptance failure" (plist-get result :error)))
+                   (should (= 1 (plist-get result :note-format-failure-count)))
+                   (should (= 1 (plist-get result :notes-reviewed)))
+                   (should (= 1 (plist-get result :notes-remaining)))
+                   (should (file-exists-p missing))
+                   (should (file-exists-p good))
+                   (should-not (mevedel-memory-store-accepted workspace (pass)))
+                   (should (= 2 (plist-get (capture) :notes))))
+                 :doc "sixteen repeated no-op notes cannot starve a seventeenth valid note"
+                 (let (invalid (good (note "z-good.md" "Completed and verified.\n" 48)))
+                   (dotimes (index 16)
+                     (push (note (format "bad-%02d.md" index) "Finished context awaiting review.\n" 72) invalid))
+                   (should (start :automatic t))
+                   (should-not (member "z-good.md" (plist-get (cdr (mevedel-memory-notes-root scope-seen)) :files)))
+                   (setq reply (text nil nil))
+                   (finish)
+                   (should (= 16 (plist-get result :note-format-failure-count)))
+                   (should-not (proposals))
+                   (should-not (mevedel-memory-pass--progress-p workspace (mevedel-memory-store-accepted workspace (pass))))
+                   ;; Disabling only the ordering rank recreates the starvation:
+                   ;; the same sixteen oldest notes still fill the next capture.
+                   (cl-letf (((symbol-function 'mevedel-memory-notes--admission-rank) (lambda (&rest _) 0)))
+                     (should-not (member "z-good.md" (plist-get (cdr (plist-get (capture) :root)) :files))))
+                   (should (start))
+                   (should (member "z-good.md" (plist-get (cdr (mevedel-memory-notes-root scope-seen)) :files)))
+                   (setq reply (text nil (list (list (address "z-good.md") "delete"))))
+                   (finish)
+                   (should (= 15 (plist-get result :note-format-failure-count)))
+                   (should (proposal 'note-delete "z-good.md"))
+                   (should-not (file-exists-p good))
+                   (should (cl-every #'file-exists-p invalid)))
                  :doc "a rejected review reply is retained for diagnosis and changes nothing"
                  (let ((path (note "kept.md" "Open item.\n")))
                    (should (start :automatic t))

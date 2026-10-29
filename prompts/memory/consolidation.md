@@ -47,7 +47,10 @@ tools can read them. Dispose of each admitted note exactly once in Notes:
   help someday, delete.
 - `keep`: only for concrete continuing use, such as an open handoff or an
   investigation still in progress, including its prepared diagnostic needed
-  for an unresolved follow-up. The note is reviewed again later.
+  for an unresolved follow-up. Name each still-open item in `open-items`; in
+  `reason`, state which resolution evidence is missing after investigation.
+  A generic "potentially useful" or "not verified" is not a justification.
+  The note is reviewed again later.
 - `condense`: rewrite the note to the part still in use, for example only its
   open handoff after its finding was extracted.
 
@@ -84,7 +87,9 @@ are usually completed in Git history: search it with the Git tool (`log` with
 the item's terms, or `show` a commit hash the note names) and quote it as
 `GIT-HISTORY`. For a handoff to integrate or merge a named commit, `show`
 reports "Commit HASH contained in current HEAD: yes" when that is done; quote
-that line. A commit that merely touches the topic
+that line. Git containment establishes inclusion only, never runtime activation,
+deployment, external review or a hosted check. Those require their own evidence.
+A commit that merely touches the topic
 does not resolve an item. A Read returns at most 8 KiB, so a
 whole large file shows only its start; searches of the workspace root are
 partial, so search a directory or file. Issue independent searches and reads
@@ -98,8 +103,21 @@ commands or files involved, measured values with their comparison baselines,
 and conditions. A phrase that only refers to an item, such as "remaining
 editing costs", loses it. Leave out completed measurements and items the note
 itself later resolved.
+For numeric measurements, preserve the complete measurement paragraphs verbatim
+(Markdown and whitespace may change), including the scenario, baseline and
+correction paragraphs that give the numbers their conditions. Acceptance keeps
+the original note on either delete or condense if such a paragraph disappears unless an extraction citing
+this note preserves it, or `resolved-by` quotes read workspace evidence containing
+that paragraph and establishing its resolution or record. Do not replace values
+with a reference such as "supplied counts". This guard does not require retaining
+completed measurements forever: provide their authenticated record or extraction
+when disposing of them, even when all open items are resolved.
 Delete when every open item is established as resolved or recorded, or when the
 note has none.
+Use the available workspace tools to check each concrete item before deciding;
+"I have not checked" is not a continuing-use reason. Account for every distinct
+owner step, not only source completion. If investigation cannot establish a
+step's resolution, retain its dated evidence rather than assuming completion.
 
 Do not keep or condense a note merely because it might help someday, and do
 not invent memories to justify deleting one. A note is removed only after
@@ -199,18 +217,21 @@ frontmatter from title, hook, and type, and updates the corresponding index
 transactionally. No two proposals may write or remove the same file; this also
 applies to merge sources. Shared index updates are managed by application.
 
-A Notes block uses the same fence with exactly these three header fields:
+A Notes block uses the same fence with these three required header fields:
 
     note: "the note's exact ID"
     disposition: "keep"
     reason: "Why this disposition fits"
     ---
 
-A delete adds two more header fields after `reason`; keep and condense may
-include `open-items` too:
+A delete adds the four fields below after `reason`. A keep must include a
+nonempty `open-items` array naming what still lacks resolution evidence.
+Condense may include `open-items` and `resolved-by` to account for removed measurements:
 
     open-items: ["Each open item listed above, one short string each"]
     resolved-by: ["docs/backlog.md: exact words of the entry recording the item"]
+    resolution-anchors: ["the item's key operation or outcome"]
+    unresolved-items: []
 
 `open-items` is `[]` only when the note has none. `resolved-by` gives at least
 one entry per open item: a workspace-relative file you Read in this review, or
@@ -220,9 +241,28 @@ record, at least a short sentence fragment. It is `[]` only when `open-items`
 is. A file that discusses the topic is not evidence unless the quoted words
 resolve or record that item. A delete whose quotes do not occur in your reads
 is accepted as keep.
+For a delete, pair `open-items`, `resolved-by` and `resolution-anchors` in the
+same order, one quote and anchor per item. Choose a short anchor phrase naming
+the item's key operation or outcome; it must occur verbatim in both that item
+and its resolution quote (case and whitespace may differ). A generic shared
+word is not evidence of completion: if the item is activation, anchor activation,
+not a different operation such as merge. Quote enough context to establish the
+whole item's resolution. Missing or mismatching anchors turn a delete into keep,
+not a rejected review. Put any items still open or unresolved in
+`unresolved-items`; a nonempty value also prevents deletion. Do not delete a
+note while acknowledging that one of its owner steps remains unresolved.
+An empty open-item list also cannot delete a source with explicit handoff
+markers (such as next steps, pending, unverified, TODO or owner-assigned work);
+inventory those items and establish their resolution instead.
 
 The body after `---` is empty for `delete` and `keep`. For `condense` it is the
 complete replacement note text.
+
+A missing or invalid Notes disposition leaves that note unchanged with no
+decision and a format-failure diagnostic; valid unrelated proposals can still
+be accepted. Duplicate claims for a note leave that note unchanged too.
+Malformed memory changes or ambiguous reply structure still reject the reply.
+This recovery does not excuse omitting a note: provide every required block.
 
 A syntactically valid proposal is still a fallible suggestion. Prefer No action
 to saving an unsupported claim or repeating an earlier rejected suggestion

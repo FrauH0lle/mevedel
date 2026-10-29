@@ -228,7 +228,7 @@
     (respond mevedel-test-memory-review--none)
     (gptel--fsm-transition request 'DONE)
     (should (eq 'success (plist-get result :outcome))))
-  :doc "admits shared notes beside digests and requires one disposition per admitted note"
+  :doc "admits shared notes beside digests and retains a missing disposition as a counted no-op"
   (let* ((shared (file-name-concat directory ".mevedel" "shared"))
          (path (file-name-concat shared "note.md"))
          scope)
@@ -249,7 +249,10 @@
         (should (eq :false (gethash "cited_by_memory" (aref (gethash "notes" input) 0)))))
       (respond mevedel-test-memory-review--none)
       (gptel--fsm-transition request 'DONE)
-      (should (eq 'error (plist-get result :outcome)))
+      (should (eq 'success (plist-get result :outcome)))
+      (should (equal '("work://shared/note.md") (mapcar #'car (plist-get result :skipped-notes))))
+      (should (= 1 (plist-get result :note-format-failure-count)))
+      (should-not (plist-get result :proposals))
       (review)
       (respond (replace-regexp-in-string
                 "## No action" (concat "## Notes\n````proposal\nnote: \"work://shared/note.md\"\n"
@@ -261,7 +264,7 @@
       (should (equal '("work://shared/note.md") (plist-get result :notes)))
       (should (= 0 (plist-get result :omitted-notes)))
       (should (eq 'note-delete (plist-get (car (plist-get result :proposals)) :action)))))
-  :doc "request admission lists only supplied notes and rejects dispositions for omitted notes"
+  :doc "request admission lists only supplied notes and ignores omitted-note dispositions without widening authority"
   (let* ((shared (file-name-concat directory ".mevedel" "shared"))
          scope)
     (put model :context-window 32)
@@ -309,10 +312,12 @@
           (should (= 3 (length (plist-get (cdr (mevedel-memory-notes-root scope)) :files)))))
         (respond (reply (append supplied (list (car omitted)))))
         (gptel--fsm-transition request 'DONE)
-        (should (eq 'error (plist-get result :outcome)))
-        (should (equal "Note disposition names an unadmitted note or unknown disposition"
-                       (plist-get result :error)))
-        (should-not (plist-get result :proposals))
+        (should (eq 'success (plist-get result :outcome)))
+        (should (= 1 (plist-get result :note-format-failure-count)))
+        (should-not (plist-get result :skipped-notes))
+        (should (equal (mapcar (lambda (note) (plist-get note :id)) supplied)
+                       (mapcar (lambda (proposal) (plist-get proposal :note))
+                               (plist-get result :proposals))))
         (review)
         (respond (reply supplied))
         (gptel--fsm-transition request 'DONE)

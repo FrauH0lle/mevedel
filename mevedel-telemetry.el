@@ -193,15 +193,15 @@ profile file larger and cost a little more per sample."
     :exit-status :failure-class :failure-stage :fallback :filesystem :first-byte-seen
     :fresh-visible-prompt-estimate
     :gc-count :gc-ms :git-head :goal-id
-    :gptel-commit :gptel-file-hash :gptel-version :handler-count
+    :gptel-commit :gptel-file-hash :gptel-version :guard-converted-keep-count :handler-count
     :handler-id :handler-source :handler-type :hook-event
     :ineligible-reason :input-bytes :input-p :input-pending :input-tokens
     :interaction-id :issue-count
     :kind :lane
-    :max-ms :message-chars :message-hash :mode :model :model-context-source :model-context-window :modes
+    :max-ms :message-chars :message-hash :mode :model :model-context-source :model-context-window :model-keep-count :modes
     :native-resource-capture :native-resource-report-bytes :nested-call-count
     :network
-    :new-count :new-segment :old-segment :omitted-count :operation-count :origin :outcome
+    :new-count :new-segment :note-format-failure-count :old-segment :omitted-count :operation-count :origin :outcome
     :output-bytes :output-estimated-tokens :output-limit :output-tokens
     :over-1000-ms :over-200-ms :over-500-ms :overlap-count :owner
     :parent-tool-use-id :parent-turn :pass-id :pending-count :permission-id :permission-mode

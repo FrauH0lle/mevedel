@@ -327,7 +327,7 @@
                  "## No action"
                  (concat "## Notes\n````proposal\nnote: \"work://shared/large.md\"\n"
                          "disposition: \"keep\"\nreason: \"Still useful.\"\n"
-                         "open-items: []\nresolved-by: []\n---\n````\n## No action")
+                         "open-items: [\"Confirm retry deadlines remain monotonic during clock rollback\"]\nresolved-by: []\n---\n````\n## No action")
                  test-mevedel-review-provider--none t t)))
     (start scope)
     (receive (test-mevedel-review-provider--response summary) 0.125)
