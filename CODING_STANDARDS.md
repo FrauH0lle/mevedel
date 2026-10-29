@@ -68,6 +68,24 @@ it from the interface.
   work, correctness, cost, latency, and user interruptions; fewer tokens alone
   do not establish a better interface.
 
+## PROPORTIONATE SOLUTIONS
+
+Match a solution's complexity to the stakes of the problem. Some problems need
+complex solutions; most do not.
+
+- Before designing, state the problem in one plain sentence and what a failure
+  would actually cost. Deleting an old temporary text file is not the same
+  problem as mutating durable user data.
+- Prefer removing a requirement to engineering around it. When a guarantee
+  becomes expensive to provide, first ask whether it is needed at all.
+- Treat each new mechanism added to rescue a previous one (caches for proofs,
+  audits for caches, recovery for audits) as a signal to stop and re-scope, not
+  as the next step. Two such rescues in a row require a fresh scope decision.
+- Size safety mechanisms by consequence. Ephemeral, reproducible or low-value
+  data does not need undo, proofs or recovery machinery.
+- A plan or slice that grows well beyond its original estimate is paused and
+  re-justified with the person who owns the goal before work continues.
+
 ## NO BACKWARDS COMPATIBILITY
 
 mevedel is under active development and has no backwards-compatibility
