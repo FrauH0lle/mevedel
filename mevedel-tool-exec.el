@@ -440,6 +440,68 @@ Upstream SIGPIPE is benign when a downstream stage succeeded."
             :pipeline-outcome (if failures 'failure outcome)
             :pipeline-classification 'observed))))
 
+(defun mevedel-tool-exec--compound-profile-hint (observation)
+  "Explain unattached segment profiles in a failed confined OBSERVATION.
+Only path-related denial output selects a captured matching fact.  This is
+matching information, not a diagnosis inferred from untrusted child output."
+  (let* ((facts (plist-get observation :facts))
+         (output (or (plist-get observation :output) ""))
+         (workdir (plist-get facts :workdir))
+         (case-fold-search t)
+         selected)
+    (when (and (eq (plist-get facts :state) 'completed)
+               (eq (plist-get facts :termination) 'exited)
+               (eq (plist-get facts :outcome) 'failure)
+               (not (plist-get observation :error))
+               (eq (plist-get (plist-get observation :sandbox-facts) :sandbox) 'bubblewrap))
+      (dolist (miss (plist-get observation :compound-profile-misses))
+        (let* ((path (file-local-name (plist-get miss :path)))
+               (relative (and workdir (file-relative-name (plist-get miss :path) workdir)))
+               (paths (delete-dups (delq nil (list path
+                                                   (and relative
+                                                        (not (string-prefix-p "../" relative))
+                                                        relative))))))
+          (when (and (< (length selected) 3)
+                     (cl-some
+                      (lambda (line)
+                        (and (string-match-p
+                              "\\b\\(?:Read-only file system\\|Permission denied\\|Operation not permitted\\)\\b"
+                              line)
+                             (let ((case-fold-search nil))
+                               (cl-some (lambda (path)
+                                          (string-match-p
+                                           (concat "\\(?:\\`\\|[\"'`:[:space:]=]\\)"
+                                                   (unless (file-name-absolute-p path) "\\(?:\\./\\)?")
+                                                   (regexp-quote (directory-file-name path))
+                                                   "\\(?:/\\|[\"'`:[:space:]]\\|\\'\\)")
+                                           line)) paths))))
+                      (split-string (substring output 0 (min (length output) 16384)) "\n" t)))
+            (push miss selected))))
+      (when selected
+        (let ((print-escape-newlines t)
+              (print-escape-control-characters t))
+          (cl-flet ((excerpt (text width)
+                      (prin1-to-string
+                       (truncate-string-to-width
+                        (if (> (length text) width)
+                            (concat (substring text 0 (- width 3)) "...")
+                          text)
+                        width nil nil "..."))))
+            (concat
+             "Command-scoped filesystem profile not attached: "
+             (mapconcat
+              (lambda (miss)
+                (format (concat "segment %s matches %s rule %s (path %s), "
+                                "but that rule does not match the complete compound command")
+                        (excerpt (plist-get miss :segment) 120)
+                        (substring (symbol-name (plist-get miss :bucket)) 1)
+                        (excerpt (plist-get miss :pattern) 100)
+                        (excerpt (file-local-name (plist-get miss :path)) 160)))
+              (nreverse selected) "; ")
+             ". Segment profiles are not inherited. This does not establish the failure cause. "
+             "Use separate Bash calls or a fresh invocation with explicit, justified authority; "
+             "inspect prior effects first. No grant or retry is automatic.")))))))
+
 (defun mevedel-tool-exec--observation-envelope
     (observation &optional suppress-sandbox-disclosure-p force-success-p)
   "Return a handler envelope for managed OBSERVATION.
@@ -463,8 +525,13 @@ stopped command's outcome."
                                    (mapconcat #'number-to-string
                                               (plist-get facts :pipeline-exit-codes) " "))))))
          (with-sandbox
-          (mevedel-tool-exec--sandbox-disclosure
-           body observation suppress-sandbox-disclosure-p failed-p))
+          (string-join
+           (delq nil
+                 (list (mevedel-tool-exec--sandbox-disclosure
+                        body observation suppress-sandbox-disclosure-p failed-p)
+                       (and failed-p (not suppress-sandbox-disclosure-p)
+                            (mevedel-tool-exec--compound-profile-hint observation))))
+           "\n\n"))
          (result
           (if suppress-sandbox-disclosure-p
               with-sandbox
@@ -680,11 +747,14 @@ CALLBACK receives the envelope.  ARGS has :command; KIND may be `monitor'."
                        pipeline-marker command))
               (list "bash" "-lc"
                     (mevedel-tool-exec--pipeline-source command pipeline-marker))))
+           (permission-context
+            (mevedel-tool-exec-permission-current-context "Bash" args session))
            (sandbox-request
             (mevedel-tool-exec-permission-effective-sandbox-request
-             args "Bash" command nil
-             (mevedel-tool-exec-permission-current-context
-              "Bash" args session)))
+             args "Bash" command nil permission-context))
+           (profile-misses
+            (mevedel-tool-exec-permission-compound-profile-misses
+             command analysis sandbox-request permission-context))
            (invocation
             mevedel--agent-invocation)
            (owner (mevedel-current-origin))
@@ -704,7 +774,9 @@ CALLBACK receives the envelope.  ARGS has :command; KIND may be `monitor'."
        :kind (or kind 'bash) :description (plist-get args :description)
        :timeout-ms (or (plist-get args :timeout_ms) 300000)
        :owner-context (or invocation session)
-       :tool-args args
+       :tool-args (if (or profile-misses (plist-member args :compound-profile-misses))
+                      (plist-put (copy-sequence args) :compound-profile-misses profile-misses)
+                    args)
        :tool-use-id (mevedel-pipeline-active-tool-use-id)
        :permission-approvals (mevedel-pipeline-active-permission-approvals)
        :command launch-command

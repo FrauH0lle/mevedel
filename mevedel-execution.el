@@ -1601,6 +1601,11 @@ PROJECT-UNCONSUMED includes RANGE's omission in facts before commitment."
                 (plist-get range :omitted)))))
     (list :output (plist-get range :output)
           :facts facts
+          :compound-profile-misses
+          (mevedel-execution--copy-value
+           (plist-get (mevedel-execution--origin-tool-args
+                       (mevedel-execution--record-origin record))
+                      :compound-profile-misses))
           :sandbox-facts (mevedel-execution--record-sandbox-facts record)
           :sandbox-summary
           (mevedel-execution-telemetry-context-summary

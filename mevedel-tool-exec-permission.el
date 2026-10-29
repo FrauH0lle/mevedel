@@ -612,6 +612,51 @@ PERMISSION-CONTEXT supplies the session execution target."
      (mevedel-tool-exec-permission--additional-profile
       network (mevedel-permission-origin-usable-grants candidates)))))
 
+(defun mevedel-tool-exec-permission-compound-profile-misses
+    (command analysis request permission-context)
+  "Return bounded diagnostic facts for unattached COMMAND segment profiles.
+ANALYSIS describes the authored shell source; REQUEST is its resolved child
+authority.  PERMISSION-CONTEXT supplies direct rules and resource policy.
+These facts never contribute authority.  Complex syntax is left unexplained."
+  (when (and (> (length (plist-get analysis :segments)) 1)
+             (not (plist-get analysis :complex-p))
+             (not (eq (plist-get request :level) 'escalated)))
+    (let* ((buckets (mevedel-bash-policy-buckets permission-context))
+           (direct (seq-filter
+                    (lambda (entry)
+                      (memq (car entry) '(:session :persistent :defcustom)))
+                    buckets))
+           (session (plist-get permission-context :session))
+           (target (and session (mevedel-session-execution-target session)))
+           (grants (plist-get (plist-get request :additional-permissions) :file-system))
+           misses)
+      (unless (mevedel-bash-policy-explicit-deny-p buckets command analysis)
+        (dolist (segment (plist-get analysis :segments))
+          (when (eq 'allow (car (mevedel-permission-rules-first-action-with-bucket
+                                direct "Bash" nil segment nil nil)))
+            (dolist (entry direct)
+              (dolist (rule (mevedel-permission-rules-find
+                            (cdr entry) "Bash" :pattern segment))
+                (when (and (< (length misses) 8)
+                           (eq (plist-get (cdr rule) :action) 'allow)
+                           (plist-get (cdr rule) :pattern)
+                           (not (mevedel-permission-rules-find
+                                 (list rule) "Bash" :pattern command)))
+                  (dolist (grant (mevedel-permission-origin-usable-grants
+                                 (plist-get (cdr rule) :file-system)))
+                    (when (and (< (length misses) 8)
+                               (not (mevedel-tool-exec-permission--filesystem-resource-rule-action
+                                     "Bash" grant permission-context))
+                               (not (mevedel-execution-grants-covering-grant
+                                     (plist-get grant :path) (plist-get grant :access)
+                                     grants (plist-get grant :recursive) target)))
+                      (push (list :segment (copy-sequence segment)
+                                  :pattern (copy-sequence (plist-get (cdr rule) :pattern))
+                                  :bucket (car entry)
+                                  :path (copy-sequence (plist-get grant :path)))
+                            misses)))))))))
+      (nreverse misses))))
+
 (defun mevedel-tool-exec-permission-effective-sandbox-request
     (args tool-name operation &optional eval-mode permission-context)
   "Resolve ARGS into TOOL-NAME's effective child authority for OPERATION.

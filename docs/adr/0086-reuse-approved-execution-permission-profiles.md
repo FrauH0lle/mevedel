@@ -99,6 +99,14 @@ a capability that no matching approved profile contains. The complete
 effective profile is resolved before spawn, and a child that may have started
 is never retried automatically.
 
+Failed confined compound Bash results may identify a segment's unattached direct
+filesystem allow profile when denial output mentions its path. Launch-time facts
+survive yielding and polling; covered capabilities, delegated rules, unusable
+grants, success and unrelated errors produce no hint. Bounded excerpts explain
+whole-command matching without diagnosing causality, attaching segment authority,
+prompting, or replaying. Recovery remains separate calls or a fresh explicit,
+justified authority request after inspecting prior effects.
+
 ## Rationale and consequences
 
 Operation-specific reuse removes repeated prompts without making all future

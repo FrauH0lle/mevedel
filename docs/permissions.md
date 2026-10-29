@@ -1023,6 +1023,14 @@ matching approved profile is not inferred from failures or earlier commands:
 the model must make a new explicit invocation with the missing capability and
 justification. A started process is never replayed.
 
+A failed confined compound Bash call can explain a segment-only filesystem
+profile that was not attached. The bounded hint uses launch-time direct usable
+allow rules, excludes capabilities already covered by effective authority, and
+requires a same-line filesystem denial mentioning that profile's path. It is
+matching information, not proof of the failure's cause. Separate calls can
+match their own profiles; otherwise a fresh explicit, justified invocation is
+needed. The hint grants nothing, changes no matching, and never prompts or retries.
+
 In Ask, before Bash executes, identified literal resources are resolved against
 the working directory. Resources outside the allowed roots require a covering
 additive grant — exact, or recursive over an ancestor directory; bare `.` and
