@@ -56,14 +56,13 @@ For interactive commands, see [README.md](README.md#usage).
   summaries and takes precedence over general scratch-storage guidance in the
   backlog and agent docs.
 - Use Markdown for notes, one topic per file; search first and update relevant
-  existing material. ApplyPatch supplies lifecycle frontmatter (kind, status,
-  owner, created), defaulting to `scratch/open`. Mark real handoffs explicitly
-  as `kind: handoff`, reports as `kind: report`, and finished notes as
-  `status: done`. Attribution is not a retention lock. Keep actionable open work
-  in the tracker/backlog rather than relying on temporary notes as a task store.
-  Scratch or done notes reach age-readiness after 7 days without modification;
-  open handoffs/reports and unmanaged external Markdown use 14 days. Reading
-  does not reset modification age; observed active use still prevents cleanup.
+  existing material. Use a descriptive first heading and source/task attribution
+  in prose; there is no note header or lifecycle label to maintain. Keep actionable
+  open work in the tracker/backlog, not temporary notes as a task store.
+  All notes and attachments reach age-readiness after 14 days without modification
+  by default (`mevedel-working-note-max-age-days`, nil disables automatic disposal).
+  Deletion is permanent, without undo or trash. Reading does not reset modification
+  age; observed active use still prevents cleanup.
 - Keep managed session plans in `work://plans/`; curate selected durable lessons
   into memory. Read-only requests and Plan-mode write restrictions still apply.
 - Preserve explicitly invoked skills' configured workflows and destinations,

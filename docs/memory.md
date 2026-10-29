@@ -1128,19 +1128,13 @@ bodies and complete terminal decision/write history.
 Main and worker guidance asks for attributed factual lessons in
 `work://shared/` when the request permits workspace writes. Agents search before
 creating and update relevant existing files, using Markdown with one topic per
-note and freely chosen filenames. ApplyPatch normalizes shared `.md` files
-(case-insensitive) before preview and commit, including contained physical paths
-and moves into the shared tree. Lifecycle frontmatter has `kind` (`scratch`,
-`report`, `handoff`), `status` (`open`, `done`), a nonempty `owner` attribution,
-and a UTC `created` timestamp. Missing fields default to scratch/open and the
-invoking session/agent identity and target time; an existing unmanaged note uses
-its previous mtime as creation time. Valid metadata persists unless deliberately
-changed. Invalid supplied fields fail visibly rather than being silently replaced.
-Models explicitly label real handoffs `kind: handoff`, reports `kind: report`,
-and finished notes `status: done`. Keep actionable work in the tracker/backlog,
-not only in temporary notes. Metadata appears in the reviewed final bytes and
-uses the ordinary atomic write/rollback path; plans, memory and non-Markdown
-attachments are not decorated. Read-only agents
+note and freely chosen filenames, a descriptive first heading and source/task
+attribution in prose. There is no note header, lifecycle label, kind/status or
+managed/unmanaged distinction. ApplyPatch treats shared files as ordinary authored
+content: it neither inserts nor validates frontmatter. Existing header-shaped
+text has no lifecycle meaning and needs no migration. Keep actionable work in the
+tracker/backlog, not only in temporary notes. Normal edit permissions and
+review/transaction protections still apply. Read-only agents
 report lessons through their existing results or available SendMessage; they
 gain no mutation tools. `$learn` considers available notes and digests as
 additional evidence, verifies relevant claims, and acknowledges omissions.
@@ -1152,14 +1146,12 @@ them. Focused reviews do not include notes. Accepted reviews and decisions are
 the only processing record.
 
 **Readiness.** Use the target clock and actual last modification time, not the
-authored creation timestamp. Managed scratch notes (either status) and any done
-note reach age-readiness after 7 elapsed days; open handoffs/reports, unmanaged
-Markdown and attachments use 14 elapsed days. Boundaries are inclusive multiples
-of 86,400 seconds; future mtimes wait. External headerless/invalid Markdown is
-listed as unmanaged with a bounded format diagnostic, not permanently exempted;
-its next tool write supplies metadata as described above. A note version is its
-path and content hash; modification age still uses actual mtime, including a
-status change or same-byte touch. Note deletion freshly rechecks that age after
+authored creation timestamp. One defcustom, `mevedel-working-note-max-age-days`,
+sets a flat **14 elapsed days** by default for every note and attachment, and
+empty-folder housekeeping. Set it to nil to disable automatic disposal.
+Boundaries are inclusive multiples of 86,400 seconds; future mtimes wait.
+A note version is its path and content hash; modification age uses actual mtime,
+including a same-byte touch. Note deletion freshly rechecks that age after
 approval and preparatory IO; renewed age is a nonterminal hold, not authorization
 from an older capture. A pending/recovery-required decision suppresses its exact version.
 Prior completed review, rejection or reversal outcomes do not start an additional
@@ -1176,9 +1168,9 @@ inventory first and authenticates prior disposition status only for paths
 present in it: a deleted path cannot be admitted, and a recreated one is
 checked like any other.
 
-Shared-directory Read exposes generated bounded kind/status, owner,
-modification-age and age-readiness rows with a first-heading/body summary that
-excludes frontmatter. It says capture/application safety checks remain pending;
+Shared-directory Read exposes generated bounded modification-age and age-readiness
+rows with the first Markdown heading (empty when absent), not a model-generated
+summary or a maintained index. It says capture/application safety checks remain pending;
 these rows do not certify current dependency/reference absence. Incomplete
 observations stay visible. Listing never writes an index or marks all entries
 in use, and direct Read/Glob/Grep keep their existing contracts.
@@ -1264,11 +1256,13 @@ for the next cohort; a format failure is never credited as reviewed or deleted.
 
 Confirmed deletions, held work and format failures remain distinct outcomes.
 Extraction dependencies, target ownership, current-use and unsaved-buffer
-checks, exact before-state, checked writes, recovery and byte-exact undo still
-apply. A write confirmed before cancellation retains its count; a prepared
+checks, exact before-state, checked writes and interrupted-write reconciliation
+still apply. Deletion is permanent; reversing an extraction never restores its
+deleted source notes. A write confirmed before cancellation retains its count; a prepared
 proposal or a deferred retry does not establish that a deletion occurred.
 
-**Housekeeping.** Attachments at least fourteen elapsed days old that no
+**Housekeeping.** Attachments at least the configured untouched age (default
+fourteen elapsed days) that no
 surviving text file, memory topic or instruction references receive delete
 decisions without inference; age-ready empty folders receive prune decisions,
 at most 128 housekeeping items per review. Matching is conservative across
@@ -1287,33 +1281,25 @@ fresh shared and applicable permanent scopes are checked again, including
 backdated edits and unsaved drafts. Inventories, file versions and configuration
 are revalidated after I/O. New references, renewed age, active use or unavailable
 evidence hold the original without a terminal decision. These checks repeat
-after private-blob preparation for both synchronous and yielding application.
+at final write admission for both synchronous and yielding application.
 A review with only housekeeping starts no model request. The dated capture and
 application observation explains holds in the cockpit; generated resource
 discovery remains age-readiness-only with safety checks explicitly pending.
 
-**Application and undo.** Note decisions use the checked decision, write
-intent, recovery and reversal paths with a shared-notes target whose
+**Permanent application.** Note decisions use checked decisions, write
+intents and interrupted-write reconciliation with a shared-notes target whose
 coordination lives in `.mevedel/state/shared-notes/`, outside the folder it
-cleans. A fenced preparatory program verifies before-state and retains the
-previous bytes as a private content-addressed blob within the undo quota. The
-final use, unsaved-buffer, age and reference checks run after that preparatory
-I/O. A locked target program then repeats ownership and exact hash/mode/blob
-proof before mutation and removal of ancestors left empty. The
-shared root is preserved. Undo restores exact bytes, mode and parent folders
-from the blob. Reversing an extraction first restores every applied note
-disposal that required it; if that fails, the extraction stays applied.
-Blobs are retained while any write intent references them, so they follow the
-ordinary resolution-based history window. `mevedel-memory-notes-undo-quota`
-(default 1 GiB) bounds them: collection of unreferenced blobs runs before each
-review and before refusing a capture, and a change that would exceed the quota
-is refused with the original left in place. Unknown quota accounting also holds
-the original; it is never interpreted as zero usage. Unsaved visiting buffers
-and changed content refuse mutation. Attachments use exactly this private undo
-path regardless of platform or size. There is no system-trash staging, external
-trash copy or permanent-deletion fallback. Current retained write references
-can keep raw preimages beyond thirty days; a per-disposal thirty-day payload
-expiry is not yet enforced.
+cleans. Final use, unsaved-buffer, age, extraction and reference checks guard
+actual forward mutation. A locked target program repeats ownership and the
+reviewed hash/mode (or empty-directory state), then deletes plainly and removes
+ancestors left empty, preserving the shared root. Notes and attachments have
+**no undo**, blob capture, quota accounting, system-trash staging or restoration
+path. Reversing a memory extraction does not restore deleted notes; durable
+memory/instruction reversal retains its separate existing contract.
+Prepared, accepted and write evidence may retain reviewed text under ordinary
+history retention. This is not a per-note purge deadline or secure-erasure
+guarantee, and it does not introduce payload receipts, audit caches or a second
+undo store. No live conversion or header migration is required.
 
 **Modes.** `manual` processes notes only through `/remember`; `propose` leaves
 their decisions in the cockpit; `auto` applies extraction, deletion and
