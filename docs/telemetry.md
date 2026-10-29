@@ -281,9 +281,9 @@ cancellation releases the fence and leaves the machine retryable.
   pass with a nonzero count is not a clean-format review; these failures must be
   counted alongside whole-review rejections when evaluating reply quality.
   Only the scalar count is emitted, never note IDs or parser diagnostic text.
-  `:guard-converted-keep-count` separately counts accepted dispositions changed
-  to keep by an evidence guard; `:model-keep-count` counts model-selected keeps.
-  These are proposal attributions, not proof of application or useful service.
+  Notes have delete-only acknowledgements. Retention-guard, model-keep and
+  preserved-condensation counters are not emitted; acknowledgement alone is
+  not proof of application or useful service.
   Phase durations accumulate in memory and join only that existing terminal
   event; phase transitions append no additional workspace events.
   `:duration-ms` starts after claim acquisition. `:queue-duration-ms`, when

@@ -326,8 +326,8 @@
          (reply (replace-regexp-in-string
                  "## No action"
                  (concat "## Notes\n````proposal\nnote: \"work://shared/large.md\"\n"
-                         "disposition: \"keep\"\nreason: \"Still useful.\"\n"
-                         "open-items: [\"Confirm retry deadlines remain monotonic during clock rollback\"]\nresolved-by: []\n---\n````\n## No action")
+                         "disposition: \"delete\"\nreason: \"Nothing qualifies for extraction.\"\n"
+                         "---\n````\n## No action")
                  test-mevedel-review-provider--none t t)))
     (start scope)
     (receive (test-mevedel-review-provider--response summary) 0.125)

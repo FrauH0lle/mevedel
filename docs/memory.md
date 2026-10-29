@@ -230,20 +230,24 @@ owns index consistency. This parser performs no reads or writes and does not
 establish current authority, freshness, or factual correctness. The request uses
 this parser at terminal settlement before accepting proposals into the durable
 review and decision lifecycle exposed by the memory cockpit.
-A note `delete` additionally requires `open-items` and `resolved-by` arrays;
-`keep` and `condense` may carry them, validated as string arrays, and their
-open items are recorded. A `resolved-by` entry that is not `PATH: QUOTE`
-(an address, a placeholder) is no evidence rather than an invalid reply. A
-block with an empty body may omit the `---` separator, a note disposition may
+A Notes block contains only `note`, `disposition: "delete"`, and `reason`,
+with an empty body. No completion inventory, resolution evidence or replacement
+note text is required or accepted. Instructions proposals supply the complete
+desired content of an exact captured applicable file, preserving unrelated
+guidance, rather than appended text. Captured known-absent instruction targets
+remain creatable. Empty Instructions bodies mean zero bytes, not path deletion;
+other decoded body bytes, including a final newline, are preserved exactly.
+One newline immediately before the closing fence is structural, so retaining
+a final newline in the desired body requires an extra newline before the fence.
+A block with an empty body may omit the `---` separator, a note disposition may
 repeat a header line with an identical value, sections may appear in any order
 (each once; every action section required, so a truncated reply still fails),
 and a reply may end without `## No action`; text between proposal blocks still
 invalidates the reply. These accept shapes real replies
 produced, which previously discarded whole reviews. A rejected reply is retained,
 newest eight, under `.mevedel/state/diagnostics/rejected-replies/` for
-diagnosis; it never becomes proposals. Each resolution entry is a plain
-workspace-relative path, `: `, and a quote of at least 12 characters; the path
-is normalized before acceptance compares the quote with the review's reads (see
+diagnosis; it never becomes proposals. Missing or invalid note acknowledgements
+leave those notes unchanged while valid unrelated proposals can survive (see
 [Shared working-note lifecycle](#shared-working-note-lifecycle)).
 
 `mevedel-memory-scope-capture` supplies the parser's root and file allowlist.
@@ -293,19 +297,19 @@ family. Memory and journal reads use captured evidence; source Read uses the
 ordinary text reader over a pinned UTF-8 snapshot capped at 512 KiB, including
 range support within that snapshot. Oversized files are refused before the
 reader can scan a long line or a large offset. No tool definitions are added to gptel's global tool registry.
-The investigation records the text each workspace Read delivered, per file;
-the review result reports it as `:inspected`, the evidence a note delete's
-`resolved-by` quotes must match. Searches and memory or journal reads do not
-count. A truncated Read names the line offset to continue from, because a
+The investigation delivers source text to the reviewer without accumulating
+another full-text evidence map in its state or callback. A truncated Read
+names the line offset to continue from, because a
 whole large document otherwise shows only its first 8 KiB.
 A fourth tool, Git, reads the workspace's history without a shell, pager,
 hook or optional lock: `log` searches commit messages (at most 30 commits,
 optionally limited to a path; a commit hash is shown instead), and `show`
 prints one commit's message and changed files plus whether the current HEAD
 contains it, naming the commit. Its output is bounded like the other tools,
-counts against the same budgets, is unavailable on remote workspaces, and is
-recorded as `GIT-HISTORY` evidence, which a delete may quote. Handoffs to
-integrate or commit are usually completed only in history.
+counts against the same budgets and is unavailable on remote workspaces.
+Git remains useful for a material claim about source history; note deletion
+does not require Git completion searches or registered resolution quotes.
+Commit containment establishes inclusion only, not activation or deployment.
 
 Searches reuse ordinary Glob/Grep over private admitted copies. Source search
 examines at most 256 entries, copies at most 2 MiB, and omits files larger than
@@ -583,14 +587,13 @@ eligible for consolidation. Exit cancels queued and active review work.
 In **auto** mode, a successful general review makes the next idle/maintenance
 opportunity eligible for catch-up only if that batch made measurable shared-note
 progress: at least one authenticated
-applied delete (including relocation to verified trash) or condense, or an applied
-keep that suppresses the reviewed note version. Proposal counts, aggregate
+applied delete (including relocation to verified trash). Proposal counts, aggregate
 application totals, digest coverage, older pending applications, empty-directory
 pruning, and rejected, held or unchanged unsuppressed notes do not establish
 progress. Application errors, recovery requirements and
 cancellation also prevent continuation. Catch-up bypasses the ordinary time and
 digest-count thresholds, but fresh owned admission must find eligible digests or
-currently ready shared files: quiet-period-passed, not suppressed, not in use,
+currently ready shared files: age-ready, not held by pending/recovery work, not in use,
 and within capture limits. The last capture's remaining count does not gate
 continuation: arrivals after capture, including ones that become ready later,
 can enter a subsequent batch. An empty opportunity starts no inference and
@@ -671,7 +674,10 @@ changes from accepted before-state without writing them. Topic frontmatter is
 generated from the validated name, description, and type. Index updates escape
 labels and filenames, retain unrelated lines, and reject duplicate or invalid
 destinations, including two encoded names for the same file. Instructions
-append to their captured file. Every emitted change retains expected original
+replace their exact captured applicable file with the complete decoded body,
+including zero bytes for an empty body. Existing and captured known-absent
+targets use the same checked write path; this action never deletes a path.
+Every emitted change retains expected original
 bytes or absence and exact proposed bytes for the shared patch transaction.
 Generated files must fit the memory reader's 32-KiB per-file bound, including
 index growth, so a change cannot exclude its root from the next review.
@@ -1106,9 +1112,11 @@ Markdown and attachments use 14 elapsed days. Boundaries are inclusive multiples
 of 86,400 seconds; future mtimes wait. External headerless/invalid Markdown is
 listed as unmanaged with a bounded format diagnostic, not permanently exempted;
 its next tool write supplies metadata as described above. A note version is its
-path and content hash; an actual edit restarts modification age, including a
-status change. A pending/recovery-required decision suppresses its exact version.
-Prior keep/condense, rejection or reversal outcomes do not start an additional
+path and content hash; modification age still uses actual mtime, including a
+status change or same-byte touch. Note deletion freshly rechecks that age after
+approval and preparatory IO; renewed age is a nonterminal hold, not authorization
+from an older capture. A pending/recovery-required decision suppresses its exact version.
+Prior completed review, rejection or reversal outcomes do not start an additional
 seven-day reconsideration timer; rejection evidence remains available to later
 reviews. A review leaves notes that open sessions are using for later. A note is in use while a
 session whose buffer is live, or one of its sub-agents, named that file in a
@@ -1138,9 +1146,10 @@ digests (one of each when both fit, then oldest first). A larger text note is
 captured alone, leaving eligible digests unpinned for the next batch, up to
 `mevedel-memory-notes-max-review-bytes` (default 512 KiB, about sixteen chunks).
 It is reviewed sequentially in UTF-8 chunks of at most 32 KiB, carrying a
-running summary capped at 16 KiB. The final review uses that summary to
-extract knowledge and decide keep, condense or delete through the normal
-decision path. Whole-file bytes and hash remain the before-state, never a
+running summary capped at 16 KiB. The summary carries candidate durable lessons,
+source attribution and uncertainty across chunks, not an open-work resolution
+audit. The final review uses that evidence to extract qualifying knowledge and
+acknowledge deletion through the normal decision path. Whole-file bytes and hash remain the before-state, never a
 truncated prefix. Each chunk and final settlement recheck that whole-file
 state. A change discards the summary and reports `restart-required`; the
 next review starts from the beginning once the new version is quiet. The
@@ -1156,81 +1165,42 @@ shows it, and review completion messages report the counts.
 
 **Citations.** Memory topics and instruction files are captured first. A file
 they cite, by `work://shared/` address or `.mevedel/shared/` path, including
-through a cited folder, is never removed as housekeeping. A cited note is
-flagged `cited_by_memory`; a delete without an extraction citing the note is
-accepted as keep, so the citation cannot silently break.
+through a named folder below the shared root, is never removed as housekeeping.
+The generic shared-root address in policy or navigation is not a dependency on
+every child; the shared root itself is retained. A cited note is
+flagged `cited_by_memory`. The reviewer can repair its captured citing memory
+with Update or Remove, or replace a citing instruction file with Instructions,
+preserving unrelated guidance and citing the note as evidence. Remaining
+citations hold deletion as an unresolved dependency, not an automatic keep.
+The applicable memory and instruction citation scope is freshly rechecked at
+the actual deletion boundary, including after approval waits. New citations or
+an unavailable or incomplete scope hold deletion; capture cannot prove their
+later absence.
 
 **Decisions.** The reply's Notes section gives every admitted note exactly one
-disposition: delete (the normal outcome for completed material, including when
-the only question is whether finished history might help someday), keep
-(concrete continuing use such as an open handoff or a prepared diagnostic
-needed for an unresolved follow-up) or condense (rewrite to the part still in
-use). The reviewer first lists the note's open items: unresolved findings,
-failed or unfinished checks, unverified hypotheses or leads, acceptance limits
-and work left to others, even when the note's main task is complete. Age or a
-missing record is not resolution. Work assigned to another owner and observations retained without an established
-cause count as open items, wherever they appear in the note; decision records
-are searched for them as well as the backlog. A condensed body keeps each open
-item's concrete operations, values with baselines and conditions, not a phrase
-that merely refers to it. An open item ends continuing use only when
-the reviewer establishes, with the workspace tools, that it was resolved,
-superseded or recorded elsewhere with its caveats and next step; otherwise the
-note is condensed to that item's dated evidence, caveats and next step, or kept.
-A delete therefore carries `open-items` and `resolved-by` header fields:
-the items, and at least one `path: exact words` entry per item quoting the
-workspace file, read in this review, that establishes its resolution or
-record. Acceptance records both. A delete whose open items lack enough quotes,
-or whose quotes do not occur in the text the review received from that file,
-is accepted as keep with that explanation, as a cited note is; a search match
-alone is not a read. Quote matching ignores Read line numbers, Markdown
-emphasis and code marks, whitespace and citation text outside quotation marks.
-These checks are deterministic; whether a reviewer lists every open item, or
-quotes text that really resolves it rather than merely discussing the topic,
-is model quality. A delete also supplies positional `resolution-anchors`: one
-short key-operation or outcome phrase per open item, occurring as whole words
-in that item and its authenticated quote (case and whitespace are normalized).
-Missing or mismatching anchors turn the delete into keep, not a rejected review.
-An explicit nonempty `unresolved-items` value prevents deletion too. When a
-delete lists no open items but the source contains explicit handoff markers
-(next steps, remaining, pending, unverified, TODO, unchecked boxes or owner work),
-acceptance keeps it for inventory instead. These conservative lexical guards
-can retain completed handoff history; the model still chooses the anchor and
-whether the quote actually resolves the whole item.
-Real held and applied deletions of 2026-10-28 that dismissed
-unresolved findings without any tool call motivated this rule; a later
-evaluation in which a reviewer cited a file it had read that did not record the
-items motivated the quotes. Extraction is ordinary memory and
+acknowledgement with `note`, `disposition: "delete"`, `reason`, and an empty
+body. Extraction is selective: a note may yield no qualifying memory. Tasks,
+unresolved findings, measurements and possible future usefulness do not require
+a completion audit or automatically retain a note. Open work belongs in its
+tracker or maintained documentation, not in permanent memory merely to permit
+cleanup. The old keep/condense, open-item resolution, quote/anchor and numeric
+preservation rules are removed; their rationale remains in ADR history.
+
+Extraction uses ordinary memory and
 instruction proposals citing the note's ID as evidence. Acceptance records
-those extractions as the disposition's `:requires`. Delete or condense applies
+all those extractions as the disposition's `:requires`. Deletion applies
 only after every required extraction is applied; an undecided requirement
 waits without a decision, and any other requirement outcome makes the
 disposition stale, leaving the note for a later review.
-
-A model-selected keep must name at least one still-open item in `open-items`;
-its reason states which resolution evidence remains missing after investigation.
-An empty or missing array invalidates that note's disposition rather than treating
-generic future usefulness as continuing use. Completed items with available resolution evidence
-should not be kept merely because the reviewer has not checked it yet.
-
-A valid condense whose canonical UTF-8 replacement (including its final newline)
-is byte-identical to the captured note is accepted as an unchanged keep, with
-an explicit reason and ordinary version suppression. Applying it records the
-decision without writing the note: bytes, modification time and permissions
-remain unchanged. A real byte change, including adding a missing final newline,
-still follows the checked condensation write and undo path. Write settlement
-describes observed unchanged targets without inferring an interruption.
 
 Missing or invalid note dispositions, including unknown note fields, leave the
 affected notes unchanged without a proposal or decision. Duplicate claims for
 one admitted note quarantine that note; valid unrelated proposals survive.
 The private no-action text records bounded diagnostics, and the callback's
 `skipped-notes` lists the affected admitted IDs. Fence lines accept trailing
-horizontal whitespace. An empty keep/delete block may end implicitly at the next
-proposal opener or No action section. An unterminated condense is a note no-op;
-its ambiguous tail is quarantined, not reinterpreted as more proposals. A closed
-condense may contain header-like body lines without creating another action.
-A same-width proposal opener inside its body is ambiguous and quarantines the
-tail too; shorter nested Markdown fences remain literal body text.
+horizontal whitespace. An empty delete block may end implicitly at the next
+proposal opener or No action section. A malformed note body's unresolved tail
+is quarantined rather than reinterpreted as additional proposals.
 Malformed memory changes and ambiguous target ownership still reject the reply,
 as do required memory sections missing outside a quarantined tail.
 Each skipped note counts as a format failure, not a successful keep or service:
@@ -1245,40 +1215,11 @@ neither suppresses nor authorizes changes and requires no new persistent store.
 The zero-applied-progress guard still stops automatic catch-up on an all-no-op
 batch instead of inventing a decision.
 
-Delete and condensation acceptance also compare the captured preimage's numeric
-measurement paragraphs with the replacement. Recognition is structural: standalone
-multi-digit counts, decimals, percentages and durations need no domain-specific
-unit vocabulary. Dates, times of day, hashes, paths, file-line references,
-versions, list ordinals and numbers inside identifiers alone are masked.
-Whole original paragraphs retain their operations and conditions; Markdown and
-whitespace changes in preservation evidence are ignored. A paragraph needs no
-additional retention when an extraction citing the note preserves it, or a
-`resolved-by` entry contains that paragraph and its quote and paragraph both occur
-in workspace text actually read by the review. Otherwise a condense appends the
-dropped paragraphs verbatim, in source order, under `## Preserved measurements`.
-A delete becomes a condense containing a one-line source-address provenance
-header followed by those paragraphs. Non-measurement paragraphs are not appended.
-These proposals record `:guard-preserved`, distinct from keeps marked
-`:guard-converted`; pass results and telemetry expose
-`guard-preserved-condense-count` only for newly confirmed changed-byte
-condensations, including earlier pending proposals applied by this job. Accepted
-flags, propose-only reviews, held or failed work, and already decided proposals
-earn no count. A preservation-generated byte-identical condensation becomes an
-unchanged keep before identity generation and drops `:guard-preserved`. A write
-confirmed before cancellation retains its count; deferred retry outcomes do not
-retroactively change a completed pass's event. If a synchronous pending sweep
-quits, it stops later work and reports its confirmed writes; its fallback
-unapplied count of one denotes the interrupted sweep, not an exact total of
-remaining proposals or earlier terminal/failed outcomes. Authenticated captured
-paragraphs may exceed the model's ordinary condensed-body limit; private records
-remain bounded. Citation, source-handoff, anchor and explicit unresolved-item
-guards still convert deletes to keep before numeric preservation. Extraction
-dependencies, exact result hashing, checked writes, recovery and byte-exact undo
-still apply. This is a conservative lexical boundary, not semantic proof of
-resolution. Single-digit counts without a recognized suffix, nonnumeric caveats
-and conditions outside recognized paragraphs still require reviewer judgement.
-Completed numeric history can be retained unnecessarily, and preserved paragraphs
-do not establish useful cleanup or a measured throughput improvement.
+Confirmed deletions, held work and format failures remain distinct outcomes.
+Extraction dependencies, target ownership, current-use and unsaved-buffer
+checks, exact before-state, checked writes, recovery and byte-exact undo still
+apply. A write confirmed before cancellation retains its count; a prepared
+proposal or a deferred retry does not establish that a deletion occurred.
 
 **Housekeeping.** Quiet attachments that no surviving text file references
 (conservatively by root-relative, note-relative, URL-encoded or address
@@ -1325,8 +1266,8 @@ trash locations remain blocked with an explicit reason; there is no permanent
 deletion fallback.
 
 **Modes.** `manual` processes notes only through `/remember`; `propose` leaves
-their decisions in the cockpit; `auto` applies extraction, deletion,
-condensation and housekeeping without prompts. In `auto`, note decisions wait
+their decisions in the cockpit; `auto` applies extraction, deletion and
+housekeeping without prompts. In `auto`, note decisions wait
 while an open session uses their file (see Readiness), rechecked at the
 mutation boundary; other notes and undecided decisions of earlier automatic
 note reviews proceed. A one-minute retry applies the held ones once any of

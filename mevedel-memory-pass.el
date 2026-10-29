@@ -363,13 +363,13 @@ cancellation was requested, holding the rest.
 A shared-note decision waits while an open session uses its file; a retry
 applies it once that use ends.  Other notes and earlier held ones proceed.
 Each note rechecks use before and at its write, since IO yields.
-Count distinct files and preserved condensations only on confirmed writes.
+Count distinct files only on confirmed writes.
 An interrupted pending sweep returns its confirmed writes and one unapplied
 sweep, without reconstructing its other terminal or failed outcome totals."
   (mevedel-memory-pass--timing-start state :application-duration-ms)
   (let ((workspace (plist-get state :workspace))
         (pass (plist-get (plist-get accepted :prepared) :id))
-        (applied 0) (held 0) (unapplied 0) (preserved 0) deferred files)
+        (applied 0) (held 0) (unapplied 0) deferred files)
     (plist-put state :application-context
                (mevedel-memory-decision--operation-context workspace (plist-get state :origin-buffer)))
     (dolist (proposal (plist-get accepted :proposals))
@@ -379,10 +379,7 @@ sweep, without reconstructing its other terminal or failed outcome totals."
                 workspace pass proposal
                 (lambda (paths)
                   (cl-incf applied)
-                  (setq files (append paths files))
-                  (when (and paths (eq (plist-get proposal :action) 'note-condense)
-                             (plist-get proposal :guard-preserved))
-                    (cl-incf preserved))))
+                  (setq files (append paths files))))
           ('held (push (plist-get proposal :file) deferred) (cl-incf held))
           ('quit (plist-put state :stop-apply t) (cl-incf unapplied))
           ('applied nil)
@@ -392,12 +389,9 @@ sweep, without reconstructing its other terminal or failed outcome totals."
              (earlier (condition-case nil
                           (mevedel-memory-pass--apply-pending
                            workspace pass (lambda (file) (push file deferred))
-                           (lambda (proposal paths)
+                           (lambda (paths)
                              (cl-incf confirmed)
-                             (setq files (append paths files))
-                             (when (and paths (eq (plist-get proposal :action) 'note-condense)
-                                        (plist-get proposal :guard-preserved))
-                               (cl-incf preserved))))
+                             (setq files (append paths files))))
                         (quit
                          ;; Preserve reached writes even when this or a later
                          ;; pending operation quits before returning its totals.
@@ -408,8 +402,7 @@ sweep, without reconstructing its other terminal or failed outcome totals."
     (when deferred
       (mevedel-memory-pass--defer-notes state deferred))
     (list :updated-files (length (delete-dups files)) :applied-count applied
-          :held-count held :unapplied-count unapplied
-          :guard-preserved-condense-count preserved)))
+          :held-count held :unapplied-count unapplied)))
 
 (defun mevedel-memory-pass--supersede (workspace accepted)
   "Supersede older undecided note dispositions replaced by ACCEPTED.
@@ -440,8 +433,8 @@ in the cockpit for an explicit decision."
 (defun mevedel-memory-pass--pending-items (workspace skip)
   "Return pending automatic proposal identities in WORKSPACE, excluding SKIP.
 Authenticate status within this read-only selection to omit every decided
-proposal, as synchronous pending selection does.  Retain identities and
-diagnostic preservation classification, never application authority;
+proposal, as synchronous pending selection does.  Retain only identities,
+never application authority;
 each later attempt still freshly reads accepted proof and status."
   (let ((entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
         (passes (make-hash-table :test #'equal)) items)
@@ -455,8 +448,6 @@ each later attempt still freshly reads accepted proof and status."
             (unless (mevedel-memory-decision-status workspace (plist-get proposal :id) entries passes)
               (push (list :pass pass :proposal (plist-get proposal :id) :pending t
                           :note (mevedel-memory-proposal-note-action-p (plist-get proposal :action))
-                          :preserved-condense (and (eq (plist-get proposal :action) 'note-condense)
-                                                   (plist-get proposal :guard-preserved))
                           :file (plist-get proposal :file))
                     items))))))
     (nreverse items)))
@@ -556,9 +547,7 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
 				   workspace claim (plist-get item :pass) (plist-get item :proposal)
 				   (lambda (paths)
 				     (cl-incf (plist-get job :applied))
-					     (plist-put job :files (append paths (plist-get job :files)))
-                                             (when (and paths (plist-get item :preserved-condense))
-                                               (cl-incf (plist-get job :preserved))))
+					     (plist-put job :files (append paths (plist-get job :files))))
 				   currentp (plist-get item :pending)))
 				(lambda (reply)
 				  (plist-put job :operation nil)
@@ -597,7 +586,6 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
 		       (list :updated-files (length (delete-dups (plist-get job :files)))
 			     :cancelled (plist-get job :cancelled)
 			     :applied-count (plist-get job :applied) :held-count (plist-get job :held)
-				     :guard-preserved-condense-count (plist-get job :preserved)
 			     :unapplied-count (plist-get job :unapplied) :error (plist-get job :error)))))
 	((error quit)
 	         ;; A completed job cannot retry its callback.  Preserve failures
@@ -623,12 +611,10 @@ automatic proposals without starting inference.  Return the application job."
          (context (or (plist-get state :application-context)
                       (mevedel-memory-decision--operation-context
                        (plist-get state :workspace) (plist-get state :origin-buffer))))
-         (job (append (list :pass pass :callback callback :applied 0 :held 0 :unapplied 0 :preserved 0 :deferred nil
+         (job (append (list :pass pass :callback callback :applied 0 :held 0 :unapplied 0 :deferred nil
                             :items (mapcar (lambda (proposal)
                                              (list :pass pass :proposal (plist-get proposal :id)
                                                    :note (mevedel-memory-proposal-note-action-p (plist-get proposal :action))
-                                                   :preserved-condense (and (eq (plist-get proposal :action) 'note-condense)
-                                                                            (plist-get proposal :guard-preserved))
                                                    :file (plist-get proposal :file)))
                                            (plist-get accepted :proposals)))
                       (copy-sequence context))))
@@ -664,8 +650,8 @@ current mode is still `auto'.  SKIP names a pass already handled.  Return
 \(APPLIED . UNAPPLIED): proposals reaching a terminal decision, and those
 that did not, including ones still waiting for their extraction.  A note
 decision whose file an open session uses stays undecided; ON-HELD, when
-non-nil, receives that file.  ON-APPLIED, when non-nil, receives the proposal
-and confirmed changed paths; terminal decisions alone do not notify it."
+non-nil, receives that file.  ON-APPLIED, when non-nil, receives confirmed
+changed paths; terminal decisions alone do not notify it."
   (let ((count 0) (failed 0)
         entries
         (passes (make-hash-table :test #'equal)))
@@ -685,7 +671,7 @@ and confirmed changed paths; terminal decisions alone do not notify it."
                 (unwind-protect
                     (pcase (mevedel-memory-pass--apply-automatic
                             workspace pass proposal
-                            (when on-applied (lambda (paths) (funcall on-applied proposal paths))))
+                            on-applied)
                       ('applied (cl-incf count))
                       ('held (when on-held (funcall on-held (plist-get proposal :file))))
                       ('quit (signal 'quit nil))
@@ -783,14 +769,14 @@ here are diagnostic only."
 (defun mevedel-memory-pass--progress-p (workspace accepted)
   "Return non-nil if ACCEPTED's batch made shared-note progress in WORKSPACE.
 Authenticate applied decisions, not proposal or aggregate application counts.
-Only this batch's delete or condense qualifies;
+Only this batch's delete qualifies;
 older pending applications and digest coverage alone do not."
   (let ((entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
         (passes (make-hash-table :test #'equal)))
     (seq-some
      (lambda (proposal)
        (let ((action (plist-get proposal :action)))
-         (when (memq action '(note-delete note-condense))
+         (when (eq action 'note-delete)
            (let ((decision (mevedel-memory-decision-status workspace (plist-get proposal :id) entries passes)))
              (eq (plist-get decision :status) 'applied)))))
      (plist-get accepted :proposals))))
@@ -844,7 +830,6 @@ request IDs and captured housekeeping into the current drain's attempt set."
                         nil (list :prepared (plist-get state :prepared)
                                   :reply (plist-get result :reply) :entries (plist-get result :entries)
                                   :notes (plist-get result :notes)
-                                  :inspected (plist-get result :inspected)
                                   :model (mevedel-memory-pass--producer result)
                                   :references (plist-get (plist-get result :references) :references))))
           (error
@@ -904,7 +889,7 @@ request IDs and captured housekeeping into the current drain's attempt set."
                      workspace (plist-get state :prepared) (plist-get result :reply)
                      (plist-get result :entries) (mevedel-memory-pass--producer result)
                      (plist-get (plist-get result :references) :references)
-                     (plist-get result :notes) (plist-get result :inspected)))
+                     (plist-get result :notes)))
               (unless accepted (error "Memory pass lost ownership before accepting its result"))
               (setq entry (mevedel-memory-store-publish workspace id)))
             (when (string-empty-p (plist-get entry :focus))
@@ -947,10 +932,6 @@ request IDs and captured housekeeping into the current drain's attempt set."
         (setf (mevedel-workspace-journal-observation workspace) nil))
       (cl-labels ((complete (applied)
 			    (mevedel-memory-pass--timing-end state :application-duration-ms)
-			    (let* ((keeps (seq-filter (lambda (proposal) (eq 'note-keep (plist-get proposal :action)))
-                                                     (plist-get accepted :proposals)))
-	                                   (converted (cl-count-if (lambda (proposal) (plist-get proposal :guard-converted)) keeps))
-	                                           (preserved (or (plist-get applied :guard-preserved-condense-count) 0)))
 		    (plist-put state :result
 			       (append (list :outcome (if entry 'success (plist-get result :outcome))
 					     :id id :entry entry :error (or (plist-get result :error) (plist-get applied :error))
@@ -964,14 +945,11 @@ request IDs and captured housekeeping into the current drain's attempt set."
 							  (or (plist-get (plist-get state :selection) :eligible) 0))
 					     :notes-reviewed (- (length (plist-get result :notes)) skipped-note-count)
 					     :note-format-failure-count note-format-failures
-					     :guard-converted-keep-count converted
-                                             :guard-preserved-condense-count preserved
-					     :model-keep-count (- (length keeps) converted)
 					     :notes-remaining (+ (or (plist-get (plist-get state :notes) :remaining) 0)
 									 (or (plist-get result :omitted-notes) 0)
 									 skipped-note-count)
 					     :notes-blocked (or (plist-get (plist-get state :notes) :blocked-count) 0))
-				       applied usage)))
+				       applied usage))
                             (when (and entry (plist-get state :drain))
                               (condition-case err
                                   (mevedel-memory-pass--record-attempts state accepted (plist-get result :notes))
@@ -1029,9 +1007,6 @@ request IDs and captured housekeeping into the current drain's attempt set."
 							    (length (plist-get entry :digests)) 0)
 					 :proposed-count (length (plist-get entry :proposals))
 					 :note-format-failure-count note-format-failures
-					 :guard-converted-keep-count (plist-get (plist-get state :result) :guard-converted-keep-count)
-                                         :guard-preserved-condense-count (plist-get (plist-get state :result) :guard-preserved-condense-count)
-					 :model-keep-count (plist-get (plist-get state :result) :model-keep-count)
 					 :updated-file-count (plist-get applied :updated-files)
 						 :remaining-count (plist-get (plist-get state :result) :remaining)))))
 	                      ;; Async completion runs after this function's outer
@@ -1097,8 +1072,7 @@ The accepted bundle survives a publication failure for checked recovery."
                 (mevedel-memory-store-accept
                  workspace (plist-get payload :prepared) (plist-get payload :reply)
                  (plist-get payload :entries) (plist-get payload :model)
-                 (plist-get payload :references) (plist-get payload :notes)
-                 (plist-get payload :inspected)))
+                 (plist-get payload :references) (plist-get payload :notes)))
           (unless accepted (error "Memory pass lost ownership before accepting its result"))
           (list :ok t :accepted accepted
                 :entry (mevedel-memory-store-publish

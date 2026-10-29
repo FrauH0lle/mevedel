@@ -112,7 +112,6 @@ counts captured notes left for a later review."
                               (list :id (plist-get note :id) :path (plist-get note :path)
                                     :modified (plist-get note :modified)
                                     :cited_by_memory (if (plist-get note :cited) t :json-false)
-                                    :sequential_summary (if (plist-get note :chunked) t :json-false)
                                     :body (plist-get note :body)))
                             notes))
     :omitted_notes (or omitted-notes 0)
@@ -236,8 +235,6 @@ malformed memory changes and unrecoverable reply structure reject the reply."
                                       :scope scope :entries admitted
                                       :notes (mapcar (lambda (note) (plist-get note :id)) admitted-notes)
                                       :omitted-notes (- (length notes) (length admitted-notes))
-                                      :inspected (and investigation
-                                                      (reverse (mevedel-memory-investigation-inspected investigation)))
                                       :references references :policy policy :omitted-digests (- (length entries) (length admitted)))
                                 parsed (snapshot))))))
          (estimated ()

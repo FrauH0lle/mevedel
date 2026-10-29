@@ -246,12 +246,11 @@ local consolidation, application or cleanup runs; other sessions' turns do not
 stop it, and notes they use wait. Auto mode offers currently ready work at the
 next idle opportunity instead of waiting another day only while each successful
 general batch makes shared-note progress. An authenticated applied delete
-(including verified trash relocation), condense, or a keep that suppresses the
-reviewed version qualifies;
+(including verified trash relocation) qualifies;
 proposal counts, digest coverage and older pending applications do not.
 The frozen capture's remaining count does not restrict continuation. Fresh
 owned admission checks eligible digests and ready shared files, including later
-arrivals; quiet-period, suppression, in-use and capture limits still apply.
+arrivals; modification-age, pending/recovery, in-use and capture limits still apply.
 An empty opportunity runs no inference and preserves the progress-qualified
 opportunity with a ten-minute retry observation, rather than ending the chain.
 Cleanup or claim contention before admission also preserves it for a later offer.
@@ -275,11 +274,7 @@ writes, rollback, claim settlement, and marker retirement share a target-side
 marker. Reconciliation compares exact before/after states; it does not infer a
 successful write from an unmarked intent. Reversal is a separate accepted intent
 and decision, preserving the original application as evidence.
-Acceptance converts a condense whose canonical replacement bytes equal the
-captured note to an unchanged keep before proposal identity is fixed. Its checked
-application records normal keep suppression without a note write or changed
-mtime/mode, rather than creating an identical before/after mutation. Settlement
-reports observed unchanged targets without inferring an interruption.
+Settlement reports observed unchanged targets without inferring an interruption.
 A known admission hold or cancellation may abandon an exact prepared intent
 without deciding the proposal only after checked rollback and freshly proven
 complete before-state. Original authority, tokens and live buffers are checked
@@ -306,7 +301,10 @@ edits and changes from other reviews are preserved without replaying write
 history. Application retains the complete current index snapshot as its expected
 before-state; exact file checks protect preparation through commit. Topics and
 instructions still require their original state, and reversal still requires
-the exact recorded after-state.
+the exact recorded after-state. An Instructions body is the complete desired
+file content, preserving unrelated guidance, rather than an appended fragment.
+Empty content clears an existing file or creates an admitted known-absent file
+with zero bytes. The exact captured applicable target set is unchanged.
 
 Private journal records live at `.mevedel/state/journal/`, alongside other
 generated workspace state; public journal entries stay at `.mevedel/journal/`.
@@ -359,38 +357,32 @@ pending/recovery holds remain; prior retention/rejection/reversal outcomes do
 not start an additional seven-day reconsideration clock. Local observed use
 retains its independent 24-hour access window. Shared-directory Read generates
 bounded kind/status, owner, age and summary rows, explicitly reporting only
-age-readiness with capture/application safety checks pending. Each
-admitted note receives one disposition (delete, keep, or condense) beside
-ordinary extraction proposals citing it, and a disposal applies only after
-those extractions are applied. Quiet attachments no surviving note references
-and quiet empty folders receive structured decisions without inference. Files
-that memory or instructions cite are not removed silently. Accepted reviews
-require a model keep to identify nonempty open items and explain missing
-resolution evidence. Numeric recognition protects whole captured paragraphs
-containing standalone multi-digit counts, decimals, percentages or durations,
-after masking metadata such as dates, paths, hashes and versions. A condense
-appends dropped protected paragraphs verbatim under a fixed heading; a delete
-becomes a condense with a source-address provenance header and those paragraphs.
-An intact citing extraction or authenticated read quote can account for a
-paragraph without appending it. Matching ignores Markdown and whitespace, not
-conditions within the paragraphs. These authenticated transformations record
-`:guard-preserved`, distinct from `:guard-converted` keeps, and may exceed the
-model body limit within bounded private records. Citation, source-handoff,
-anchor and unresolved-item guards still produce keeps. Semantic resolution and
-conditions outside recognized paragraphs remain reviewer responsibilities.
-These checks address a replay that replaced concrete operation counts with
-"supplied instrumentation counts", alongside unjustified completed-case keeps;
-reversible undo alone did not prevent loss. Deletes bind each listed item to an
-authenticated quote by a shared key-operation anchor, and cannot acknowledge
-unresolved items. An empty inventory cannot bypass explicit source handoff
-markers. These checks deliberately trade some extra retention for a conservative
-loss boundary; semantic relevance and unlabelled work remain model quality.
-Recoverable invalid or missing note dispositions produce no decision for those
-notes, rather than discarding valid unrelated proposals. Fence lines tolerate
-trailing whitespace; empty keep/delete blocks may end at an unambiguous next
-opener or No action section. Unterminated condense bodies quarantine their tail
-as note no-ops, never granting authority to header-like body text. Same-width
-proposal openers inside a condense body are ambiguous and fail closed too.
+age-readiness with capture/application safety checks pending. Each admitted note
+receives an explicit delete acknowledgement with a reason and empty body beside
+ordinary qualifying extraction proposals. Every citing extraction is a disposal
+dependency and must be applied first. Notes are disposable working material,
+not an open-work tracker: deletion needs no inventory of unfinished tasks,
+resolution quotes, source markers, anchors or numeric-retention transformations.
+There is no keep or condense path. Qualifying memory may be empty; task owners
+record actionable open work in the tracker or backlog.
+
+Permanent memory or instruction citations must be repaired through checked
+updates/removals. Complete current configured memory and applicable instruction
+scope is freshly scanned before note deletion, including indexes, new files and
+roots, captured instruction targets and their absent companions. Any remaining
+citation, unknown scope, unsaved draft, active use or renewed modification age
+holds the note without deciding it. These checks repeat after preparatory IO
+at the mutation boundary; a same-byte touch after capture resets age too.
+Reversing an extraction restores its applied dependent note deletions first.
+Quiet attachments no surviving text references and quiet empty folders receive
+structured decisions without inference; existing housekeeping safety remains
+separate from model acknowledgement.
+
+Recoverable invalid, duplicate or missing note acknowledgements produce no
+decision for those notes, rather than discarding valid unrelated proposals.
+Fence lines tolerate trailing whitespace; empty delete blocks may end at an
+unambiguous matching-width opener or No action section. Malformed nonempty note
+bodies remain unauthorized; quoted header-like content never admits a target.
 Their per-pass
 format failure count remains visible; ambiguous ownership, required memory
 sections missing outside that tail and invalid memory changes still reject the
@@ -437,6 +429,25 @@ longer than ordinary recall when evidence or recovery still needs it; the recall
 limit is not an erasure guarantee.
 
 ## Decision history
+
+### 2026-10-29: Extract knowledge and acknowledge deletion, not task resolution
+
+The conservative open-item, authenticated-quote and measurement guards below
+responded to real loss observations, but turned temporary notes into a task
+tracker: a replay retained nearly all reviewed notes instead of extracting the
+few qualifying durable lessons and disposing of working material. The accepted
+direction in [ADR 0128](0128-extract-memory-and-expire-working-notes.md) separates
+those responsibilities. Notes now have delete-only acknowledgements; keep,
+condense, semantic resolution inventories, quote accumulators and preservation
+counters are removed. The earlier rationale remains in this history.
+
+This does not weaken mutation authority or permit dangling permanent citations.
+All citing extractions must apply; current complete memory/instruction scope is
+rechecked after approval and preparation, with nonterminal holds on citations
+or incomplete observations. Instructions now replaces the complete exact
+captured file, including known absence, because append-only updates could not
+repair an old citation. Checked before-state, ownership, rollback, buffers and
+dependent reversal remain the disposal boundary, not semantic task completion.
 
 ### 2026-10-29: Metadata and modification age replace quiet-hour readiness
 

@@ -40,92 +40,24 @@ qualifying memory from them now: cite the note's ID in a proposal's `evidence`.
 The same qualification rules apply; a note's existence is no reason to save
 it. Only IDs in the top-level `notes` array may receive dispositions. Omitted
 or merely referenced notes remain outside this review, even if investigation
-tools can read them. Dispose of each admitted note exactly once in Notes:
+tools can read them. Acknowledge each admitted note exactly once in Notes with
+`disposition: "delete"` and an empty body, after extracting any qualifying
+knowledge. No extraction is a successful outcome. Do not invent memories to
+justify cleanup. Open work, unresolved findings, numeric measurements, and
+possible future usefulness do not require a completion audit or a note rewrite.
+Do not offer keep or condense dispositions. Acknowledgement proposes deletion;
+it does not claim the file was removed. The checked application removes a note
+only after every extraction citing it has been applied.
 
-- `delete`: the normal outcome for completed material, after extraction or when
-  nothing qualifies. When the only question is whether finished history might
-  help someday, delete.
-- `keep`: only for concrete continuing use, such as an open handoff or an
-  investigation still in progress, including its prepared diagnostic needed
-  for an unresolved follow-up. Name each still-open item in `open-items`; in
-  `reason`, state which resolution evidence is missing after investigation.
-  A generic "potentially useful" or "not verified" is not a justification.
-  The note is reviewed again later.
-- `condense`: rewrite the note to the part still in use, for example only its
-  open handoff after its finding was extracted.
-
-Before choosing a disposition, identify the note's open items: unresolved defects
-or findings, failed or unfinished checks, unverified hypotheses or leads,
-stated acceptance limits, and work it explicitly leaves for someone else
-("not done", "remains", "handoff", "belongs to"). Do this even when the note's
-main task is complete; passing checks or completed fixes do not resolve a
-separate finding. Age, an absent next step, or a missing record is not
-resolution: "not established as unresolved" is not a reason to delete.
-Work assigned to another owner ("belongs to", "parent owns") and observations
-the note retains without an established cause are open items of this note too;
-assigning them elsewhere is not resolving or recording them.
-Open items appear throughout a note, not only in a closing handoff section:
-account for each statement that something remains, is retained, unattributed,
-unexplained or more expensive than its control. A completed section that a
-later section of the same note resolves is not open.
-A note with `sequential_summary` true is a running summary of a long note's
-chunks; items it marks RESOLVED, with the note's own words, are not open, and
-need no other resolution evidence.
-Record them only in the disposition's `open-items` field, never as text
-between proposal blocks.
-
-An open item ends the note's continuing use only when it was resolved,
-superseded, or recorded elsewhere with its caveats and next-step conditions
-intact. Establish that with the workspace tools: Grep maintained records such
-as `docs/backlog.md`, decision records under `docs/adr/`, documentation, and
-the code and tests the note names for the item's specific terms, then Read the
-matching lines with `offset` and `limit`. Measurements, residual costs and
-acceptance limits are usually recorded in a decision record's measurements or
-consequences, not the backlog: search `docs/adr/` with the item's distinctive
-terms and numbers too. Handoffs to integrate, commit, merge or run final checks
-are usually completed in Git history: search it with the Git tool (`log` with
-the item's terms, or `show` a commit hash the note names) and quote it as
-`GIT-HISTORY`. For a handoff to integrate or merge a named commit, `show`
-reports "Commit HASH contained in current HEAD: yes" when that is done; quote
-that line. Git containment establishes inclusion only, never runtime activation,
-deployment, external review or a hosted check. Those require their own evidence.
-A commit that merely touches the topic
-does not resolve an item. A Read returns at most 8 KiB, so a
-whole large file shows only its start; searches of the workspace root are
-partial, so search a directory or file. Issue independent searches and reads
-together in one tool round. These checks can change the proposal, so make them
-even when other guidance favours brief investigation. If an open item remains
-unestablished, condense the note to that item's dated evidence, caveats and
-next step, stated as the note's observation at that date, not as a current
-defect or a user preference; or keep it when the whole note is still in use.
-A condensed body keeps each open item's concrete content: the operations,
-commands or files involved, measured values with their comparison baselines,
-and conditions. A phrase that only refers to an item, such as "remaining
-editing costs", loses it. Leave out completed measurements and items the note
-itself later resolved.
-For numeric measurements, preserve the complete measurement paragraphs verbatim
-(Markdown and whitespace may change), including the scenario, baseline and
-correction paragraphs that give the numbers their conditions. Acceptance keeps
-the original note on either delete or condense if such a paragraph disappears unless an extraction citing
-this note preserves it, or `resolved-by` quotes read workspace evidence containing
-that paragraph and establishing its resolution or record. Do not replace values
-with a reference such as "supplied counts". This guard does not require retaining
-completed measurements forever: provide their authenticated record or extraction
-when disposing of them, even when all open items are resolved.
-Delete when every open item is established as resolved or recorded, or when the
-note has none.
-Use the available workspace tools to check each concrete item before deciding;
-"I have not checked" is not a continuing-use reason. Account for every distinct
-owner step, not only source completion. If investigation cannot establish a
-step's resolution, retain its dated evidence rather than assuming completion.
-
-Do not keep or condense a note merely because it might help someday, and do
-not invent memories to justify deleting one. A note is removed only after
-every extraction citing it has been applied.
 A note with `cited_by_memory` is referenced by a memory topic or instruction
-file. Delete it only together with an Update or Remove proposal that makes the
-citing memory self-contained, citing the note's ID as evidence; otherwise keep
-it.
+file. Propose Update or Remove for the citing memory, or Instructions for the
+citing instruction file, so surviving guidance is self-contained without the
+temporary note reference. Cite the note's ID as evidence. Preserve unrelated
+guidance and do not promote temporary task state into memory merely to remove
+a citation. If the captured scope does not support a safe repair, acknowledge
+delete anyway and explain the uncertainty in `reason`: application dynamically
+holds deletion while citations remain or their scope cannot be checked. The
+hold is a dependency refusal, not a keep disposition or deletion authority.
 
 Use only the supplied read tools and captured scopes to investigate uncertain
 claims. A literal reference match proves textual occurrence only. A missing
@@ -187,7 +119,7 @@ and a JSON array for evidence:
     reason: "Why the evidence supports this change"
     evidence: ["exact admitted digest ID"]
     ---
-    Complete replacement body, without file frontmatter.
+    Complete replacement body (memory topics omit generated frontmatter).
 
 The separator is a line containing only `---`. The body is Markdown, not a JSON
 string. Write the header as the separate key: value lines shown above, not a JSON
@@ -210,7 +142,15 @@ Action rules:
   The target may be one of the merged sources; other source topics are removed.
 - Remove names an admitted existing topic and has an empty body after `---`.
 - Instructions names an exact applicable file in a captured instruction root.
-  Its body contains only the new guidance to append, not the existing file.
+  Its body is the COMPLETE desired file content, not an addition to append.
+  Preserve all unrelated captured guidance. The captured target may already
+  exist or be a known-absent applicable file; do not add other targets. An empty
+  body clears an existing file or creates a known-absent file with zero bytes;
+  it never deletes the file path. Body bytes are used exactly as decoded,
+  including any final newline; an empty body has no implicit newline.
+  The newline immediately before the closing fence is structural and is not
+  part of the decoded body. To retain a final newline in the desired file,
+  include an extra newline before that closing fence.
 
 Do not propose direct changes to MEMORY.md. Application constructs topic
 frontmatter from title, hook, and type, and updates the corresponding index
@@ -220,43 +160,12 @@ applies to merge sources. Shared index updates are managed by application.
 A Notes block uses the same fence with these three required header fields:
 
     note: "the note's exact ID"
-    disposition: "keep"
-    reason: "Why this disposition fits"
+    disposition: "delete"
+    reason: "What qualified for extraction, or why nothing did"
     ---
 
-A delete adds the four fields below after `reason`. A keep must include a
-nonempty `open-items` array naming what still lacks resolution evidence.
-Condense may include `open-items` and `resolved-by` to account for removed measurements:
-
-    open-items: ["Each open item listed above, one short string each"]
-    resolved-by: ["docs/backlog.md: exact words of the entry recording the item"]
-    resolution-anchors: ["the item's key operation or outcome"]
-    unresolved-items: []
-
-`open-items` is `[]` only when the note has none. `resolved-by` gives at least
-one entry per open item: a workspace-relative file you Read in this review, or
-`GIT-HISTORY` for Git tool output, then `: `, and exact words copied from that
-output showing the item's resolution or
-record, at least a short sentence fragment. It is `[]` only when `open-items`
-is. A file that discusses the topic is not evidence unless the quoted words
-resolve or record that item. A delete whose quotes do not occur in your reads
-is accepted as keep.
-For a delete, pair `open-items`, `resolved-by` and `resolution-anchors` in the
-same order, one quote and anchor per item. Choose a short anchor phrase naming
-the item's key operation or outcome; it must occur verbatim in both that item
-and its resolution quote (case and whitespace may differ). A generic shared
-word is not evidence of completion: if the item is activation, anchor activation,
-not a different operation such as merge. Quote enough context to establish the
-whole item's resolution. Missing or mismatching anchors turn a delete into keep,
-not a rejected review. Put any items still open or unresolved in
-`unresolved-items`; a nonempty value also prevents deletion. Do not delete a
-note while acknowledging that one of its owner steps remains unresolved.
-An empty open-item list also cannot delete a source with explicit handoff
-markers (such as next steps, pending, unverified, TODO or owner-assigned work);
-inventory those items and establish their resolution instead.
-
-The body after `---` is empty for `delete` and `keep`. For `condense` it is the
-complete replacement note text.
+These are the only Notes fields. The body after `---` is empty. Do not include
+completion inventories, resolution quotes, anchors, or replacement note text.
 
 A missing or invalid Notes disposition leaves that note unchanged with no
 decision and a format-failure diagnostic; valid unrelated proposals can still

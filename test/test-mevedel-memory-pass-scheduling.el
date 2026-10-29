@@ -76,7 +76,7 @@
                                                                         memory-id (concat name ".md") name)) '("one" "two") "")
                                                    "## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n"
                                                    (format (concat "```proposal\nroot: %S\nfile: \"AGENTS.md\"\ntype: \"project\"\ntitle: \"Guidance\"\n"
-                                                                   "hook: \"Guidance\"\nreason: \"Evidence\"\nevidence: []\n---\nUse the checked workflow.\n```\n") instruction-id)
+                                                                   "hook: \"Guidance\"\nreason: \"Evidence\"\nevidence: []\n---\nExisting guidance.\nUse the checked workflow.\n```\n") instruction-id)
                                                    "## No action\n- none")))
                                           memory))
                                       (drain ()

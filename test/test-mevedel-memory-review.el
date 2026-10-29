@@ -178,29 +178,22 @@
     (dolist (rule '("`user`:" "`feedback`:" "`project`:" "`reference`:"
                     "Tasks, blockers, deadlines, progress, and decisions belong"
                     "reviewing older notes containing project progress"
-                    "When the only question is whether finished history might"
-                    "Before choosing a disposition, identify the note's open items: unresolved defects"
-                    "Record them only in the disposition's `open-items` field, never as text"
-                    "assigning them elsewhere is not resolving or recording them."
-                    "Open items appear throughout a note, not only in a closing handoff section:"
-                    "chunks; items it marks RESOLVED, with the note's own words, are not open, and"
-                    "consequences, not the backlog: search `docs/adr/` with the item's distinctive"
-                    "A condensed body keeps each open item's concrete content: the operations,"
+                    "`disposition: \"delete\"` and an empty body"
+                    "No extraction is a successful outcome."
+                    "do not require a completion audit or a note rewrite."
+                    "The checked application removes a note"
+                    "application dynamically"
+                    "holds deletion while citations remain or their scope cannot be checked."
+                    "Its body is the COMPLETE desired file content, not an addition to append."
+                    "Preserve all unrelated captured guidance."
+                    "exist or be a known-absent applicable file; do not add other targets."
+                    "it never deletes the file path. Body bytes are used exactly as decoded,"
                     "Analysis, lists and explanations outside proposal blocks invalidate the reply."
-                    "stated acceptance limits, and work it explicitly leaves for someone else"
-                    "resolution: \"not established as unresolved\" is not a reason to delete."
-                    "superseded, or recorded elsewhere with its caveats and next-step conditions"
-                    "A Read returns at most 8 KiB, so a"
-                    "are usually completed in Git history: search it with the Git tool (`log` with"
-                    "reports \"Commit HASH contained in current HEAD: yes\" when that is done; quote"
-                    "unestablished, condense the note to that item's dated evidence, caveats and"
-                    "defect or a user preference; or keep it when the whole note is still in use."
-                    "open-items: [\"Each open item listed above, one short string each\"]"
-                    "is. A file that discusses the topic is not evidence unless the quoted words"
-                    "investigation still in progress, including its prepared diagnostic needed"
-                    "main task is complete; passing checks or completed fixes do not resolve a"
                     "No action is a successful"))
       (should (string-search rule sent-system)))
+    (dolist (obsolete '("open-items" "resolved-by" "resolution-anchors" "unresolved-items"
+                        "GIT-HISTORY" "sequential_summary" "Preserved measurements"))
+      (should-not (string-search obsolete sent-system)))
     (with-current-buffer (plist-get handle :buffer)
       (should-not mevedel--session)
       (should (equal '("Read" "Glob" "Grep" "Git") (mapcar #'gptel-tool-name gptel-tools))))
@@ -228,12 +221,13 @@
     (respond mevedel-test-memory-review--none)
     (gptel--fsm-transition request 'DONE)
     (should (eq 'success (plist-get result :outcome))))
-  :doc "admits shared notes beside digests and retains a missing disposition as a counted no-op"
+  :doc "admits unresolved numeric notes for delete-only extraction and counts a missing acknowledgement as no-op"
   (let* ((shared (file-name-concat directory ".mevedel" "shared"))
          (path (file-name-concat shared "note.md"))
+         (body "TODO: parent owns the unresolved integration follow-up.\nScenario: 50 notes took 125 seconds; baseline: 100 notes in 250 seconds.\n")
          scope)
     (make-directory shared t)
-    (write-region "Finding: index destinations must be unique.\n" nil path nil 'silent)
+    (write-region body nil path nil 'silent)
     (set-file-times path (time-subtract nil (* 15 86400)))
     (mevedel-workspace-identity-ensure directory)
     (setq scope (mevedel-memory-scope-capture workspace))
@@ -246,6 +240,8 @@
       (let ((input (json-parse-string sent)))
         (should (= 1 (length (gethash "digests" input))))
         (should (equal "work://shared/note.md" (gethash "id" (aref (gethash "notes" input) 0))))
+        (should (equal body (gethash "body" (aref (gethash "notes" input) 0))))
+        (should-not (gethash "sequential_summary" (aref (gethash "notes" input) 0)))
         (should (eq :false (gethash "cited_by_memory" (aref (gethash "notes" input) 0)))))
       (respond mevedel-test-memory-review--none)
       (gptel--fsm-transition request 'DONE)
@@ -256,14 +252,20 @@
       (review)
       (respond (replace-regexp-in-string
                 "## No action" (concat "## Notes\n````proposal\nnote: \"work://shared/note.md\"\n"
-                                       "disposition: \"delete\"\nreason: \"Nothing durable.\"\nopen-items: []\nresolved-by: []\n---\n````\n## No action")
+                                       "disposition: \"delete\"\nreason: \"Nothing durable.\"\n---\n````\n## No action")
                 mevedel-test-memory-review--none t t))
       (gptel--fsm-transition request 'DONE)
       (ert-info ((format "Review error: %s" (plist-get result :error)))
         (should (eq 'success (plist-get result :outcome))))
       (should (equal '("work://shared/note.md") (plist-get result :notes)))
       (should (= 0 (plist-get result :omitted-notes)))
-      (should (eq 'note-delete (plist-get (car (plist-get result :proposals)) :action)))))
+      (should-not (plist-member result :inspected))
+      (should (= 1 (length (plist-get result :proposals))))
+      (let ((proposal (car (plist-get result :proposals))))
+        (should (eq 'note-delete (plist-get proposal :action)))
+        (should (equal "" (plist-get proposal :body)))
+        (dolist (key '(:open-items :resolved-by :resolution-anchors :unresolved-items))
+          (should-not (plist-member proposal key))))))
   :doc "request admission lists only supplied notes and ignores omitted-note dispositions without widening authority"
   (let* ((shared (file-name-concat directory ".mevedel" "shared"))
          scope)
@@ -290,7 +292,7 @@
                      (concat "## Notes\n"
                              (mapconcat
                               (lambda (note)
-                                (format "````proposal\nnote: %s\ndisposition: \"delete\"\nreason: \"Nothing durable.\"\nopen-items: []\nresolved-by: []\n---\n````\n"
+                                (format "````proposal\nnote: %s\ndisposition: \"delete\"\nreason: \"Nothing durable.\"\n---\n````\n"
                                         (json-serialize (plist-get note :id))))
                               notes "")
                              "## No action")
@@ -323,6 +325,50 @@
         (gptel--fsm-transition request 'DONE)
         (should (eq 'success (plist-get result :outcome)))
         (should (= (length supplied) (length (plist-get result :proposals)))))))
+  :doc "Instructions retains captured old guidance and decodes complete, empty or whitespace bodies exactly"
+  (let* ((old "# Guidance\nUnrelated guidance must survive.\nSee work://shared/temporary.md.\n")
+         (replacement "# Guidance\nUnrelated guidance must survive.\nUse the maintained contract instead.\n"))
+    (with-temp-file (file-name-concat directory "AGENTS.md") (insert old))
+    (dolist (target '("AGENTS.md" "AGENTS.local.md"))
+      (dolist (body (list replacement "" " \t\n"))
+        (setq result nil)
+        (start)
+        (let* ((input (json-parse-string sent :object-type 'plist :array-type 'list))
+               (root (seq-find (lambda (row) (equal "instructions" (plist-get row :kind)))
+                               (plist-get input :roots)))
+               (document (seq-find (lambda (row) (equal "AGENTS.md" (plist-get row :file)))
+                                   (plist-get input :documents)))
+               (reply (replace-regexp-in-string
+                       "## Instructions\n- none"
+                       (concat "## Instructions\n````proposal\n"
+                               "root: " (json-serialize (plist-get root :id)) "\n"
+                               "file: " (json-serialize target) "\n"
+                               "type: \"project\"\ntitle: \"Self-contained guidance\"\n"
+                               "hook: \"Repair a temporary reference\"\n"
+                               "reason: \"Replace the file while preserving unrelated guidance.\"\n"
+                               "evidence: []\n---\n" body "\n````")
+                       mevedel-test-memory-review--none t t)))
+          (should (member target (plist-get root :admitted_files)))
+          (should (equal old (plist-get document :body)))
+          (should-not (file-exists-p (file-name-concat directory "AGENTS.local.md")))
+          (respond reply)
+          (gptel--fsm-transition request 'DONE)
+          (ert-info ((format "Instruction review failed: %S" result))
+            (should (eq 'success (plist-get result :outcome))))
+          (let ((proposal (car (plist-get result :proposals))))
+            (should (eq 'instructions (plist-get proposal :action)))
+            (should (equal (plist-get root :id) (plist-get proposal :root)))
+            (should (equal target (plist-get proposal :file)))
+            (should (equal "project" (plist-get proposal :type)))
+            (should (equal "Self-contained guidance" (plist-get proposal :title)))
+            (should (equal "Repair a temporary reference" (plist-get proposal :hook)))
+            (should (equal "Replace the file while preserving unrelated guidance."
+                           (plist-get proposal :reason)))
+            (should-not (plist-get proposal :evidence))
+            (should (equal body (plist-get proposal :body))))
+          (should (equal old (with-temp-buffer
+                               (insert-file-contents (file-name-concat directory "AGENTS.md"))
+                               (buffer-string))))))))
   :doc "runs an admitted Read without inheriting interactive tool confirmation"
   (let ((gptel-confirm-tool-calls t) tool-result)
     (with-temp-file (file-name-concat directory "source.el") (insert ";; Source evidence.\n"))
@@ -340,6 +386,9 @@
     (respond mevedel-test-memory-review--none)
     (gptel--fsm-transition request 'DONE)
     (should (eq 'success (plist-get result :outcome)))
+    (should-not (plist-member result :inspected))
+    (should (= 1 (length (plist-get (plist-get result :investigation) :calls))))
+    (should-not (string-search "Source evidence" (prin1-to-string result)))
     (should (= 1 settlements)))
   :doc "rejects unavailable tool names before dispatch without entering an unbounded repair loop"
   (let (diagnostics)

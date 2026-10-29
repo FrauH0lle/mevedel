@@ -50,12 +50,12 @@
 (autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 
 ;; `mevedel-session-control-fs'
-(declare-function mevedel-session-control-fs-append-rotating "mevedel-session-control-fs"
-                  (path content max-bytes))
-(declare-function mevedel-session-control-fs-make-directory "mevedel-session-control-fs"
-                  (path &optional parents))
-(autoload 'mevedel-session-control-fs-append-rotating "mevedel-session-control-fs")
-(autoload 'mevedel-session-control-fs-make-directory "mevedel-session-control-fs")
+(declare-function mevedel-session-control-fs-program-value "mevedel-session-control-fs"
+                  (result))
+(declare-function mevedel-session-control-fs-run-program "mevedel-session-control-fs"
+                  (operations &optional lock-directory))
+(autoload 'mevedel-session-control-fs-program-value "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-run-program "mevedel-session-control-fs")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-root-buffer-for-session
@@ -193,15 +193,14 @@ profile file larger and cost a little more per sample."
     :exit-status :failure-class :failure-stage :fallback :filesystem :first-byte-seen
     :fresh-visible-prompt-estimate
     :gc-count :gc-ms :git-head :goal-id
-    :gptel-commit :gptel-file-hash :gptel-version :guard-converted-keep-count
-    :guard-preserved-condense-count :handler-count
+    :gptel-commit :gptel-file-hash :gptel-version :handler-count
     :handler-id :handler-source :handler-type :hook-event
     :ineligible-reason :input-bytes :input-p :input-pending :input-tokens
     :investigation :investigation-command :investigation-notes :investigation-notes-omitted
     :investigation-path :investigation-pattern :investigation-root
     :interaction-id :issue-count
     :kind :lane :limit
-    :max-ms :message-chars :message-hash :mode :model :model-context-source :model-context-window :model-keep-count :modes
+    :max-ms :message-chars :message-hash :mode :model :model-context-source :model-context-window :modes
     :native-resource-capture :native-resource-report-bytes :nested-call-count
     :network
     :new-count :new-segment :note-format-failure-count :offset :old-segment :omitted-count :operation-count :origin :outcome

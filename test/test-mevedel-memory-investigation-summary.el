@@ -77,8 +77,8 @@
       (should (equal "NEVER" (plist-get (nth 1 rows) :investigation-pattern)))
       (should (eq 'error (plist-get (nth 3 rows) :status)))
       (should-not (string-search "Source file is unavailable" (prin1-to-string snapshot)))
-      ;; Search delivery is not promoted to authenticated disposal evidence.
-      (should (equal '("source.txt") (mapcar #'car (mevedel-memory-investigation-inspected state))))))
+      ;; Neither Read nor search delivery retains a source-body accumulator.
+      (should-not (string-search "PRIVATE-CONTENT-NEVER-PERSISTED" (prin1-to-string state)))))
   :doc "partial snapshots, long-line clipping and result clipping are observable independently"
   (progn
     (with-temp-file (file-name-concat directory "huge.txt") (insert (make-string 600000 ?x)))
@@ -282,8 +282,8 @@
              (real-supported (symbol-function 'mevedel-journal-worker-supported-p))
              (real-worker (symbol-function 'mevedel-journal-worker-start))
              (reply (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n"
-                            "## Notes\n````proposal\nnote: \"work://shared/note.md\"\ndisposition: \"keep\"\n"
-                            "reason: \"Completion evidence is missing\"\nopen-items: [\"Investigate the observation\"]\n---\n````\n"
+                            "## Notes\n````proposal\nnote: \"work://shared/note.md\"\ndisposition: \"delete\"\n"
+                            "reason: \"Nothing qualifies for extraction\"\n---\n````\n"
                             "## No action\n- none"))
              worker-enabled worker-operations state result fsm callback)
      :before-each ((put model :context-window 128) (put model :capabilities '(tool-use)))

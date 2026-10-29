@@ -986,6 +986,13 @@
     (should-not (plist-member safe :command))
     (should-not (plist-member safe :event))
     (should (equal '("ok" (1 2)) (plist-get safe :skill-names))))
+  :doc "obsolete note retention counters are not emitted even as zero"
+  (let* ((mevedel-telemetry--dropped-keys nil)
+         (safe (mevedel-telemetry--safe-props
+                '(:guard-converted-keep-count 0 :guard-preserved-condense-count 0 :model-keep-count 0
+                  :note-format-failure-count 0 :updated-file-count 1 :reviewed-count 2))))
+    (should (equal '(:note-format-failure-count 0 :updated-file-count 1 :reviewed-count 2) safe))
+    (should (= 3 (length mevedel-telemetry--dropped-keys))))
   :doc "preserves duplicate key order and input while reporting nested drops"
   (let* ((props '(:status first :command "secret" :status second
                   :modes (:path "secret" :status nested) :command "again"
@@ -1794,6 +1801,35 @@
             (should-not (string-match-p "SECRET" (prin1-to-string event)))))
       (delete-directory root t)))
 
+  :doc "cold workspace telemetry loads its filesystem owner at first use"
+  (let* ((root (make-temp-file "mevedel-telemetry-cold-" t))
+         (source (file-name-directory (locate-library "mevedel-telemetry")))
+         (process-environment (copy-sequence process-environment)))
+    (unwind-protect
+        (progn
+          (dolist (name '("HOME" "XDG_CONFIG_HOME" "XDG_CACHE_HOME" "XDG_DATA_HOME" "XDG_STATE_HOME" "XDG_RUNTIME_DIR"))
+            (let ((path (file-name-concat root name)))
+              (make-directory path)
+              (setenv name path)))
+          (with-temp-buffer
+            (should
+             (zerop
+              (call-process
+               invocation-name nil t nil "-Q" "--batch" "-L" source "--eval"
+               (format
+                (concat "(progn (setq native-comp-jit-compilation nil native-comp-eln-load-path (list %S))"
+                        " (require 'mevedel-structs) (require 'mevedel-native)"
+                        " (setq mevedel-native--load-state \"Cold fixture uses fallback clock\")"
+                        " (require 'mevedel-telemetry)"
+                        " (when (featurep 'mevedel-session-control-fs) (kill-emacs 1))"
+                        " (unless (mevedel-telemetry-record-workspace"
+                        " (mevedel-workspace--create :root %S) 'memory-consolidation-completed :updated-file-count 1)"
+                        " (kill-emacs 2))"
+                        " (unless (file-exists-p %S) (kill-emacs 3)))")
+                (file-name-concat root "eln") root
+                (file-name-concat root ".mevedel" "state" "diagnostics" mevedel-telemetry-file-name)))))
+            (should (string-empty-p (buffer-string)))))
+      (delete-directory root t)))
   :doc "disabled telemetry creates no state, and storage failure is nonblocking"
   (let* ((root (make-temp-file "mevedel-workspace-telemetry-" t))
          (workspace (mevedel-workspace--create :root root)))

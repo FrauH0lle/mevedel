@@ -34,10 +34,6 @@
 (defconst mevedel-memory-investigation--summary-bytes 32768
   "Maximum serialized UTF-8 bytes in one investigation summary.")
 
-(defconst mevedel-memory-investigation-git-evidence "GIT-HISTORY"
-  "Evidence key recording Git history a review read.
-A note delete cites it in `resolved-by' as \"GIT-HISTORY: quote\".")
-
 (cl-defstruct (mevedel-memory-investigation
                (:constructor mevedel-memory-investigation-create
                              (scope entries currentp exhausted)))
@@ -45,9 +41,8 @@ A note delete cites it in `resolved-by' as \"GIT-HISTORY: quote\".")
 SCOPE contains captured roots. ENTRIES are the owner's admitted public
 journal snapshots. CURRENTP must reject expired generations. EXHAUSTED is
 called with a reason when a tool budget prevents valid completion.
-INSPECTED maps each normalized workspace path to the Read text delivered for it.
 SUMMARIES retains bounded target fields and delivery metadata, never bodies."
-  scope entries currentp exhausted (calls 0) (bytes 0) stopped active inspected summaries)
+  scope entries currentp exhausted (calls 0) (bytes 0) stopped active summaries)
 
 (defun mevedel-memory-investigation-summary (state)
   "Return STATE's bounded metadata-only call summary as an independent snapshot.
@@ -353,20 +348,13 @@ SUMMARY is the call's metadata row."
      (with-current-buffer origin (add-hook 'kill-buffer-hook #'abort-search nil t))
      (setq timer (run-at-time 0 nil #'step)))))
 
-(defun mevedel-memory-investigation--record (state key delivered)
-  "Record DELIVERED text as read evidence under KEY in STATE."
-  (when delivered
-    (let ((row (assoc key (mevedel-memory-investigation-inspected state))))
-      (if row (setcdr row (concat (cdr row) "\n" delivered))
-        (push (cons key delivered) (mevedel-memory-investigation-inspected state))))))
-
 (defun mevedel-memory-investigation--git (state args path callback &optional summary)
   "Run read-only Git history query ARGS for STATE, limited to PATH.
 `log' searches commit messages for :pattern; `show' prints one :pattern
 commit's message, changed-file summary and whether the current HEAD
 contains it.  A commit hash given to `log' is shown instead.  No shell,
-pager, hook or optional lock is involved; output is bounded and recorded
-as evidence.  SUMMARY is the call's metadata row."
+pager, hook or optional lock is involved; output is bounded and delivered
+to CALLBACK.  SUMMARY is the call's metadata row."
   (let* ((scope (mevedel-memory-investigation-scope state))
          (root (plist-get scope :workspace-root))
          (pattern (plist-get args :pattern))
@@ -389,8 +377,8 @@ as evidence.  SUMMARY is the call's metadata row."
                                         (if (= status 0) text "Error: Unknown commit")))
                                 (cons (list "merge-base" "--is-ancestor" pattern "HEAD")
                                       (lambda (_text status)
-                                        ;; Name the commit, so a quote of this
-                                        ;; line cannot vouch for another one.
+                                        ;; Tie containment to the selected commit,
+                                        ;; not another hash in the same result.
                                         (format "\nCommit %s contained in current HEAD: %s\n" pattern
                                                 (pcase status (0 "yes") (1 "no") (_ "unknown")))))))
                   (_ (error "Git command must be log or show"))))
@@ -410,9 +398,7 @@ as evidence.  SUMMARY is the call's metadata row."
                    (delq stopper (mevedel-memory-investigation-active state)))
              (when (buffer-live-p output) (kill-buffer output))
              (when text
-               (mevedel-memory-investigation--record
-                state mevedel-memory-investigation-git-evidence
-                (mevedel-memory-investigation--deliver state callback text nil summary)))))
+               (mevedel-memory-investigation--deliver state callback text nil summary))))
          (run (remaining)
            (with-current-buffer output (erase-buffer))
            (setq process
@@ -492,16 +478,11 @@ another model follow-up. Calls after retirement have no effects or callback."
                                                       (file-name-extension path t)))
                       (let ((coding-system-for-write 'utf-8-unix))
                         (write-region document nil temporary nil 'silent))
-                      (let ((delivered (mevedel-memory-investigation--deliver
-                                        state callback
-                                        (mevedel-tool-fs-read-slurp-file-contents
-                                         temporary (plist-get args :offset) (plist-get args :limit) path)
-                                        t summary)))
-                        (when (and delivered (equal root "workspace"))
-                          ;; A delete's resolution quotes must come from text the
-                          ;; review actually read, not from a search match.
-                          (mevedel-memory-investigation--record
-                           state (mevedel-memory-proposal-normalize-path path) delivered))))
+                      (mevedel-memory-investigation--deliver
+                       state callback
+                       (mevedel-tool-fs-read-slurp-file-contents
+                        temporary (plist-get args :offset) (plist-get args :limit) path)
+                       t summary))
                   (when temporary (delete-file temporary)))))))
         (error (mevedel-memory-investigation--deliver
                 state callback (concat "Error: " (error-message-string err)) nil summary)))))))
@@ -551,8 +532,8 @@ Paths are relative to the explicit root argument, not a new resource family."
               (:name "path" :type string :optional t
                :description "log only: limit to commits touching this workspace-relative path; default ."))
       :description (concat "Read-only Git history of the workspace, bounded to 30 commits and 8 KiB. "
-                           "Use it to establish that work a note leaves open was later committed; "
-                           "quote its output in resolved-by as \"" mevedel-memory-investigation-git-evidence ": exact words\".")
+                           "Use it to investigate a material claim about commits or source history. "
+                           "Commit containment proves inclusion only, not activation or deployment.")
       :function (lambda (callback command pattern &optional path)
                   (mevedel-memory-investigation-call
                    state 'git (list :command command :pattern pattern :path path) callback)))))))

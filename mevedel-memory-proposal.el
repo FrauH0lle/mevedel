@@ -32,28 +32,19 @@ Notes may be omitted; omitted dispositions leave their notes unchanged.")
   "Closed proposal header fields; values use JSON syntax.")
 
 (defconst mevedel-memory-proposal--note-fields
-  '(("note" . :note) ("disposition" . :disposition) ("reason" . :reason)
-    ("open-items" . :open-items) ("resolved-by" . :resolved-by)
-    ("resolution-anchors" . :resolution-anchors) ("unresolved-items" . :unresolved-items))
-  "Closed shared-note disposition header fields; values use JSON syntax.
-Keep requires nonempty `open-items'; delete requires the field too.
-Condense may carry both fields to account for removed measurements.")
+  '(("note" . :note) ("disposition" . :disposition) ("reason" . :reason))
+  "Closed shared-note deletion header fields; values use JSON syntax.")
 
 (defconst mevedel-memory-proposal--dispositions
-  '(("delete" . note-delete) ("keep" . note-keep) ("condense" . note-condense))
+  '(("delete" . note-delete))
   "Model-selectable shared-note dispositions and their actions.")
 
-(defconst mevedel-memory-proposal-note-actions '(note-delete note-keep note-condense note-prune)
+(defconst mevedel-memory-proposal-note-actions '(note-delete note-prune)
   "Proposal actions disposing of shared working files, not memory topics.")
 
 (defun mevedel-memory-proposal-note-action-p (action)
   "Return non-nil when ACTION disposes of a shared working file."
   (memq action mevedel-memory-proposal-note-actions))
-
-(defun mevedel-memory-proposal-condensed-bytes (body)
-  "Return the exact UTF-8 bytes a condense disposition writes for BODY.
-Acceptance hashes and application writes these same bytes."
-  (encode-coding-string (concat (string-trim-right body "\n+") "\n") 'utf-8-unix))
 
 (defun mevedel-memory-proposal-relative-path-p (path)
   "Return non-nil when PATH is a plain relative path without traversal.
@@ -69,55 +60,6 @@ Absolute, home-relative, control-character, colon, and `..' spellings fail."
 PATH must satisfy `mevedel-memory-proposal-relative-path-p'."
   (let ((root "/mevedel-relative-root/"))
     (directory-file-name (file-relative-name (expand-file-name path root) root))))
-
-(defconst mevedel-memory-proposal--min-quote 12
-  "Minimum characters of a delete's resolution quote, after normalization.")
-
-(defun mevedel-memory-proposal--plain (text)
-  "Return TEXT without Read line numbers or Markdown marks, spaces collapsed.
-Quotes of Markdown prose commonly omit `*' and backquote formatting."
-  (string-trim (replace-regexp-in-string
-                "[ \t\n]+" " "
-                (replace-regexp-in-string
-                 "[*`]" "" (replace-regexp-in-string "^ *[0-9]+\t" "" text)))))
-
-(defun mevedel-memory-proposal-quoted-p (quote text)
-  "Return non-nil when QUOTE occurs in delivered Read TEXT.
-When QUOTE wraps words in double quotation marks, as in
-\"\\\"exact words\\\" (lines 7-11)\", every quoted segment must occur;
-otherwise the whole QUOTE must.  Line-number prefixes, emphasis and code
-marks, and whitespace differences are ignored."
-  (let ((plain (mevedel-memory-proposal--plain text))
-        (start 0) segments)
-    (while (string-match "[\"“]\\([^\"”]+\\)[\"”]" quote start)
-      (push (match-string 1 quote) segments)
-      (setq start (match-end 0)))
-    (and (>= (length (mevedel-memory-proposal--plain (apply #'concat (or segments (list quote)))))
-             mevedel-memory-proposal--min-quote)
-         (cl-every (lambda (segment)
-                     (string-search (mevedel-memory-proposal--plain segment) plain))
-                   (or segments (list quote))))))
-
-(defun mevedel-memory-proposal--resolution (entry)
-  "Return resolution ENTRY \"PATH: QUOTE\" as (NORMALIZED-PATH . QUOTE), or nil.
-Plain relative paths contain no colon, so the first one separates them."
-  (when (string-match "\\`\\([^:]+\\): \\(.+\\)\\'" entry)
-    (let ((path (match-string 1 entry)) (quote (match-string 2 entry)))
-      (when (and (mevedel-memory-proposal-relative-path-p path)
-                 (>= (length (mevedel-memory-proposal--plain quote)) mevedel-memory-proposal--min-quote))
-        (cons (mevedel-memory-proposal-normalize-path path) quote)))))
-
-(defun mevedel-memory-proposal--strings (value predicate)
-  "Return VALUE as a list when it is a duplicate-free array of PREDICATE strings."
-  (unless (and (vectorp value)
-               (cl-every (lambda (item)
-                           (and (stringp item) (not (string-blank-p item))
-                                (not (string-match-p "[[:cntrl:]]" item))
-                                (funcall predicate item)))
-                         value)
-               (= (length value) (length (delete-dups (append value nil)))))
-    (error "Note disposition open-items and resolved-by must be arrays of distinct strings"))
-  (append value nil))
 
 (defun mevedel-memory-proposal--file-p (file)
   "Return non-nil for an ordinary relative Markdown FILE below a root."
@@ -186,57 +128,22 @@ rather than letting a later same-note proposal escape quarantine."
 (defun mevedel-memory-proposal--disposition (text notes)
   "Decode one shared-note disposition TEXT for admitted NOTES.
 NOTES maps each admitted note ID to (ROOT-ID . RELATIVE-PATH).
-A delete also lists the note's OPEN-ITEMS (unresolved findings,
-hypotheses, limits or next steps) and RESOLVED-BY entries \"PATH: QUOTE\",
-exact words from a workspace file establishing their resolution or durable
-record, returned as (PATH . QUOTE).  Acceptance checks the quotes against the
-review's reads; this parser only validates shape.  Keep requires nonempty
-open items identifying what still lacks resolution evidence.  Condense may
-carry the same fields to account for removed measurements."
+Only deletion with an empty body acknowledges a note."
   (let* ((decoded (mevedel-memory-proposal--fenced text mevedel-memory-proposal--note-fields t))
          (fields (car decoded)) (body (cdr decoded))
          (note (assoc (plist-get fields :note) notes))
          (action (cdr (assoc (plist-get fields :disposition) mevedel-memory-proposal--dispositions)))
          (reason (plist-get fields :reason)))
-    (unless (and (cl-every (lambda (key) (plist-member fields key)) '(:note :disposition :reason))
-                 ;; A delete must account for its open items.  Missing
-                 ;; resolution evidence is simply none: acceptance then keeps
-                 ;; any delete that lists an open item.
-                 (or (not (eq action 'note-delete)) (plist-member fields :open-items)))
+    (unless (cl-every (lambda (key) (plist-member fields key)) '(:note :disposition :reason))
       (error "Note disposition fields are incomplete"))
     (unless (and note action (stringp reason) (not (string-blank-p reason))
                  (not (string-match-p "[[:cntrl:]]" reason)))
       (error "Note disposition names an unadmitted note or unknown disposition"))
-    (unless (if (eq action 'note-condense) (not (string-blank-p body)) (string-blank-p body))
+    (unless (string-blank-p body)
       (error "Note disposition body does not match its disposition"))
-    (when (string-blank-p body) (setq body ""))
-    (when (and (eq action 'note-keep)
-               (not (and (plist-member fields :open-items)
-                         (mevedel-memory-proposal--strings (plist-get fields :open-items) #'always))))
-      (error "Keep must name an open item lacking resolution evidence"))
-    (append
-     (list :action action :root (cadr note) :file (cddr note) :note (car note)
-           :type "note" :title (cddr note) :hook "" :reason reason
-           :evidence (list (car note)) :body body)
-     (when (plist-member fields :open-items)
-       (list :open-items (mevedel-memory-proposal--strings (plist-get fields :open-items) #'always)))
-     ;; These are acceptance evidence, not a reason to reject the whole reply.
-     ;; Missing, malformed or incomplete anchors leave a delete unsupported.
-     (when (plist-member fields :resolution-anchors)
-       (list :resolution-anchors
-             (let ((value (plist-get fields :resolution-anchors)))
-               (when (and (vectorp value) (cl-every #'stringp value)) (append value nil)))))
-     (when (plist-member fields :unresolved-items)
-       (list :unresolved-items (plist-get fields :unresolved-items)))
-     (cond
-      ((or (eq action 'note-delete) (plist-member fields :resolved-by))
-       ;; An entry that is not "PATH: QUOTE" (an address, a placeholder such
-       ;; as "none") is no evidence; acceptance then keeps a delete whose
-       ;; open items lack enough valid quotes.  It never rejects the reply.
-       (list :resolved-by (delq nil (mapcar #'mevedel-memory-proposal--resolution
-                                            (mevedel-memory-proposal--strings
-                                             (if (plist-member fields :resolved-by) (plist-get fields :resolved-by) [])
-                                             #'always)))))))))
+    (list :action action :root (cadr note) :file (cddr note) :note (car note)
+          :type "note" :title (cddr note) :hook "" :reason reason
+          :evidence (list (car note)) :body "")))
 
 (defun mevedel-memory-proposal--item (text action roots evidence)
   "Decode proposal TEXT for ACTION against captured ROOTS and EVIDENCE."
@@ -290,8 +197,10 @@ carry the same fields to account for removed measurements."
                                      (not (equal (file-name-nondirectory source) "MEMORY.md"))))
                               merged)))))
           (error "Memory proposal action conflicts with its captured files")))
-      (unless (if (eq action 'remove) (string-empty-p body)
-                (not (string-blank-p body)))
+      (unless (pcase action
+                ('remove (string-empty-p body))
+                ('instructions t)
+                (_ (not (string-blank-p body))))
         (error "Proposal replacement body does not match its action"))
       (setq fields (plist-put fields :evidence (append ids nil)))
       (when merged
@@ -308,9 +217,9 @@ replies are accepted too: a separator of three or more dashes; a
 backtick-only line or the next proposal opener closing a block whose body is
 still empty; and a section heading closing a header-only block without a
 separator.  After a separator a heading is body text.
-With NOTE-P, implicit boundaries require empty keep/delete metadata; only
-the next proposal opener or a final No action section can end it.  A note
-body without its matching fence consumes the unresolved tail and returns
+With NOTE-P, implicit boundaries require empty deletion metadata; only
+a matching-width proposal opener or a final No action section can end it.
+A note body without its matching fence consumes the unresolved tail and returns
 an (END . ERROR) pair instead of rejecting unrelated proposals.  Header-looking
 body lines never admit another target.  A same-width proposal opener in a
 body is ambiguous and quarantines the tail too; its apparent closer might
@@ -324,13 +233,14 @@ inside that tail remain a structural error in the complete reply."
                                                   (buffer-substring-no-properties start (point))
                                                   mevedel-memory-proposal--note-fields t))
                                             :disposition)
-                                 '("keep" "delete"))))))
+                                 '("delete"))))))
       (while (not end)
         (cond
          ((eobp)
           (if note-p (setq end (point) failure "Unclosed note proposal fence; unresolved tail skipped")
             (error "Unclosed proposal fence")))
-         ((and (looking-at "`\\{3,\\}proposal[ \t]*$")
+         ((and (looking-at (if note-p (concat (regexp-quote fence) "proposal[ \t]*$")
+                            "`\\{3,\\}proposal[ \t]*$"))
                (if note-p (bodyless-note-p) empty))
           (setq end (point)))
          ((and note-p (looking-at (concat (regexp-quote fence) "proposal[ \t]*$")))

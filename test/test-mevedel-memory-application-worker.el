@@ -173,7 +173,8 @@ while constructing retained history.  Recovery still owns final pin release."
 
   :doc "a visiting buffer modified during child work is preserved and never applied"
   (mevedel-test-application-fixture
-    (let ((start (symbol-function 'mevedel-journal-worker-start)) buffer)
+    (let ((start (symbol-function 'mevedel-journal-worker-start))
+          (create-lockfiles nil) buffer)
       (cl-letf (((symbol-function 'mevedel-journal-worker-start)
 		 (lambda (ws operation callback &rest args)
 		   (apply start ws operation
@@ -185,7 +186,13 @@ while constructing retained history.  Recovery still owns final pin release."
         (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
         (mevedel-test-application-wait (lambda () result)))
       (should (= 0 (plist-get result :applied-count)))
-      (should (= 1 (plist-get result :unapplied-count)))
+      (should (= 1 (plist-get result :held-count)))
+      (should (= 0 (plist-get result :unapplied-count)))
+      (should-not (plist-get result :error))
+      (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))
+      (let ((input (mevedel-memory-decision--application-input accepted proposal workspace)))
+        (should (eq 'waiting (plist-get input :status)))
+        (should (string-match-p "unsaved" (plist-get input :reason))))
       (should (equal (make-string 100 ?x) (mevedel-session-control-fs-read-file path)))
       (with-current-buffer buffer
         (should (buffer-modified-p))
@@ -353,7 +360,7 @@ while constructing retained history.  Recovery still owns final pin release."
                                          "title: \"Lesson\"\nhook: \"Lesson\"\nreason: \"Supported\"\nevidence: [%S]\n---\n"
                                          "Preserve extraction dependencies.\n```\n## Update\n- none\n## Merge\n- none\n"
                                          "## Remove\n- none\n## Instructions\n- none\n## Notes\n```proposal\nnote: %S\n"
-                                         "disposition: \"delete\"\nreason: \"Reviewed\"\nopen-items: []\nresolved-by: []\n---\n```\n## No action\n- none")
+                                         "disposition: \"delete\"\nreason: \"Reviewed\"\n---\n```\n## No action\n- none")
                                  memory-id address address))
                    (pending (mevedel-memory-store-accept workspace prepared text nil "test:model" nil (list address)))
                    (items (plist-get pending :proposals))
@@ -1795,6 +1802,7 @@ while constructing retained history.  Recovery still owns final pin release."
     (let ((mevedel-test-application-items 2))
       (mevedel-test-application-fixture
         (let* ((next (symbol-function 'mevedel-memory-pass--application-next))
+               (create-lockfiles nil)
                (second (cadr (plist-get accepted :proposals)))
                (second-path (plist-get (cdr (car (plist-get second :before))) :path))
                (conversation (generate-new-buffer " *chain-note-user*")) buffer injected)
@@ -1821,12 +1829,19 @@ while constructing retained history.  Recovery still owns final pin release."
                 (should (= 1 (plist-get result :applied-count)))
                 (should (file-exists-p second-path))
                 (should-not (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get second :id)) :status)))
-                (if (eq late 'access)
-                    (should (= 1 (plist-get result :held-count)))
-                  (should (= 1 (plist-get result :unapplied-count)))
-                  (if (eq late 'disk)
-                      (should (equal "Intervening disk change" (mevedel-session-control-fs-read-file second-path)))
-                    (with-current-buffer buffer (should (buffer-modified-p))))))
+                (if (eq late 'disk)
+                    (progn
+                      (should (= 1 (plist-get result :unapplied-count)))
+                      (should (eq 'stale (plist-get (mevedel-memory-decision-status workspace (plist-get second :id)) :status)))
+                      (should (equal "Intervening disk change" (mevedel-session-control-fs-read-file second-path))))
+                  (should (= 1 (plist-get result :held-count)))
+                  (should (= 0 (plist-get result :unapplied-count)))
+                  (should-not (mevedel-memory-decision-status workspace (plist-get second :id)))
+                  (when (eq late 'edit)
+                    (with-current-buffer buffer (should (buffer-modified-p)))
+                    (let ((input (mevedel-memory-decision--application-input accepted second workspace)))
+                      (should (eq 'waiting (plist-get input :status)))
+                      (should (string-match-p "unsaved" (plist-get input :reason)))))))
             (when (buffer-live-p buffer) (with-current-buffer buffer (set-buffer-modified-p nil)) (kill-buffer buffer))
             (kill-buffer conversation)))))))
 

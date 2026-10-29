@@ -52,6 +52,7 @@
     (should (mevedel-memory-notes--external-p "lab/run/result.png" '("Data in `work://shared/lab/`.")))
     (should (mevedel-memory-notes--external-p "lab/report.md" '("See .mevedel/shared/lab/report.md")))
     (should-not (mevedel-memory-notes--external-p "other/report.md" '("Data in `work://shared/lab/`.")))
+    (should-not (mevedel-memory-notes--external-p "lab/report.md" '("Working notes belong in work://shared/ (.mevedel/shared/).")))
     (should-not (mevedel-memory-notes--external-p "lab/report.md" nil))))
 
 (mevedel-deftest mevedel-memory-notes--suppressed ()
@@ -64,7 +65,7 @@
       (should (mevedel-memory-notes--suppressed (seen 'note-delete 'pending) "v1"))
       (should (mevedel-memory-notes--suppressed (seen 'note-delete 'recovery-required) "v1"))
       (dolist (status '(applied rejected reversed stale unavailable))
-        (should-not (mevedel-memory-notes--suppressed (seen 'note-keep status) "v1")))
+        (should-not (mevedel-memory-notes--suppressed (seen 'note-delete status) "v1")))
       (should-not (mevedel-memory-notes--suppressed (seen 'note-delete 'pending) "v9")))))
 
 (mevedel-deftest mevedel-memory-notes--ancestors ()
@@ -158,11 +159,11 @@
     (accept (capture))
     (let* ((accepted (accept (capture)
                              (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n"
-                                     "## Notes\n````proposal\nnote: \"work://shared/old.md\"\ndisposition: \"keep\"\n"
-                                     "reason: \"Completion evidence is missing\"\nopen-items: [\"Investigate the observation\"]\n---\n````\n"
+                                     "## Notes\n````proposal\nnote: \"work://shared/old.md\"\ndisposition: \"delete\"\n"
+                                     "reason: \"No qualifying memory\"\n---\n````\n"
                                      "## No action\n- none")))
            (proposal (car (plist-get accepted :proposals))))
-      (should (eq 'note-keep (plist-get proposal :action)))
+      (should (eq 'note-delete (plist-get proposal :action)))
       ;; Pending decisions still suppress normally, independently of rank.
       (should-not (files (capture)))
       (mevedel-memory-decision-reject workspace (plist-get (plist-get accepted :review) :pass-id)
@@ -304,19 +305,14 @@
          (folder (list :path "/s/d" :exists t :directory t :empty t))
          (proposal (lambda (action file before &optional body)
                      (list :action action :file file :before (list (cons file before)) :body (or body "")))))
-    (should-not (mevedel-memory-notes-changes (funcall proposal 'note-keep "n.md" note)))
     (should (equal (list (list :path "/s/n.md" :before note :action 'delete :after '(:path "/s/n.md" :exists nil)))
                    (mevedel-memory-notes-changes (funcall proposal 'note-delete "n.md" note))))
     (should (equal '(:path "/s/d" :exists nil)
                    (plist-get (car (mevedel-memory-notes-changes (funcall proposal 'note-prune "d" folder))) :after)))
     (should-error (mevedel-memory-notes-changes (funcall proposal 'note-prune "n.md" note)))
     (should-error (mevedel-memory-notes-changes (funcall proposal 'note-delete "d" folder)))
-    (let ((change (car (mevedel-memory-notes-changes (funcall proposal 'note-condense "n.md" note "Open.\n\n")))))
-      (should (equal "Open.\n" (plist-get change :bytes)))
-      (should (equal (secure-hash 'sha256 "Open.\n") (plist-get (plist-get change :after) :hash)))
-      (should (= #o644 (plist-get (plist-get change :after) :mode))))
-    (should-error (mevedel-memory-notes-changes
-                   (funcall proposal 'note-condense "n.md" note (make-string (* 33 1024) ?x))))))
+    (should-error (mevedel-memory-notes-changes (funcall proposal 'unknown "n.md" note)))
+    (should-error (mevedel-memory-notes-changes (funcall proposal 'note-delete "missing.md" nil)))))
 
 (mevedel-deftest mevedel-memory-notes-housekeeping ()
   ,test

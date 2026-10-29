@@ -135,12 +135,8 @@
                                    (concat "## Notes\n"
                                            (mapconcat
                                             (lambda (doc)
-                                              (format "```proposal\nnote: %S\ndisposition: %S\nreason: \"Reviewed\"\n%s---\n%s```\n"
-                                                      (plist-get doc :id) disposition
-                                                      (cond ((equal disposition "delete") "open-items: []\nresolved-by: []\n")
-                                                            ((equal disposition "keep") "open-items: [\"Measure retry-deadline behavior during clock rollback\"]\n")
-                                                            (t ""))
-                                                      (if (equal disposition "condense") "Open handoff.\n" ""))) documents "")))
+                                              (format "```proposal\nnote: %S\ndisposition: %S\nreason: \"Reviewed\"\n---\n```\n"
+                                                      (plist-get doc :id) disposition)) documents "")))
                                  "## No action\n- No durable changes."))
                   (request (car pending)) (callback (cdr pending)))
              (push (length documents) batches)
@@ -944,7 +940,9 @@
     (wait-for (lambda () pending))
     (notes 2)
     (finish)
-    (should (= 0 (plist-get (plist-get latest :result) :notes-remaining)))
+    (should (= 1 (plist-get (plist-get latest :result) :notes-remaining)))
+    (should (= 0 (plist-get (plist-get latest :result) :notes-reviewed)))
+    (should (= 1 (plist-get (plist-get latest :result) :note-format-failure-count)))
     (should (eq 'success (plist-get (plist-get latest :result) :outcome)))
     (should-not (mevedel-memory-pass--progress-p workspace (accepted)))
     (should-not (plist-get (mevedel-workspace-memory-schedule workspace) :catch-up))
@@ -961,11 +959,10 @@
     (offer)
     (should (= 1 calls))
     (should-not (mevedel-memory-pass-running workspace)))
-  :doc "applied deletion and condensation continue catch-up through authenticated decisions"
+  :doc "applied deletions continue catch-up through authenticated decisions"
   (let ((mevedel-memory-consolidation-mode 'auto))
     (notes 8 30000)
-    (dolist (action '("delete" "condense"))
-      (setq disposition action)
+    (dotimes (_ 2)
       (offer)
       (finish)
       (should (eq 'success (plist-get (plist-get latest :result) :outcome)))
@@ -973,7 +970,7 @@
       (should (mevedel-memory-pass--progress-p workspace (accepted)))
       (should (plist-get (mevedel-workspace-memory-schedule workspace) :catch-up)))
     (should (= 2 calls)))
-  :doc "a successful catch-up whose keeps do not suppress ends the chain and ordinary time gates later offers"
+  :doc "unsupported note acknowledgements end catch-up and ordinary time gates later offers"
   (let ((mevedel-memory-consolidation-mode 'auto))
     (notes 8 30000)
     (offer)
@@ -985,7 +982,8 @@
       (finish)
       (should (= 2 calls))
       (should (eq 'success (plist-get (plist-get latest :result) :outcome)))
-      (should (> (plist-get (plist-get latest :result) :applied-count) 0))
+      (should (= 0 (plist-get (plist-get latest :result) :applied-count)))
+      (should (> (plist-get (plist-get latest :result) :note-format-failure-count) 0))
       (should-not (mevedel-memory-pass--progress-p workspace (accepted)))
       (should-not (plist-get (mevedel-workspace-memory-schedule workspace) :catch-up))
       (offer)
@@ -1157,13 +1155,14 @@
     (should (= 2 (plist-get drain :batch)))
     (should (mevedel-memory-pass-drain-status workspace))
     (should (mevedel-memory-pass-cancel workspace)))
-  :doc "explicit auto drain attempts an unchanged keep once and still reaches a later valid batch"
+  :doc "explicit auto drain attempts unsupported keep once without credit and reaches a later valid batch"
   (let ((mevedel-memory-consolidation-mode 'auto))
     (notes 17)
     (setq disposition "keep")
     (start)
     (finish)
-    (should (= 16 (plist-get (car results) :notes-reviewed)))
+    (should (= 0 (plist-get (car results) :notes-reviewed)))
+    (should (= 16 (plist-get (car results) :note-format-failure-count)))
     (should (= 16 (length (plist-get drain :attempted))))
     (setq disposition "delete")
     (finish)

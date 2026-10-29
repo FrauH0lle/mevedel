@@ -26,8 +26,8 @@
 
 (defconst mevedel-memory-store--max-bytes (* 16 1024 1024)
   "Maximum private immutable pass or write record bytes.
-A preserved 512 KiB note can appear as two before-state and three after-state
-byte strings, with up to fourfold escaping, plus decoded content and metadata.")
+Captured note preimages and checked write records may contain repeated byte
+strings with up to fourfold escaping, plus decoded content and metadata.")
 
 (defun mevedel-memory-store--directory (workspace id)
   "Return WORKSPACE's private pass directory for ID."
@@ -204,8 +204,7 @@ Return the number of pins released; already absent pins are not counted."
 
 (defun mevedel-memory-store--proposal (scope id proposal)
   "Bind PROPOSAL to pass ID, original SCOPE targets, and complete before-state.
-A byte-identical canonical condensation becomes a keep before freezing identity.
-A changed condensed note records the hash of its resulting version."
+Identity includes the original targets and exact captured before-state."
   (let* ((root (cdr (assoc (plist-get proposal :root) (plist-get scope :roots))))
          (action (plist-get proposal :action))
          (files (delete-dups
@@ -214,13 +213,6 @@ A changed condensed note records the hash of its resulting version."
                            (list "MEMORY.md")))))
          (before (mapcar (lambda (file) (cons file (mevedel-memory-scope-before scope (plist-get proposal :root) file)))
                          (sort files #'string<)))
-         (proposal (if (eq action 'note-condense)
-                       (let ((bytes (mevedel-memory-proposal-condensed-bytes (plist-get proposal :body))))
-                         (if (equal bytes (plist-get (cdr (assoc (plist-get proposal :file) before)) :bytes))
-                             (mevedel-memory-store--kept
-                              proposal "the canonical condensation is byte-identical to the captured note.")
-                           (append proposal (list :result (secure-hash 'sha256 bytes)))))
-                     proposal))
          (identity (list id (plist-get root :dir) (plist-get root :client) (plist-get root :target)
                          proposal before)))
     (append proposal (list :id (secure-hash 'sha256 (mevedel-memory-store--print identity)) :before before))))
@@ -252,13 +244,12 @@ authenticated accepted bytes' hash under :hash."
           (append data (list :prepared prepared :hash (plist-get outcome :payload))))))))
 
 (defun mevedel-memory-store-accept (workspace prepared reply entries model references
-                                              &optional notes inspected)
+                                              &optional notes)
   "Accept validated REPLY for WORKSPACE's PREPARED pass before public coverage.
 ENTRIES are the complete admitted subset; MODEL is its exact provider label and
 REFERENCES are bounded dated observations. Retain original target before-state.
 NOTES lists the admitted shared working note IDs.  A nil REPLY accepts a
 housekeeping-only pass, which admitted no digests or notes for inference.
-INSPECTED lists the normalized workspace paths the review actually read.
 The immutable claim outcome accepts the bundle hash, allowing later recovery."
   (let ((scope (plist-get prepared :scope)))
     (when (and (null reply) (or entries notes))
@@ -266,239 +257,15 @@ The immutable claim outcome accepts the bundle hash, allowing later recovery."
     (mevedel-memory-store-accept-proposals
      workspace prepared
      (if reply
-         (append
-          (mevedel-memory-proposal-parse
-           reply (plist-get scope :roots) (mapcar (lambda (entry) (plist-get entry :id)) entries)
-           (seq-filter (lambda (row) (member (car row) notes)) (mevedel-memory-notes-index scope)))
-          (list :inspected inspected))
+         (mevedel-memory-proposal-parse
+          reply (plist-get scope :roots) (mapcar (lambda (entry) (plist-get entry :id)) entries)
+          (seq-filter (lambda (row) (member (car row) notes)) (mevedel-memory-notes-index scope)))
        (list :proposals nil :no-action "- Shared-folder housekeeping only."))
      entries model references)))
 
 (defun mevedel-memory-store--note-p (proposal)
   "Return non-nil when PROPOSAL disposes of a shared working file."
   (mevedel-memory-proposal-note-action-p (plist-get proposal :action)))
-
-(defun mevedel-memory-store--kept (proposal why)
-  "Return note PROPOSAL accepted as keep, explaining WHY before its reason.
-Drop condensation preservation metadata before freezing the keep's identity."
-  (plist-put
-   (plist-put (plist-put (cl-loop for (key value) on proposal by #'cddr
-                                unless (eq key :guard-preserved) append (list key value))
-                        :action 'note-keep)
-              :guard-converted t)
-   :reason (concat "Kept: " why " Reviewer: " (plist-get proposal :reason))))
-
-(defun mevedel-memory-store--preserved (proposal paragraphs)
-  "Return note PROPOSAL condensed with lost measurement PARAGRAPHS verbatim.
-PARAGRAPHS retain their original order and conditions from the captured note."
-  (let ((copy (copy-sequence proposal)))
-    (plist-put copy :body
-               (concat (if (eq (plist-get proposal :action) 'note-delete)
-                           (format "Measurements retained from %s.\n\n" (plist-get proposal :note))
-                         (concat (string-trim-right (plist-get proposal :body) "\n+")
-                                 "\n\n## Preserved measurements\n\n"))
-                       (string-join paragraphs "\n\n")))
-    (plist-put copy :action 'note-condense)
-    (setq copy (plist-put copy :guard-preserved t))
-    (plist-put copy :reason
-               (concat "Preserved: measurement paragraphs retained verbatim. Reviewer: "
-                       (plist-get proposal :reason)))))
-
-(defun mevedel-memory-store--unsupported-delete-p (proposal inspected)
-  "Return non-nil when delete PROPOSAL leaves an open item unsupported.
-A delete that lists open items must quote, at least once per item, workspace
-text establishing their resolution or durable record, and each quote must
-occur in what the review read from that file.  INSPECTED maps paths to that
-delivered text.  Each item's positional resolution anchor must occur in both
-the item and its authenticated quote.  Explicit unresolved items prevent delete.
-Absence of a visible record is not resolution."
-  (and (eq (plist-get proposal :action) 'note-delete)
-       (or (let ((unresolved (plist-get proposal :unresolved-items)))
-             (and unresolved (not (equal unresolved []))))
-           (and (plist-get proposal :open-items)
-                (let ((resolved (plist-get proposal :resolved-by))
-                      (anchors (plist-get proposal :resolution-anchors))
-                      (items (plist-get proposal :open-items)))
-                  (or (/= (length anchors) (length items))
-                      (< (length resolved) (length items))
-                      (cl-some (lambda (entry)
-                                 (not (mevedel-memory-proposal-quoted-p
-                                       (cdr entry) (or (cdr (assoc (car entry) inspected)) ""))))
-                               resolved)
-                      (cl-loop for item in items for entry in resolved for anchor in anchors
-                               thereis (not (and (mevedel-memory-store--anchor-p anchor item)
-                                                 (mevedel-memory-store--resolution-anchor-p anchor (cdr entry))
-                                                 (mevedel-memory-store--anchor-p
-                                                  anchor (or (cdr (assoc (car entry) inspected)) "") t))))))))))
-
-(defun mevedel-memory-store--plain (text &optional delivered)
-  "Normalize TEXT without erasing raw tab-separated measurement counts.
-Only DELIVERED Read text may contain numeric line-number prefixes to strip."
-  (mevedel-memory-proposal--plain
-   (if delivered text (replace-regexp-in-string "\t" " " text))))
-
-(defun mevedel-memory-store--anchor-p (anchor text &optional delivered)
-  "Return non-nil when nonempty ANCHOR occurs as whole words in TEXT.
-Case and whitespace are normalized; numeric and word substrings do not match.
-DELIVERED marks Read text whose numeric line prefixes are presentation only."
-  (and (stringp anchor) (not (string-blank-p anchor))
-       (let ((case-fold-search t)
-             (plain (mevedel-memory-store--plain anchor)))
-         (and (string-match-p "[[:alnum:]]" plain)
-              (string-match-p
-               (concat "\\(?:\\`\\|[^[:alnum:]_]\\)"
-                       (regexp-quote plain)
-                       "\\(?:\\'\\|[^[:alnum:]_]\\)")
-               (mevedel-memory-store--plain text delivered))))))
-
-(defun mevedel-memory-store--resolution-anchor-p (anchor quote)
-  "Return non-nil when ANCHOR occurs in QUOTE's authenticated segments.
-When quotation marks delimit segments, surrounding citation text is not proof."
-  (let ((start 0) segments)
-    (while (string-match "[\"\u201c]\\([^\"\u201d]+\\)[\"\u201d]" quote start)
-      (push (match-string 1 quote) segments)
-      (setq start (match-end 0)))
-    (cl-some (lambda (segment) (mevedel-memory-store--anchor-p anchor segment))
-             (or segments (list quote)))))
-
-(defun mevedel-memory-store--unaccounted-handoff-p (proposal scope)
-  "Return non-nil if delete PROPOSAL omits SCOPE's explicit handoff markers.
-An empty open-item inventory cannot account for a source's labelled open work.
-This conservative lexical guard may retain already-completed handoff history."
-  (when (and (plist-get proposal :note)
-             (eq (plist-get proposal :action) 'note-delete)
-             (null (plist-get proposal :open-items)))
-    (let* ((before (mevedel-memory-scope-before scope (plist-get proposal :root) (plist-get proposal :file)))
-           (text (mevedel-memory-store--plain (decode-coding-string (plist-get before :bytes) 'utf-8-unix)))
-           (case-fold-search t))
-      (string-match-p
-       (concat "\\_<\\(?:next steps?\\|remaining\\|open\\|handoff\\|pending\\|unverified\\|"
-               "unresolved\\|TODO\\|\\(?:owner\\|root\\) \\(?:to\\|owns\\)\\)\\_>\\|\\[ \\]")
-       text))))
-
-(defun mevedel-memory-store--measurements (text)
-  "Return conservative measurement paragraphs from TEXT, with their conditions.
-Protect whole paragraphs, not bare numbers: a value without its operation,
-baseline or sample conditions is not the same evidence.  Integers of at least
-two digits after leading zeros, decimals, percentages and durations qualify.
-Mask explicit dates, clock times, hashes, paths, line references, versions and
-list ordinals first.  Ambiguous bare decimals remain protected, not erased."
-  (with-syntax-table (standard-syntax-table)
-    (let ((case-fold-search t))
-      (seq-filter
-       (lambda (paragraph)
-	 (let ((data paragraph) (start 0) found
-               (duration "\\(?:ns\\|us\\|ms\\|s\\|seconds?\\|minutes?\\|hours?\\)"))
-           ;; Mask spans, not whole paragraphs: metadata beside a measurement
-           ;; must not conceal it.  Ordinals need the original line boundaries.
-           (dolist (pattern
-                    '("^[ \t]*[0-9]+[.)][ \t]+"
-                      "[0-9]\\{4\\}[-/][0-9]\\{2\\}[-/][0-9]\\{2\\}"
-                      "[0-9]\\{2\\}[./-][0-9]\\{2\\}[./-][0-9]\\{4\\}"
-                      "\\_<T?[0-2]?[0-9]:[0-5][0-9]\\(?::[0-5][0-9]\\(?:\\.[0-9]+\\)?\\)?\\(?:Z\\|[+-][0-9][0-9]:?[0-9][0-9]\\|[ \t]*[ap]m\\)?"
-                      "\\_<\\(?:commit\\|hash\\|sha1\\|sha256\\)[: \t]+[[:xdigit:]]\\{7,64\\}\\_>"
-                      "\\_<\\(?:version\\|release\\|ver\\)[: \t]+v?[0-9]+\\(?:\\.[0-9]+\\)*\\(?:[-+][[:alnum:].-]+\\)?"
-                      "\\_<v[0-9]+\\(?:\\.[0-9]+\\)*\\(?:[-+][[:alnum:].-]+\\)?"
-                      "\\(?:\\`\\|[^[:alnum:]_.]\\)[0-9]+\\(?:\\.[0-9]+\\)\\{2,\\}\\(?:[-+][[:alnum:].-]+\\)?"
-                      "\\_<[[:alpha:]_][[:alnum:]_.-]*:[0-9]+\\(?:[-:][0-9]+\\)?"
-                      "\\_<\\(?:lines? +\\|L\\)[0-9]+\\(?:[-:][0-9]+\\)?\\_>"))
-             (setq data (replace-regexp-in-string pattern " " data t t)))
-           (cl-labels ((mask-path (token)
-                         (save-match-data
-			   (if (or (and (not (string-match-p
-                                              (concat "\\`[+-]?\\(?:[0-9][0-9,.]*\\|\\.[0-9]+\\)" duration "/") token))
-                                        (string-match-p "[/\\\\]" token)
-                                        (or (string-match-p "[[:alpha:]~.]" token)
-                                            (string-match-p "\\`[\"'(]*[/~]" token)))
-				   (and (string-search "." token)
-                                        (string-match-p
-                                         "\\`[[:alnum:]_-]+\\.[[:alpha:]][[:alnum:]]*\\_>"
-                                         (string-trim-left token "[^[:alnum:]_-]+"))))
-                               " " token))))
-             ;; Quoted paths can contain spaces; mask them before tokenizing.
-             (dolist (pattern '("\"[^\"\n]+\"" "`[^`\n]+`" "'[^'\n]+'"))
-               (setq data
-                     (replace-regexp-in-string
-                      pattern (lambda (quoted)
-                                (save-match-data
-				  (let ((first (car (split-string (substring quoted 1 -1) "[ \t]+" t))))
-                                    (if (and first (equal " " (mask-path first))) " " quoted))))
-                      data t t)))
-             (setq data (replace-regexp-in-string "[^ \t\n]+" #'mask-path data t t)))
-           (setq data (mevedel-memory-store--plain data))
-           (while (and (not found)
-                       (string-match "\\(?:[0-9][0-9,]*\\(?:\\.[0-9]+\\)?\\|\\.[0-9]+\\)" data start))
-             (let* ((begin (match-beginning 0)) (end (match-end 0))
-                    (number (match-string 0 data))
-                    (left (and (> begin 0) (substring data (1- begin) begin)))
-                    (right (and (< end (length data)) (substring data end (1+ end))))
-                    (suffix (string-match-p
-                             (concat "\\`[ \t]*\\(?:%\\|" duration "\\(?:\\'\\|[^[:alnum:]_]\\)\\)")
-                             (substring data end))))
-               (setq start end
-                     found (and (not (and left (string-match-p "[[:alnum:]_.]" left)))
-				(not (and (member left '("-" "+")) (> begin 1)
-                                          (string-match-p "[[:alpha:]_]" (substring data (- begin 2) (1- begin)))))
-				(or suffix (not (and right (string-match-p "[[:alnum:]_]" right))))
-				(or suffix (string-match-p "\\." number)
-                                    (string-match-p
-                                     "[1-9][0-9]+"
-                                     (replace-regexp-in-string "," "" number)))))))
-           found))
-       (split-string text "\n[ \t]*\n" t)))))
-
-(defun mevedel-memory-store--contains-paragraph-p (paragraph text &optional delivered)
-  "Return non-nil when normalized PARAGRAPH occurs intact within TEXT.
-Require whitespace, quote or text boundaries: 512 must not match 1512 reads.
-DELIVERED marks Read text whose numeric line prefixes are presentation only."
-  (let* ((needle (mevedel-memory-store--plain paragraph))
-         (haystack (mevedel-memory-store--plain text delivered))
-         (offset 0) found)
-    ;; Literal search also supports paragraphs beyond the regexp size limit.
-    (when case-fold-search
-      (setq needle (downcase needle) haystack (downcase haystack)))
-    (unless (string-empty-p needle)
-      (while (and (not found) (<= offset (length haystack))
-                  (setq offset (string-search needle haystack offset)))
-        (let ((end (+ offset (length needle))))
-          (setq found (and (or (= offset 0) (memq (aref haystack (1- offset)) '(?\s ?\" #x201c)))
-                           (or (= end (length haystack)) (memq (aref haystack end) '(?\s ?\" #x201d))))))
-        (setq offset (1+ offset))))
-    found))
-
-(defun mevedel-memory-store--lost-measurements (proposal scope extractions inspected)
-  "Return measurements a delete or condense PROPOSAL drops from SCOPE's preimage.
-An intact paragraph in the replacement or EXTRACTIONS citing this note
-preserves it.  A resolution quote may account for it only when the quote
-contains that paragraph and occurs in INSPECTED's delivered workspace text.
-This is a conservative content guard, not semantic proof of resolution.
-Completed measurement paragraphs without such evidence require preservation,
-even when a sequential summary omitted them to fit its size limit."
-  (when (and (plist-get proposal :note)
-             (memq (plist-get proposal :action) '(note-delete note-condense)))
-    (let* ((before (mevedel-memory-scope-before scope (plist-get proposal :root) (plist-get proposal :file)))
-           (paragraphs (mevedel-memory-store--measurements
-                        (decode-coding-string (plist-get before :bytes) 'utf-8-unix)))
-           (preserved (cons (plist-get proposal :body)
-                            (mapcar (lambda (item) (plist-get item :body))
-                                    (seq-filter
-                                     (lambda (item)
-                                       (member (plist-get proposal :note) (plist-get item :evidence)))
-                                     extractions))))
-           (quotes (seq-filter
-                    (lambda (entry)
-                      (mevedel-memory-proposal-quoted-p
-                       (cdr entry) (or (cdr (assoc (car entry) inspected)) "")))
-                    (plist-get proposal :resolved-by))))
-      (seq-remove
-       (lambda (paragraph)
-         (or (cl-some (lambda (body) (mevedel-memory-store--contains-paragraph-p paragraph body)) preserved)
-             (cl-some (lambda (entry)
-                        (and (mevedel-memory-store--contains-paragraph-p paragraph (cdr entry))
-                             (mevedel-memory-store--contains-paragraph-p
-                              paragraph (cdr (assoc (car entry) inspected)) t)))
-                      quotes)))
-       paragraphs))))
 
 (defun mevedel-memory-store-accept-proposals (workspace prepared parsed entries producer references)
   "Accept trusted PARSED proposals for WORKSPACE's PREPARED pass.
@@ -508,16 +275,13 @@ Callers validate model text before this boundary; direct user actions construct
 structured changes from fresh captured snapshots without synthetic model text.
 Housekeeping for the scope's captured attachments and empty folders is added
 here, after every extraction.  Each note disposal records the extractions
-citing its note as :requires, so it cannot apply before them.  Deleting a
-note that memory or instructions cite, without any extraction citing it, is
-accepted as keep instead, so a citation never silently breaks.  A delete
-listing open items is likewise accepted as keep unless PARSED's :inspected
-reads include every file it cites as their resolution or record."
+citing its note as :requires, so it cannot apply before them.  Application
+must additionally recheck the complete current memory and instruction scope
+for remaining citations before deleting a note."
   (let* ((id (plist-get prepared :id))
          (claim (plist-get prepared :claim))
          (scope (plist-get prepared :scope))
-         (ids (mapcar (lambda (entry) (plist-get entry :id)) entries))
-         (inspected (plist-get parsed :inspected)))
+         (ids (mapcar (lambda (entry) (plist-get entry :id)) entries)))
     (mevedel-memory-store--assert-owned claim)
     (unless (equal prepared (mevedel-memory-store-read workspace id))
       (error "Prepared memory evidence changed"))
@@ -548,35 +312,7 @@ reads include every file it cites as their resolution or record."
                                                    (lambda (extraction)
                                                      (member (plist-get proposal :note)
                                                              (plist-get extraction :evidence)))
-                                                   extractions))))
-                                       (handoff (mevedel-memory-store--unaccounted-handoff-p proposal scope))
-                                       (lost (mevedel-memory-store--lost-measurements
-                                              proposal scope extractions inspected))
-                                       (cited (plist-get (cdr (assoc (plist-get proposal :file)
-                                                                     (plist-get (cdr (mevedel-memory-notes-root scope))
-                                                                                :notes)))
-                                                         :cited)))
-                                  ;; The citation is the note's continuing use until the
-                                  ;; citing memory changes in the same review.
-                                  (cond
-                                   (handoff
-                                    (setq proposal
-                                          (mevedel-memory-store--kept
-                                           proposal "the source contains explicit handoff markers but the review lists no open items.")))
-                                   ((and cited (null requires) (eq (plist-get proposal :action) 'note-delete))
-                                    (setq proposal
-                                          (mevedel-memory-store--kept
-                                           proposal (concat "a memory topic or instruction file cites "
-                                                            "this note, and no update in this review "
-                                                            "replaces that citation."))))
-                                   ((mevedel-memory-store--unsupported-delete-p
-                                     proposal inspected)
-                                    (setq proposal
-                                          (mevedel-memory-store--kept
-                                           proposal (format "the review did not quote read workspace evidence with a matching resolution anchor for each item, or still lists unresolved items: %s."
-                                                            (string-join (plist-get proposal :open-items) "; ")))))
-                                   (lost
-                                    (setq proposal (mevedel-memory-store--preserved proposal lost))))
+                                                   extractions)))))
                                   (mevedel-memory-store--proposal scope id (append proposal (list :requires requires)))))
                               (seq-filter #'mevedel-memory-store--note-p parsed)))))
            (review (list :pass-id id :workspace (plist-get scope :workspace)
