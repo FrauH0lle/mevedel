@@ -11,6 +11,7 @@
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-journal-cleanup)
 (require 'mevedel-journal-store)
+(require 'mevedel-memory-decision)
 (require 'mevedel-memory-notes)
 (require 'mevedel-memory-pass)
 (require 'mevedel-memory-scope)
@@ -88,10 +89,26 @@
   :doc "retiring a note-only review retains a false journal marker and no clock"
   (progn
     (note)
-    (let ((record (retire (review))))
-      (should (eq :false (gethash "journal-bearing" record)))
-      (should (equal "general" (gethash "scope" record)))
-      (should-not (times))))
+    (let* ((entry (review))
+           (pass (plist-get entry :pass-id))
+           (accepted (mevedel-memory-store-accepted workspace pass))
+           (proposal (car (plist-get accepted :proposals))))
+      (should (= 1 (length (plist-get accepted :proposals))))
+      (should (eq 'note-delete (plist-get proposal :action)))
+      ;; Pending disposal independently prevents expiry even without a cycle.
+      (should (= 0 (mevedel-journal-cleanup-expired workspace t)))
+      (should-not (mevedel-journal-cleanup-pass-retired-p root pass))
+      (cl-letf (((symbol-function 'mevedel-journal-store-timestamp) (lambda (_) date)))
+        (should (eq 'rejected (plist-get (mevedel-memory-decision-reject
+                                         workspace pass (plist-get proposal :id) "Retain the fixture note")
+                                        :status))))
+      (let ((record (retire entry)))
+        (should (eq :false (gethash "journal-bearing" record)))
+        (should (equal "general" (gethash "scope" record)))
+        (should-not (times)))
+      (should (equal "An uncertain finding, not durable guidance.\n"
+                     (mevedel-session-control-fs-read-file
+                      (file-name-concat root ".mevedel" "shared" "finding.md"))))))
   :doc "retiring a journal-bearing general review preserves its independent clock"
   (let* ((entry (review (list (digest))))
          (record (retire entry)))

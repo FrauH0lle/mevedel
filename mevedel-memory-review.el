@@ -175,7 +175,7 @@ CURRENTP without a separate check."
   "Run a bounded read-only review of captured SCOPE and candidate ENTRIES.
 CALLBACK receives :outcome success/error/aborted and the admitted :entries,
 :scope, :references, model :policy, and usage.  Success also carries the exact
-:reply, parsed :proposals, :skipped-notes diagnostics, and :no-action.
+:reply, parsed memory/instruction :proposals, and :no-action.
 It never writes coverage
 or proposals.
 
@@ -200,8 +200,8 @@ its exact provider payload and per-step token usage are not exposed.
 Complete shared working notes captured in SCOPE are admitted like digests:
 one of each kind is reserved when both fit, then the remaining items oldest
 first while the request fits.  The callback reports the admitted note IDs as
-:notes and the captured notes left for later as :omitted-notes.  Missing or
-invalid note dispositions yield no proposal and remain in :skipped-notes;
+:notes and the captured notes left for later as :omitted-notes.
+The accepting store disposes of admitted notes after a successful review;
 malformed memory changes and unrecoverable reply structure reject the reply."
   (let* ((buffer (generate-new-buffer " *mevedel-memory-review*"))
          (caller (current-buffer))
@@ -412,10 +412,8 @@ malformed memory changes and unrecoverable reply structure reject the reply."
                      (finish 'success nil
                              (append (mevedel-memory-proposal-parse
                                       reply (plist-get scope :roots)
-                                      (mapcar (lambda (entry) (plist-get entry :id)) admitted)
-                                      (let ((index (mevedel-memory-notes-index scope)))
-                                        (mapcar (lambda (note) (assoc (plist-get note :id) index))
-                                                admitted-notes)))
+                                      (append (mapcar (lambda (entry) (plist-get entry :id)) admitted)
+                                              (mapcar (lambda (note) (plist-get note :id)) admitted-notes)))
                                      (list :reply reply))))
                  ;; A rejected complete reply is diagnostic evidence for the
                  ;; consumer; it never becomes proposals.

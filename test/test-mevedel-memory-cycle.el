@@ -91,7 +91,7 @@
     (let ((text (cdr (mevedel-memory-cycle--read workspace))))
       (should (< (string-bytes text) (* 128 1024)))
       (should-not (string-search "Disposable factual working note" text))))
-  :doc "accepted actual input counts once despite no valid note acknowledgements"
+  :doc "accepted actual input counts once independently of pending disposal application"
   (progn
     (notes 17) (acquire) (freeze) (batch)
     (acquire) (recover)

@@ -74,8 +74,7 @@
     (should (= 1 calls))
     (should pending)
     (let* ((reply (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n"
-                          "## Instructions\n- none\n## Notes\n```proposal\nnote: \"work://shared/open-handoff.md\"\n"
-                          "---\n```\n## No action\n- none"))
+                          "## Instructions\n- none\n## No action\n- none"))
            (response (gptel--json-encode
                       (list :choices (vector (list :index 0 :finish_reason "stop"
                                                    :message (list :role "assistant" :content reply)))
@@ -89,7 +88,7 @@
     (should (eq 'success (plist-get result :outcome)))
     (should-not (plist-get result :error))
     (should (= 1 (plist-get result :notes-reviewed)))
-    (should (= 0 (plist-get result :note-format-failure-count)))
+    (should-not (plist-member result :note-format-failure-count))
     (should (= 1 (plist-get result :updated-files)))
     (should (= 1 (plist-get result :provider-call-count)))
     (dolist (key '(:guard-converted-keep-count :guard-preserved-condense-count :model-keep-count))
@@ -106,7 +105,34 @@
       (should-not (file-exists-p path))
       (should-error (mevedel-memory-decision-reverse workspace pass (plist-get proposal :id)) :type 'user-error)
       (should-not (file-exists-p path))))
-  :doc "a native fifty-note drain attempts invalid inputs once and excludes later or changed versions"
+  :doc "a rejected native memory reply creates no disposal and leaves the admitted source unchanged"
+  (cl-letf (((symbol-function 'url-retrieve)
+             (lambda (_url callback &rest _)
+               (cl-incf calls)
+               (should (string-search "work://shared/open-handoff.md" url-request-data))
+               (setq pending callback transport (generate-new-buffer " *note-rejected-provider-url*")))))
+    (setq state (mevedel-memory-pass-start workspace (lambda (value) (setq result value))))
+    (should state)
+    (should (= 1 calls))
+    (let* ((reply (concat "## Promote\n````proposal\nnote: \"work://shared/open-handoff.md\"\n---\n````\n"
+                          "## Update\n- none\n## Merge\n- none\n## Remove\n- none\n"
+                          "## Instructions\n- none\n## No action\n- none"))
+           (response (gptel--json-encode
+                      (list :choices (vector (list :index 0 :finish_reason "stop"
+                                                   :message (list :role "assistant" :content reply)))))))
+      (with-current-buffer transport
+        (insert "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n")
+        (setq-local url-http-end-of-headers (copy-marker (point)) url-http-response-status 200)
+        (insert response)
+        (goto-char (point-min))
+        (funcall pending nil)))
+    (should (eq 'error (plist-get result :outcome)))
+    (should (equal "Unknown or repeated proposal field" (plist-get result :error)))
+    (should (= 0 (or (plist-get result :updated-files) 0)))
+    (should-not (mevedel-memory-store-accepted workspace (plist-get (plist-get state :claim) :owner)))
+    (should (equal original (mevedel-session-control-fs-read-file path)))
+    (should (= #o640 (file-modes path))))
+  :doc "a native fifty-note drain deletes admitted notes without acknowledgements and excludes changed or late versions"
   (let ((old-mtime (file-attribute-modification-time (file-attributes path)))
         (arrival (file-name-concat shared "later-arrival.md"))
         (recent (file-name-concat shared "recent-handoff.md"))
@@ -134,7 +160,7 @@
                        (running (mevedel-memory-pass-running workspace))
                        (buffer (generate-new-buffer " *note-cohort-provider-url*")))
                   (cl-incf calls)
-                  ;; Derive acknowledgement targets from actual serialized input,
+                  ;; Observe admitted notes from actual serialized input,
                   ;; not the captured roster or a fabricated callback :notes list.
                   (should (<= 1 (length ids) 16))
                   (dolist (id ids)
@@ -153,12 +179,7 @@
               (let* ((pending pending-response)
                      (reply
                       (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n"
-                              "## Remove\n- none\n## Instructions\n- none\n## Notes\n"
-                              (mapconcat
-                               (lambda (id)
-                                 (format "```proposal\nnote: %S\n%s---\n```\n"
-                                         id (if (= calls 1) "unknown: true\n" "")))
-                               (plist-get pending :ids) "")
+                              "## Remove\n- none\n## Instructions\n- none\n"
                               "## No action\n- none"))
                      (response
                       (gptel--json-encode
@@ -184,9 +205,8 @@
           (let* ((success (seq-filter (lambda (response) (eq 'success (plist-get response :outcome))) responses))
                  (cycle (car (mevedel-memory-cycle--read workspace))))
             (should (= 4 (length success)))
-            (should (= 33 (apply #'+ (mapcar (lambda (response) (plist-get response :updated-files)) success))))
-            (should (= 33 (apply #'+ (mapcar (lambda (response) (plist-get response :notes-reviewed)) success))))
-            (should (= 16 (apply #'+ (mapcar (lambda (response) (plist-get response :note-format-failure-count)) success))))
+            (should (= 49 (apply #'+ (mapcar (lambda (response) (plist-get response :updated-files)) success))))
+            (should (= 49 (apply #'+ (mapcar (lambda (response) (plist-get response :notes-reviewed)) success))))
             (should (eq 'complete (plist-get cycle :status)))
             (should (= 50 (length (plist-get cycle :members))))
             (should (= 49 (length (plist-get cycle :attempted))))
@@ -194,11 +214,11 @@
             (should-not (plist-get cycle :inflight)))
           (dolist (request requests)
             (let ((accepted (mevedel-memory-store-accepted workspace (plist-get request :pass))))
-              (should (equal (plist-get request :ids) (plist-get accepted :admitted-notes)))))
-          (should-not (plist-get (mevedel-memory-store-accepted workspace (plist-get (car (last requests)) :pass)) :proposals))
+              (should (equal (plist-get request :ids) (plist-get accepted :admitted-notes)))
+              (should (equal (plist-get request :ids)
+                             (mapcar (lambda (item) (plist-get item :note)) (plist-get accepted :proposals))))))
           (dotimes (number 49)
-            (should (eq (< number 16)
-                        (file-exists-p (file-name-concat shared (format "finding-%03d.md" (1+ number)))))))
+            (should-not (file-exists-p (file-name-concat shared (format "finding-%03d.md" (1+ number))))))
           (should (file-exists-p arrival))
           (should (equal "# Recent handoff\nTODO: still working.\n"
                          (mevedel-session-control-fs-read-file recent)))

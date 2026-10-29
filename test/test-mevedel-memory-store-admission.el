@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Actual model admission survives invalid acknowledgements and interrupted
-;; publication.  Captured scope and valid proposals are not admission records.
+;; Actual model admission determines host-generated disposal and survives
+;; interrupted publication.  Captured scope is not an admission record.
 
 ;;; Code:
 
@@ -57,51 +57,41 @@
      :after-each ((when claim (mevedel-journal-claim-settle claim 'cancelled ""))
                   (delete-directory root t)))
   (cl-labels
-      ((block (id &optional invalid)
-         (format "````proposal\nnote: %S\n%s---\n````\n"
-                 id (if invalid "disposition: \"delete\"\nreason: \"Reviewed\"\n" "")))
-       (reply (acknowledgements)
-         (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## Notes\n"
-                 acknowledgements "## No action\n- none"))
+      ((reply ()
+         (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n"
+                 "## Remove\n- none\n## Instructions\n- none\n## No action\n- none"))
        (accept (text &optional input)
          (mevedel-memory-store-accept workspace prepared text nil "test:model" nil input))
        (readback () (mevedel-memory-store-accepted workspace (plist-get prepared :id))))
     ,test)
   (test)
-  :doc "captured three input two valid acknowledgement one retains exactly the actual input"
-  (let* ((accepted (accept (reply (concat (block "work://shared/a.md")
-                                         (block "work://shared/b.md" t)
-                                         (block "work://shared/c.md"))) ids))
+  :doc "a successful no-action review disposes exactly the two admitted notes, not all three captured"
+  (let* ((accepted (accept (reply) ids))
          (proposals (plist-get accepted :proposals)))
     (should (= 3 (length (mevedel-memory-notes-index (plist-get prepared :scope)))))
     (should (equal ids (plist-get accepted :admitted-notes)))
-    (should (= 1 (length proposals)))
-    (should (equal "work://shared/a.md" (plist-get (car proposals) :note)))
+    (should (= 2 (length proposals)))
+    (should (equal ids (mapcar (lambda (item) (plist-get item :note)) proposals)))
+    (should (cl-every (lambda (item) (eq 'note-delete (plist-get item :action))) proposals))
     (should-not (plist-member (car proposals) :reason))
     (should-not (plist-member (car proposals) :disposition))
-    (should (string-search "unadmitted note blocks skipped" (plist-get accepted :no-action)))
+    (should (equal "- none" (plist-get accepted :no-action)))
     (should-not (mevedel-journal-store-entries root))
     ;; Restart-readable immutable input metadata exists before publication.
     (should (equal accepted (readback)))
     (should-not (plist-member (car (plist-get (readback) :proposals)) :reason))
     (should-not (plist-member (car (plist-get (readback) :proposals)) :disposition)))
-  :doc "duplicate acknowledgements quarantine their note while omitted and unadmitted notes remain unchanged"
-  (let* ((accepted (accept (reply (concat (block "work://shared/a.md")
-                                         (block "work://shared/a.md")
-                                         (block "work://shared/c.md"))) ids))
-         (no-action (plist-get accepted :no-action)))
-    (should-not (plist-get accepted :proposals))
-    (should (equal ids (plist-get accepted :admitted-notes)))
-    (should (string-search "Duplicate note target" no-action))
-    (should (string-search "Missing note acknowledgement" no-action))
-    (should (string-search "unadmitted note blocks skipped" no-action))
-    (should (equal accepted (readback)))
+  :doc "a rejected review cannot create accepted disposal or change any source"
+  (progn
+    (should-error (accept (string-replace "## Promote\n- none" "## Promote\nMalformed" (reply)) ids))
+    (should-not (readback))
+    (should-not (mevedel-journal-claim-outcome claim))
     (dolist (name '("a.md" "b.md" "c.md"))
       (should (file-exists-p (file-name-concat shared name)))))
-  :doc "all invalid or missing acknowledgements retain input admission through publication recovery"
-  (let* ((accepted (accept (reply (block "work://shared/a.md" t)) ids))
+  :doc "successful review retains exact input and generated disposal through publication recovery"
+  (let* ((accepted (accept (reply) ids))
          (pass (plist-get prepared :id)))
-    (should-not (plist-get accepted :proposals))
+    (should (= 2 (length (plist-get accepted :proposals))))
     (should (equal ids (plist-get (readback) :admitted-notes)))
     (should-not (mevedel-journal-store-entries root))
     (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
@@ -120,7 +110,7 @@
   (dolist (invalid '("work://shared/a.md" ["work://shared/a.md"]
                      ("work://shared/a.md" "work://shared/a.md")
                      ("work://shared/a.md" "work://shared/outside.md")))
-    (should-error (accept (reply "- none\n") invalid))
+    (should-error (accept (reply) invalid))
     (should-not (mevedel-journal-claim-outcome claim))
     (should-not (file-exists-p (file-name-concat (mevedel-memory-store--directory workspace (plist-get prepared :id))
                                                "accepted.el")))))
@@ -143,6 +133,14 @@
                    nil "user" nil)))
     (should (plist-member accepted :admitted-notes))
     (should-not (plist-get accepted :admitted-notes)))
+  :doc "parsed metadata cannot manufacture a shared-note disposal"
+  (progn
+    (should-error
+     (mevedel-memory-store-accept-proposals
+      workspace prepared '(:proposals ((:action note-delete :note "work://shared/forged.md")))
+      nil "user" nil))
+    (should-not (mevedel-journal-claim-outcome claim))
+    (should-not (mevedel-memory-store-accepted workspace (plist-get prepared :id))))
   :doc "invalid explicit admission cannot create a bundle or settle ownership"
   (let ((parsed '(:proposals nil :no-action "- none")))
     (dolist (notes '(7 ("work://shared/outside.md") ("work://shared/a.md" "work://shared/a.md")))

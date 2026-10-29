@@ -13,6 +13,7 @@
 (require 'mevedel-journal-gc)
 (require 'mevedel-journal-store)
 (require 'mevedel-memory-cycle)
+(require 'mevedel-memory-decision)
 (require 'mevedel-memory-notes)
 (require 'mevedel-memory-scope)
 (require 'mevedel-memory-store)
@@ -77,10 +78,17 @@
                   (reply (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n"
                                  "## Remove\n- none\n## Instructions\n- none\n## No action\n- No supported changes.")))
              (cl-letf (((symbol-function 'mevedel-journal-store-timestamp) (lambda (_) "2000-01-01T00:00:00Z")))
-               (let ((accepted (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil notes)))
+               (let* ((accepted (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil notes))
+                      (proposal (car (plist-get accepted :proposals))))
                  (should (= 1 (length (plist-get accepted :admitted-notes))))
-                 (should-not (plist-get accepted :proposals)))
-               (mevedel-memory-store-publish workspace (plist-get prepared :id)))))))
+                 (should (= 1 (length (plist-get accepted :proposals))))
+                 (should (eq 'note-delete (plist-get proposal :action)))
+                 (prog1 (mevedel-memory-store-publish workspace (plist-get prepared :id))
+                   ;; Resolve disposal so only the unreconciled cycle pins history.
+                   (should (eq 'rejected (plist-get (mevedel-memory-decision-reject
+                                                    workspace (plist-get prepared :id) (plist-get proposal :id)
+                                                    "Retain the fixture note")
+                                                   :status))))))))))
     ,test)
   (test)
   :doc "a pre-preparation reservation survives ordinary GC, then releases its sole proof"
@@ -106,7 +114,7 @@
       (should (string-match-p "predecessor is not fenced" (error-message-string failure))))
     (should (equal reserved (mevedel-memory-cycle-inflight-claim workspace)))
     (should (equal "A temporary finding.\n" (mevedel-session-control-fs-read-file path))))
-  :doc "zero-proposal accepted input stays pinned through history expiry until reconciliation"
+  :doc "accepted no-action input stays pinned after disposal rejection until reconciliation"
   (let* ((entry (accept-cycle))
          (pass (plist-get entry :pass-id))
          (mevedel-memory-history-max-age-days 0))
@@ -119,7 +127,8 @@
       (should (= 1 (length (plist-get cycle :attempted))))
       (should-not (plist-get cycle :inflight)))
     (should (mevedel-journal-claim-settle successor 'completed ""))
-    (should (= 1 (mevedel-journal-cleanup-expired workspace t)))
+    ;; Retirement deletes the review and its terminal rejection decision.
+    (should (= 2 (mevedel-journal-cleanup-expired workspace t)))
     (should (mevedel-journal-cleanup-pass-retired-p root pass))
     (should-error (mevedel-memory-store-accepted workspace pass))
     (should (equal "A temporary finding.\n" (mevedel-session-control-fs-read-file path)))))

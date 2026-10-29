@@ -44,11 +44,7 @@ PENDING leaves their proposals undecided."
                    (notes (mapcar (lambda (document) (plist-get document :id))
                                   (mevedel-memory-notes-documents scope)))
                    (reply (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n"
-                                  "## Remove\n- none\n## Instructions\n- none\n## Notes\n"
-                                  (mapconcat (lambda (note)
-                                               (format "```proposal\nnote: %S\n---\n```\n" note))
-                                             notes "")
-                                  "## No action\n- none"))
+                                  "## Remove\n- none\n## Instructions\n- none\n## No action\n- none"))
                    (accepted (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil notes)))
               (mevedel-memory-store-publish workspace (plist-get prepared :id))
               (unless pending

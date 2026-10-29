@@ -59,7 +59,7 @@
                                     "type: \"project\"\ntitle: \"Guide\"\nhook: \"Context\"\n"
                                     "reason: \"Qualifying guide\"\nevidence: []\n---\nDurable guide.\n````\n"
                                     "## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n"
-                                    "## Notes\n````proposal\nnote: \"work://shared/note.md\"\n---\n````\n## No action\n- none") root-id)))
+                                    "## No action\n- none") root-id)))
         (setq accepted (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil
                                                    '("work://shared/note.md"))
               pass (plist-get prepared :id))))
@@ -73,7 +73,7 @@
                     (mevedel-report-test-text (list :title "Decision" :sections (list section))))))
       ,test))
   (test)
-  :doc "ID-only note acknowledgement omits model Reason from the rendered report but retains current and decision diagnostics"
+  :doc "internal note disposal omits model Reason from the rendered report but retains current and decision diagnostics"
   (let* ((proposal (seq-find (lambda (proposal) (plist-get proposal :note)) (plist-get accepted :proposals)))
          (text (decision-text proposal)))
     (should proposal)

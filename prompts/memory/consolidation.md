@@ -38,27 +38,23 @@ Shared working notes in `notes` are temporary working material from
 `work://shared/`. They are cleaned up after this review, so extract every
 qualifying memory from them now: cite the note's ID in a proposal's `evidence`.
 The same qualification rules apply; a note's existence is no reason to save
-it. Only IDs in the top-level `notes` array may receive acknowledgements. Omitted
-or merely referenced notes remain outside this review, even if investigation
-tools can read them. Acknowledge each admitted note exactly once in Notes with
-only `note: "ID"` and an empty body, after extracting any qualifying
-knowledge. No extraction is a successful outcome. Do not invent memories to
-justify cleanup. Open work, unresolved findings, numeric measurements, and
-possible future usefulness do not require a completion audit or a note rewrite.
-Deletion is implied by the acknowledgement; do not supply a disposition or reason.
-Acknowledgement proposes deletion;
-it does not claim the file was removed. The checked application removes a note
-only after every extraction citing it has been applied.
+it. Extract anything qualifying as ordinary memory proposals citing the note ID
+in `evidence`; nothing else is needed for notes. No extraction is a successful
+outcome. Do not invent memories to justify cleanup. Open work, unresolved findings,
+numeric measurements and possible future usefulness do not require a completion
+audit or a note rewrite. After a successful review, the host disposes of every
+admitted note once all changes citing it have been applied. Failed or rejected
+reviews delete nothing. Omitted or merely referenced notes remain outside this
+review, even if investigation tools can read them.
 
 A note with `cited_by_memory` is referenced by a memory topic or instruction
 file. Propose Update or Remove for the citing memory, or Instructions for the
 citing instruction file, so surviving guidance is self-contained without the
 temporary note reference. Cite the note's ID as evidence. Preserve unrelated
 guidance and do not promote temporary task state into memory merely to remove
-a citation. If the captured scope does not support a safe repair, acknowledge
-the note anyway: application dynamically holds deletion while citations remain
-or their scope cannot be checked. The hold is a dependency refusal, not a
-different acknowledgement or deletion authority.
+a citation. If the captured scope does not support a safe repair, application
+dynamically holds deletion while citations remain or their scope cannot be
+checked. The hold is a dependency refusal, not a different output action.
 
 Use only the supplied read tools and captured scopes to investigate uncertain
 claims. A literal reference match proves textual occurrence only. A missing
@@ -90,14 +86,11 @@ Return these level-two headings in order:
 ## Merge
 ## Remove
 ## Instructions
-## Notes
 ## No action
 
-Include `## Notes` exactly when the input contains notes; omit it otherwise.
-Always finish with the `## No action` section, even after long Notes blocks; a
-reply without it is rejected whole.
+Always finish with the `## No action` section.
 Every action section contains one or more proposal blocks, or the single line
-`- none`. Notes contains one block per supplied note and is never `- none`.
+`- none`.
 The No action section contains plain bullets explaining why no changes
 are useful, or `- none` when there is nothing further to report. No preamble,
 other headings outside proposal bodies, or trailing commentary is permitted.
@@ -157,20 +150,6 @@ Do not propose direct changes to MEMORY.md. Application constructs topic
 frontmatter from title, hook, and type, and updates the corresponding index
 transactionally. No two proposals may write or remove the same file; this also
 applies to merge sources. Shared index updates are managed by application.
-
-A Notes block uses the same fence with exactly one required header field:
-
-    note: "the note's exact ID"
-    ---
-
-No other Notes fields are accepted. The body after `---` is exactly empty. Do not include
-completion inventories, resolution quotes, anchors, or replacement note text.
-
-A missing or invalid Notes acknowledgement leaves that note unchanged with no
-decision and a format-failure diagnostic; valid unrelated proposals can still
-be accepted. Duplicate claims for a note leave that note unchanged too.
-Malformed memory changes or ambiguous reply structure still reject the reply.
-This recovery does not excuse omitting a note: provide every required block.
 
 A syntactically valid proposal is still a fallible suggestion. Prefer No action
 to saving an unsupported claim or repeating an earlier rejected suggestion

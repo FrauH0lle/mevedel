@@ -293,15 +293,12 @@ cancellation releases the fence and leaves the machine retryable.
   Auto completion also records `updated-file-count`, the distinct paths newly
   confirmed written by that run, without exposing those paths or claiming that
   the resulting memory is better.
-  `:note-format-failure-count` counts admitted notes whose missing, invalid or
-  duplicate acknowledgements were recovered as no-ops, plus unadmitted note blocks
-  skipped in that pass. A completed
-  pass with a nonzero count is not a clean-format review; these failures must be
-  counted alongside whole-review rejections when evaluating reply quality.
-  Only the scalar count is emitted, never note IDs or parser diagnostic text.
-  Notes have ID-only acknowledgements with deletion implied. Retention-guard, model-keep and
-  preserved-condensation counters are not emitted; acknowledgement alone is
-  not proof of application or useful service.
+  There is no model-facing note acknowledgement or note-format counter. After
+  successful review the store generates disposal from exact admitted IDs;
+  malformed memory/instruction output rejects the whole review before disposal.
+  Confirmed writes, held extraction dependencies and review failures remain
+  distinct. Retention-guard, model-keep and preserved-condensation counters are
+  not emitted; accepted review alone is not proof of application or useful service.
   The daily shared-note cycle and a pass are different units. One finite cycle
   can use several ordinary passes; the private cycle record tracks the frozen
   cohort, accepted-pass-authenticated attempts, deferred versions and scheduling

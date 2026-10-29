@@ -178,10 +178,11 @@
     (dolist (rule '("`user`:" "`feedback`:" "`project`:" "`reference`:"
                     "Tasks, blockers, deadlines, progress, and decisions belong"
                     "reviewing older notes containing project progress"
-                    "only `note: \"ID\"` and an empty body"
                     "No extraction is a successful outcome."
                     "do not require a completion audit or a note rewrite."
-                    "The checked application removes a note"
+                    "nothing else is needed for notes."
+                    "After a successful review, the host disposes of every admitted note once all changes citing it have been applied."
+                    "Failed or rejected reviews delete nothing."
                     "application dynamically"
                     "holds deletion while citations remain or their scope cannot be checked."
                     "Its body is the COMPLETE desired file content, not an addition to append."
@@ -191,7 +192,7 @@
                     "Analysis, lists and explanations outside proposal blocks invalidate the reply."
                     "No action is a successful"))
       (should (string-search rule (replace-regexp-in-string "[[:space:]]+" " " sent-system))))
-    (dolist (obsolete '("open-items" "resolved-by" "resolution-anchors" "unresolved-items"
+    (dolist (obsolete '("## Notes" "only `note: \"ID\"`" "open-items" "resolved-by" "resolution-anchors" "unresolved-items"
                         "GIT-HISTORY" "sequential_summary" "Preserved measurements"))
       (should-not (string-search obsolete sent-system)))
     (with-current-buffer (plist-get handle :buffer)
@@ -221,7 +222,7 @@
     (respond mevedel-test-memory-review--none)
     (gptel--fsm-transition request 'DONE)
     (should (eq 'success (plist-get result :outcome))))
-  :doc "admits unresolved numeric notes for delete-only extraction and counts a missing acknowledgement as no-op"
+  :doc "admits unresolved numeric notes as evidence without requiring model disposal output"
   (let* ((shared (file-name-concat directory ".mevedel" "shared"))
          (path (file-name-concat shared "note.md"))
          (body "TODO: parent owns the unresolved integration follow-up.\nScenario: 50 notes took 125 seconds; baseline: 100 notes in 250 seconds.\n")
@@ -246,27 +247,12 @@
       (respond mevedel-test-memory-review--none)
       (gptel--fsm-transition request 'DONE)
       (should (eq 'success (plist-get result :outcome)))
-      (should (equal '("work://shared/note.md") (mapcar #'car (plist-get result :skipped-notes))))
-      (should (= 1 (plist-get result :note-format-failure-count)))
       (should-not (plist-get result :proposals))
-      (review)
-      (respond (replace-regexp-in-string
-                "## No action" (concat "## Notes\n````proposal\nnote: \"work://shared/note.md\"\n"
-                                       "---\n````\n## No action")
-                mevedel-test-memory-review--none t t))
-      (gptel--fsm-transition request 'DONE)
-      (ert-info ((format "Review error: %s" (plist-get result :error)))
-        (should (eq 'success (plist-get result :outcome))))
       (should (equal '("work://shared/note.md") (plist-get result :notes)))
       (should (= 0 (plist-get result :omitted-notes)))
       (should-not (plist-member result :inspected))
-      (should (= 1 (length (plist-get result :proposals))))
-      (let ((proposal (car (plist-get result :proposals))))
-        (should (eq 'note-delete (plist-get proposal :action)))
-        (should (equal "" (plist-get proposal :body)))
-        (dolist (key '(:open-items :resolved-by :resolution-anchors :unresolved-items))
-          (should-not (plist-member proposal key))))))
-  :doc "request admission lists only supplied notes and ignores omitted-note acknowledgements without widening authority"
+      (should (file-exists-p path))))
+  :doc "request admission lists only supplied notes without widening disposal authority to omitted notes"
   (let* ((shared (file-name-concat directory ".mevedel" "shared"))
          scope)
     (put model :context-window 32)
@@ -285,18 +271,7 @@
       (cl-labels ((review ()
                     (setq result nil handle
                           (mevedel-memory-review-request
-                           scope entries (lambda (value) (setq result value)))))
-                  (reply (notes)
-                    (replace-regexp-in-string
-                     "## No action"
-                     (concat "## Notes\n"
-                             (mapconcat
-                              (lambda (note)
-                                (format "````proposal\nnote: %s\n---\n````\n"
-                                        (json-serialize (plist-get note :id))))
-                              notes "")
-                             "## No action")
-                     mevedel-test-memory-review--none t t)))
+                           scope entries (lambda (value) (setq result value))))))
         (review)
         (should-not result)
         (let* ((input (json-parse-string sent :object-type 'plist :array-type 'list))
@@ -312,19 +287,13 @@
                          (plist-get root :admitted_files)))
           ;; Admission must not change the retained capture used by storage.
           (should (= 3 (length (plist-get (cdr (mevedel-memory-notes-root scope)) :files)))))
-        (respond (reply (append supplied (list (car omitted)))))
+        (respond mevedel-test-memory-review--none)
         (gptel--fsm-transition request 'DONE)
         (should (eq 'success (plist-get result :outcome)))
-        (should (= 1 (plist-get result :note-format-failure-count)))
-        (should-not (plist-get result :skipped-notes))
         (should (equal (mapcar (lambda (note) (plist-get note :id)) supplied)
-                       (mapcar (lambda (proposal) (plist-get proposal :note))
-                               (plist-get result :proposals))))
-        (review)
-        (respond (reply supplied))
-        (gptel--fsm-transition request 'DONE)
-        (should (eq 'success (plist-get result :outcome)))
-        (should (= (length supplied) (length (plist-get result :proposals)))))))
+                       (plist-get result :notes)))
+        (should (= (length omitted) (plist-get result :omitted-notes)))
+        (should-not (plist-get result :proposals)))))
   :doc "Instructions retains captured old guidance and decodes complete, empty or whitespace bodies exactly"
   (let* ((old "# Guidance\nUnrelated guidance must survive.\nSee work://shared/temporary.md.\n")
          (replacement "# Guidance\nUnrelated guidance must survive.\nUse the maintained contract instead.\n"))

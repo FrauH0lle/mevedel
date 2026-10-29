@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Note failures are isolated without weakening memory or instruction checks.
+;; Validate memory and instruction proposals against captured scope and evidence.
 
 ;;; Code:
 
@@ -12,7 +12,6 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-memory-proposal)
-(require 'mevedel-memory-store)
 
 (mevedel-deftest mevedel-memory-proposal/cold-compile-runtime-owner ()
   ,test
@@ -126,6 +125,20 @@ Use a monotonic deadline for elapsed-time retries.
   (should-error
    (mevedel-memory-proposal-parse mevedel-test-memory-proposal--reply
                                  mevedel-test-memory-proposal--roots nil))
+
+  :doc "admitted note IDs are evidence but never authorize model note actions"
+  (let* ((note "work://shared/finding.md")
+         (reply (string-replace (make-string 64 ?a) note mevedel-test-memory-proposal--reply))
+         (result (mevedel-memory-proposal-parse reply mevedel-test-memory-proposal--roots (list note))))
+    (should (equal '(promote) (mapcar (lambda (item) (plist-get item :action))
+                                    (plist-get result :proposals))))
+    (should (equal (list note) (plist-get (car (plist-get result :proposals)) :evidence)))
+    (should-error (mevedel-memory-proposal-parse reply mevedel-test-memory-proposal--roots nil))
+    (dolist (invalid (list (string-replace "## No action" "## Notes\n- none\n## No action" reply)
+                          (string-replace "root: \"local-agents\""
+                                          (concat "note: " (json-serialize note) "\nroot: \"local-agents\"")
+                                          reply)))
+      (should-error (mevedel-memory-proposal-parse invalid mevedel-test-memory-proposal--roots (list note)))))
 
   :doc "scope diagnostics distinguish root, path, and evidence failures"
   (let* ((id (make-string 64 ?a))
@@ -257,18 +270,13 @@ Use a monotonic deadline for elapsed-time retries.
     (dolist (path '("" "/etc/passwd" "~/x" "a:b" "a\nb" "../x" "a/../b" nil))
       (should-not (mevedel-memory-proposal-relative-path-p path)))))
 
-(mevedel-deftest mevedel-memory-proposal--note-claims
-  (:doc "ownership ignores body and multiline JSON content but reserves every explicit ID")
+(mevedel-deftest mevedel-memory-proposal-note-action-p
+  (:doc "recognizes internal disposal actions separately from model proposal actions")
   (progn
-    (should (equal '("a" "b")
-                   (mevedel-memory-proposal--note-claims
-                    "future: {\n  \"note\": \"unadmitted\"\n}\nnote: \"a\"\nnote: \"a\"\nnote: \"b\"\n---\nnote: \"body\"")))
-    (should (equal '("a") (mevedel-memory-proposal--note-claims "reason: invalid-json\nnote: \"a\"\n")))
-    (dolist (header '("note: \"a\"\nfuture: [\n  invalid" "note: \"a\"\ninvalid header"
-                      "note: \"a\"\nopen-items: [\"Finding\"]}"))
-      (should (equal '("a") (mevedel-memory-proposal--note-claims header))))
-    (dolist (header '("note: null" "note: invalid-json" "reason: \"No identity\""))
-      (should-error (mevedel-memory-proposal--note-claims header)))))
+    (should (mevedel-memory-proposal-note-action-p 'note-delete))
+    (should (mevedel-memory-proposal-note-action-p 'note-prune))
+    (should-not (mevedel-memory-proposal-note-action-p 'promote))
+    (should-not (mevedel-memory-proposal-note-action-p 'instructions))))
 
 (mevedel-deftest mevedel-memory-proposal-parse/instructions ()
   ,test
@@ -298,134 +306,6 @@ Use a monotonic deadline for elapsed-time retries.
                    (string-replace "Use a monotonic deadline for elapsed-time retries." ""
                                    mevedel-test-memory-proposal--reply)
                    mevedel-test-memory-proposal--roots (list (make-string 64 ?a))))))
-
-(mevedel-deftest mevedel-memory-proposal-parse/notes
-    (:vars* ((notes '(("work://shared/a.md" "notes-root" . "a.md")
-                     ("work://shared/b.md" "notes-root" . "b.md")
-                     ("work://shared/c.md" "notes-root" . "c.md")))
-             (head (string-remove-suffix "## No action\n- none" mevedel-test-memory-proposal--reply))))
-  (cl-labels ((block (id &optional body)
-                (format "````proposal\nnote: %S\n---\n%s````\n"
-                        id (if body (concat body "\n") "")))
-              (parse (blocks)
-                (mevedel-memory-proposal-parse
-                 (concat head "## Notes\n" blocks "## No action\n- Reviewed.\n")
-                 mevedel-test-memory-proposal--roots (list (make-string 64 ?a)) notes))
-              (actions (result)
-                (mapcar (lambda (item) (plist-get item :action)) (plist-get result :proposals)))
-              (skipped (result) (mapcar #'car (plist-get result :skipped-notes))))
-    ,test)
-  (test)
-  :doc "delete acknowledgements retain exact admitted identities and allow no extraction"
-  (let* ((result (parse (mapconcat (lambda (note) (block (car note))) notes "")))
-         (items (cdr (plist-get result :proposals))))
-    (should (equal '(promote note-delete note-delete note-delete) (actions result)))
-    (should-not (plist-get result :skipped-notes))
-    (should (equal (mapcar #'car notes) (mapcar (lambda (item) (plist-get item :note)) items)))
-    (dolist (item items)
-      (should (equal (list (plist-get item :note)) (plist-get item :evidence)))
-      (should (equal "" (plist-get item :body)))
-      (should-not (plist-member item :reason))
-      (should-not (plist-member item :disposition)))
-    (should (mevedel-memory-proposal-note-action-p 'note-delete))
-    (should (mevedel-memory-proposal-note-action-p 'note-prune))
-    (should-not (mevedel-memory-proposal-note-action-p 'note-keep))
-    (should-not (mevedel-memory-proposal-note-action-p 'note-condense)))
-  :doc "invalid one-note fields and removed actions never discard valid unrelated proposals"
-  (let ((a (block "work://shared/a.md")) (b (block "work://shared/b.md")) (c (block "work://shared/c.md")))
-    (dolist (bad (append
-                 (mapcar (lambda (field) (string-replace "---\n" (concat field "\n---\n") a))
-                         '("reason: \"Reviewed\"" "reason: null" "reason: invalid-json" "future-field: true"
-                           "open-items: []" "resolved-by: []" "resolution-anchors: []" "unresolved-items: []"
-                           "disposition: \"delete\"" "disposition: \"keep\"" "disposition: \"condense\""
-                           "disposition: null" "disposition: \"delete\"\nreason: \"Reviewed\""))
-                 (mapcar (lambda (body) (block "work://shared/a.md" body))
-                         '("Unexpected replacement body." " " "\t" "\n"))))
-      (let ((result (parse (concat bad b c))))
-        (should (equal '(promote note-delete note-delete) (actions result)))
-        (should (equal '("work://shared/a.md") (skipped result)))
-        (should (= 1 (plist-get result :note-format-failure-count)))
-        (should (string-search "Note NO OP" (plist-get result :no-action)))))
-    ;; Missing or undecodable ownership cannot safely be assigned to one note.
-    (dolist (bad (list (string-replace "note: \"work://shared/a.md\"" "note: null" a)
-                      (string-replace "note: \"work://shared/a.md\"\n" "" a)))
-      (should-error (parse (concat bad b c)))))
-  :doc "missing duplicate aliased and unadmitted identities receive no service credit"
-  (let ((a (block "work://shared/a.md")) (b (block "work://shared/b.md")) (c (block "work://shared/c.md")))
-    (dolist (blocks (list (concat a a b c)
-                          (concat (string-replace "---\n" "unknown: true\n---\n" a) a b c)
-                          (concat a (string-replace "---\n" "unknown: true\n---\n" a) b c)
-                          (concat (string-replace "---\n" "note: \"work://shared/a.md\"\n---\n" a) b c)))
-      (let ((result (parse blocks)))
-        (should (equal '(promote note-delete note-delete) (actions result)))
-        (should (equal '("work://shared/a.md") (skipped result)))))
-    (let ((result (mevedel-memory-proposal-parse
-                   (concat head "## Notes\n" a (block "alias") b c)
-                   mevedel-test-memory-proposal--roots (list (make-string 64 ?a))
-                   (append notes '(("alias" "notes-root" . "a.md"))))))
-      (should (equal '(promote note-delete note-delete) (actions result)))
-      (should (equal '("work://shared/a.md" "alias") (skipped result))))
-    (let ((result (parse (concat (string-replace "---\n" "note: \"work://shared/b.md\"\n---\n" a) c))))
-      (should (equal '(promote note-delete) (actions result)))
-      (should (equal '("work://shared/a.md" "work://shared/b.md") (skipped result))))
-    (let ((result (parse (concat b c (block "foreign/a.md")))))
-      (should (equal '("work://shared/a.md") (skipped result)))
-      (should (= 2 (plist-get result :note-format-failure-count))))
-    (let ((result (parse "- none\n")))
-      (should (equal '(promote) (actions result)))
-      (should (equal (mapcar #'car notes) (skipped result))))
-    (let ((result (mevedel-memory-proposal-parse head mevedel-test-memory-proposal--roots
-                                                (list (make-string 64 ?a)) notes)))
-      (should (equal (mapcar #'car notes) (skipped result)))))
-  :doc "store reparse retains isolated note diagnostics and rejects malformed memory"
-  (let* ((text (concat head "## Notes\n"
-                       (string-replace "---\n" "future-field: true\n---\n" (block "work://shared/a.md"))
-                       (block "work://shared/b.md") (block "work://shared/c.md")))
-         (result (parse (substring text (length (concat head "## Notes\n")))))
-         (scope (list :roots (append mevedel-test-memory-proposal--roots
-                                    '(("notes-root" :kind notes
-                                       :notes (("a.md" :id "work://shared/a.md")
-                                               ("b.md" :id "work://shared/b.md")
-                                               ("c.md" :id "work://shared/c.md")))))))
-         captured)
-    (cl-letf (((symbol-function 'mevedel-memory-store-accept-proposals)
-               (lambda (_workspace _prepared parsed &rest _args) (setq captured parsed))))
-      (mevedel-memory-store-accept nil (list :scope scope) text
-                                   (list (list :id (make-string 64 ?a))) "test" nil (mapcar #'car notes)))
-    (should (equal (plist-get result :proposals) (plist-get captured :proposals)))
-    (should (equal (plist-get result :skipped-notes) (plist-get captured :skipped-notes)))
-    (should-error (parse (concat (block "work://shared/a.md") "## Unknown\n- none\n")))
-    (should-error (mevedel-memory-proposal-parse
-                   (string-replace "root: \"local-agents\"" "root: \"foreign\"" text)
-                   mevedel-test-memory-proposal--roots (list (make-string 64 ?a)) notes)))
-  :doc "bodyless acknowledgements accept safe implicit boundaries without header repeats"
-  (let* ((blocks (mapconcat (lambda (note) (string-remove-suffix "````\n" (block (car note)))) notes ""))
-         (result (parse blocks)))
-    (should (equal '(promote note-delete note-delete note-delete) (actions result)))
-    (should-not (skipped result))
-    (should-not (skipped (parse (string-replace "---\n" "" (mapconcat (lambda (note) (block (car note))) notes "")))))
-    (should-not (skipped (parse (string-replace "---\n" "---\n\n" (mapconcat (lambda (note) (block (car note))) notes "")))))
-    (should-not (skipped (parse (replace-regexp-in-string "^````\\(proposal\\)?$" "````\\1 \t"
-                                                         (mapconcat (lambda (note) (block (car note))) notes ""))))))
-  :doc "unexpected bodies and ambiguous unclosed tails cannot admit body-shaped targets"
-  (let ((a (block "work://shared/a.md")) (c (block "work://shared/c.md")))
-    (dolist (body '("## No action\nnote: \"work://shared/c.md\"\n---"
-                    "```proposal\nnote: \"work://shared/c.md\"\n---\n```"))
-      (let ((result (parse (concat a (block "work://shared/b.md" body) c))))
-        (should (equal '(promote note-delete note-delete) (actions result)))
-        (should (equal '("work://shared/b.md") (skipped result)))))
-    (let ((unclosed (string-remove-suffix "````\n" (block "work://shared/b.md" "Unexpected body."))))
-      (dolist (tail (list "" c))
-        (let ((result (parse (concat a unclosed tail))))
-          (should (equal '(promote note-delete) (actions result)))
-          (should (equal '("work://shared/b.md" "work://shared/c.md") (skipped result)))))))
-  :doc "unknown notes never become proposals without an admitted note roster"
-  (let ((result (mevedel-memory-proposal-parse
-                 (concat head "## Notes\n" (block "work://shared/a.md"))
-                 mevedel-test-memory-proposal--roots (list (make-string 64 ?a)))))
-    (should (equal '(promote) (actions result)))
-    (should-not (skipped result))
-    (should (= 1 (plist-get result :note-format-failure-count)))))
 
 (provide 'test-mevedel-memory-proposal)
 ;;; test-mevedel-memory-proposal.el ends here

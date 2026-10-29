@@ -75,8 +75,7 @@
                                 instruction-id (if absent-instructions "AGENTS.local.md" "AGENTS.md") note-id
                                 (if absent-instructions "" new-instructions))
                       "- none\n")
-                    (format (concat "## Notes\n```proposal\nnote: %S\n---\n```\n"
-                                    "## No action\n- none") note-id))))
+                    "## No action\n- none")))
              (setq pass (plist-get prepared :id)
                    accepted (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil (list note-id))
                    note (seq-find (lambda (item) (eq (plist-get item :action) 'note-delete)) (plist-get accepted :proposals))

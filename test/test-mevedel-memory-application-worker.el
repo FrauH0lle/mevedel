@@ -359,9 +359,8 @@ while constructing retained history.  Recovery still owns final pin release."
                    (text (format (concat "## Promote\n```proposal\nroot: %S\nfile: \"lesson.md\"\ntype: \"project\"\n"
                                          "title: \"Lesson\"\nhook: \"Lesson\"\nreason: \"Supported\"\nevidence: [%S]\n---\n"
                                          "Preserve extraction dependencies.\n```\n## Update\n- none\n## Merge\n- none\n"
-                                         "## Remove\n- none\n## Instructions\n- none\n## Notes\n```proposal\nnote: %S\n"
-                                         "---\n```\n## No action\n- none")
-                                 memory-id address address))
+                                         "## Remove\n- none\n## Instructions\n- none\n## No action\n- none")
+                                 memory-id address))
                    (pending (mevedel-memory-store-accept workspace prepared text nil "test:model" nil (list address)))
                    (items (plist-get pending :proposals))
                    (extraction (seq-find (lambda (item) (eq 'promote (plist-get item :action))) items))

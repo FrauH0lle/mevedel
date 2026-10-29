@@ -986,13 +986,6 @@
     (should-not (plist-member safe :command))
     (should-not (plist-member safe :event))
     (should (equal '("ok" (1 2)) (plist-get safe :skill-names))))
-  :doc "obsolete note retention counters are not emitted even as zero"
-  (let* ((mevedel-telemetry--dropped-keys nil)
-         (safe (mevedel-telemetry--safe-props
-                '(:guard-converted-keep-count 0 :guard-preserved-condense-count 0 :model-keep-count 0
-                  :note-format-failure-count 0 :updated-file-count 1 :reviewed-count 2))))
-    (should (equal '(:note-format-failure-count 0 :updated-file-count 1 :reviewed-count 2) safe))
-    (should (= 3 (length mevedel-telemetry--dropped-keys))))
   :doc "preserves duplicate key order and input while reporting nested drops"
   (let* ((props '(:status first :command "secret" :status second
                   :modes (:path "secret" :status nested) :command "again"

@@ -215,12 +215,11 @@ storage contract and the workflows below for the user surface.
 The consolidation output contract is implemented in
 `mevedel-memory-proposal-parse`. It validates the complete reply against captured
 root IDs, admitted files, complete filename observations for creation, and
-admitted digest IDs before returning any proposals. The fixed ordered sections
-are Promote, Update, Merge, Remove, Instructions, Notes, and No action; Notes is
-required exactly when shared notes were admitted, with one acknowledgement per
-admitted note, and may otherwise be omitted or `- none`. The request's notes-root
-filename roster lists only admitted notes; references and investigation reads do
-not admit additional notes for acknowledgement. Proposal fences
+admitted digest and note IDs before returning any proposals. The sections are
+Promote, Update, Merge, Remove, Instructions, and No action. There is no Notes
+section or per-note acknowledgement. The request's notes-root filename roster
+lists only admitted notes; references and investigation reads do not admit more
+notes. Proposal fences
 contain JSON-valued header lines, a `---` separator, and Markdown replacement
 content. The header is a sequence of `key: value` lines, not a JSON object;
 only the values use JSON syntax. Merge sources must be admitted files; overlapping file operations
@@ -230,10 +229,10 @@ owns index consistency. This parser performs no reads or writes and does not
 establish current authority, freshness, or factual correctness. The request uses
 this parser at terminal settlement before accepting proposals into the durable
 review and decision lifecycle exposed by the memory cockpit.
-A Notes block contains only `note: "ID"`, with deletion implied and an exactly
-empty body. Extra fields, including `disposition` and `reason`, are invalid for
-that note. No completion inventory, resolution evidence or replacement
-note text is required or accepted. Instructions proposals supply the complete
+The model extracts qualifying knowledge with ordinary proposals citing the
+admitted note ID in evidence; nothing else is needed for notes. The accepting
+store generates an internal deletion proposal for every admitted note only after
+a successful review. Instructions proposals supply the complete
 desired content of an exact captured applicable file, preserving unrelated
 guidance, rather than appended text. Captured known-absent instruction targets
 remain creatable. Empty Instructions bodies mean zero bytes, not path deletion;
@@ -241,15 +240,14 @@ other decoded body bytes, including a final newline, are preserved exactly.
 One newline immediately before the closing fence is structural, so retaining
 a final newline in the desired body requires an extra newline before the fence.
 A block with an empty body may omit the `---` separator. Repeated header fields
-are invalid, including identical note IDs. Sections may appear in any order
+are invalid. Sections may appear in any order
 (each once; every action section required, so a truncated reply still fails),
 and a reply may end without `## No action`; text between proposal blocks still
 invalidates the reply. These accept shapes real replies
 produced, which previously discarded whole reviews. A rejected reply is retained,
 newest eight, under `.mevedel/state/diagnostics/rejected-replies/` for
-diagnosis; it never becomes proposals. Missing or invalid note acknowledgements
-leave those notes unchanged while valid unrelated proposals can survive (see
-[Shared working-note lifecycle](#shared-working-note-lifecycle)).
+diagnosis; it never becomes proposals. Failed or rejected reviews create no
+disposals (see [Shared working-note lifecycle](#shared-working-note-lifecycle)).
 
 `mevedel-memory-scope-capture` supplies the parser's root and file allowlist.
 It reads complete topic, index, and root instruction files without changing
@@ -617,10 +615,9 @@ never admission or mutation authority.
 
 Each frozen version is attempted at most once in that cycle. Attempts are
 authenticated against the accepted pass and its exact admitted note IDs, not
-the model's acknowledgements or the number of files deleted. An invalid or
-missing acknowledgement therefore remains a format failure and leaves that
-note unchanged, but cannot force the coordinator to review that same version
-again before reaching later cohort members. A batch with no deletions does not
+the number of files deleted. Failed reviews pause the cycle without disposal;
+successful reviews generate disposals even when no memory qualifies. Held
+extractions or use can still prevent actual deletion. A batch with no deletions does not
 stop an otherwise successful cycle. Capture-history ranking, applied-progress
 catch-up and the rolling successful-batch ceiling are removed.
 
@@ -1057,8 +1054,8 @@ bypass the daily note-cycle time gate and journal timing/count thresholds, but
 not claim ownership, cohort/version checks, pending recovery, age, current use,
 unsaved buffers or mutation checks. It services a finite frozen note cohort;
 new arrivals and changed versions do not extend that cohort. Completed attempts
-are authenticated against accepted pass identities and exact admitted notes,
-including invalid or missing acknowledgements. Attempted is not reviewed or
+are authenticated against accepted pass identities and exact admitted notes.
+Attempted is not confirmed
 deleted. An empty selection requests no empty current-memory review.
 Pending/recovery-required and blocked notes remain held; propose/manual drain leaves decisions for approval rather
 than deleting their files. Other sessions' turns do not stop the drain; notes
@@ -1186,8 +1183,9 @@ captured alone, leaving eligible digests unpinned for the next batch, up to
 It is reviewed sequentially in UTF-8 chunks of at most 32 KiB, carrying a
 running summary capped at 16 KiB. The summary carries candidate durable lessons,
 source attribution and uncertainty across chunks, not an open-work resolution
-audit. The final review uses that evidence to extract qualifying knowledge and
-acknowledge deletion through the normal decision path. Whole-file bytes and hash remain the before-state, never a
+audit. The final review uses that evidence to extract qualifying knowledge;
+successful acceptance generates the disposal through the normal decision path.
+Whole-file bytes and hash remain the before-state, never a
 truncated prefix. Each chunk and final settlement recheck that whole-file
 state. A change discards the summary and reports `restart-required`; the
 next review starts from the beginning once the new version is quiet. The
@@ -1215,9 +1213,9 @@ the actual deletion boundary, including after approval waits. New citations or
 an unavailable or incomplete scope hold deletion; capture cannot prove their
 later absence.
 
-**Decisions.** The reply's Notes section gives every admitted note exactly one
-acknowledgement with only `note: "ID"`, deletion implied, and an exactly empty
-body. Neither `disposition` nor `reason` is accepted. Extraction is selective:
+**Decisions.** After a successful review the host creates a deletion proposal
+for every admitted note. The reply has no Notes section, acknowledgement or
+note-specific output. Failed/rejected reviews delete nothing. Extraction is selective:
 a note may yield no qualifying memory. Tasks,
 unresolved findings, measurements and possible future usefulness do not require
 a completion audit or automatically retain a note. Open work belongs in its
@@ -1232,29 +1230,15 @@ only after every required extraction is applied; an undecided requirement
 waits without a decision, and any other requirement outcome makes the
 disposition stale, leaving the note for a later review.
 
-Missing or invalid note acknowledgements, including unknown note fields, leave the
-affected notes unchanged without a proposal or decision. Duplicate claims for
-one admitted note quarantine that note; valid unrelated proposals survive.
-The private no-action text records bounded diagnostics, and the callback's
-`skipped-notes` lists the affected admitted IDs. Fence lines accept trailing
-horizontal whitespace. An empty delete block may end implicitly at the next
-proposal opener or No action section. A malformed note body's unresolved tail
-is quarantined rather than reinterpreted as additional proposals.
-Malformed memory changes and ambiguous target ownership still reject the reply,
-as do required memory sections missing outside a quarantined tail.
-Each skipped note counts as a format failure, not a successful keep or service:
-the pass reports it in `note-format-failure-count` (which also counts unadmitted
-note blocks), subtracts it from
-`notes-reviewed`. `notes-remaining` reports capture-bounded remaining members,
-not an immediate retry obligation for malformed acknowledgements. The accepted pass still
-proves an attempt for each exact admitted version in the finite daily cohort;
-no acknowledgement or deletion is invented. Other cohort members remain
-serviceable even after a batch whose acknowledgements are all invalid. The
-cycle's persistent attempt set replaces captured-without-proposal ranking and
-the zero-applied-progress catch-up guard. A new version or later arrival waits
-for the next cohort; a format failure is never credited as reviewed or deleted.
+Malformed memory/instruction proposals or ambiguous reply structure reject the
+whole review before acceptance. There is no acknowledgement parser, skipped-note
+diagnostic or note-format counter. Accepted passes prove attempts for their exact
+admitted versions, while checked write outcomes prove actual deletion. A captured
+but unadmitted note gets no disposal proposal. The finite attempt set replaces
+capture-history ranking and the applied-progress catch-up guard; new versions and
+later arrivals wait for the next cohort.
 
-Confirmed deletions, held work and format failures remain distinct outcomes.
+Confirmed deletions, held work and review failures remain distinct outcomes.
 Extraction dependencies, target ownership, current-use and unsaved-buffer
 checks, exact before-state, checked writes and interrupted-write reconciliation
 still apply. Deletion is permanent; reversing an extraction never restores its

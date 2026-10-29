@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Exercise accepted delete acknowledgements, extraction dependencies and exact
+;; Exercise host-generated disposals, extraction dependencies and exact
 ;; preimages through the ordinary checked decision/write lifecycle.
 
 ;;; Code:
@@ -49,7 +49,7 @@
          (let* ((prepared (mevedel-memory-store-prepare workspace claim scope nil ""))
                 (reply (concat (if extraction-sections (funcall extraction-sections scope)
                                  "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n")
-                               "## Notes\n````proposal\nnote: \"work://shared/handoff.md\"\n---\n````\n## No action\n- none")))
+                               "## No action\n- none")))
            (setq accepted (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil
                                                       '("work://shared/handoff.md"))
                  item (car (last (plist-get accepted :proposals)))

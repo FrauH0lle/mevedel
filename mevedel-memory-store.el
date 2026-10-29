@@ -220,7 +220,7 @@ Identity includes the original targets and exact captured before-state."
 (defun mevedel-memory-store--admitted-notes-p (scope notes)
   "Return non-nil when NOTES uniquely name captured note IDs in SCOPE.
 An empty input is valid even when the scope captured notes not supplied to
-the review.  Proposal acknowledgements never establish admission."
+the review.  Only the producer's admitted roster establishes disposal targets."
   (and (proper-list-p notes)
        (= (length notes) (length (delete-dups (copy-sequence notes))))
        (or (null notes)
@@ -231,7 +231,7 @@ the review.  Proposal acknowledgements never establish admission."
   "Return the fenced accepted bundle for WORKSPACE pass ID, or nil.
 Verify its exact bytes against the claim outcome before reading its private
 proposal data.  The required :admitted-notes records actual review input IDs,
-independently of valid note acknowledgements.  Return the immutable prepared
+independently of memory proposal contents.  Return the immutable prepared
 record under :prepared and the authenticated accepted bytes' hash under :hash."
   (let* ((prepared (mevedel-memory-store-read workspace id))
          (outcome (mevedel-journal-claim-outcome (plist-get prepared :claim))))
@@ -263,7 +263,7 @@ record under :prepared and the authenticated accepted bytes' hash under :hash."
 ENTRIES are the complete admitted subset; MODEL is its exact provider label and
 REFERENCES are bounded dated observations. Retain original target before-state.
 NOTES lists only the shared working note IDs actually supplied to the review,
-not all captured notes or just valid acknowledgements.  A nil REPLY accepts
+not all captured notes or IDs inferred from model output.  A nil REPLY accepts
 a housekeeping-only pass, which admitted no digests or notes for inference.
 The immutable claim outcome accepts the bundle hash, allowing later recovery."
   (let ((scope (plist-get prepared :scope)))
@@ -275,8 +275,8 @@ The immutable claim outcome accepts the bundle hash, allowing later recovery."
      workspace prepared
      (if reply
          (mevedel-memory-proposal-parse
-          reply (plist-get scope :roots) (mapcar (lambda (entry) (plist-get entry :id)) entries)
-          (seq-filter (lambda (row) (member (car row) notes)) (mevedel-memory-notes-index scope)))
+          reply (plist-get scope :roots)
+          (append (mapcar (lambda (entry) (plist-get entry :id)) entries) notes))
        (list :proposals nil :no-action "- Shared-folder housekeeping only."))
      entries model references notes)))
 
@@ -290,8 +290,9 @@ The immutable claim outcome accepts the bundle hash, allowing later recovery."
 ENTRIES and REFERENCES retain the same evidence contract as model replies.
 PRODUCER is the provider label, or `user' for an explicit cockpit action.
 ADMITTED-NOTES is the exact list of note IDs supplied to the model review;
-structured user actions and housekeeping supply nil.  Never infer it from
-the captured roster or the valid proposals in PARSED.
+structured user actions and housekeeping supply nil.  Every admitted note gets
+an internal deletion proposal after this successful review.  Never infer
+admission from the captured roster or model proposals in PARSED.
 Callers validate model text before this boundary; direct user actions construct
 structured changes from fresh captured snapshots without synthetic model text.
 Housekeeping for the scope's captured attachments and empty folders is added
@@ -308,6 +309,8 @@ for remaining citations before deleting a note."
       (error "Prepared memory evidence changed"))
     (unless (mevedel-memory-store--admitted-notes-p scope admitted-notes)
       (error "Admitted note IDs are duplicated or outside the prepared scope"))
+    (when (seq-some #'mevedel-memory-store--note-p (plist-get parsed :proposals))
+      (error "Parsed memory proposals cannot dispose of shared notes"))
     (unless (or entries (null (plist-get prepared :entries)))
       (error "A selected digest batch must admit a complete digest"))
     (dolist (entry entries)
@@ -322,7 +325,18 @@ for remaining citations before deleting a note."
                         (mevedel-memory-store--pin workspace id (plist-get entry :id)) 'utf-8-unix 65))
           (error "Accepted digest evidence is not retained"))))
     (let* ((proposals
-            (let* ((parsed (append (plist-get parsed :proposals) (mevedel-memory-notes-housekeeping scope)))
+            (let* ((parsed
+                    (append
+                     (plist-get parsed :proposals)
+                     (let ((index (mevedel-memory-notes-index scope)))
+                       (mapcar
+                        (lambda (id)
+                          (let ((note (assoc id index)))
+                            (list :action 'note-delete :root (cadr note) :file (cddr note) :note id
+                                  :type "note" :title (cddr note) :hook ""
+                                  :evidence (list id) :body "")))
+                        admitted-notes))
+                     (mevedel-memory-notes-housekeeping scope)))
                    (extractions (mapcar (lambda (proposal) (mevedel-memory-store--proposal scope id proposal))
                                         (seq-remove #'mevedel-memory-store--note-p parsed))))
               ;; Note disposals depend on every extraction that cites them.

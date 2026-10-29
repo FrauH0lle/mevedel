@@ -270,8 +270,8 @@ claim observation grants retention only, never write authority. Preparation
 failure without a returned bundle can adopt only its exact original reserved
 claim before fresh-owned reconciliation and pause. Attempt completion is
 authenticated against accepted passes and exact admitted notes; the cycle record
-is neither a second review ledger nor mutation authority. Accepted invalid or missing note
-acknowledgements count as attempts, not reviewed or deleted notes. A successful
+is neither a second review ledger nor mutation authority. An admitted attempt
+is not proof of a checked deletion. A successful
 batch with no deletions cannot starve later cohort members. Recovery resumes
 without repeating completed attempts; failure, cancellation and application
 recovery requirements pause the current cycle. An explicit review or drain can
@@ -382,9 +382,10 @@ pending/recovery holds remain; prior retention/rejection/reversal outcomes do
 not start an additional seven-day reconsideration clock. Local observed use
 retains its independent 24-hour access window. Shared-directory Read generates
 bounded age and first-heading rows, explicitly reporting only
-age-readiness with capture/application safety checks pending. Each admitted note
-receives an ID-only acknowledgement with deletion implied and an empty body beside
-ordinary qualifying extraction proposals. Every citing extraction is a disposal
+age-readiness with capture/application safety checks pending. The model emits
+ordinary qualifying extraction proposals citing the note ID in evidence, with no
+Notes section or per-note acknowledgement. After successful validation the store
+generates a deletion proposal for every admitted note. Every citing extraction is a disposal
 dependency and must be applied first. Notes are disposable working material,
 not an open-work tracker: deletion needs no inventory of unfinished tasks,
 resolution quotes, source markers, anchors or numeric-retention transformations.
@@ -407,19 +408,13 @@ and JSON, rather than trusting mtimes to identify changed referrers. Named
 containing-folder references hold; generic root navigation does not. Unknown
 scope, active use and unsaved drafts hold without a terminal decision. Target,
 scope and use checks repeat at final write admission. This housekeeping
-authority remains separate from model acknowledgement.
+authority remains separate from model output.
 
-Recoverable invalid, duplicate or missing note acknowledgements produce no
-decision for those notes, rather than discarding valid unrelated proposals.
-Fence lines tolerate trailing whitespace; empty delete blocks may end at an
-unambiguous matching-width opener or No action section. Malformed nonempty note
-bodies remain unauthorized; quoted header-like content never admits a target.
-Their per-pass
-format failure count remains visible; ambiguous ownership, required memory
-sections missing outside that tail and invalid memory changes still reject the
-reply. The accepted pass still proves an attempt for each admitted version in
-the frozen daily cohort. Repeated no-op versions cannot displace later cohort
-members; they receive no invented review or application credit. This finite
+Failed/rejected reviews create no deletion proposals or writes. Invalid memory
+or instruction output and ambiguous reply structure reject the whole review;
+there is no note-output parser or note-format counter. A successful accepted pass
+proves an attempt for each admitted version in the frozen daily cohort, not that
+every generated disposal was applied. This finite
 attempt set replaces capture-history ranking and progress-based catch-up.
 Accepted reviews
 and decisions are the processing record. Note decisions reuse checked intents

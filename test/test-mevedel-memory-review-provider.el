@@ -323,11 +323,7 @@
                              '("Scope" "Constraints & Preferences" "Work & Evidence" "Key Decisions"
                                "Open Questions & Risks" "Critical Context" "Relevant Files"
                                "Skills Invoked" "Next Steps") "\n"))
-         (reply (replace-regexp-in-string
-                 "## No action"
-                 (concat "## Notes\n````proposal\nnote: \"work://shared/large.md\"\n"
-                         "---\n````\n## No action")
-                 test-mevedel-review-provider--none t t)))
+         (reply test-mevedel-review-provider--none))
     (start scope)
     (receive (test-mevedel-review-provider--response summary) 0.125)
     (should-not result)

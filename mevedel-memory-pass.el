@@ -783,8 +783,6 @@ here are diagnostic only."
            (status (if (memq (plist-get result :outcome) '(aborted restart-required)) 'cancelled 'failed))
            (reported (if-let* ((read-usage (plist-get (plist-get state :request) :usage)))
                          (funcall read-usage) result))
-           (skipped-note-count (length (plist-get result :skipped-notes)))
-           (note-format-failures (or (plist-get result :note-format-failure-count) 0))
            ;; Freeze diagnostics before storage can replace RESULT with an error.
            ;; Cancellation has no review callback result, so use its live snapshot.
            (usage (append
@@ -889,8 +887,7 @@ here are diagnostic only."
 							    (+ (or (plist-get (plist-get state :selection) :remaining) 0)
 							       (or (plist-get result :omitted-digests) 0))
 							  (or (plist-get (plist-get state :selection) :eligible) 0))
-					     :notes-reviewed (- (length (plist-get result :notes)) skipped-note-count)
-					     :note-format-failure-count note-format-failures
+					     :notes-reviewed (length (plist-get result :notes))
 					     :notes-remaining (or (plist-get (plist-get state :notes) :remaining) 0)
 					     :notes-blocked (or (plist-get (plist-get state :notes) :blocked-count) 0))
 				       applied usage))
@@ -945,7 +942,6 @@ here are diagnostic only."
 					 :covered-count (if (eq 'general (plist-get (plist-get state :telemetry) :scope))
 							    (length (plist-get entry :digests)) 0)
 					 :proposed-count (length (plist-get entry :proposals))
-					 :note-format-failure-count note-format-failures
 					 :updated-file-count (plist-get applied :updated-files)
 						 :remaining-count (plist-get (plist-get state :result) :remaining)))))
 	                      ;; Async completion runs after this function's outer

@@ -104,7 +104,7 @@ one sixteen-note request per day. Freeze a finite cohort of path/version identit
 at cycle admission. Each identity is attempted at most once in that cycle;
 changed, newly eligible and newly arrived versions wait for the next daily cycle.
 Recheck current eligibility before every batch and mutation. The cycle records
-attempts separately from confirmed deletion; malformed output is not service.
+attempts separately from confirmed deletion; a failed review is not service.
 
 Keep the existing ordinary request bounds (16 notes, 96 KiB; oversized Markdown
 alone in bounded chunks up to the configured limit), per-request deadlines,
@@ -132,14 +132,13 @@ It does not enumerate open work, prove resolution, reproduce every measurement,
 search Git for completion, or decide whether a note should become a tracker.
 No qualifying memory is a successful extraction result and still permits deletion.
 
-Keep a small per-admitted-note acknowledgement in the Notes output: only
-`note: "ID"`, with deletion implied and an exactly empty body. There is no
-`disposition` or `reason` field, no keep or condense alternative, and no open-items,
-resolved-by, resolution-anchors or unresolved-items header. Invalid, missing or
-duplicate acknowledgements leave that particular note
-unchanged with a format diagnostic; they do not discard unrelated valid memory
-proposals or cause same-cycle retries. A malformed memory proposal or ambiguous
-target ownership still fails the review. Chunk summaries carry potentially
+The model emits only ordinary qualifying memory/instruction proposals citing the
+note ID in `evidence`; nothing else is needed for notes. There is no Notes section,
+per-note acknowledgement, disposition, reason, keep/condense alternative or
+resolution header. After a successful review the accepting store creates internal
+deletion proposals for every exact admitted note, not every captured file.
+Malformed memory/instruction proposals or ambiguous output reject the review
+before acceptance and create no deletions. Chunk summaries carry potentially
 qualifying lessons, attribution and uncertainty, not an unresolved-work inventory.
 
 Each accepted deletion depends on all memory changes citing that note. Apply all
@@ -231,6 +230,16 @@ The header codec, normalization, classification, migration and undo paths were
 removed rather than kept as compatibility machinery. The tracker/memory split,
 selective extraction, finite cohorts and inexpensive deletion guards remain.
 
+The next controlled eight-note extraction check failed before acceptance: the
+reviewer put note acknowledgements under Promote and emitted no memory bodies,
+despite calling the four positive lessons durable in No action. On 2026-10-30 the
+user removed the acknowledgement contract entirely. Successful review admission
+already determines which exact sources were processed, and extraction evidence
+already determines their dependencies; a second model-written note roster adds
+format failures without useful authority. The parser now handles memory and
+instruction changes only; the store generates disposal from admitted IDs after
+successful validation. Failed/rejected review still disposes of nothing.
+
 ## Consequences and acceptance evidence
 
 Temporary notes can disappear while they still describe open work. That is the
@@ -243,7 +252,7 @@ use, unsaved changes and unavailable references remain visible deferrals.
 The target capacity is 50–100 notes per day, **not established by deterministic
 tests**. The deterministic fifty-note native drain exercises actual request
 serialization, response parsing, acceptance and permanent deletion, replacing
-only URL transport. It checks invalid acknowledgements, changed and late
+only URL transport. It checks rejected memory output, changed and late
 versions, and a thirteen-day headerless handoff excluded from the frozen cohort.
 Scripted transport proves mechanics, not inference quality, cost or throughput.
 Any separately authorized real-provider replay uses a private copied corpus,

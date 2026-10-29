@@ -45,7 +45,7 @@
              (real-request (symbol-function 'gptel-request))
              (real-cleanup-active (symbol-function 'mevedel-journal-cleanup-active-p))
              (now (floor (float-time)))
-             (calls 0) (busy nil) (busy-checks 0) invalid-note-fields pending latest drain results batches retry-origin)
+             (calls 0) (busy nil) (busy-checks 0) pending latest drain results batches retry-origin)
      :quiet t
      :before-each ((put model :context-window 128) (put model :capabilities '(tool-use))
                    (make-directory shared t))
@@ -130,12 +130,6 @@
                   (scope (plist-get (plist-get state :prepared) :scope))
                   (documents (mevedel-memory-notes-documents scope))
                   (reply (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n"
-                                 (when documents
-                                   (concat "## Notes\n"
-                                           (mapconcat
-                                            (lambda (doc)
-                                              (format "```proposal\nnote: %S\n%s---\n```\n"
-                                                      (plist-get doc :id) (or invalid-note-fields ""))) documents "")))
                                  "## No action\n- No durable changes."))
                   (request (car pending)) (callback (cdr pending)))
              (push (length documents) batches)
@@ -784,6 +778,7 @@
     (finish t)
     (should (= 1 calls))
     (should-not (reviews))
+    (should (= 20 (length (directory-files shared nil "\\.md\\'"))))
     (should-not (mevedel-memory-pass-drain-status workspace))
     (should (eq 'error (plist-get (car results) :outcome))))
   :doc "quitting automatic application stops the drain but retains the published review and held proposals"
@@ -814,22 +809,6 @@
       (should (= 35 (length (plist-get cycle :attempted)))))
     (offer)
     (should (= 3 calls)))
-  :doc "invalid first-batch acknowledgements are attempted once while a later valid batch applies"
-  (let ((mevedel-memory-consolidation-mode 'auto))
-    (notes 17)
-    (setq invalid-note-fields "disposition: \"keep\"\n")
-    (offer)
-    (finish)
-    (should (= 0 (plist-get (plist-get latest :result) :notes-reviewed)))
-    (should (= 16 (plist-get (plist-get latest :result) :note-format-failure-count)))
-    (setq invalid-note-fields nil)
-    (finish)
-    (wait-for (lambda () (and (not (mevedel-memory-pass-running workspace))
-                              (= 0 (hash-table-count mevedel-memory-pass--pending)))))
-    (should (= 2 calls))
-    (should (equal '(1 16) batches))
-    (should (= 16 (length (directory-files shared nil "\\.md\\'"))))
-    (should (= 17 (length (plist-get (car (mevedel-memory-cycle--read workspace)) :attempted)))))
   :doc "arrivals after freezing wait for the next daily cohort despite a productive final batch"
   (let ((mevedel-memory-consolidation-mode 'auto)
         (path (file-name-concat shared "arrival.md")))
@@ -892,17 +871,14 @@
     (offer)
     (should (= 1 calls))
     (should-not (mevedel-memory-pass-running workspace)))
-  :doc "explicit drain resumes paused work and attempts invalid notes once without service credit"
+  :doc "explicit drain resumes paused work and services every remaining admitted note"
   (progn
     (notes 17)
     (offer)
     (finish t)
-    (setq invalid-note-fields "unknown: true\n")
     (start)
     (finish)
-    (should (= 0 (plist-get (car results) :notes-reviewed)))
-    (should (= 16 (plist-get (car results) :note-format-failure-count)))
-    (setq invalid-note-fields nil)
+    (should (= 16 (plist-get (car results) :notes-reviewed)))
     (finish)
     (wait-for (lambda () (not (mevedel-memory-pass-drain-status workspace))))
     (should (= 3 calls))

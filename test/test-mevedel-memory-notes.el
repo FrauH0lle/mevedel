@@ -110,19 +110,21 @@
               (or reply no-action) nil "test:model" nil (or admitted notes)))))
       ,test))
   (test)
-  :doc "accepted no-proposal captures create no secondary admission history"
+  :doc "successful no-action review creates pending disposal history for every admitted note"
   (progn
     (note "old.md" 0)
-    (accept (capture))
-    (should (= 0 (hash-table-count (mevedel-memory-notes--history workspace nil)))))
+    (note "other.md" 1)
+    (let ((accepted (accept (capture))))
+      (should (= 2 (length (plist-get accepted :proposals))))
+      (should (= 2 (hash-table-count (mevedel-memory-notes--history workspace nil))))
+      (dolist (proposal (plist-get accepted :proposals))
+        (should (eq 'note-delete (plist-get proposal :action)))
+        (should-not (plist-get proposal :requires))))
+    (should-not (files (capture))))
   :doc "pending decisions suppress their exact version until explicitly rejected"
   (progn
     (note "old.md" 0)
-    (accept (capture))
-    (let* ((accepted (accept (capture)
-                             (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n"
-                                     "## Notes\n````proposal\nnote: \"work://shared/old.md\"\n---\n````\n"
-                                     "## No action\n- none")))
+    (let* ((accepted (accept (capture)))
            (proposal (car (plist-get accepted :proposals))))
       (should (eq 'note-delete (plist-get proposal :action)))
       (should (equal (list :hash (secure-hash 'sha256 "Completed observation.\n") :status 'pending)
