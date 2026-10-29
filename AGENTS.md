@@ -55,6 +55,12 @@ For interactive commands, see [README.md](README.md#usage).
   `work://shared/`, not `.scratch/`. This applies to full reports as well as short
   summaries and takes precedence over general scratch-storage guidance in the
   backlog and agent docs.
+- Use Markdown for notes, one topic per file; search first and update relevant
+  existing material. ApplyPatch supplies lifecycle frontmatter (kind, status,
+  owner, created), defaulting to `scratch/open`. Mark real handoffs explicitly
+  as `kind: handoff`, reports as `kind: report`, and finished notes as
+  `status: done`. Attribution is not a retention lock. Keep actionable open work
+  in the tracker/backlog rather than relying on temporary notes as a task store.
 - Keep managed session plans in `work://plans/`; curate selected durable lessons
   into memory. Read-only requests and Plan-mode write restrictions still apply.
 - Preserve explicitly invoked skills' configured workflows and destinations,

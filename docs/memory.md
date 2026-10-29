@@ -1072,7 +1072,20 @@ bodies and complete terminal decision/write history.
 
 Main and worker guidance asks for attributed factual lessons in
 `work://shared/` when the request permits workspace writes. Agents search before
-creating and update relevant existing files; no filename or structure is required. Read-only agents
+creating and update relevant existing files, using Markdown with one topic per
+note and freely chosen filenames. ApplyPatch normalizes shared `.md` files
+(case-insensitive) before preview and commit, including contained physical paths
+and moves into the shared tree. Lifecycle frontmatter has `kind` (`scratch`,
+`report`, `handoff`), `status` (`open`, `done`), a nonempty `owner` attribution,
+and a UTC `created` timestamp. Missing fields default to scratch/open and the
+invoking session/agent identity and target time; an existing unmanaged note uses
+its previous mtime as creation time. Valid metadata persists unless deliberately
+changed. Invalid supplied fields fail visibly rather than being silently replaced.
+Models explicitly label real handoffs `kind: handoff`, reports `kind: report`,
+and finished notes `status: done`. Keep actionable work in the tracker/backlog,
+not only in temporary notes. Metadata appears in the reviewed final bytes and
+uses the ordinary atomic write/rollback path; plans, memory and non-Markdown
+attachments are not decorated. Read-only agents
 report lessons through their existing results or available SendMessage; they
 gain no mutation tools. `$learn` considers available notes and digests as
 additional evidence, verifies relevant claims, and acknowledges omissions.

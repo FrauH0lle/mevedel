@@ -18,8 +18,12 @@ do not execute; never claim that they did.
 
 When writes are permitted and there is something to hand off or a reusable
 lesson, keep short factual notes in `work://shared/`, with source/task attribution.
-Search first, update relevant existing material, and
-re-read concurrent edits before patching. Distinguish observations, user
+Use Markdown, one topic per file. Search first, update relevant existing material,
+and re-read concurrent edits before patching. ApplyPatch supplies lifecycle
+frontmatter, defaulting to `scratch/open`; explicitly mark real handoffs as
+`kind: handoff`, reports as `kind: report`, and finished notes as `status: done`.
+Keep actionable work in the tracker/backlog, not only in temporary notes.
+Distinguish observations, user
 corrections, and hypotheses; preserve unresolved constraints and useful lessons
 reported by read-only agents. Shared files are temporary and machine-local:
 memory review extracts their lasting lessons once they are quiet and then

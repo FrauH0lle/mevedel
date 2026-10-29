@@ -1014,6 +1014,17 @@ also rejects symlink escapes."
     (file-name-concat (mevedel-workspace-root workspace)
                       ".mevedel" mevedel-resource--shared-work-component)))
 
+(defun mevedel-resource-work-shared-path-p (workspace path)
+  "Return non-nil when PATH is physically contained in WORKSPACE's shared tree.
+Ordinary filesystem operands and resource operands share this identity.
+Reject symlink escapes in the shared root as well as its descendants."
+  (when-let* ((workspace-root (and workspace (mevedel-workspace-root workspace)))
+              (shared (mevedel-resource-work-shared-directory workspace)))
+    (and (mevedel-resource-within-root-p shared workspace-root)
+         (mevedel-resource-within-root-p path shared)
+         (not (equal (directory-file-name (expand-file-name path))
+                     (directory-file-name (expand-file-name shared)))))))
+
 (defun mevedel-resource--shared-work-p (components)
   "Return non-nil when work COMPONENTS address the workspace's shared files."
   (equal (car components) mevedel-resource--shared-work-component))

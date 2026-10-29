@@ -36,6 +36,7 @@ Data model
   mevedel-memory-investigation.el request-local Read/Glob/Grep scope, budgets, and cancellation
   mevedel-memory-review.el    bounded sessionless consolidation request and validated reply
   mevedel-memory-pass.el      consolidation gates, admission, settlement, and checked auto apply
+  mevedel-working-note.el     pure shared Markdown lifecycle metadata codec and classifier
   mevedel-memory-notes.el     shared working-note readiness, capture, housekeeping, and checked byte-preserving disposal
   mevedel-memory-store.el     private pass evidence, accepted proposals, and review publication
   mevedel-memory-cleanup.el   completed-review retention dependencies and expiry candidates

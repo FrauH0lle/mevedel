@@ -7,8 +7,10 @@ Status: Proposed
 This is the requested design draft against `7570fb62`, not a description of
 implemented behavior. It separates the shared-note lifecycle from the journal
 publication and transaction protocol in [ADR 0117](0117-publish-journal-results-from-fenced-outcomes.md).
-The lifecycle rules below were agreed in the design conversation; implementation
-choices and the legacy conversion are proposals. Acceptance must amend ADR 0117
+The user accepted the lifecycle direction and authorized sliced implementation on
+2026-10-29. This draft remains Proposed until the corresponding runtime and
+verification land; implementation choices and the legacy conversion below are
+not yet current behavior. Acceptance must amend ADR 0117
 and its index in the corresponding implementation, retaining its decision history.
 
 ## Context
@@ -63,11 +65,14 @@ authored into the note. The body stays ordinary Markdown.
 
 The ApplyPatch write path owns normalization for creates, updates and moves into
 the shared Markdown tree, whether addressed through `work://shared/` or its
-contained physical path. New notes without a header get `handoff`, `open`, the
+contained physical path. New notes without an explicit kind get `scratch`, `open`, the
 invoking session/agent identity, and the target time. Explicit valid kind/status
 values are honored; updates preserve attribution and creation time unless the
 author deliberately changes them. Existing unmanaged notes acquire the defaults
 on their next authorized write, using their previous mtime as creation time.
+Agent guidance tells models to mark real handoffs explicitly as `kind: handoff`
+(and reports as `kind: report`); the default scratch/open note has a seven-day
+modification-age window. Status defaults to open independently of kind.
 Malformed supplied frontmatter is a visible
 validation error, not silently replaced. Leaving the tree or writing session
 `work://plans/`, memory, source, or attachments does not add note metadata.
@@ -80,10 +85,13 @@ must agree; never decorate a note after committing it. No permission exception,
 new tool or model-side bookkeeping sequence is introduced.
 
 External writers can bypass this boundary. **A Markdown file without valid
-metadata is an unmanaged open handoff:** it uses the 14-day rule, appears as
+metadata is unmanaged:** it uses the 14-day rule, appears as
 `unmanaged` in discovery, and produces a bounded format diagnostic. It is not
 blocked forever. This is a rule for current external writes as well as old files,
-not a second legacy-format reader or a compatibility shim.
+not a second legacy-format reader or a compatibility shim. Headerless notes may
+be user-authored or come from another client, which is why they receive the
+longer window until their next tool write. Explicit legacy conversion remains
+handoff/open with owner legacy; it does not use the tool-write scratch default.
 
 ### Generated discovery
 

@@ -1049,7 +1049,11 @@
             (dolist (guidance '("main agent, subagents, and later sessions in the same workspace"
                                 "mevedel-created worktree sessions"
                                 "not automatically added to conversations"
-                                "give the receiving agent the note's address"))
+                                "give the receiving agent the note's address"
+                                "defaulting to `scratch/open`"
+                                "real handoffs as `kind: handoff`"
+                                "reports as `kind: report`"
+                                "finished notes as `status: done`"))
               (should (string-search guidance prompt))))
           (let ((prompt (mevedel-system-build-prompt 'main :retained t
                                                     :workspace workspace :session session)))
@@ -1071,7 +1075,11 @@
                 (dolist (guidance '("main agent, subagents, and later sessions in the same workspace"
                                     "mevedel-created worktree sessions"
                                     "not automatically added to conversations"
-                                    "give the receiving agent the note's address"))
+                                    "give the receiving agent the note's address"
+                                    "defaulting to `scratch/open`"
+                                    "real handoffs as `kind: handoff`"
+                                    "reports as `kind: report`"
+                                    "finished notes as `status: done`"))
                   (should (string-search guidance context))))
               (if (equal name "worker")
                   (should (string-search "Persistent memory" prompt))

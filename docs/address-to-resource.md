@@ -221,6 +221,16 @@ Shared note contents are not automatically added to every conversation. Models
 discover and read them with Read, Glob, and Grep; an agent handing off work
 provides the note's address to the receiving agent.
 
+Shared Markdown notes (`.md`, case-insensitive) receive lifecycle frontmatter
+through ApplyPatch before preview and commit, including writes through contained
+physical paths and moves into the tree. The default is `scratch/open`; explicitly
+label real handoffs `kind: handoff`, reports `kind: report`, and completed notes
+`status: done`. The write path fills owner attribution and UTC creation time,
+preserving valid metadata on edits. Existing unmanaged notes use their previous
+mtime as creation time on first tool write. Malformed supplied metadata fails
+visibly. Other working scopes and non-Markdown attachments are not decorated.
+See the [note-authoring contract](memory.md#shared-working-note-lifecycle).
+
 Memory consolidation reviews quiet shared files automatically, extracts their
 lasting knowledge and then deletes, keeps or condenses each one, preferring
 deletion; quiet unreferenced attachments and empty folders are removed too.
