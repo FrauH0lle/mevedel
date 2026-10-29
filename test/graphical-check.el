@@ -174,6 +174,7 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
   (require 'helpers)
   (require 'mevedel-execution)
   (require 'mevedel-pending-inputs)
+  (require 'mevedel-tool-render-data)
   (require 'mevedel-view)
   (require 'mevedel-view-agent)
   (require 'mevedel-view-render)
@@ -187,6 +188,13 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
      data-buf
      "# Graphical view fixture\n\nA **bold response**, *emphasis*, and `inline code`.\n\n| Check | Result |\n|---|---|\n| Markdown | Fontified |\n| Frame | Exported |\n\n"
      'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-tool-render-data-format
+      (list :kind 'request-summary :elapsed-seconds 157
+            :started-at (float-time (encode-time 43 29 14 29 10 2026))
+            :finished-at (float-time (encode-time 20 32 14 29 10 2026))))
+     'ignore)
     (switch-to-buffer view-buf)
     ;; Font Lock refuses internal buffers whose names begin with a space.
     (rename-buffer "*mevedel graphical fixture*" t)
@@ -269,6 +277,10 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
       (unless (equal "> active draft\nsecond line" (mevedel-view--input-text))
         (error "Fixture redraw changed the composer"))
       (goto-char (point-min))
+      (search-forward "── Worked for 2m 37s · Thu 29 Oct 14:32 ")
+      (unless (get-text-property (- (point) 2) 'help-echo)
+        (error "Fixture timestamp lost its timing tooltip"))
+      (goto-char (point-min))
       (set-window-start nil (point-min))
       (message nil)
       (redisplay t)
@@ -284,7 +296,19 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
         (let ((coding-system-for-write 'no-conversion))
           (with-temp-file (file-name-concat output (format "view.%s" type))
             (set-buffer-multibyte nil)
-            (insert (x-export-frames nil type))))))))
+            (insert (x-export-frames nil type)))))
+      (let ((width (frame-width)))
+        (unwind-protect
+            (progn
+              (set-frame-width nil 60)
+              (redisplay t)
+              (mevedel-view-table-rerender (selected-window))
+              (redisplay t)
+              (let ((coding-system-for-write 'no-conversion))
+                (with-temp-file (file-name-concat output "view-narrow.png")
+                  (set-buffer-multibyte nil)
+                  (insert (x-export-frames nil 'png)))))
+          (set-frame-width nil width))))))
 
 (defun mevedel-graphical-check--child (output)
   "Run the graphical checks, save diagnostics in OUTPUT, and always exit."

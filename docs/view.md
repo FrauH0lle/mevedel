@@ -804,7 +804,7 @@ names, and the row shows that body under a header naming the dependencies.
 ### Turn and activity rules
 
 An assistant turn closes with one rule. Once the request summary is known the
-rule carries it, as in `── Worked for 2m 37s ─────`: the label uses
+rule carries it, as in `── Worked for 2m 37s · Thu 29 Oct 14:32 ─────`: the label uses
 `mevedel-view-separator`, and a strike-through on its extended newline
 (`mevedel-view-request-summary-rule`) continues it to the window edge, so split
 and narrow windows need no width calculation. One blank row separates it from
@@ -814,6 +814,16 @@ that empty row leaves the same space above the next heading. A user turn that
 renders nothing visible, such as a harness-started background-event wake,
 contributes no rows, so the space after a closing rule does not depend on
 which kind of turn follows.
+
+The timestamp is the actual finish time in the host's local time zone, using
+English weekday/month abbreviations and a 24-hour clock. Hovering it shows the
+full start and finish dates, year, seconds, UTC offsets, and active-work
+duration. `Worked for` excludes blocking interaction pauses, so it is not
+necessarily the wall-clock difference between those timestamps. The hidden
+request summary saves numeric Unix `:started-at` and `:finished-at` values
+alongside `:elapsed-seconds`; repeated settlement, rerendering, and restoration
+preserve the settled values. Summaries without recorded timestamps show only
+the duration, without inventing dates. Running turns and headings stay untimed.
 
 Inside a turn, activity hangs below the prose that announced it, separated by a
 blank line only. Prose that follows activity starts with a quiet rule: two

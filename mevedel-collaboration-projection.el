@@ -88,6 +88,12 @@
                   "mevedel-view-render" (open-tag attribute))
 (declare-function mevedel-view--rendering-status
                   "mevedel-view-render" (rendering &optional render-data))
+(declare-function mevedel-view--request-summary-details
+                  "mevedel-view-render" (render-data))
+(declare-function mevedel-view--request-summary-line
+                  "mevedel-view-render" (render-data))
+(declare-function mevedel-view--request-summary-render-data-from-text
+                  "mevedel-view-render" (text))
 (declare-function mevedel-view--sandbox-summary-line
                   "mevedel-view-render" (summary))
 (declare-function mevedel-view--tool-call-parse
@@ -241,7 +247,7 @@ An artifact record's `:artifact-path' stays host-side: guests address
 an artifact only by its record id, never by a filesystem path."
   (let (out)
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
-                       :truncated :guest :directive :item :detail :diff
+                       :truncated :guest :directive :item :detail :details :diff
                        :artifact :title :store :size :missing :presentation :shared
                        :execution :description :number :firstSegment :lastSegment
                        :sender :mailType :outcome :activity :toolUseId))
@@ -1076,6 +1082,57 @@ mailboxes are not guest completion records."
                       :exitCode (unless (memq termination '(signaled interrupted))
                                   (plist-get facts :exit-code))))))
 
+(defun mevedel-collaboration--request-summary (text)
+  "Return the projected (FAILURE LINE DETAILS) of request-summary TEXT, or nil.
+FAILURE is the failed-request notice, LINE the host's closing line without
+text properties, and DETAILS its timing tooltip; each may be nil.  Nothing
+else from the saved summary, such as raw error data, is carried."
+  (when-let* ((summary (mevedel-view--request-summary-render-data-from-text text))
+              (value (list (and (eq (plist-get summary :outcome) 'error)
+                                (concat "Assistant request failed. "
+                                        (or (plist-get summary :message)
+                                            "Retry from the host or send a follow-up.")))
+                           (when-let* ((line (mevedel-view--request-summary-line
+                                              summary)))
+                             (substring-no-properties line))
+                           (mevedel-view--request-summary-details summary)))
+              ((or (car value) (cadr value))))
+    value))
+
+(defun mevedel-collaboration--request-summary-key (value)
+  "Return the occurrence key of projected request-summary VALUE.
+A failure keeps its failure-text key so its record identity does not depend
+on the timing footer that follows it."
+  (cond ((car value) (list "failure" (car value)))
+        (value (list "request-summary" (cdr value)))))
+
+(defun mevedel-collaboration--request-summary-records (value occurrence)
+  "Return the failure and closing-line records for VALUE at OCCURRENCE.
+The closing line of a failure derives its identity from the failure record,
+which is already unique, so it stays stable with it."
+  (pcase-let* ((`(,failure ,line ,details) value)
+               (failed (and failure
+                            (mevedel-collaboration--record
+                             (mevedel-collaboration--stable-record-id
+                              "failure" failure occurrence)
+                             "assistant" :revision 0 :status "failed"
+                             :text (mevedel-collaboration--truncate-bytes
+                                    failure 2000)))))
+    (delq nil
+          (list failed
+                (and line
+                     (apply #'mevedel-collaboration--record
+                            (if failed
+                                (mevedel-collaboration--stable-record-id
+                                 "request-summary"
+                                 (concat (plist-get failed :id) "\0" line))
+                              (mevedel-collaboration--stable-record-id
+                               "request-summary"
+                               (concat line "\0" (or details ""))
+                               occurrence))
+                            "request-summary" :revision 0 :text line
+                            (and details (list :details details))))))))
+
 (defun mevedel-collaboration--canonical-records
     (data-buffer &optional completion-buffer completions cache own-path)
   "Return allowlisted records reconstructed from DATA-BUFFER.
@@ -1257,24 +1314,14 @@ owner; omitted means the root transcript."
                        (cdr (project-segment
                              segment nil
                              (lambda ()
-                               (let ((summary (cdr (mevedel-tool-render-data-extract
-                                                    (buffer-substring start end)))))
-                                 (cons (and (eq (plist-get summary :kind) 'request-summary)
-                                            (eq (plist-get summary :outcome) 'error)
-                                            (concat "Assistant request failed. "
-                                                    (or (plist-get summary :message)
-                                                        "Retry from the host or send a follow-up.")))
-                                       (cons start end))))
-                             (lambda (text) (and text (list "failure" text)))
-                             (lambda (text occurrence)
-                               (when text
-                                 (list (mevedel-collaboration--record
-                                        (mevedel-collaboration--stable-record-id
-                                         "failure" text occurrence)
-                                        "assistant" :revision 0 :status "failed"
-                                        :text (mevedel-collaboration--truncate-bytes
-                                               text 2000))))))))
-                (push (copy-sequence record) records)))
+                               (cons (mevedel-collaboration--request-summary
+                                      (buffer-substring start end))
+                                     (cons start end)))
+                             #'mevedel-collaboration--request-summary-key
+                             #'mevedel-collaboration--request-summary-records)))
+                (push (mevedel-collaboration--scoped
+                       (copy-sequence record) scope)
+                      records)))
              ((eq (car segment) 'mailbox)
               (when-let* ((completion
                            (car (project-segment

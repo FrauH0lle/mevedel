@@ -255,6 +255,7 @@
 
   function roleOf(record) {
     if (record.kind === 'user') return record.guest ? 'guest' : 'you';
+    if (record.kind === 'request-summary') return 'summary';
     return 'ai';
   }
 
@@ -410,6 +411,33 @@
     if (presentation.truncated) {
       details.append(el('p', 'tool-truncated', 'Tool display truncated: additional content omitted (size limit).'));
     }
+    return details;
+  }
+
+  // A request's closing rule. The host formats its label (including the
+  // leading rule) and multiline details; timed summaries disclose those
+  // details on hover, keyboard focus and tap through a native <details>.
+  function renderRequestSummary(record, disclosures) {
+    const text = String(record.text || '');
+    if (typeof record.details !== 'string' || !record.details) {
+      return el('div', 'request-summary', text);
+    }
+    const details = el('details', 'request-summary');
+    disclosures.set('request-summary', details);
+    const summary = el('summary', '', text);
+    summary.setAttribute('title', record.details);
+    // Keyboard focus reveals the details, which a title alone does not;
+    // leaving closes only what focus opened. Pointer focus is not
+    // focus-visible, so a click or tap keeps its single native toggle.
+    let revealed = false;
+    summary.addEventListener('focus', () => {
+      if (!details.open && summary.matches(':focus-visible')) details.open = revealed = true;
+    });
+    summary.addEventListener('click', () => { revealed = false; });
+    summary.addEventListener('blur', () => {
+      if (revealed) details.open = revealed = false;
+    });
+    details.append(summary, el('pre', 'request-summary-details', record.details));
     return details;
   }
 
@@ -585,6 +613,23 @@
     turn.dataset.recordId = record.id;
     if (record.toolUseId) turn.dataset.toolUseId = record.toolUseId;
     turn.dataset.role = roleOf(record);
+    turn.disclosures = new Map();
+    // Rebuilding a record owns disclosure continuity. Callers supply the
+    // prior record element, without coordinating a separate save/restore pass.
+    const restore = () => {
+      for (const [key, old] of (previous && previous.disclosures) || []) {
+        const node = turn.disclosures.get(key);
+        if (node) node.open = !!old.open;
+      }
+      return turn;
+    };
+    if (record.kind === 'request-summary') {
+      // Quiet and ungrouped: no rail glyph, speaker, scope chip or activity.
+      const content = el('div', 'content');
+      content.append(renderRequestSummary(record, turn.disclosures));
+      turn.append(content);
+      return restore();
+    }
     turn.activity = record.activity;
     const rail = el('div', 'rail');
     const glyphText = roleOf(record) === 'ai' ? 'm'
@@ -593,17 +638,10 @@
     turn.append(rail);
     const content = el('div', 'content');
     content.append(whoLine(record, scopeChip));
-    turn.disclosures = new Map();
     const rendered = renderContent(record, onArtifactOpen, turn.disclosures, onExecutionOpen, onAgentOpen, href);
     content.append(rendered);
     turn.append(content);
-    // Rebuilding a record owns disclosure continuity. Callers supply the
-    // prior record element, without coordinating a separate save/restore pass.
-    for (const [key, old] of (previous && previous.disclosures) || []) {
-      const node = turn.disclosures.get(key);
-      if (node) node.open = !!old.open;
-    }
-    return turn;
+    return restore();
   }
 
   function revealTool(transcript, id) {

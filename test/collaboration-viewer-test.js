@@ -824,6 +824,62 @@ function testCompletionRendering() {
   assert.equal(openedArtifact, artifact);
 }
 
+// A request's closing summary is a quiet rule: no speaker, rail glyph, scope
+// chip or tool card. Its host-formatted details disclose natively and keep
+// their open state across rebuilds; it never joins an activity group.
+function testRequestSummaryRendering() {
+  const window = {};
+  const document = {createElement: tag => new Element(tag)};
+  const context = {window, document};
+  installMarkdown(context, Element);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), context);
+  const renderer = window.mevedelTranscriptRenderer;
+  const label = '── Worked for 2m 37s · Thu 29 Oct 14:32 ';
+  const details = 'Started: Thu 29 Oct 2026 14:29:43 +0000\nFinished: Thu 29 Oct 2026 14:32:20 +0000\nActive work: 2m 37s';
+  const record = {id: 'summary-1', kind: 'request-summary', text: label, details,
+    directive: 'dir-1', activity: {id: 'tool-1', summary: 'Read 1 file', status: 'completed'}};
+  const chips = [];
+  const turn = renderer.renderRecord(record, scope => { chips.push(scope); return {label: 'Dir'}; });
+  assert.equal(turn.dataset.role, 'summary');
+  assert.equal(turn.dataset.recordId, 'summary-1');
+  assert.equal(turn.activity, undefined, 'a closing summary never joins an activity group');
+  assert.equal(findByClass(turn, 'glyph'), null);
+  assert.equal(findByClass(turn, 'who'), null);
+  assert.equal(findByClass(turn, 'tool'), null);
+  assert.deepEqual(chips, []);
+  const disclosure = findByClass(turn, 'request-summary');
+  assert.equal(disclosure.tagName, 'details');
+  assert.equal(disclosure.open, false);
+  const summary = disclosure.children[0];
+  assert.equal(summary.tagName, 'summary');
+  assert.equal(textOf(summary), label);
+  assert.equal(summary.attributes.title, details, 'hover shows the full details');
+  assert.equal(textOf(findByClass(disclosure, 'request-summary-details')), details);
+
+  disclosure.open = true;
+  const rebuilt = renderer.renderRecord({...record}, null, null, turn);
+  assert.equal(findByClass(rebuilt, 'request-summary').open, true,
+               'an opened summary stays open across a rebuild');
+
+  const untimed = renderer.renderRecord({id: 'summary-2', kind: 'request-summary',
+    text: '── Worked for 12s '});
+  const quiet = findByClass(untimed, 'request-summary');
+  assert.equal(quiet.tagName, 'div', 'no disclosure without details');
+  assert.equal(textOf(quiet), '── Worked for 12s ');
+  assert.equal(quiet.attributes.title, undefined);
+  assert.equal(untimed.disclosures.size, 0);
+
+  // The next assistant turn starts afresh rather than continuing the rule.
+  const transcript = new Element('main');
+  transcript.append(
+    renderer.renderRecord({id: 'a1', kind: 'assistant', text: 'Done.'}),
+    untimed,
+    renderer.renderRecord({id: 'a2', kind: 'assistant', text: 'Next.'}));
+  renderer.markContinuations(transcript);
+  assert.deepEqual(transcript.children.map(node => node.className),
+                   ['turn ai', 'turn summary', 'turn ai']);
+}
+
 function testComposerShortcut() {
   for (const [platform, hint] of [['Linux', 'Ctrl+Enter'], ['MacIntel', '⌘+Enter']]) {
     const window = {};
@@ -868,6 +924,7 @@ async function main() {
   testComposerShortcut();
   await testWaitFor();
   testCompletionRendering();
+  testRequestSummaryRendering();
   await runNotificationTests();
   await testItemConversations();
   await testEditingAvailability();

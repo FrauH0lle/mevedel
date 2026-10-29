@@ -15,7 +15,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   - Also drag-n-drop of files for upload
 - Make system prompt/role a bit more general so mevedel can also be used for writing for example
 - Opening Artifact via lobby -> Artifacts did not work, required to first open it via a session which has the Artifact attached.
-- Add timestamps with time+date
 - This here about memory:
   ```
   **Yes—as sandbox protection scaffolding, not memory storage.**

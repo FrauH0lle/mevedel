@@ -738,7 +738,9 @@
              '(:kind request-summary :elapsed-seconds 1 :outcome error
                :message "Provider unavailable" :error-data (:secret "not projected"))))
     (let ((records (mevedel-collaboration--canonical-records (current-buffer))))
-      (should (= (length records) 1))
+      ;; The failure notice is followed by the turn's closing line.
+      (should (equal (mapcar (lambda (record) (plist-get record :kind)) records)
+                     '("assistant" "request-summary")))
       (should (equal (plist-get (car records) :status) "failed"))
       (should (equal (plist-get (car records) :text)
                      "Assistant request failed. Provider unavailable"))

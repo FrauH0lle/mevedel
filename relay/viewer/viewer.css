@@ -359,6 +359,31 @@ code, pre { font-family: var(--font-mono); }
 }
 .tool > summary .st.completed { color: var(--ok); }
 .execution-breadcrumb { display: flex; align-items: baseline; flex-wrap: wrap; gap: .3rem; font-size: .9rem; color: var(--muted); }
+/* A request's closing rule: the host label, then a line to the edge. */
+.turn.summary > .content { grid-column: 2; }
+.request-summary { font-size: .8125rem; color: var(--muted); }
+div.request-summary, .request-summary > summary {
+  display: flex;
+  align-items: center;
+  gap: .35em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+div.request-summary::after, .request-summary > summary::after {
+  content: "";
+  flex: 1 0 1.5rem;
+  border-top: 1px solid var(--line);
+}
+.request-summary > summary { list-style: none; cursor: pointer; }
+.request-summary > summary::-webkit-details-marker { display: none; }
+.request-summary > summary:hover { color: var(--ink); }
+.request-summary > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.request-summary-details {
+  margin: .35rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: .8rem/1.5 var(--font-mono);
+}
 .execution-status.failed { color: var(--failed); }
 .execution-result-link { border: 0; padding: 0; background: none; color: var(--accent); cursor: pointer; text-decoration: underline; font: inherit; }
 .execution-result-dialog { width: min(850px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; background: var(--surface); color: var(--ink); border: 1px solid var(--rule-strong); border-radius: 6px; }

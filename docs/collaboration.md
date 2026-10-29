@@ -932,6 +932,17 @@ brings its heading back into view and returns keyboard focus there.
 Archived and agent transcripts use the live conversation's compact grouping:
 consecutive assistant text and tool calls share one visible speaker label.
 
+Completed turns close with the same quiet summary as the native view, such as
+`── Worked for 2m 37s · Thu 29 Oct 14:32 ─────`. The host projects a scoped
+`request-summary` record containing only its stable identity, formatted label,
+and optional full timing details. Browser locale and time-zone settings do not
+change the host-formatted times. Hovering shows the full start/finish dates,
+year, seconds, UTC offsets, and active-work duration. Keyboard focus reveals
+those details in place; activation or a tap/click toggles them explicitly.
+The closing rule stays outside folded activity groups, has no speaker heading,
+and preserves its disclosure state
+across record rebuilds. Saved summaries without timestamps remain duration-only.
+
 The **Assistant working…** indicator sits above the message composer. The
 host publishes status immediately after request admission and teardown,
 including interruption and failure, rather than inferring activity from the

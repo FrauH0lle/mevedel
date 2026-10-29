@@ -3711,10 +3711,12 @@ Cached globally; see `mevedel-view--scaffolding-only-cache'."
      (buffer-substring seg-start seg-end))))
 
 (defun mevedel-view--delete-request-summaries (data-buf start end)
-  "Delete request-summary render-data blocks in DATA-BUF START..END."
+  "Delete request-summary render-data blocks in DATA-BUF START..END.
+Return the last deleted summary, so settlement can preserve its timing."
   (with-current-buffer data-buf
     (save-excursion
       (let ((case-fold-search nil)
+            summary
             (limit (copy-marker (or end (point-max)) t)))
         (goto-char (or start (point-min)))
         (unwind-protect
@@ -3727,16 +3729,18 @@ Cached globally; see `mevedel-view--scaffolding-only-cache'."
                            (not (plist-member (caddr block) :mevedel-tool-use-id))
                            (mevedel-tool-render-data-trusted-range-p
                             open (cadr block)))
+                  (setq summary (caddr block))
                   (delete-region (car block) (cadr block))
                   (goto-char (car block)))))
-          (set-marker limit nil))))))
+          (set-marker limit nil))
+        summary))))
 
-(defun mevedel-view--request-summary-elapsed-seconds (data-buf)
-  "Return elapsed seconds for DATA-BUF's current request, or nil."
+(defun mevedel-view--request-summary-elapsed-seconds (data-buf &optional now)
+  "Return active seconds for DATA-BUF's current request at NOW, or nil."
   (when-let* (((buffer-live-p data-buf))
               (request
                (buffer-local-value 'mevedel--current-request data-buf)))
-    (mevedel-request-active-elapsed-seconds request)))
+    (mevedel-request-active-elapsed-seconds request now)))
 
 (defun mevedel-view--append-request-summary
     (data-buf search-start &optional extra)
@@ -3744,21 +3748,27 @@ Cached globally; see `mevedel-view--scaffolding-only-cache'."
 SEARCH-START bounds duplicate detection to the current response tail.
 EXTRA is additional request metadata to persist.
 Return the new data-buffer end position."
-  (when-let* ((elapsed (mevedel-view--request-summary-elapsed-seconds
-                        data-buf)))
+  (when-let* ((now (current-time))
+              (elapsed (mevedel-view--request-summary-elapsed-seconds
+                        data-buf now)))
     (with-current-buffer data-buf
-      (let ((tail-start (or search-start (point-min))))
-        (mevedel-view--delete-request-summaries
-         data-buf tail-start (point-max))
+      (let* ((tail-start (or search-start (point-min)))
+             (started (float-time
+                       (mevedel-request-started-at mevedel--current-request)))
+             (previous (mevedel-view--delete-request-summaries
+                        data-buf tail-start (point-max)))
+             (summary
+              (if (equal started (plist-get previous :started-at))
+                  (copy-sequence previous)
+                (list :kind 'request-summary :elapsed-seconds elapsed
+                      :started-at started :finished-at (float-time now)))))
+        (while extra
+          (setq summary (plist-put summary (pop extra) (pop extra))))
         (save-excursion
           (goto-char (point-max))
           (unless (bolp) (insert "\n"))
           (insert
-           (mevedel-tool-render-data-format
-            (append
-             (list :kind 'request-summary
-                   :elapsed-seconds elapsed)
-             extra))))))
+           (mevedel-tool-render-data-format summary)))))
     (with-current-buffer data-buf
       (point-max))))
 
@@ -6240,9 +6250,30 @@ Merge fragments of one reasoning block into an expanded disclosure."
 
 (defun mevedel-view--request-summary-line (render-data)
   "Return the visible request summary line for RENDER-DATA."
-  (let ((elapsed (plist-get render-data :elapsed-seconds)))
+  (let ((elapsed (plist-get render-data :elapsed-seconds))
+        (finished (plist-get render-data :finished-at))
+        (system-time-locale "C"))
     (when (numberp elapsed)
-      (format "── Worked for %s " (mevedel--duration-label elapsed)))))
+      (concat
+       (format "── Worked for %s" (mevedel--duration-label elapsed))
+       (when (numberp finished)
+         (concat " · "
+                 (propertize
+                  (format-time-string "%a %d %b %H:%M" finished)
+                  'help-echo (mevedel-view--request-summary-details render-data))))
+       " "))))
+
+(defun mevedel-view--request-summary-details (render-data)
+  "Return full timing details for RENDER-DATA, or nil without timestamps."
+  (let ((started (plist-get render-data :started-at))
+        (finished (plist-get render-data :finished-at))
+        (elapsed (plist-get render-data :elapsed-seconds))
+        (system-time-locale "C"))
+    (when (and (numberp started) (numberp finished) (numberp elapsed))
+      (format "Started: %s\nFinished: %s\nActive work: %s"
+              (format-time-string "%a %d %b %Y %H:%M:%S %z" started)
+              (format-time-string "%a %d %b %Y %H:%M:%S %z" finished)
+              (mevedel--duration-label elapsed)))))
 
 (defun mevedel-view--render-request-summary-segment (seg data-buf)
   "Render request-summary SEG from DATA-BUF as the assistant turn's closing rule.
