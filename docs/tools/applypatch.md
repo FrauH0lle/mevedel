@@ -96,6 +96,10 @@ contents and correct the cause. Do not replay a user-rejected proposal unless
 their feedback asks for revision. A proposal is not evidence of application;
 use the tool's settled result and inspect the resulting change when needed.
 
+File transactions validate and synchronize the visiting base buffer, even when
+file lookup finds an indirect child. Selecting an indirect editing buffer does
+not bypass unsaved-edit or read-only protection on its base.
+
 Mismatch diagnostics identify the operation and hunk. A **patch line** counts
 from `*** Begin Patch` and identifies the hunk's `@@` marker, or its first
 content line when there is no marker; it is not a file line. A **file line**

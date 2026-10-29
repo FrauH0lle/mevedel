@@ -1092,6 +1092,12 @@ MUTATE, when supplied, performs each before/after snapshot replacement."
             (file-name-directory (directory-file-name directory))))
     missing))
 
+(defun mevedel-tool-patch--visiting-base-buffer (path)
+  "Return PATH's visiting buffer normalized to its base buffer.
+Preserve `find-buffer-visiting' file identity and alias matching."
+  (when-let* ((buffer (find-buffer-visiting path)))
+    (or (buffer-base-buffer buffer) buffer)))
+
 (defun mevedel-tool-patch-commit (changes &optional currentp mutate)
   "Commit CHANGES as one filesystem and visited-buffer transaction.
 Each change may include :before, a snapshot whose bytes/absence/mode must still
@@ -1113,7 +1119,8 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                             (cl-every #'funcall checks))))))
   (dolist (change changes)
     (when-let* (((eq (plist-get change :action) 'write))
-                (buffer (find-buffer-visiting (plist-get change :path)))
+                (buffer (mevedel-tool-patch--visiting-base-buffer
+                         (plist-get change :path)))
                 ((buffer-local-value 'buffer-read-only buffer)))
       (error "Buffer is read-only: %s" (buffer-name buffer))))
   (cl-labels
@@ -1216,7 +1223,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
             (delq nil
                   (mapcar
                    (lambda (change)
-                     (when-let* ((buffer (find-buffer-visiting
+                     (when-let* ((buffer (mevedel-tool-patch--visiting-base-buffer
                                           (plist-get change :path))))
                        (append (buffer-snapshot buffer)
                                (list :path (plist-get change :path)
@@ -1261,7 +1268,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                  (delete-file (plist-get change :path))))))
             (dolist (change changes)
               (mevedel-tool-patch--assert-current currentp)
-              (when-let* ((buffer (find-buffer-visiting
+              (when-let* ((buffer (mevedel-tool-patch--visiting-base-buffer
                                    (plist-get change :path))))
                 (with-current-buffer buffer
                   (if (eq (plist-get change :action) 'delete)
@@ -1332,7 +1339,8 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
 (defun mevedel-tool-patch--assert-buffers-unmodified (changes)
   "Signal when a visited file in CHANGES has unsaved edits."
   (dolist (change changes)
-    (when-let* ((buffer (find-buffer-visiting (plist-get change :path)))
+    (when-let* ((buffer (mevedel-tool-patch--visiting-base-buffer
+                        (plist-get change :path)))
                 ((buffer-modified-p buffer)))
       (error "File has unsaved buffer changes: %s"
              (plist-get change :path)))))
