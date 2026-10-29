@@ -176,7 +176,8 @@ CURRENTP without a separate check."
   "Run a bounded read-only review of captured SCOPE and candidate ENTRIES.
 CALLBACK receives :outcome success/error/aborted and the admitted :entries,
 :scope, :references, model :policy, and usage.  Success also carries the exact
-:reply, parsed :proposals, and :no-action.  It never writes coverage
+:reply, parsed :proposals, :skipped-notes diagnostics, and :no-action.
+It never writes coverage
 or proposals.
 
 CURRENTP checks the consumer's current ownership generation.  TELEMETRY-CONTEXT
@@ -200,8 +201,9 @@ its exact provider payload and per-step token usage are not exposed.
 Complete shared working notes captured in SCOPE are admitted like digests:
 one of each kind is reserved when both fit, then the remaining items oldest
 first while the request fits.  The callback reports the admitted note IDs as
-:notes and the captured notes left for later as :omitted-notes; the reply must
-dispose of every admitted note."
+:notes and the captured notes left for later as :omitted-notes.  Missing or
+invalid note dispositions yield no proposal and remain in :skipped-notes;
+malformed memory changes and unrecoverable reply structure reject the reply."
   (let* ((buffer (generate-new-buffer " *mevedel-memory-review*"))
          (caller (current-buffer))
          (stream gptel-stream)

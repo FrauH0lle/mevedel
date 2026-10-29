@@ -257,6 +257,15 @@ cancellation releases the fence and leaves the machine retryable.
   Auto completion also records `updated-file-count`, the distinct paths newly
   confirmed written by that run, without exposing those paths or claiming that
   the resulting memory is better.
+  `:note-format-failure-count` counts admitted notes whose missing, invalid or
+  duplicate dispositions were recovered as no-ops, plus unadmitted note blocks
+  skipped in that pass. A completed
+  pass with a nonzero count is not a clean-format review; these failures must be
+  counted alongside whole-review rejections when evaluating reply quality.
+  Only the scalar count is emitted, never note IDs or parser diagnostic text.
+  `:guard-converted-keep-count` separately counts accepted dispositions changed
+  to keep by an evidence guard; `:model-keep-count` counts model-selected keeps.
+  These are proposal attributions, not proof of application or useful service.
   Phase durations accumulate in memory and join only that existing terminal
   event; phase transitions append no additional workspace events.
   `:duration-ms` starts after claim acquisition. `:queue-duration-ms`, when

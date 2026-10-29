@@ -134,7 +134,9 @@
                                             (lambda (doc)
                                               (format "```proposal\nnote: %S\ndisposition: %S\nreason: \"Reviewed\"\n%s---\n%s```\n"
                                                       (plist-get doc :id) disposition
-                                                      (if (equal disposition "delete") "open-items: []\nresolved-by: []\n" "")
+                                                      (cond ((equal disposition "delete") "open-items: []\nresolved-by: []\n")
+                                                            ((equal disposition "keep") "open-items: [\"Measure retry-deadline behavior during clock rollback\"]\n")
+                                                            (t ""))
                                                       (if (equal disposition "condense") "Open handoff.\n" ""))) documents "")))
                                  "## No action\n- No durable changes."))
                   (request (car pending)) (callback (cdr pending)))

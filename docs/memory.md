@@ -1125,7 +1125,17 @@ alone is not a read. Quote matching ignores Read line numbers, Markdown
 emphasis and code marks, whitespace and citation text outside quotation marks.
 These checks are deterministic; whether a reviewer lists every open item, or
 quotes text that really resolves it rather than merely discussing the topic,
-is model quality. Real held and applied deletions of 2026-10-28 that dismissed
+is model quality. A delete also supplies positional `resolution-anchors`: one
+short key-operation or outcome phrase per open item, occurring as whole words
+in that item and its authenticated quote (case and whitespace are normalized).
+Missing or mismatching anchors turn the delete into keep, not a rejected review.
+An explicit nonempty `unresolved-items` value prevents deletion too. When a
+delete lists no open items but the source contains explicit handoff markers
+(next steps, remaining, pending, unverified, TODO, unchecked boxes or owner work),
+acceptance keeps it for inventory instead. These conservative lexical guards
+can retain completed handoff history; the model still chooses the anchor and
+whether the quote actually resolves the whole item.
+Real held and applied deletions of 2026-10-28 that dismissed
 unresolved findings without any tool call motivated this rule; a later
 evaluation in which a reviewer cited a file it had read that did not record the
 items motivated the quotes. Extraction is ordinary memory and
@@ -1134,6 +1144,56 @@ those extractions as the disposition's `:requires`. Delete or condense applies
 only after every required extraction is applied; an undecided requirement
 waits without a decision, and any other requirement outcome makes the
 disposition stale, leaving the note for a later review.
+
+A model-selected keep must name at least one still-open item in `open-items`;
+its reason states which resolution evidence remains missing after investigation.
+An empty or missing array invalidates that note's disposition rather than treating
+generic future usefulness as continuing use. Completed items with available resolution evidence
+should not be kept merely because the reviewer has not checked it yet.
+
+Missing or invalid note dispositions, including unknown note fields, leave the
+affected notes unchanged without a proposal or decision. Duplicate claims for
+one admitted note quarantine that note; valid unrelated proposals survive.
+The private no-action text records bounded diagnostics, and the callback's
+`skipped-notes` lists the affected admitted IDs. Fence lines accept trailing
+horizontal whitespace. An empty keep/delete block may end implicitly at the next
+proposal opener or No action section. An unterminated condense is a note no-op;
+its ambiguous tail is quarantined, not reinterpreted as more proposals. A closed
+condense may contain header-like body lines without creating another action.
+A same-width proposal opener inside its body is ambiguous and quarantines the
+tail too; shorter nested Markdown fences remain literal body text.
+Malformed memory changes and ambiguous target ownership still reject the reply,
+as do required memory sections missing outside a quarantined tail.
+Each skipped note counts as a format failure, not a successful keep or service:
+the pass reports it in `note-format-failure-count` (which also counts unadmitted
+note blocks), subtracts it from
+`notes-reviewed` and includes it in `notes-remaining`. No decision means no
+seven-day suppression. Existing authenticated captured-pass history places
+unchanged versions last when their latest capture had no note proposal, keeping
+oldest-first order within each priority group. Newly offered or edited notes
+therefore do not sit behind a full batch of repeated no-ops. This advisory rank
+neither suppresses nor authorizes changes and requires no new persistent store.
+The zero-applied-progress guard still stops automatic catch-up on an all-no-op
+batch instead of inventing a decision.
+
+Delete and condensation acceptance also compare the captured preimage's numeric measurement
+paragraphs with the replacement. It conservatively protects whole paragraphs
+containing numeric program/read/sample counts, timings, sizes, percentages and
+similar units, not bare numbers stripped of their operations and conditions.
+Markdown and whitespace changes are ignored. A missing paragraph makes the
+disposition a keep unless an extraction citing the note preserves it, or a
+`resolved-by` entry contains that paragraph and its quote and paragraph both occur
+in workspace text actually read by the review. Extraction dependencies still
+apply. This is a conservative loss guard, not a general measurement parser or
+semantic proof that a quote resolves an item; unlabeled numbers and conditions
+outside the protected paragraphs still require reviewer judgement. Completed
+notes can still be deleted with their measurements accounted for by authenticated
+quotes or applied extractions, under the open-item resolution contract above.
+The guard deliberately prefers retention when a completed numeric paragraph has
+no authenticated resolution quote. This can also keep a large sequentially
+summarized note whose completed measurement history would exceed the final reply
+limit; the summary is not authority to erase the captured measurement preimage.
+Such conservative keeps are a quality cost, not useful-service credit.
 
 **Housekeeping.** Quiet attachments that no surviving text file references
 (conservatively by root-relative, note-relative, URL-encoded or address

@@ -344,6 +344,33 @@ ordinary extraction proposals citing it, and a disposal applies only after
 those extractions are applied. Quiet attachments no surviving note references
 and quiet empty folders receive structured decisions without inference. Files
 that memory or instructions cite are not removed silently. Accepted reviews
+require a model keep to identify nonempty open items and explain missing
+resolution evidence. Deletes and condensations that drop numeric measurement paragraphs from
+the captured preimage become keeps unless a citing extraction preserves them or
+authenticated read quotes contain and account for them. Matching ignores Markdown
+and whitespace, not conditions within the paragraphs; semantic resolution and
+conditions outside recognized paragraphs remain reviewer responsibilities.
+These checks address a replay that replaced concrete operation counts with
+"supplied instrumentation counts", alongside unjustified completed-case keeps;
+reversible undo alone did not prevent loss. Deletes bind each listed item to an
+authenticated quote by a shared key-operation anchor, and cannot acknowledge
+unresolved items. An empty inventory cannot bypass explicit source handoff
+markers. These checks deliberately trade some extra retention for a conservative
+loss boundary; semantic relevance and unlabelled work remain model quality.
+Recoverable invalid or missing note dispositions produce no decision for those
+notes, rather than discarding valid unrelated proposals. Fence lines tolerate
+trailing whitespace; empty keep/delete blocks may end at an unambiguous next
+opener or No action section. Unterminated condense bodies quarantine their tail
+as note no-ops, never granting authority to header-like body text. Same-width
+proposal openers inside a condense body are ambiguous and fail closed too.
+Their per-pass
+format failure count remains visible; ambiguous ownership, required memory
+sections missing outside that tail and invalid memory changes still reject the
+reply. No-op notes remain eligible and do not establish applied
+progress. Existing authenticated capture history places unchanged versions whose
+latest capture had no proposal after fresh offers, preserving oldest-first order
+within groups so a batch of repeated no-ops cannot starve a fresh note.
+Accepted reviews
 and decisions are the processing record. Note decisions reuse checked intents
 and reversal through a shared-notes target whose coordination stays outside
 the cleaned folder; the previous bytes are retained as content-addressed

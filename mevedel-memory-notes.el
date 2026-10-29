@@ -433,14 +433,33 @@ have not been published are included.  Unreadable accepted state signals."
           (push accepted bundles))))))
 
 (defun mevedel-memory-notes--history (workspace entries &optional paths)
-  "Return a table from shared relative path to retained disposition observations.
+  "Return shared-path observations from WORKSPACE's accepted ENTRIES.
 Each observation has :action, :hash (the reviewed version), :result (the
 condensed version), :status, :superseded, and :at, the decision or review
-time.  When PATHS is a hash table of current inventory paths, omit decisions
-for absent sources: they cannot affect this capture's suppression."
+time.  Capture observations instead have :capture (`proposal' or
+`captured-without-proposal'), :root, :path, :hash, :generation and :at.
+A captured note need not have been admitted to inference.  When PATHS is a
+hash table of current inventory paths, omit absent sources."
   (let ((table (make-hash-table :test #'equal))
         (passes (make-hash-table :test #'equal)))
     (dolist (accepted (mevedel-memory-notes-passes workspace entries) table)
+      (let* ((prepared (plist-get accepted :prepared))
+             (notes (mevedel-memory-notes-root (plist-get prepared :scope)))
+             (generation (plist-get (plist-get prepared :claim) :generation))
+             (at (float-time (date-to-time (plist-get (plist-get accepted :review) :created)))))
+        (dolist (note (plist-get (cdr notes) :notes))
+          (when (or (null paths) (gethash (car note) paths))
+            (let ((before (cdr (assoc (car note) (plist-get (cdr notes) :before))))
+                  (proposal (seq-find
+                             (lambda (proposal)
+                               (and (mevedel-memory-proposal-note-action-p (plist-get proposal :action))
+                                    (equal (plist-get proposal :root) (car notes))
+                                    (equal (plist-get proposal :file) (car note))))
+                             (plist-get accepted :proposals))))
+              (push (list :capture (if proposal 'proposal 'captured-without-proposal)
+                          :root (car notes) :path (plist-get before :path) :hash (plist-get before :hash)
+                          :generation generation :at at)
+                    (gethash (car note) table))))))
       (clrhash passes)
       (puthash (plist-get (plist-get accepted :prepared) :id) accepted passes)
       (dolist (proposal (plist-get accepted :proposals))
@@ -456,6 +475,21 @@ for absent sources: they cannot affect this capture's suppression."
                         :at (float-time (date-to-time (or (plist-get decision :created)
                                                           (plist-get (plist-get accepted :review) :created)))))
                   (gethash (plist-get proposal :file) table))))))))
+
+(defun mevedel-memory-notes--admission-rank (observations root path version)
+  "Return advisory rank for ROOT's PATH and VERSION from OBSERVATIONS.
+Only the latest accepted capture of this exact source version counts.
+Captured-without-proposal versions sort after other notes, but stay eligible."
+  (let (latest)
+    (dolist (observation observations)
+      (when (and (plist-get observation :capture)
+                 (equal root (plist-get observation :root))
+                 (equal path (plist-get observation :path))
+                 (equal version (plist-get observation :hash))
+                 (or (null latest)
+                     (> (plist-get observation :generation) (plist-get latest :generation))))
+        (setq latest observation)))
+    (if (eq (plist-get latest :capture) 'captured-without-proposal) 1 0)))
 
 (defun mevedel-memory-notes--suppressed (observations version now review-days)
   "Return why VERSION is not eligible given OBSERVATIONS at NOW, or nil.
@@ -494,7 +528,9 @@ lists memory and instruction texts; files they cite are never removed as
 housekeeping, and cited notes are flagged for the review.  IN-USE lists
 relative paths open sessions are using; like recent files, they wait.
 
-Complete UTF-8 notes are admitted oldest first.  An oversized note within
+Complete UTF-8 notes are admitted oldest first within advisory priority
+groups.  Versions last captured without a proposal follow other notes.
+An oversized note within
 the configured chunk-review bound is admitted alone.  Attachments are
 admitted only when quiet, unreferenced by any
 surviving text file, and the reference scan is complete.  No shared file is
@@ -503,6 +539,7 @@ changed; the summary is recorded as the latest observation."
     (when (and configured (mevedel-session-control-fs-directory-p configured))
       (let* ((directory (file-name-as-directory (file-truename configured)))
              (client (unless (file-remote-p directory) (mevedel-workspace-identity-client)))
+             (root-id (secure-hash 'sha256 (prin1-to-string (list 'notes directory client))))
              (now (mevedel-session-control-fs-target-time directory))
              (quiet (* quiet-hours 3600))
              (inventory (mevedel-memory-notes--inventory directory))
@@ -529,9 +566,23 @@ changed; the summary is recorded as the latest observation."
                     (not (member relative in-use))
                     (not (mevedel-memory-notes--suppressed
                           (gethash relative history) version now review-days)))))
+          (dolist (row rows)
+            (when (and (eq (plist-get (cdr row) :kind) 'text) (gethash (car row) history))
+              (let* ((path (file-name-concat directory (car row)))
+                     (bytes (plist-get (cdr row) :bytes))
+                     ;; Ranking is only a hint.  Readiness and before-state
+                     ;; proofs below remain authoritative, including failures.
+                     (version (if bytes (secure-hash 'sha256 bytes)
+                                (ignore-errors (plist-get (mevedel-memory-notes-observe (list :path path)) :hash)))))
+                (setf (plist-get (cdr row) :admission-rank)
+                      (mevedel-memory-notes--admission-rank (gethash (car row) history) root-id path version)))))
           (dolist (row (sort (copy-sequence rows)
-                             (lambda (a b) (time-less-p (plist-get (cdr a) :modified)
-                                                        (plist-get (cdr b) :modified)))))
+                             (lambda (a b)
+                               (let ((a-rank (or (plist-get (cdr a) :admission-rank) 0))
+                                     (b-rank (or (plist-get (cdr b) :admission-rank) 0)))
+                                 (if (= a-rank b-rank)
+                                     (time-less-p (plist-get (cdr a) :modified) (plist-get (cdr b) :modified))
+                                   (< a-rank b-rank))))))
             (let* ((relative (car row))
                    (path (file-name-concat directory relative))
                    (modified (plist-get (cdr row) :modified)))
@@ -614,9 +665,8 @@ changed; the summary is recorded as the latest observation."
            directory (append (list :at (format-time-string "%FT%TZ" (seconds-to-time now) t)) summary))
           (append
            (list :root (when (or notes attachments directories)
-                         (let* ((target (mevedel-execution-target-create directory))
-                                (id (secure-hash 'sha256 (prin1-to-string (list 'notes directory client)))))
-                           (cons id (list :kind 'notes :label "Shared working notes"
+                         (let ((target (mevedel-execution-target-create directory)))
+                           (cons root-id (list :kind 'notes :label "Shared working notes"
                                           :dir directory :configured-dir (file-name-as-directory configured)
                                           :client client :target (mevedel-execution-target-identity target)
                                           :mode mode :captured now
