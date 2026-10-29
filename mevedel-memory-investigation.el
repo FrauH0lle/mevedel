@@ -9,6 +9,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'generator)
 (require 'mevedel-memory-proposal)
 (require 'mevedel-memory-scope)
 (require 'mevedel-tool-fs-read)
@@ -20,6 +21,8 @@
 (defvar gptel--known-tools)
 
 ;; `mevedel-structs'
+(defvar mevedel--agent-invocation)
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 
 (defconst mevedel-memory-investigation--max-calls 64
@@ -184,17 +187,20 @@ Return the delivered text, or nil."
                when (and (plist-get snapshot :exists) (plist-get snapshot :bytes))
                collect (cons file (decode-coding-string (plist-get snapshot :bytes) 'utf-8-unix))))))
 
-(defun mevedel-memory-investigation--documents (state root path contents)
-  "Return (DOCUMENTS . PARTIAL) for ROOT and PATH in STATE.
+(iter-defun mevedel-memory-investigation--documents (state root path contents)
+  "Yield progress then (:ready (DOCUMENTS . PARTIAL)) for STATE's ROOT and PATH.
 When CONTENTS is nil, snapshot file names only. Source searches inspect at
 most 256 entries and copy at most 2 MiB, with a 512 KiB per-file limit.
-The caller labels omitted source data; model tools can narrow the subtree."
+The caller labels omitted source data; model tools can narrow the subtree.
+Each source admission keeps its fresh authority and pinned read checks."
   (if (not (equal root "workspace"))
-      (cons (cl-remove-if-not
-             (lambda (document)
-               (or (equal path ".") (equal path (car document))
-                   (string-prefix-p (file-name-as-directory path) (car document))))
-             (mevedel-memory-investigation--evidence state root)) nil)
+      (let ((documents
+             (cl-remove-if-not
+              (lambda (document)
+                (or (equal path ".") (equal path (car document))
+                    (string-prefix-p (file-name-as-directory path) (car document))))
+              (mevedel-memory-investigation--evidence state root))))
+        (iter-yield (list :ready (cons documents nil))))
     (let* ((scope (mevedel-memory-investigation-scope state))
            (pending (list (list (mevedel-memory-scope-source-path scope path))))
            (count 0) (remaining (* 2 1024 1024)) documents partial)
@@ -213,18 +219,24 @@ The caller labels omitted source data; model tools can narrow the subtree."
                 (mevedel-memory-scope-source-path scope relative)
                 (if (file-directory-p native)
                     (let* ((available (- 256 count))
-                           (children (and (> available 0)
+                           (children (and (mevedel-memory-investigation--live-p state)
+                                          (> available 0)
                                           (directory-files native t directory-files-no-dot-files-regexp nil (1+ available)))))
                       (when (or (= available 0) (> (length children) available)) (setq partial t))
                       (when children
                         (setq pending (nconc pending (list (seq-take children available))))))
-                  (when (file-regular-p native)
+                  (unless (file-regular-p native) (setq partial t))
+                  (when (and (file-regular-p native)
+                             (mevedel-memory-investigation--live-p state))
                     (let* ((snapshot (and contents (mevedel-memory-scope--snapshot native (min remaining (* 512 1024)))))
                            (bytes (plist-get snapshot :bytes)))
+                      (when (and contents (not (plist-get snapshot :exists)))
+                        (error "Source file is unavailable"))
                       (cl-decf remaining (length bytes))
                       (push (cons relative (if contents (decode-coding-string bytes 'utf-8-unix) "")) documents)))))
-            (error (setq partial t)))))
-      (cons (nreverse documents) (or partial pending)))))
+            (error (setq partial t))))
+        (iter-yield nil))
+      (iter-yield (list :ready (cons (nreverse documents) (or partial pending)))))))
 
 (defun mevedel-memory-investigation--search (state operation args root path callback &optional summary)
   "Run bounded search OPERATION using ARGS over STATE's ROOT and PATH.
@@ -233,52 +245,113 @@ relative filenames; private copy paths are removed from results and errors.
 SUMMARY is the call's metadata row."
   (let ((directory (make-temp-file "mevedel-memory-search-" t))
         (caller-directory default-directory)
-        done cancel stopper)
+        (caller-exec-path (copy-sequence exec-path))
+        (caller-environment (copy-sequence process-environment))
+        (caller-request (bound-and-true-p mevedel--current-request))
+        (caller-invocation (bound-and-true-p mevedel--agent-invocation))
+        (origin (current-buffer))
+        (iterator (mevedel-memory-investigation--documents state root path (eq operation 'grep)))
+        timer stepping writing documents partial delivery done cancel launched stopper)
     (cl-labels
      ((cleanup ()
-        (setf (mevedel-memory-investigation-active state)
-              (delq stopper (mevedel-memory-investigation-active state)))
-        (when (file-exists-p directory) (delete-directory directory t)))
+        ;; Pinned reads and helper launch can dispatch cancellation.  Their
+        ;; current step must unwind before closing its iterator or directory.
+        (unless stepping
+          (when timer (cancel-timer timer) (setq timer nil))
+          (when iterator (iter-close iterator) (setq iterator nil))
+          (setf (mevedel-memory-investigation-active state)
+                (delq stopper (mevedel-memory-investigation-active state)))
+          (when (buffer-live-p origin)
+            (with-current-buffer origin (remove-hook 'kill-buffer-hook #'abort-search t)))
+          (when (file-exists-p directory) (delete-directory directory t))
+          (when delivery
+            (let ((text delivery))
+              (setq delivery nil)
+              (when (buffer-live-p origin)
+                (with-current-buffer origin
+                  (let ((default-directory caller-directory)
+                        (exec-path caller-exec-path)
+                        (process-environment caller-environment)
+                        (mevedel--session nil)
+                        (mevedel--current-request caller-request)
+                        (mevedel--agent-invocation caller-invocation))
+                    (mevedel-memory-investigation--deliver
+                     state callback
+                     (string-replace directory "."
+                                     (string-replace (file-name-as-directory directory) "" text)) nil summary))))))))
       (finish (text)
         (unless done
-          (setq done t)
-          (cleanup)
-          ;; Empty searches can settle before the snapshot binding unwinds.
-          (let ((default-directory caller-directory))
-            (mevedel-memory-investigation--deliver
-             state callback
-             (string-replace directory "."
-                             (string-replace (file-name-as-directory directory) "" text)) nil summary))))
+          (setq done t delivery text)
+          (cleanup)))
       (abort-search ()
         (unless done
           (setq done t)
+          (when (and summary (eq (plist-get summary :status) 'pending))
+            (plist-put summary :status 'cancelled))
           (when (functionp cancel) (funcall cancel))
-          (cleanup))))
+          (cleanup)))
+      (launch ()
+        (setq launched t)
+        (let ((default-directory (file-name-as-directory directory))
+              (mevedel-tool-fs-search--teardown #'abort-search)
+              (mevedel-tool-fs-search-timeout 20))
+          (setq cancel
+                (funcall (if (eq operation 'glob) #'mevedel-tool-fs-search-glob #'mevedel-tool-fs-search-grep)
+                         (lambda (result)
+                           (when (and summary (mevedel-memory-investigation--live-p state)
+                                      (string-prefix-p "Error:" (plist-get result :result)))
+                             (plist-put summary :status 'error))
+                           (finish (concat (when partial "[Partial source snapshot: excluded, unavailable, or bounded paths were not searched. Missing matches remain unknown.]\n")
+                                           (plist-get result :result))))
+                         (list :path directory :pattern (plist-get args :pattern)
+                               :output_mode "content" :head_limit 100 :glob (plist-get args :glob))))
+          (when (and done (functionp cancel)) (funcall cancel))))
+      (step ()
+        (unless stepping
+          (setq timer nil stepping t)
+          (unwind-protect
+              (unless done
+                (if (or (not (buffer-live-p origin)) (not (mevedel-memory-investigation--live-p state)))
+                    (abort-search)
+                  (with-current-buffer origin
+                    (let ((default-directory caller-directory)
+                          (exec-path caller-exec-path)
+                          (process-environment caller-environment)
+                          (mevedel--session nil)
+                          (mevedel--current-request caller-request)
+                          (mevedel--agent-invocation caller-invocation))
+                      (condition-case err
+                          (let ((deadline (+ (float-time) 0.02)) (count 0))
+                            ;; Bound both traversal/read work and temporary-file
+                            ;; writes.  A single native operation still owns its
+                            ;; pinned proof; authority is never cached over a yield.
+                            (while (and (not done) (< count 8) (< (float-time) deadline))
+                              (cl-incf count)
+                              (unless (mevedel-memory-investigation--live-p state) (abort-search))
+                              (unless done
+                                (if (not writing)
+                                    (let ((value (iter-next iterator)))
+                                      (when (and (not done) (plist-member value :ready))
+                                        (setq writing t documents (car (plist-get value :ready))
+                                              partial (cdr (plist-get value :ready)))))
+                                  (if (null documents)
+                                      (progn (launch) (setq count 8))
+                                    (let* ((document (pop documents))
+                                           (file (file-name-concat directory
+                                                                   (mevedel-memory-investigation--relative (car document)))))
+                                      (make-directory (file-name-directory file) t)
+                                      (unless (or done (not (mevedel-memory-investigation--live-p state)))
+                                        (let ((coding-system-for-write 'utf-8-unix))
+                                          (write-region (cdr document) nil file nil 'silent))))))))
+                            (unless (or done launched)
+                              (setq timer (run-at-time 0.001 nil #'step))))
+                        (error (finish (concat "Error: " (error-message-string err)))))))))
+            (setq stepping nil)
+            (when done (cleanup))))))
      (setq stopper #'abort-search)
      (push stopper (mevedel-memory-investigation-active state))
-     (condition-case err
-         (let* ((captured (mevedel-memory-investigation--documents state root path (eq operation 'grep)))
-                (partial (cdr captured))
-                (default-directory (file-name-as-directory directory))
-                (mevedel-tool-fs-search--teardown #'abort-search)
-                (mevedel-tool-fs-search-timeout 20))
-           (dolist (document (car captured))
-             (let ((file (file-name-concat directory (mevedel-memory-investigation--relative (car document)))))
-               (make-directory (file-name-directory file) t)
-               (let ((coding-system-for-write 'utf-8-unix))
-                 (write-region (cdr document) nil file nil 'silent))))
-           (unless (mevedel-memory-investigation--live-p state) (error "Investigation retired"))
-           (setq cancel
-                 (funcall (if (eq operation 'glob) #'mevedel-tool-fs-search-glob #'mevedel-tool-fs-search-grep)
-                          (lambda (result)
-                            (when (and summary (mevedel-memory-investigation--live-p state)
-                                       (string-prefix-p "Error:" (plist-get result :result)))
-                              (plist-put summary :status 'error))
-                            (finish (concat (when partial "[Partial source snapshot: excluded, unavailable, or bounded paths were not searched. Missing matches remain unknown.]\n")
-                                            (plist-get result :result))))
-                          (list :path directory :pattern (plist-get args :pattern)
-                                :output_mode "content" :head_limit 100 :glob (plist-get args :glob)))))
-       (error (finish (concat "Error: " (error-message-string err))))))))
+     (with-current-buffer origin (add-hook 'kill-buffer-hook #'abort-search nil t))
+     (setq timer (run-at-time 0 nil #'step)))))
 
 (defun mevedel-memory-investigation--record (state key delivered)
   "Record DELIVERED text as read evidence under KEY in STATE."

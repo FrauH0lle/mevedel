@@ -356,10 +356,17 @@ those extractions are applied. Quiet attachments no surviving note references
 and quiet empty folders receive structured decisions without inference. Files
 that memory or instructions cite are not removed silently. Accepted reviews
 require a model keep to identify nonempty open items and explain missing
-resolution evidence. Deletes and condensations that drop numeric measurement paragraphs from
-the captured preimage become keeps unless a citing extraction preserves them or
-authenticated read quotes contain and account for them. Matching ignores Markdown
-and whitespace, not conditions within the paragraphs; semantic resolution and
+resolution evidence. Numeric recognition protects whole captured paragraphs
+containing standalone multi-digit counts, decimals, percentages or durations,
+after masking metadata such as dates, paths, hashes and versions. A condense
+appends dropped protected paragraphs verbatim under a fixed heading; a delete
+becomes a condense with a source-address provenance header and those paragraphs.
+An intact citing extraction or authenticated read quote can account for a
+paragraph without appending it. Matching ignores Markdown and whitespace, not
+conditions within the paragraphs. These authenticated transformations record
+`:guard-preserved`, distinct from `:guard-converted` keeps, and may exceed the
+model body limit within bounded private records. Citation, source-handoff,
+anchor and unresolved-item guards still produce keeps. Semantic resolution and
 conditions outside recognized paragraphs remain reviewer responsibilities.
 These checks address a replay that replaced concrete operation counts with
 "supplied instrumentation counts", alongside unjustified completed-case keeps;
@@ -444,6 +451,36 @@ advanced mtime, delaying readiness. Acceptance now classifies this as an unchang
 keep, with normal suppression and no note filesystem write. Genuine byte changes
 retain ordinary checked application and undo. The diagnostic for observed
 unchanged targets no longer claims an interruption that may never have occurred.
+
+### 2026-10-29: Preserve numeric paragraphs structurally instead of keeping whole notes
+
+The generic numeric detector closed a vocabulary gap for cold-result counts and
+ratios, but matched replays of the structural reply contract still applied only
+unchanged keeps. Protecting measurements by blocking disposal retained completed
+background alongside the evidence. Numeric-only losses now produce condenses
+that retain the missing whole paragraphs verbatim, rather than keeps. The model
+can discard unrelated completed prose without having to reproduce every measured
+paragraph in its output. Other delete guards still retain their keep behavior.
+This changes retention mechanics, not semantic resolution proof or undo authority.
+Generated preservation can exceed the model body limit; the private record bound
+accounts for duplicated escaped before/after bytes of a large captured note.
+Useful cleanup and semantic preservation require independent applied-outcome
+grading; a preservation flag alone is not service evidence.
+
+Integration with canonical no-op normalization exposed a regenerated preservation
+body identical to the captured note and accepted-only or held proposals counted
+as preservation applications. Unchanged keeps now drop `:guard-preserved` before
+identity generation. The preserved-condense metric uses existing confirmed-write
+notifications with nonempty changed paths, not accepted flags or terminal-status
+returns. Synchronous and asynchronous jobs include their earlier pending writes;
+propose-only, held, stale, unavailable, rolled-back and already decided proposals
+do not earn credit. Confirmed writes keep their count if cancellation follows.
+Classification metadata does not authorize application or add target reads, and
+later deferred retries do not rewrite a completed pass's telemetry.
+The synchronous pending boundary catches quit so confirmed accounting reaches
+completion while later writes, retry scheduling and catch-up stay stopped. Its
+interrupted fallback reports confirmed writes and one unapplied sweep; it does
+not reconstruct every terminal or failed outcome observed before interruption.
 
 ### 2026-10-28: Progress guards automatic catch-up; the cap is a ceiling
 
