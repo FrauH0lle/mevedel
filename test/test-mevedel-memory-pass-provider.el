@@ -59,7 +59,7 @@
                   (delete-directory root t)))
   ,test
   (test)
-  :doc "an unresolved numeric handoff is deleted and exactly restored without a semantic audit"
+  :doc "an unresolved numeric handoff is permanently deleted without a semantic audit"
   (cl-letf (((symbol-function 'url-retrieve)
              (lambda (url callback &rest _)
                (should (string-prefix-p "https://example.invalid/" url))
@@ -109,8 +109,12 @@
   :doc "a native fifty-note drain attempts invalid inputs once and excludes later or changed versions"
   (let ((old-mtime (file-attribute-modification-time (file-attributes path)))
         (arrival (file-name-concat shared "later-arrival.md"))
+        (recent (file-name-concat shared "recent-handoff.md"))
         (deadline (+ (float-time) 120))
         pending-response requests responses buffers offered)
+    ;; A headerless handoff below fourteen days is not in the eligible fifty.
+    (write-region "# Recent handoff\nTODO: still working.\n" nil recent nil 'silent)
+    (set-file-times recent (seconds-to-time (- (float-time) (* 13 86400))))
     (dotimes (number 49)
       (let ((file (file-name-concat shared (format "finding-%03d.md" (1+ number)))))
         (write-region (format "# Finding %d\nDisposable result only.\n" (1+ number)) nil file nil 'silent)
@@ -136,6 +140,7 @@
                   (dolist (id ids)
                     (should-not (member id offered))
                     (should-not (equal id "work://shared/later-arrival.md"))
+                    (should-not (equal id "work://shared/recent-handoff.md"))
                     (push id offered))
                   (push (list :pass (plist-get (plist-get running :claim) :owner) :ids ids) requests)
                   (push buffer buffers)
@@ -195,6 +200,8 @@
             (should (eq (< number 16)
                         (file-exists-p (file-name-concat shared (format "finding-%03d.md" (1+ number)))))))
           (should (file-exists-p arrival))
+          (should (equal "# Recent handoff\nTODO: still working.\n"
+                         (mevedel-session-control-fs-read-file recent)))
           (should (equal "An edited handoff after cohort admission.\n"
                          (mevedel-session-control-fs-read-file path))))
       (dolist (buffer buffers) (when (buffer-live-p buffer) (kill-buffer buffer))))))

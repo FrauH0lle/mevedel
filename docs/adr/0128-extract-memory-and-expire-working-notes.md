@@ -241,8 +241,10 @@ Missing labels cannot make notes immortal. Oversized/unreadable files, active
 use, unsaved changes and unavailable references remain visible deferrals.
 
 The target capacity is 50–100 notes per day, **not established by deterministic
-tests**. The commit gate is one existing deterministic fifty-note native drain
-replay, including invalid acknowledgements and changed/late/in-use versions.
+tests**. The deterministic fifty-note native drain exercises actual request
+serialization, response parsing, acceptance and permanent deletion, replacing
+only URL transport. It checks invalid acknowledgements, changed and late
+versions, and a thirteen-day headerless handoff excluded from the frozen cohort.
 Scripted transport proves mechanics, not inference quality, cost or throughput.
 Any separately authorized real-provider replay uses a private copied corpus,
 never the live shared folder, and reports confirmed deletions separately from
