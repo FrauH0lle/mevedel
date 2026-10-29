@@ -53,10 +53,10 @@ instructions; they remain read-only. Private pending journal state is unavailabl
 
 Read of `work://shared/` or a shared descendant directory generates bounded
 note rows; bare `work://` includes the same shared rows alongside session files.
-Rows show canonical address, kind/status (or unmanaged/attachment), owner,
-modification age, age-readiness and a bounded first-heading/body summary excluding
-frontmatter. Scratch/done notes become age-ready after 7 days, other notes and
-attachments after 14 days; future mtimes wait. Age-readiness is not mutation
+Rows show canonical address, modification age, age-readiness and a bounded first
+Markdown heading. Notes and attachments become age-ready after 14 days untouched
+by default (`mevedel-working-note-max-age-days`); future mtimes wait. No note
+header or lifecycle labels are parsed. Age-readiness is not mutation
 authority: capture/application safety checks remain pending. Incomplete inventory
 or reads stay visible. Listing does not create storage or mark every file in use;
 direct-file Read and Glob/Grep keep their ordinary contracts.

@@ -19,7 +19,6 @@
 (require 'mevedel-file-state)
 (require 'mevedel-resource)
 (require 'mevedel-utilities)
-(require 'mevedel-working-note)
 
 ;; `diff'
 (declare-function diff-no-select "diff"
@@ -92,11 +91,6 @@
 (declare-function mevedel-resource-prepare
                   "mevedel-resource" (operation address context))
 
-;; `mevedel-session-control-fs'
-(declare-function mevedel-session-control-fs-target-time
-                  "mevedel-session-control-fs" (directory))
-(autoload 'mevedel-session-control-fs-target-time "mevedel-session-control-fs")
-
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-shallow-ensure-files
                   "mevedel-session-persistence" (session buffer))
@@ -106,11 +100,9 @@
 (declare-function mevedel-request-ephemeral-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-one-shot-mutations-p
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-origin "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
@@ -951,102 +943,6 @@ Returns nil when the two contents hold the same lines."
           (error "Patch touches path more than once: %s" path))
         (puthash path t seen)))))
 
-(defun mevedel-tool-patch--prepare-notes (proposal)
-  "Freeze invocation defaults and shared-note identity for PROPOSAL.
-Only final destinations inside the shared tree receive normalization."
-  (when-let* ((session (and (boundp 'mevedel--session) mevedel--session))
-              (workspace (mevedel-session-workspace session)))
-    (let ((owner (format "%s%s" (or (mevedel-session-session-id session) "session")
-                         (or (and (boundp 'mevedel--current-request)
-                                  mevedel--current-request
-                                  (mevedel-request-origin mevedel--current-request))
-                             "/root")))
-          now)
-      (dolist (operation (plist-get proposal :operations))
-        (let* ((source (mevedel-tool-patch-physical-path operation))
-               (destination (if (eq (plist-get operation :kind) 'move)
-                                (mevedel-tool-patch--physical-move-path operation)
-                              source)))
-          (when (and (not (eq (plist-get operation :kind) 'delete))
-                     (mevedel-working-note-markdown-p destination)
-                     (mevedel-resource-work-shared-path-p workspace destination))
-            (unless now
-              (setq now (if (file-remote-p destination)
-                            (mevedel-session-control-fs-target-time
-                             (mevedel-workspace-root workspace))
-                          (float-time))))
-            (plist-put operation :working-note-p t)
-            (plist-put operation :note-owner owner)
-            (plist-put operation :note-created
-                       (format-time-string
-                        "%Y-%m-%dT%H:%M:%SZ"
-                        (or (and (not (eq (plist-get operation :kind) 'add))
-                                 (file-attribute-modification-time
-                                  (file-attributes source)))
-                            now) t))))))))
-
-(defun mevedel-tool-patch--normalize-note-content (operation content)
-  "Return selected CONTENT for OPERATION with required note metadata.
-Cache its final visible diff without changing the selectable authored hunks."
-  (if (not (plist-get operation :working-note-p)) content
-    (let ((normalized
-           (mevedel-working-note-normalize
-            content (plist-get operation :note-owner)
-            (plist-get operation :note-created)
-            (plist-get operation :baseline-content))))
-      (unless (equal normalized (plist-get operation :normalized-content))
-        (plist-put operation :normalized-content normalized)
-        (plist-put operation :normalized-diff
-                   (string-join
-                    (cl-mapcan (lambda (hunk)
-                                 (cons "@@" (copy-sequence (plist-get hunk :diff-lines))))
-                               (mevedel-tool-patch-hunks-from-content
-                                (or (plist-get operation :baseline-content) "") normalized))
-                    "\n")))
-      normalized)))
-
-(defun mevedel-tool-patch-normalized-preview (proposal)
-  "Return the mandatory normalized final diff for PROPOSAL's selected notes.
-Derive it from the frozen baseline, not live files or the current buffer.
-Invalid partial selections remain visible as errors and cannot be committed."
-  (let (parts)
-    (dolist (operation (plist-get proposal :operations))
-      (when (plist-get operation :working-note-p)
-        (let* ((kind (plist-get operation :kind))
-               (hunks (plist-get operation :hunks))
-               (selected (if (eq kind 'update)
-                             (cl-some (lambda (hunk)
-                                        (and (plist-get hunk :selected)
-                                             (mevedel-tool-patch-hunk-changes-p hunk))) hunks)
-                           (plist-get operation :selected))))
-          (plist-put operation :normalization-error nil)
-          (unless selected
-            (plist-put operation :normalized-content nil)
-            (plist-put operation :normalized-diff nil))
-          (when selected
-            (push
-             (condition-case err
-                 (let ((content (if (eq kind 'add) (plist-get operation :content)
-                                  (if hunks
-                                      (mevedel-tool-patch-apply-hunks
-                                       (plist-get operation :baseline-content) hunks
-                                       (plist-get operation :rel-path))
-                                    (plist-get operation :baseline-content)))))
-                   (mevedel-tool-patch--normalize-note-content operation content)
-                   (format "%s\n%s" (or (plist-get operation :move-rel-path)
-                                         (plist-get operation :rel-path))
-                           (plist-get operation :normalized-diff)))
-               (error
-                (plist-put operation :normalized-content nil)
-                (plist-put operation :normalized-diff nil)
-                (let ((diagnostic (format "Invalid selected note metadata: %s" (error-message-string err))))
-                  (plist-put operation :normalization-error diagnostic)
-                  diagnostic)))
-             parts)))))
-    (when parts
-      (concat "\nWorking-note final diff (metadata included; follows current selection):\n"
-              (string-join (nreverse parts) "\n\n") "\n"))))
-
 (defun mevedel-tool-patch-planned-changes (proposal)
   "Validate PROPOSAL and return its selected filesystem changes."
   (let ((operations (plist-get proposal :operations))
@@ -1067,8 +963,7 @@ Invalid partial selections remain visible as errors and cannot be committed."
              (push (append (list :action 'write :path path)
                            (and (plist-get operation :resource-path-p)
                                 '(:resource-p t))
-                           (list :content (mevedel-tool-patch--normalize-note-content
-                                           operation (plist-get operation :content))))
+                           (list :content (plist-get operation :content)))
                    changes))))
         ('delete
          (let ((path (mevedel-tool-patch-physical-path operation)))
@@ -1094,9 +989,8 @@ Invalid partial selections remain visible as errors and cannot be committed."
              (pcase-let* ((`(,content . ,coding)
                            (mevedel-tool-patch--read-file path t))
                           (updated
-                           (mevedel-tool-patch--normalize-note-content
-                            operation (mevedel-tool-patch-apply-hunks
-                                       content hunks (or (plist-get operation :rel-path) path)))))
+                           (mevedel-tool-patch-apply-hunks
+                            content hunks (or (plist-get operation :rel-path) path))))
                (push (append (list :action 'write :path path)
                              (and (plist-get operation :resource-path-p)
                                   '(:resource-p t))
@@ -1127,8 +1021,7 @@ Invalid partial selections remain visible as errors and cannot be committed."
                                          content hunks (or (plist-get operation :rel-path) path))
                                       content)))
                                (list :mode (file-modes path)
-                                     :content (setq updated (mevedel-tool-patch--normalize-note-content
-                                                             operation updated))
+                                     :content updated
                                      :bytes
                                      (encode-coding-string updated coding))))
                      changes)))))))
@@ -1518,9 +1411,6 @@ Refresh file tracking immediately and diagnostics before continuation."
                           "@@")
                         (copy-sequence (plist-get hunk :diff-lines))))
                 hunks))))
-      (when (and (plist-get operation :working-note-p)
-                 (plist-get operation :normalized-diff))
-        (setq lines (split-string (plist-get operation :normalized-diff) "\n" t)))
       (list :path (plist-get operation :rel-path)
             :move-path (plist-get operation :move-rel-path)
             :kind kind
@@ -1528,9 +1418,7 @@ Refresh file tracking immediately and diagnostics before continuation."
                                 lines)
             :deleted (cl-count-if (lambda (line) (string-prefix-p "-" line))
                                   lines)
-            :diff (or (and (plist-get operation :working-note-p)
-                           (plist-get operation :normalized-diff))
-                      (string-join lines "\n"))))))
+            :diff (string-join lines "\n")))))
 
 (defun mevedel-tool-patch-revised-count (proposal)
   "Return how many of PROPOSAL's applied changes the user revised."
@@ -1559,7 +1447,6 @@ settled transcript badge stays expandable without applied diffs.
 REVIEWED marks a result settled through the interactive review; its
 transcript row then opens on the first changes so the user sees what
 the review just applied."
-  (mevedel-tool-patch-normalized-preview proposal)
   (let (details notes)
     (cl-flet ((note (line)
                 (push line details)
@@ -1593,8 +1480,6 @@ the review just applied."
       (when-let* ((feedback (plist-get proposal :feedback)))
         (note (format "Feedback (whole patch): %s" feedback)))
       (dolist (operation (plist-get proposal :operations))
-        (when-let* ((diagnostic (plist-get operation :normalization-error)))
-          (note diagnostic))
         (if (eq (plist-get operation :kind) 'update)
             (progn
               (revision operation)
@@ -1695,44 +1580,40 @@ the review just applied."
 The plist carries :selected and :total change counts plus :added and
 :deleted line counts.  Update line counts cover selected hunks only;
 whole-operation kinds always report their full size."
-  (let* ((selected-p (if (plist-get operation :selected) 1 0))
-         (stats
-          (pcase (plist-get operation :kind)
-            ('add
-             (list :selected selected-p :total 1
-                   :added (length (mevedel-tool-patch-content-lines
-                                   (plist-get operation :content)))
-                   :deleted 0))
-            ('delete
-             (list :selected selected-p :total 1
-                   :added 0
-                   :deleted (length (mevedel-tool-patch-content-lines
-                                     (or (plist-get operation :baseline-content) "")))))
-            ('move
-             (let ((added 0) (deleted 0))
-               (dolist (hunk (plist-get operation :hunks))
-                 (pcase-let ((`(,a . ,d) (mevedel-tool-patch-hunk-counts hunk)))
-                   (cl-incf added a)
-                   (cl-incf deleted d)))
-               (list :selected selected-p :total 1 :added added :deleted deleted)))
-            ('update
-             ;; Locator hunks position other hunks; they are not changes.
-             (let ((selected 0) (total 0) (added 0) (deleted 0))
-               (dolist (hunk (plist-get operation :hunks))
-                 (when (mevedel-tool-patch-hunk-changes-p hunk)
-                   (cl-incf total)
-                   (when (plist-get hunk :selected)
-                     (cl-incf selected)
-                     (pcase-let ((`(,a . ,d) (mevedel-tool-patch-hunk-counts hunk)))
-                       (cl-incf added a)
-                       (cl-incf deleted d)))))
-               (list :selected selected :total total :added added :deleted deleted))))))
-    (when (and (> (plist-get stats :selected) 0)
-               (plist-get operation :normalized-diff))
-      (let ((lines (split-string (plist-get operation :normalized-diff) "\n" t)))
-        (plist-put stats :added (cl-count-if (lambda (line) (string-prefix-p "+" line)) lines))
-        (plist-put stats :deleted (cl-count-if (lambda (line) (string-prefix-p "-" line)) lines))))
-    stats))
+  (let ((selected-p (if (plist-get operation :selected) 1 0)))
+    (pcase (plist-get operation :kind)
+      ('add
+       (list :selected selected-p :total 1
+             :added (length (mevedel-tool-patch-content-lines
+                             (plist-get operation :content)))
+             :deleted 0))
+      ('delete
+       (list :selected selected-p :total 1
+             :added 0
+             :deleted (length (mevedel-tool-patch-content-lines
+                               (or (plist-get operation :baseline-content)
+                                   "")))))
+      ('move
+       (let ((added 0) (deleted 0))
+         (dolist (hunk (plist-get operation :hunks))
+           (pcase-let ((`(,a . ,d) (mevedel-tool-patch-hunk-counts hunk)))
+             (cl-incf added a)
+             (cl-incf deleted d)))
+         (list :selected selected-p :total 1 :added added :deleted deleted)))
+      ('update
+       ;; Locator hunks position other hunks; they are not changes.
+       (let ((selected 0) (total 0) (added 0) (deleted 0))
+         (dolist (hunk (plist-get operation :hunks))
+           (when (mevedel-tool-patch-hunk-changes-p hunk)
+             (cl-incf total)
+             (when (plist-get hunk :selected)
+               (cl-incf selected)
+               (pcase-let ((`(,a . ,d)
+                            (mevedel-tool-patch-hunk-counts hunk)))
+                 (cl-incf added a)
+                 (cl-incf deleted d)))))
+         (list :selected selected :total total
+               :added added :deleted deleted))))))
 
 (defun mevedel-tool-patch-proposal-stats (proposal)
   "Return aggregate selection stats for PROPOSAL.
@@ -1857,7 +1738,6 @@ file buttons, rewritten links, or inline images."
                            (mevedel-tool-patch-prepare-resources
                             proposal t)))
              (_baseline (mevedel-tool-patch--capture-baseline proposal))
-             (_notes (mevedel-tool-patch--prepare-notes proposal))
              (changes (mevedel-tool-patch-planned-changes proposal)))
         (mevedel-tool-patch-assert-baseline proposal)
         (if (memq (mevedel-tool-patch--effective-mode) '(edits full-auto))

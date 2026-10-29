@@ -203,23 +203,23 @@ while constructing retained history.  Recovery still owns final pin release."
   (dolist (case '((use . async) (edit . async) (use . sync) (edit . sync)))
     (mevedel-test-application-fixture
       (let ((late (car case))
-            (mkdir (symbol-function 'mevedel-session-control-fs-make-directory)) injected
+            (commit (symbol-function 'mevedel-memory-notes-commit)) injected
 	    (conversation (generate-new-buffer " *application-late-turn*")))
         (unwind-protect
 	    (progn
 	      (with-current-buffer conversation
 	        (setq-local mevedel--session (mevedel-session--create :workspace workspace)))
-	      (cl-letf (((symbol-function 'mevedel-session-control-fs-make-directory)
-			 (lambda (directory &rest args)
-			   (prog1 (apply mkdir directory args)
-			     (when (and (not injected) (string-suffix-p "/blobs" (directory-file-name directory)))
-			       (setq injected t)
-		       (if (eq late 'use)
-			   (with-current-buffer conversation
-			     (mevedel-resource-prepare
-			      'read (mevedel-memory-notes-address (plist-get proposal :file))
-			      (list :session mevedel--session)))
-				 (with-current-buffer (find-file-noselect path) (goto-char (point-max)) (insert "unsaved"))))))))
+                      (cl-letf (((symbol-function 'mevedel-memory-notes-commit)
+                                 (lambda (&rest args)
+                                   (unless injected
+                                     (setq injected t)
+                                     (if (eq late 'use)
+                                         (with-current-buffer conversation
+                                           (mevedel-resource-prepare
+                                            'read (mevedel-memory-notes-address (plist-get proposal :file))
+                                            (list :session mevedel--session)))
+                                       (with-current-buffer (find-file-noselect path) (goto-char (point-max)) (insert "unsaved"))))
+                                   (apply commit args))))
 	        (if (eq (cdr case) 'sync)
 		    (setq result (mevedel-memory-pass--apply state accepted))
 		  (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
@@ -563,21 +563,18 @@ while constructing retained history.  Recovery still owns final pin release."
   (mevedel-test-application-fixture
     (let ((origin (generate-new-buffer " *late-policy-origin*"))
           (other (generate-new-buffer " *late-policy-incidental*"))
-          (mkdir (symbol-function 'mevedel-session-control-fs-make-directory))
           (commit (symbol-function 'mevedel-memory-notes-commit)) injected)
       (unwind-protect
           (progn
             (plist-put state :origin-buffer origin)
             (with-current-buffer origin (setq-local mevedel-memory-consolidation-mode 'auto))
             (with-current-buffer other (setq-local mevedel-memory-consolidation-mode 'auto))
-            (cl-letf (((symbol-function 'mevedel-session-control-fs-make-directory)
-                       (lambda (directory &rest args)
-                         (prog1 (apply mkdir directory args)
-                           (when (and (not injected) (string-suffix-p "/blobs" (directory-file-name directory)))
-                             (setq injected t)
-                             (with-current-buffer origin (setq-local mevedel-memory-consolidation-mode 'propose))))))
-                      ((symbol-function 'mevedel-memory-notes-commit)
-                       (lambda (&rest args) (with-current-buffer other (apply commit args)))))
+            (cl-letf (((symbol-function 'mevedel-memory-notes-commit)
+                       (lambda (&rest args)
+                         (unless injected
+                           (setq injected t)
+                           (with-current-buffer origin (setq-local mevedel-memory-consolidation-mode 'propose)))
+                         (with-current-buffer other (apply commit args)))))
               (with-current-buffer origin
                 (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value))))
               (with-current-buffer other (mevedel-test-application-wait (lambda () result))))

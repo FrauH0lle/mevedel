@@ -89,7 +89,7 @@
        (input () (mevedel-memory-decision--application-input accepted note workspace)))
     ,test)
   (test)
-  :doc "all citing repairs apply before delete and extraction reversal restores its note first"
+  :doc "all citing repairs apply before delete and extraction reversal never restores its note"
   (progn
     (prepare t)
     (should (equal (sort (copy-sequence (plist-get note :requires)) #'string<)
@@ -104,10 +104,9 @@
     (should (eq (plist-get (apply-item note) :status) 'applied))
     (should-not (file-exists-p note-path))
     (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get instruction :id)) :status)))
-    (should (equal old-note (read-file note-path)))
-    (should (= #o640 (file-modes note-path)))
+    (should-not (file-exists-p note-path))
     (should (equal old-instructions (read-file instructions-path)))
-    (should (eq 'reversed (plist-get (mevedel-memory-decision-status workspace (plist-get note :id)) :status))))
+    (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get note :id)) :status))))
   :doc "pre-existing citations dynamically hold delete without manufacturing a keep"
   (progn
     (prepare)
@@ -133,17 +132,17 @@
       (write-region "Durable context without that citation.\n" nil new-topic nil 'silent)
       (should (eq 'applied (plist-get (apply-item note) :status)))
       (should-not (file-exists-p note-path))))
-  :doc "a citation introduced during quota IO holds without a terminal decision or pending marker"
+  :doc "a citation introduced at final write admission holds without a terminal decision or pending marker"
   (progn
     (uncite)
     (prepare)
     (should (eq 'fresh (plist-get (input) :status)))
-    (let ((original (symbol-function 'mevedel-memory-notes--quota)) injected)
-      (cl-letf (((symbol-function 'mevedel-memory-notes--quota)
+    (let ((original (symbol-function 'mevedel-memory-notes-commit)) injected)
+      (cl-letf (((symbol-function 'mevedel-memory-notes-commit)
                  (lambda (&rest arguments)
-                   (prog1 (apply original arguments)
-                     (setq injected t)
-                     (write-region "Late citation: work://shared/task.md\n" nil topic-path nil 'silent)))))
+                   (setq injected t)
+                   (write-region "Late citation: work://shared/task.md\n" nil topic-path nil 'silent)
+                   (apply original arguments))))
         (should-error (apply-item note) :type 'mevedel-memory-decision-held))
       (should injected))
     (should (equal old-note (read-file note-path)))
@@ -170,7 +169,7 @@
     (should (equal old-note (read-file note-path)))
     (set-file-times note-path (seconds-to-time (- (float-time) (* 15 86400))))
     (should (eq 'applied (plist-get (apply-item note) :status))))
-  :doc "empty full instructions create an admitted absent file and reverse to absence after note restore"
+  :doc "empty full instructions create an admitted absent file and reverse without note restoration"
   (progn
     (uncite)
     (prepare nil t)
@@ -182,7 +181,7 @@
       (should (eq 'applied (plist-get (apply-item note) :status)))
       (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get instruction :id)) :status)))
       (should-not (file-exists-p local))
-      (should (equal old-note (read-file note-path)))))
+      (should-not (file-exists-p note-path))))
   :doc "a stale instruction repair never deletes the note or overwrites intervening guidance"
   (progn
     (prepare t)

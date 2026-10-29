@@ -84,18 +84,21 @@
          (path (file-name-concat shared "large.md"))
          (mevedel-memory-dirs nil)
          (mevedel-memory-notes-max-review-bytes (* 48 1024))
+         (mevedel-working-note-max-age-days 9)
          state observed result review-callback)
     (unwind-protect
         (progn
           (make-directory shared t)
           (write-region (make-string (* 40 1024) ?x) nil path nil 'silent)
-          (set-file-times path (time-subtract nil (* 15 86400)))
+          ;; Younger than the default: a child ignoring the frozen setting cannot admit it.
+          (set-file-times path (time-subtract nil (* 10 86400)))
           (cl-letf (((symbol-function 'mevedel-memory-review-request)
                      (lambda (scope _entries callback &rest _)
                        (setq observed scope review-callback callback)
                        (list :cancel #'ignore))))
             (setq state (mevedel-memory-pass-start workspace (lambda (value) (setq result value)) :memory-only t)
-                  mevedel-memory-notes-max-review-bytes (* 32 1024))
+                  mevedel-memory-notes-max-review-bytes (* 32 1024)
+                  mevedel-working-note-max-age-days nil)
             (should (processp (plist-get state :worker)))
             (let ((deadline (+ (float-time) 15)))
               (while (and (not observed) (not result) (< (float-time) deadline))

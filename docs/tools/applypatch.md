@@ -90,17 +90,6 @@ not receive that exception. Directive Planning permits no patches.
 
 ## Failure and review
 
-Shared Markdown notes (`work://shared/**/*.md`, case-insensitive extension) have
-lifecycle frontmatter normalized before review, including when addressed through
-contained physical paths or moved into the shared tree. Missing fields default
-to `kind: scratch`, `status: open`, invoking owner attribution and UTC creation
-time (previous mtime for an existing unmanaged file). Mark real handoffs as
-`kind: handoff` and reports as `kind: report`. Valid existing attribution and
-creation time persist unless deliberately changed. Invalid supplied metadata
-fails visibly. The preview includes generated metadata; partial selection cannot
-bypass normalization, and committed bytes match the reviewed final content.
-Moves out, plans, memory and non-Markdown data receive no note metadata.
-
 An ambiguous/missing match, invalid grammar, existing Add target, or unsaved
 buffer edits produces an error rather than a guessed edit. Inspect current
 contents and correct the cause. Do not replay a user-rejected proposal unless

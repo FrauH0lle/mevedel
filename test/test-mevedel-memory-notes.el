@@ -329,26 +329,5 @@
                      (should-error (mevedel-memory-notes--shared-check proof))))
       (should (member "bbb.wav" (plist-get (mevedel-memory-notes--shared-proof root '("bbb.wav")) :referenced))))))
 
-(mevedel-deftest mevedel-memory-notes-collect-blobs
-    (:vars* ((root (file-name-as-directory (file-truename (make-temp-file "mevedel-notes-blobs-" t))))
-             (workspace (mevedel-workspace--create :root root))
-             (blobs (file-name-concat root ".mevedel" "state" "shared-notes" "blobs")))
-     :before-each ((mevedel-workspace-identity-ensure root) (make-directory blobs t))
-     :after-each ((delete-directory root t)))
-  ,test
-  (test)
-  :doc "removes blobs that no retained write references and fails closed on unreadable writes"
-  (progn
-    (write-region "x" nil (file-name-concat blobs (make-string 64 ?a)) nil 'silent)
-    (write-region "other" nil (file-name-concat blobs "README") nil 'silent)
-    (should (= 1 (mevedel-memory-notes-collect-blobs workspace blobs)))
-    (should-not (file-exists-p (file-name-concat blobs (make-string 64 ?a))))
-    (should (file-exists-p (file-name-concat blobs "README")))
-    (write-region "x" nil (file-name-concat blobs (make-string 64 ?b)) nil 'silent)
-    (cl-letf (((symbol-function 'mevedel-memory-write-list)
-               (lambda (_) (list (list :id (make-string 64 ?c) :error "Unreadable")))))
-      (should-error (mevedel-memory-notes-collect-blobs workspace blobs)))
-    (should (file-exists-p (file-name-concat blobs (make-string 64 ?b))))))
-
 (provide 'test-mevedel-memory-notes)
 ;;; test-mevedel-memory-notes.el ends here

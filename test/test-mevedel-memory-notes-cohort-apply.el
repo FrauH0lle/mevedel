@@ -91,14 +91,14 @@
     (should-error (apply-note) :type 'user-error)
     (unchanged)
     (should-not (mevedel-memory-write-recovery-candidates workspace)))
-  :doc "late recreation during quota preparation is held again immediately before mutation"
+  :doc "late recreation at final write admission is held immediately before mutation"
   (progn
     (prepare)
-    (let ((quota (symbol-function 'mevedel-memory-notes--quota)) injected)
-      (cl-letf (((symbol-function 'mevedel-memory-notes--quota)
+    (let ((commit (symbol-function 'mevedel-memory-notes-commit)) injected)
+      (cl-letf (((symbol-function 'mevedel-memory-notes-commit)
                  (lambda (&rest args)
-                   (prog1 (apply quota args)
-                     (unless injected (setq injected t) (recreate))))))
+                   (unless injected (setq injected t) (recreate))
+                   (apply commit args))))
         (should-error (apply-note) :type 'mevedel-memory-decision-held))
       (should injected))
     (unchanged)

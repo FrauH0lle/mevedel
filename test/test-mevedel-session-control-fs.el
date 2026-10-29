@@ -2202,16 +2202,13 @@ streams over stdin."
 (mevedel-deftest mevedel-session-control-fs-file-hash ()
   ,test
   (test)
-  :doc "hashes, verifies, captures and restores arbitrary bytes through pinned parents"
-  (let* ((root (file-name-as-directory (make-temp-file "mevedel-control-blob-" t)))
-         (blobs (file-name-concat root "blobs"))
+  :doc "hash proof prevents deletion of different arbitrary bytes through pinned parents"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-control-hash-" t)))
          (source (file-name-concat root "notes" "image.bin"))
          (bytes (apply #'unibyte-string (number-sequence 0 255)))
-         (hash (secure-hash 'sha256 bytes))
-         (blob (file-name-concat blobs hash)))
+         (hash (secure-hash 'sha256 bytes)))
     (unwind-protect
         (progn
-          (make-directory blobs)
           (make-directory (file-name-directory source))
           (let ((coding-system-for-write 'no-conversion))
             (write-region bytes nil source nil 'silent))
@@ -2227,49 +2224,16 @@ streams over stdin."
                                         (list :op 'verify-hash :path source :content (make-string 64 ?0))
                                         (list :op 'delete-file :path source))))))
           (should (file-exists-p source))
-          (dotimes (_ 2)
-            ;; Capture is idempotent for identical bytes.
-            (should (eq 'ok (plist-get (car (mevedel-session-control-fs-run-program
-                                             (list (list :op 'capture-blob :path blob :source source))))
-                                      :status))))
-          (should (equal bytes (mevedel-session-control-fs-read-file blob 'no-conversion)))
-          (should (= #o600 (file-modes blob)))
-          ;; A source whose bytes no longer have the requested name is refused.
-          (let ((wrong (file-name-concat blobs (make-string 64 ?a))))
-            (should (eq 'mismatch
-                        (plist-get (car (mevedel-session-control-fs-run-program
-                                         (list (list :op 'capture-blob :path wrong :source source))))
-                                   :status)))
-            (should-not (file-exists-p wrong))
-            (should-not (directory-files blobs nil "\\`\\.mevedel")))
-          (delete-file source)
-          (should (eq 'ok (plist-get (car (mevedel-session-control-fs-run-program
-                                           (list (list :op 'restore-blob :path source
-                                                       :source blob :mode #o640))))
-                                    :status)))
-          (should (equal bytes (with-temp-buffer
-                                 (set-buffer-multibyte nil)
-                                 (insert-file-contents-literally source)
-                                 (buffer-string))))
-          (should (= #o640 (file-modes source)))
-          ;; Restoration replaces only after its own content proof.
-          (write-region "changed" nil blob nil 'silent)
-          (should (eq 'mismatch
-                      (plist-get (car (mevedel-session-control-fs-run-program
-                                       (list (list :op 'restore-blob :path source
-                                                   :source blob :mode #o640))))
-                                 :status)))
-          (should (equal hash (plist-get (mevedel-session-control-fs-file-hash source) :sha256)))
-          ;; Linked leaves are neither hashed nor captured.
+          ;; Linked leaves are not hashed.
           (make-symbolic-link source (file-name-concat root "linked"))
           (should-error (mevedel-session-control-fs-file-hash (file-name-concat root "linked"))
                         :type 'file-error)
-          (delete-file blob)
-          (should-not (eq 'ok (plist-get (car (mevedel-session-control-fs-run-program
-                                               (list (list :op 'capture-blob :path blob
-                                                           :source (file-name-concat root "linked")))))
-                                        :status)))
-          (should-not (file-exists-p blob)))
+          (should (equal '(ok ok)
+                         (mapcar (lambda (result) (plist-get result :status))
+                                 (mevedel-session-control-fs-run-program
+                                  (list (list :op 'verify-hash :path source :content hash)
+                                        (list :op 'delete-file :path source))))))
+          (should-not (file-exists-p source)))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-control-fs-observation-time ()

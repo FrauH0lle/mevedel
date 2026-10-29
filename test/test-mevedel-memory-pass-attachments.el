@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Exercise preparation, complete citation-scope admission, accepted housekeeping,
-;; checked private disposal and undo without any inference or live workspace data.
+;; checked permanent disposal without any inference or live workspace data.
 
 ;;; Code:
 
@@ -47,7 +47,7 @@
                  (setq state (mevedel-memory-pass-start workspace (lambda (value) (setq result value))))))
       ,test))
   (test)
-  :doc "a complete attachment-only pass deletes through private storage and restores exact bytes and mode"
+  :doc "a complete attachment-only pass deletes permanently without inference or retained copies"
   (progn
     (start)
     (should (eq 'success (plist-get result :outcome)))
@@ -65,9 +65,8 @@
       (should (equal "attachment" (plist-get proposal :type)))
       (should-not (plist-get accepted :admitted-notes))
       (should-not (plist-member before :trash-file))
-      (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get proposal :id)) :status)))
-      (should (equal bytes (mevedel-session-control-fs-read-file path 'no-conversion)))
-      (should (= #o640 (file-modes path)))))
+      (should-error (mevedel-memory-decision-reverse workspace pass (plist-get proposal :id)) :type 'user-error)
+      (should-not (file-exists-p path))))
   :doc "an omitted permanent citation root cannot become empty flattened text and authorize housekeeping"
   (progn
     (write-region (make-string (1+ mevedel-memory-scope--max-file-bytes) ?x) nil index nil 'silent)

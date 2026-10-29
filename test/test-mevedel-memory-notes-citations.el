@@ -220,12 +220,12 @@
              (path (file-name-concat shared "note.md"))
              (mevedel-memory-dirs nil)
              (now 1800000000)
-             (body (mevedel-working-note-normalize "# Note\n" "owner" "2000-01-01T00:00:00Z"))
+             (body "# Note\n")
              snapshot note-root)
      :before-each ((mevedel-workspace-identity-ensure root)
                    (make-directory shared t)
                    (write-region body nil path nil 'silent)
-                   (set-file-times path (seconds-to-time (- now (* 7 86400))))
+                   (set-file-times path (seconds-to-time (- now (* 14 86400))))
                    (setq snapshot (mevedel-memory-scope--snapshot path (* 32 1024))
                          note-root (list :dir shared :before (list (cons "note.md" snapshot)))))
      :after-each ((dolist (buffer (buffer-list))
@@ -243,7 +243,7 @@
     (set-file-times path (seconds-to-time now))
     (should (mevedel-memory-notes-current-p snapshot))
     (should (string-search "not age-ready" (mevedel-memory-notes-mutation-hold workspace note-root "note.md")))
-    (set-file-times path (seconds-to-time (- now (* 7 86400))))
+    (set-file-times path (seconds-to-time (- now (* 14 86400))))
     (should-not (mevedel-memory-notes-mutation-hold workspace note-root "note.md")))
   :doc "future mtimes and changed bytes remain held"
   (progn

@@ -43,6 +43,28 @@ Like TRAMP, return cached data unless `remote-file-name-inhibit-cache' is t."
                (t (apply operation args))))))
     handler))
 
+(mevedel-deftest mevedel-working-note-files-markdown-p ()
+  (progn
+    (should (mevedel-working-note-files-markdown-p "note.MD"))
+    (should-not (mevedel-working-note-files-markdown-p "note.txt"))
+    (should-not (mevedel-working-note-files-markdown-p nil))))
+
+(mevedel-deftest mevedel-working-note-files-heading ()
+  (progn
+    (should (equal "First heading" (mevedel-working-note-files-heading "Prose\n# First heading\n## Later\n")))
+    (should (equal "" (mevedel-working-note-files-heading "Prose only\n")))
+    (should (<= (length (mevedel-working-note-files-heading (concat "# " (make-string 200 ?x)))) 160))))
+
+(mevedel-deftest mevedel-working-note-files-eligibility ()
+  (let ((now 1800000000) (mevedel-working-note-max-age-days 14))
+    (should (plist-get (mevedel-working-note-files-eligibility (- now (* 14 86400)) now) :eligible))
+    (should-not (plist-get (mevedel-working-note-files-eligibility (1+ (- now (* 14 86400))) now) :eligible))
+    (should (eq 'future-mtime (plist-get (mevedel-working-note-files-eligibility (1+ now) now) :reason)))
+    (should (eq 'unknown-mtime (plist-get (mevedel-working-note-files-eligibility nil now) :reason)))
+    (should (eq 'unknown-mtime (plist-get (mevedel-working-note-files-eligibility now nil) :reason)))
+    (let ((mevedel-working-note-max-age-days nil))
+      (should (eq 'disabled (plist-get (mevedel-working-note-files-eligibility 0 now) :reason))))))
+
 (mevedel-deftest mevedel-working-note-files-inventory
     (:vars* ((root (make-temp-file "mevedel-note-inventory-" t)))
      :after-each ((delete-directory root t)))
@@ -132,8 +154,8 @@ Like TRAMP, return cached data unless `remote-file-name-inhibit-cache' is t."
   :doc "production root and descendant Read share generated rows without touching files or use evidence"
   (progn
     (make-directory directory t)
-    (write-region (mevedel-working-note-normalize "# Actual summary\nBody" "author" "2000-01-01T00:00:00Z") nil path nil 'silent)
-    (set-file-times path (seconds-to-time (- now (* 7 86400))))
+    (write-region "# Actual heading\nBody" nil path nil 'silent)
+    (set-file-times path (seconds-to-time (- now (* 14 86400))))
     (write-region "{\"private\":\"JSON-NOT-A-NOTE\"}" nil (file-name-concat directory "data.json") nil 'silent)
     (set-file-times directory (seconds-to-time 100))
     (set-file-modes directory #o555)
@@ -144,18 +166,19 @@ Like TRAMP, return cached data unless `remote-file-name-inhibit-cache' is t."
                                    (mevedel-resource-prepare 'read "work://shared" (list :session session))) :result))
            descendant)
       (mevedel-tool-fs-read--resource-directory directory "work://shared/nested" (lambda (text) (setq descendant text)))
-      (should (string-search "work://shared/nested/a%20b.MD\tkind=scratch status=open age=7.00d owner=author" root-result))
-      (should (string-search "age-ready; capture/application safety checks pending summary=Actual summary" descendant))
-      (should (string-search "data.json\tkind=attachment" descendant))
-      (should-not (string-search "kind: scratch" descendant))
+      (should (string-search "work://shared/nested/a%20b.MD\tage=14.00d" root-result))
+      (should (string-search "age-ready; capture/application safety checks pending heading=Actual heading" descendant))
+      (should (string-search "data.json\tage=" descendant))
+      (dolist (obsolete '("kind=" "status=" "owner="))
+        (should-not (string-search obsolete descendant)))
       (should-not (string-search "JSON-NOT-A-NOTE" descendant))
       (should (equal mtime (file-attribute-modification-time (file-attributes directory))))
       (should (equal file-mtime (file-attribute-modification-time (file-attributes path))))
       (should (= #o555 (file-modes directory)))
       (should (equal accesses (mevedel-resource-shared-accesses workspace)))
       (should-not (file-exists-p (file-name-concat root ".mevedel" "state")))
-      ;; Negative control: direct Read still returns exact YAML-bearing bytes.
-      (should (string-prefix-p "---\nkind: scratch\n"
+      ;; Negative control: direct Read still returns exact authored bytes.
+      (should (equal "# Actual heading\nBody"
                                (mevedel-resource-execute
                                 (mevedel-resource-prepare 'read "work://shared/nested/a%20b.MD" (list :session session))
                                 (lambda (file _) (mevedel-session-control-fs-read-file file)))))
@@ -176,7 +199,7 @@ Like TRAMP, return cached data unless `remote-file-name-inhibit-cache' is t."
       (mevedel-tool-fs-read--resource-directory directory "work://shared/nested" (lambda (text) (setq descendant text)))
       (dolist (listing (list root-result descendant))
         (dolist (name '("payload.txt" "payload.json"))
-          (should (string-search (concat "work://shared/nested/" name "\tkind=attachment status=- age=14.00d") listing)))
+          (should (string-search (concat "work://shared/nested/" name "\tage=14.00d") listing)))
         (should (string-search "readiness=age-ready; capture/application safety checks pending" listing))
         (should-not (string-search "observation-incomplete" listing))
         (should-not (string-search "Metadata prefix is incomplete" listing))))
@@ -207,41 +230,42 @@ Like TRAMP, return cached data unless `remote-file-name-inhibit-cache' is t."
   (cl-letf (((symbol-function 'mevedel-session-control-fs-observation-time) (lambda (_) now)))
     ,test)
   (test)
-  :doc "capture and generated discovery use the same exact managed and external age boundaries"
-  (dolist (fixture '((scratch open 7) (handoff done 7) (report open 14) (unmanaged open 14)))
-    (let* ((kind (nth 0 fixture)) (status (nth 1 fixture)) (days (nth 2 fixture))
-           (body (if (eq kind 'unmanaged) "---\nkind: invalid\n---\n# External\n"
-                   (mevedel-working-note-normalize
-                    (format "---\nkind: %s\nstatus: %s\n---\n# Body\n" kind status)
-                    "owner" "2000-01-01T00:00:00Z"))))
+  :doc "capture and discovery use mtime alone, ignoring all header-like prose"
+  (dolist (body '("# Body\n" "---\nkind: scratch\nstatus: done\n---\n# Body\n" "---\nkind: invalid\n# Body\n"))
+    (let ((days 14))
       (write-region body nil path nil 'silent)
-      (set-file-times path (seconds-to-time (+ (- now (* days 86400)) 3600)))
+      (set-file-times path (seconds-to-time (1+ (- now (* days 86400)))))
       (should (= 0 (plist-get (mevedel-memory-notes-capture workspace nil) :notes)))
       (should (string-search "readiness=age-wait" (mevedel-working-note-files-listing shared "work://shared")))
       (set-file-times path (seconds-to-time (- now (* days 86400))))
       (should (= 1 (plist-get (mevedel-memory-notes-capture workspace nil) :notes)))
       (should (string-search "readiness=age-ready; capture/application safety checks pending"
                              (mevedel-working-note-files-listing shared "work://shared")))
-      ;; Reopening/editing is an actual modification, even with an old created timestamp.
+      ;; An actual edit resets eligibility; reading the listing did not.
       (set-file-times path (seconds-to-time now))
       (should (= 0 (plist-get (mevedel-memory-notes-capture workspace nil) :notes)))
       (set-file-times path (seconds-to-time (1+ now)))
       (should (= 0 (plist-get (mevedel-memory-notes-capture workspace nil) :notes)))
       (should (string-search "readiness=future-mtime" (mevedel-working-note-files-listing shared "work://shared")))))
-  :doc "a long valid header is explicitly incomplete in discovery but fully classified before capture"
-  (progn
-    (write-region (mevedel-working-note-normalize "# Body\n" (make-string (* 34 1024) ?x)
-                                                   "2000-01-01T00:00:00Z") nil path nil 'silent)
-    (set-file-times path (seconds-to-time (- now (* 7 86400))))
-    (let ((listing (mevedel-working-note-files-listing shared "work://shared")))
-      (should (string-search "readiness=observation-incomplete" listing))
-      (should (string-search "Observation incomplete" listing))
-      (should-not (string-search "kind=unmanaged" listing)))
-    (should (= 1 (plist-get (mevedel-memory-notes-capture workspace nil) :notes))))
+  :doc "one setting changes note and attachment admission together and nil disables it"
+  (let ((attachment (file-name-concat shared "a.bin")))
+    (write-region "# Body\n" nil path nil 'silent)
+    (write-region (unibyte-string 0 1 2) nil attachment nil 'silent)
+    (dolist (file (list path attachment))
+      (set-file-times file (seconds-to-time (- now (* 10 86400)))))
+    (let ((mevedel-working-note-max-age-days 9)
+          capture)
+      (setq capture (mevedel-memory-notes-capture workspace nil))
+      (should (= 1 (plist-get capture :notes)))
+      (should (= 1 (plist-get capture :attachments))))
+    (dolist (mevedel-working-note-max-age-days '(14 nil))
+      (let ((capture (mevedel-memory-notes-capture workspace nil)))
+        (should (= 0 (plist-get capture :notes)))
+        (should (= 0 (plist-get capture :attachments))))))
   :doc "a same-byte mtime refresh during snapshot preparation prevents stale admission"
   (progn
-    (write-region (mevedel-working-note-normalize "# Body\n" "owner" "2000-01-01T00:00:00Z") nil path nil 'silent)
-    (set-file-times path (seconds-to-time (- now (* 7 86400))))
+    (write-region "# Body\n" nil path nil 'silent)
+    (set-file-times path (seconds-to-time (- now (* 14 86400))))
     (let ((original (symbol-function 'mevedel-memory-scope--snapshot)) (snapshots 0) other-paths)
       (cl-letf (((symbol-function 'mevedel-memory-scope--snapshot)
                  (lambda (&rest args)
@@ -255,8 +279,8 @@ Like TRAMP, return cached data unless `remote-file-name-inhibit-cache' is t."
       (should (cl-every (lambda (observed) (not (file-in-directory-p observed shared))) other-paths))))
   :doc "final capture bypasses attributes repopulated by snapshot mode reads"
   (progn
-    (write-region (mevedel-working-note-normalize "# Body\n" "owner" "2000-01-01T00:00:00Z") nil path nil 'silent)
-    (set-file-times path (seconds-to-time (- now (* 7 86400))))
+    (write-region "# Body\n" nil path nil 'silent)
+    (set-file-times path (seconds-to-time (- now (* 14 86400))))
     (let* ((original (symbol-function 'mevedel-memory-scope--snapshot))
            (snapshots 0) (mode-reads 0) other-paths (remote-file-name-inhibit-cache nil)
            (handler (test-mevedel-working-note-files--cached-handler
@@ -277,7 +301,7 @@ Like TRAMP, return cached data unless `remote-file-name-inhibit-cache' is t."
       (should other-paths)
       (should (cl-every (lambda (observed) (not (file-in-directory-p observed shared))) other-paths))
       (should (> mode-reads 0))
-      (should (= (- now (* 7 86400)) (float-time (file-attribute-modification-time (file-attributes path)))))
+      (should (= (- now (* 14 86400)) (float-time (file-attribute-modification-time (file-attributes path)))))
       (let ((remote-file-name-inhibit-cache t))
         (should (= now (float-time (file-attribute-modification-time (file-attributes path))))))))
   :doc "unsaved visiting buffers prevent capture even when disk age is ready"
@@ -330,7 +354,7 @@ Like TRAMP, return cached data unless `remote-file-name-inhibit-cache' is t."
     (unwind-protect
         (progn
           (make-directory shared)
-          (write-region (mevedel-working-note-normalize "# Cold summary\n" "author" "2000-01-01T00:00:00Z")
+          (write-region "# Cold heading\n"
                         nil (file-name-concat shared "note.md") nil 'silent)
           (setenv "HOME" root)
           (dolist (name '("XDG_CONFIG_HOME" "XDG_CACHE_HOME" "XDG_DATA_HOME" "XDG_STATE_HOME" "XDG_RUNTIME_DIR"))
@@ -344,9 +368,9 @@ Like TRAMP, return cached data unless `remote-file-name-inhibit-cache' is t."
                              native-comp-eln-load-path (list ,(file-name-concat root "eln")))
                        (require 'mevedel-working-note-files)
                        (let ((listing (mevedel-working-note-files-listing ,shared "work://shared")))
-                         (unless (and (string-search "work://shared/note.md\tkind=scratch" listing)
-                                      (string-search "summary=Cold summary" listing))
-                           (error "Cold discovery did not read the managed note")))
+                         (unless (and (string-search "work://shared/note.md\tage=" listing)
+                                      (string-search "heading=Cold heading" listing))
+                           (error "Cold discovery did not read the note")))
                        (dolist (feature '(mevedel-memory-notes mevedel-memory-decision
                                           mevedel-memory-apply mevedel-memory-store mevedel-memory-pass))
                          (when (featurep feature) (error "Discovery loaded memory runtime: %s" feature)))))

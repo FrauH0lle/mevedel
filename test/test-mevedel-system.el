@@ -1050,12 +1050,8 @@
                                 "mevedel-created worktree sessions"
                                 "not automatically added to conversations"
                                 "give the receiving agent the note's address"
-                                "defaulting to `scratch/open`"
-                                "real handoffs as `kind: handoff`"
-                                "reports as `kind: report`"
-                                "finished notes as `status: done`"
-                                "after 7 days untouched"
-                                "unmanaged Markdown after 14 days"
+                                "No note header or lifecycle labels are required"
+                                "after 14 days without modification by default"
                                 "capture/application safety checks remain pending"))
               (should (string-search guidance prompt))))
           (let ((prompt (mevedel-system-build-prompt 'main :retained t
@@ -1079,12 +1075,8 @@
                                     "mevedel-created worktree sessions"
                                     "not automatically added to conversations"
                                     "give the receiving agent the note's address"
-                                    "defaulting to `scratch/open`"
-                                    "real handoffs as `kind: handoff`"
-                                    "reports as `kind: report`"
-                                    "finished notes as `status: done`"
-                                    "after 7 days untouched"
-                                    "unmanaged Markdown after 14 days"
+                                    "No note header or lifecycle labels are required"
+                                    "after 14 days without modification by default"
                                     "capture/application safety checks remain pending"))
                   (should (string-search guidance context))))
               (if (equal name "worker")

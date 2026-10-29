@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 ;; Run real pass -> native gptel URL response -> parser -> acceptance -> checked
-;; deletion -> undo.  Only URL transport is replaced; no provider is contacted.
+;; permanent deletion.  Only URL transport is replaced; no provider is contacted.
 
 ;;; Code:
 
@@ -20,7 +20,6 @@
 (require 'mevedel-models)
 (require 'mevedel-telemetry)
 (require 'mevedel-telemetry-usage)
-(require 'mevedel-working-note)
 
 (mevedel-deftest mevedel-memory-pass-start/provider
     (:quiet t
@@ -28,9 +27,7 @@
              (workspace (mevedel-workspace--create :root root))
              (shared (file-name-concat root ".mevedel" "shared"))
              (path (file-name-concat shared "open-handoff.md"))
-             (original (mevedel-working-note-normalize
-                        "---\nkind: handoff\nstatus: open\n---\n# Open handoff\nTODO: port the remote fix.\n512\treads on target A.\nMeasured update: 12.25 ms median, 6 paired samples.\n"
-                        "owner" "2000-01-01T00:00:00Z"))
+             (original "# Open handoff\nTODO: port the remote fix.\n512\treads on target A.\nMeasured update: 12.25 ms median, 6 paired samples.\n")
              (mevedel-memory-dirs nil)
              (mevedel-memory-consolidation-mode 'auto)
              (mevedel-journal-worker--child-p t)
@@ -107,9 +104,8 @@
       (should-not (plist-get proposal :requires))
       (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get proposal :id)) :status)))
       (should-not (file-exists-p path))
-      (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get proposal :id)) :status)))
-      (should (equal original (with-temp-buffer (insert-file-contents path) (buffer-string))))
-      (should (= #o640 (file-modes path)))))
+      (should-error (mevedel-memory-decision-reverse workspace pass (plist-get proposal :id)) :type 'user-error)
+      (should-not (file-exists-p path))))
   :doc "a native fifty-note drain attempts invalid inputs once and excludes later or changed versions"
   (let ((old-mtime (file-attribute-modification-time (file-attributes path)))
         (arrival (file-name-concat shared "later-arrival.md"))

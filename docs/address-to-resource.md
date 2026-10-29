@@ -194,12 +194,11 @@ An explicit missing descendant, including an arbitrary directory descendant,
 is an error rather than an empty discovery root.
 
 Shared-directory Read (root or descendant) generates a bounded listing with
-canonical address, kind/status or unmanaged/attachment, owner, modification age,
-age-readiness reason and first-heading/body summary. Bare `work://` includes
-these same shared rows. Summaries exclude lifecycle frontmatter and are not
-model-generated. Incomplete inventory/header reads are explicit; no maintained
-index is written. Age-readiness uses the target clock and actual mtime: scratch
-or done notes need 7 days, other notes/attachments need 14 days, inclusive at the
+canonical address, modification age, age-readiness reason and first Markdown
+heading. Bare `work://` includes these same shared rows. Headings are not
+model-generated. Incomplete inventory/reads are explicit; no maintained
+index is written. Age-readiness uses the target clock and actual mtime: all notes
+and attachments need 14 days by default, inclusive at the
 boundary. It does not certify dependency/reference absence or authorize mutation:
 capture/application safety checks remain pending. Directory discovery does not
 mark all returned files used or refresh their modification age. Glob/Grep and
@@ -233,22 +232,19 @@ Shared note contents are not automatically added to every conversation. Models
 discover and read them with Read, Glob, and Grep; an agent handing off work
 provides the note's address to the receiving agent.
 
-Shared Markdown notes (`.md`, case-insensitive) receive lifecycle frontmatter
-through ApplyPatch before preview and commit, including writes through contained
-physical paths and moves into the tree. The default is `scratch/open`; explicitly
-label real handoffs `kind: handoff`, reports `kind: report`, and completed notes
-`status: done`. The write path fills owner attribution and UTC creation time,
-preserving valid metadata on edits. Existing unmanaged notes use their previous
-mtime as creation time on first tool write. Malformed supplied metadata fails
-visibly. Other working scopes and non-Markdown attachments are not decorated.
+Shared Markdown notes (`.md`, case-insensitive) are ordinary authored files.
+ApplyPatch neither adds nor validates note headers. One setting,
+`mevedel-working-note-max-age-days` (default 14, nil disables disposal), controls
+modification-age readiness for every note and attachment.
 See the [note-authoring contract](memory.md#shared-working-note-lifecycle).
 
 Memory consolidation reviews a finite daily cohort of age-ready shared notes,
 extracts qualifying lasting knowledge and proposes deletion through ID-only
 acknowledgements. Attachments expire without inference after fourteen days,
 only when complete fresh reference, local-use and unsaved-buffer checks permit
-private reversible disposal. Unknown scope or quota pressure holds the original;
-there is no system-trash alternative. Age-ready empty folders can be pruned,
+permanent deletion. Unknown scope holds the original; no undo copy or system
+trash is used. Reversing an extraction does not restore deleted notes.
+Age-ready empty folders can be pruned,
 but the shared root remains. These safety outcomes appear in capture/application
 observations, not as current guarantees from an age-readiness listing.
 See [Shared working-note lifecycle](memory.md#shared-working-note-lifecycle).

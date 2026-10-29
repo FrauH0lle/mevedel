@@ -59,7 +59,7 @@
          (plist-get (mevedel-memory-decision--published workspace decision) :intent)))
     ,test)
   (test)
-  :doc "unresolved numeric handoff with no memory extraction is genuinely deleted and undo is exact"
+  :doc "unresolved numeric handoff with no memory extraction is permanently deleted"
   (let* ((original "TODO: verify the remote case.\n\nScenario: 584 reads, 67 retained, 2.491 ms.\nOwner: another agent.\n")
          notifications)
     (accept original)
@@ -80,9 +80,8 @@
       (should-not (mevedel-memory-write-recovery-candidates workspace))
       (should (equal decision (mevedel-memory-decision-apply workspace pass (plist-get item :id) notify)))
       (should (equal (list (list path)) notifications))
-      (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get item :id)) :status)))
-      (should (equal (encode-coding-string original 'utf-8-unix) (bytes)))
-      (should (= #o640 (file-modes path)))))
+      (should-error (mevedel-memory-decision-reverse workspace pass (plist-get item :id)) :type 'user-error)
+      (should-not (file-exists-p path))))
   :doc "untouched delete recovery reports observed unchanged targets without inventing an interruption"
   (let ((original "Original reviewed handoff.\n"))
     (accept original)
@@ -100,7 +99,7 @@
         (should (= #o640 (file-modes path)))
         (should (= 1 (plist-get (capture) :notes)))
         (should-not (file-exists-p (mevedel-memory-write--pin write))))))
-  :doc "large escaped preimages remain readable and restore byte-exactly after actual deletion"
+  :doc "large escaped review evidence remains readable without creating a restoration path"
   (let* ((original (concat "TODO: unresolved observation.\nScenario: 584 results.\n"
                            (make-string (* 255 1024) #x00e9) "\n"))
          (encoded (encode-coding-string original 'utf-8-unix)))
@@ -114,9 +113,8 @@
       (should (equal encoded (plist-get (cdr (assoc "handoff.md" (plist-get item :before))) :bytes)))
       (should (> (string-bytes (mevedel-memory-store--print write)) (* 1024 1024)))
       (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get item :id)) :status)))
-      (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get item :id)) :status)))
-      (should (equal encoded (bytes)))
-      (should (= #o640 (file-modes path)))))
+      (should-error (mevedel-memory-decision-reverse workspace pass (plist-get item :id)) :type 'user-error)
+      (should-not (file-exists-p path))))
   :doc "every citing memory and instruction proposal becomes an extraction dependency"
   (progn
    (accept

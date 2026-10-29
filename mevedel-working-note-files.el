@@ -13,9 +13,40 @@
 (require 'url-util)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-utilities)
-(require 'mevedel-working-note)
 
 (defvar remote-file-name-inhibit-cache)
+
+(defcustom mevedel-working-note-max-age-days 14
+  "Untouched age in days before a shared note or attachment can be deleted.
+Age comes only from file modification time; reading does not reset it.
+Active local use and unsaved buffer changes still prevent deletion.
+Set to nil to disable automatic shared-file disposal."
+  :type '(choice (const :tag "Never delete" nil) natnum)
+  :group 'mevedel)
+
+(defun mevedel-working-note-files-markdown-p (path)
+  "Return non-nil when PATH names a Markdown note, ignoring case."
+  (and (stringp path) (string-suffix-p ".md" (downcase path))))
+
+(defun mevedel-working-note-files-eligibility (modified now)
+  "Return modification-age readiness at target time NOW for MODIFIED.
+Both times are seconds on the same target clock.  Eligibility describes age
+only, not capture or application safety.  Exactly the configured age qualifies."
+  (let* ((age (and (numberp modified) (numberp now) (- now modified)))
+         (reason (cond ((null mevedel-working-note-max-age-days) 'disabled)
+                       ((null age) 'unknown-mtime)
+                       ((< age 0) 'future-mtime)
+                       ((>= age (* mevedel-working-note-max-age-days 86400)) 'age-ready)
+                       (t 'age-wait))))
+    (list :age-seconds age :reason reason :eligible (eq reason 'age-ready))))
+
+(defun mevedel-working-note-files-heading (content)
+  "Return the bounded first Markdown heading in CONTENT, or an empty string."
+  (if (string-match "^#+[ \t]+\\(.+\\)$" content)
+      (truncate-string-to-width
+       (string-trim (replace-regexp-in-string "[[:space:][:cntrl:]]+" " " (match-string 1 content)))
+       160 nil nil t)
+    ""))
 
 (defconst mevedel-working-note-files-max-entries 4096
   "Maximum shared entries inventoried in one observation.")
@@ -88,8 +119,8 @@ This is an observation, not write proof."
 
 (defun mevedel-working-note-files-read (directory rows)
   "Read bounded prefixes of file ROWS in DIRECTORY without changing mtimes.
-Rows carry :classification metadata and :kind `text', `attachment' or
-`unknown'.  Only readable Markdown is a text note.  Readable attachments
+Rows carry :kind `text', `attachment' or `unknown'.
+Only readable Markdown is a text note.  Readable attachments
 still carry :text for conservative reference scans; :bytes is complete
 only without :truncated.  Failed or changed observations carry :error."
   (let ((pending rows) results)
@@ -117,21 +148,13 @@ only without :truncated.  Failed or changed observations carry :error."
               (let* ((bytes (plist-get result :value))
                      (truncated (> (length bytes) mevedel-working-note-files-prefix-bytes))
                      (text (mevedel-working-note-files-text
-                            (if truncated (substring bytes 0 mevedel-working-note-files-prefix-bytes) bytes) truncated))
-                     (metadata-incomplete (and (mevedel-working-note-markdown-p (car row))
-                                               truncated text
-                                               (string-match-p "\\`---\r?\n" text)
-                                               (not (string-match-p "\n---\r?\\(?:\n\\|\\'\\)" text))))
-                     (classification (if metadata-incomplete
-                                         (list :classification 'unknown :diagnostic "Metadata prefix is incomplete")
-                                       (mevedel-working-note-classify (car row) (or text "")))))
-                (append row (list :kind (cond ((and (not text) (mevedel-working-note-markdown-p (car row))) 'unknown)
+                            (if truncated (substring bytes 0 mevedel-working-note-files-prefix-bytes) bytes) truncated)))
+                (append row (list :kind (cond ((and (not text) (mevedel-working-note-files-markdown-p (car row))) 'unknown)
                                               ((not text) 'attachment)
-                                              ((mevedel-working-note-markdown-p (car row)) 'text)
+                                              ((mevedel-working-note-files-markdown-p (car row)) 'text)
                                               (t 'attachment))
-                                  :metadata classification :text text :bytes (unless truncated bytes)
-                                  :metadata-incomplete metadata-incomplete
-                                  :error (and (not text) (mevedel-working-note-markdown-p (car row))
+                                  :text text :bytes (unless truncated bytes)
+                                  :error (and (not text) (mevedel-working-note-files-markdown-p (car row))
                                               "Markdown note is not readable UTF-8")
                                   :truncated truncated))))) results))
          batch reads)))
@@ -145,32 +168,27 @@ capture/application safety, use or reference dependencies have been checked."
          (rows (mevedel-working-note-files-read directory (plist-get inventory :files)))
          (now (condition-case nil (mevedel-session-control-fs-observation-time directory) (error nil)))
          (complete (and now (plist-get inventory :complete)
-                        (not (seq-some (lambda (row) (or (plist-get (cdr row) :error)
-                                                        (plist-get (cdr row) :metadata-incomplete))) rows))))
+                        (not (seq-some (lambda (row) (plist-get (cdr row) :error)) rows))))
          (lines
           (mapcar
            (lambda (row)
-             (let* ((data (cdr row)) (metadata (plist-get data :metadata))
-                    (classification (plist-get metadata :classification))
-                    (readiness (mevedel-working-note-eligibility
-                                metadata (and (plist-get data :modified)
-                                              (float-time (plist-get data :modified))) now))
+             (let* ((data (cdr row))
+                    (readiness (mevedel-working-note-files-eligibility
+                                (and (plist-get data :modified)
+                                     (float-time (plist-get data :modified))) now))
                     (age (plist-get readiness :age-seconds))
-                    (reason (if (or (plist-get data :error) (plist-get data :metadata-incomplete)) "observation-incomplete"
+                    (reason (if (plist-get data :error) "observation-incomplete"
                               (if (plist-get readiness :eligible)
                                   "age-ready; capture/application safety checks pending"
                                 (symbol-name (plist-get readiness :reason))))))
-               (format "%s/%s\tkind=%s status=%s age=%s owner=%s readiness=%s summary=%s%s"
+               (format "%s/%s\tage=%s readiness=%s heading=%s%s"
                        (string-remove-suffix "/" address)
                        (mapconcat (lambda (part) (url-hexify-string part)) (split-string (car row) "/") "/")
-                       (if (eq classification 'managed) (plist-get metadata :kind)
-                         (or classification 'unknown))
-                       (if (memq classification '(managed unmanaged)) (plist-get metadata :status) "-")
                        (if age (format "%.2fd" (/ age 86400.0)) "unknown")
-                       (truncate-string-to-width (or (plist-get metadata :owner) "-") 80 nil nil t) reason
+                       reason
                        (if (eq (plist-get data :kind) 'text)
-                           (mevedel-working-note-summary (plist-get data :text)) "")
-                       (if-let* ((diagnostic (or (plist-get data :error) (plist-get metadata :diagnostic))))
+                           (mevedel-working-note-files-heading (plist-get data :text)) "")
+                       (if-let* ((diagnostic (plist-get data :error)))
                            (concat " diagnostic=" diagnostic)
                          (if (plist-get data :truncated) " observation=prefix-only" ""))))) rows)))
     (string-join

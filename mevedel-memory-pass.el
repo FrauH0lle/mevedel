@@ -1039,7 +1039,7 @@ inference and is marked :housekeeping-only."
          (mevedel-memory-consolidation-min-hours (plist-get payload :min-hours))
          (mevedel-memory-consolidation-min-digests (plist-get payload :min-digests))
          (mevedel-memory-consolidation-mode (plist-get payload :mode))
-         (mevedel-memory-notes-undo-quota (plist-get payload :notes-quota))
+         (mevedel-working-note-max-age-days (plist-get payload :notes-max-age-days))
          (mevedel-memory-notes-max-review-bytes (plist-get payload :notes-max-review-bytes))
          recovery-duration notes scope cycle)
     (mevedel-memory-store--assert-owned claim)
@@ -1133,15 +1133,9 @@ inference and is marked :housekeeping-only."
 SCOPE retains complete memory and instruction citation evidence and omissions.
 IN-USE lists relative paths open sessions are using; they wait.
 COHORT is a closed ordered allowlist of frozen full file versions.
-First collect undo blobs no retained write needs.  The caller holds the
-consolidation claim, which also excludes concurrent application."
+The caller holds the consolidation claim, excluding concurrent application."
   (when-let* ((configured (mevedel-memory-notes-directory workspace))
               ((mevedel-session-control-fs-directory-p configured)))
-    ;; An unreadable retained write keeps every blob; collection is retried
-    ;; at the next review and before quota refusal.
-    (ignore-errors
-      (mevedel-memory-notes-collect-blobs
-       workspace (mevedel-memory-notes-blob-directory (file-truename configured))))
     (mevedel-memory-notes-capture workspace entries :mode mode :citation-scope scope :in-use in-use :cohort cohort)))
 
 (defun mevedel-memory-pass--prepared (state result focus memory-only)
@@ -1342,7 +1336,7 @@ from the automatic or drain queue owner; direct starts omit admission dwell."
 				  :min-hours mevedel-memory-consolidation-min-hours
 				  :min-digests mevedel-memory-consolidation-min-digests
 				  :mode mevedel-memory-consolidation-mode
-				  :notes-quota mevedel-memory-notes-undo-quota
+				  :notes-max-age-days mevedel-working-note-max-age-days
 				  :notes-max-review-bytes mevedel-memory-notes-max-review-bytes
 				  ;; Notes that open sessions are using wait; others proceed.
 				  :in-use-notes (mevedel-memory-notes-in-use workspace)

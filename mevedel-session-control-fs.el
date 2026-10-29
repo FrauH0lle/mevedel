@@ -399,59 +399,6 @@ before the operation ran."
    "        test \"$sum\" = \"$payload\" || exit 72\n"
    "      fi\n"
    "      ;;\n"
-   ;; A content-addressed blob is named by its SHA-256.  Its copy is proved
-   ;; against that name before the exclusive link publishes it, so a source
-   ;; path redirected after the caller's observation can only fail; an
-   ;; existing blob with the right bytes makes capture idempotent.
-   "    capture-blob)\n"
-   "      [[ \"$leaf\" =~ ^[0-9a-f]{64}$ ]] || exit 71\n"
-   "      source=$(printf '%s' \"$payload\" | base64 -d) || exit 71\n"
-   "      test -n \"$source\" || exit 71\n"
-   "      if test -e \"$leaf\" || test -L \"$leaf\"; then\n"
-   "        test ! -L \"$leaf\" && test -f \"$leaf\" || exit 69\n"
-   "        sum=$(sha256sum <\"$leaf\") || exit 67\n"
-   "        test \"${sum%% *}\" = \"$leaf\" || exit 72\n"
-   "        exit 0\n"
-   "      fi\n"
-   "      test ! -L \"$source\" || exit 69\n"
-   "      test -e \"$source\" || exit 77\n"
-   "      test -f \"$source\" || exit 68\n"
-   "      temporary=$(mktemp -- .mevedel-control-fs-XXXXXX) || exit 66\n"
-   "      trap 'rm -f -- \"$temporary\"' EXIT\n"
-   "      exec 8<\"$temporary\" || exit 66\n"
-   "      test \"$(readlink /proc/self/fd/8)\" = \"${parent%/}/$temporary\" || exit 70\n"
-   "      exec 8>/proc/self/fd/8 || exit 66\n"
-   "      dd if=\"$source\" iflag=nofollow status=none >&8 || exit 67\n"
-   "      chmod 600 -- /proc/self/fd/8 || exit 67\n"
-   "      sum=$(sha256sum </proc/self/fd/8) || exit 67\n"
-   "      test \"${sum%% *}\" = \"$leaf\" || exit 72\n"
-   "      ln -- \"$temporary\" \"$leaf\" || exit 73\n"
-   "      rm -f -- \"$temporary\"\n"
-   "      trap - EXIT\n"
-   "      ;;\n"
-   ;; Restoration copies a blob beside the pinned leaf, proves the copy's
-   ;; bytes against the blob's name, then renames it into place.  Callers
-   ;; state the expected current leaf as an earlier operation.
-   "    restore-blob)\n"
-   "      test ! -L \"$leaf\" || exit 69\n"
-   "      decoded=$(printf '%s' \"$payload\" | base64 -d) || exit 71\n"
-   "      mode=${decoded%%$'\\n'*}\n"
-   "      blob=${decoded#*$'\\n'}\n"
-   "      [[ \"$mode\" =~ ^[0-7]+$ ]] || exit 71\n"
-   "      [[ \"${blob##*/}\" =~ ^[0-9a-f]{64}$ ]] || exit 71\n"
-   "      test ! -L \"$blob\" && test -f \"$blob\" || exit 66\n"
-   "      temporary=$(mktemp -- .mevedel-control-fs-XXXXXX) || exit 66\n"
-   "      trap 'rm -f -- \"$temporary\"' EXIT\n"
-   "      exec 8<\"$temporary\" || exit 66\n"
-   "      test \"$(readlink /proc/self/fd/8)\" = \"${parent%/}/$temporary\" || exit 70\n"
-   "      exec 8>/proc/self/fd/8 || exit 66\n"
-   "      dd if=\"$blob\" iflag=nofollow status=none >&8 || exit 67\n"
-   "      sum=$(sha256sum </proc/self/fd/8) || exit 67\n"
-   "      test \"${sum%% *}\" = \"${blob##*/}\" || exit 72\n"
-   "      chmod \"$mode\" -- /proc/self/fd/8 || exit 67\n"
-   "      mv -fT -- \"$temporary\" \"$leaf\" || exit 67\n"
-   "      trap - EXIT\n"
-   "      ;;\n"
    "    verify-latest)\n"
    "      suffix=$payload\n"
    "      test -n \"$suffix\" || exit 71\n"
@@ -663,9 +610,7 @@ parent must not turn into a `Setting current directory' failure."
     (verify-list . "verify-list")
     (tree-size . "tree-size")
     (file-hash . "hash")
-    (verify-hash . "verify-hash")
-    (capture-blob . "capture-blob")
-    (restore-blob . "restore-blob"))
+    (verify-hash . "verify-hash"))
   "Program operation names mapped to their target-side verbs.")
 
 (defun mevedel-session-control-fs--program-status (code)
@@ -731,21 +676,6 @@ parent must not turn into a `Setting current directory' failure."
                          (natnump (plist-get op :max-bytes)))
               (error "Read byte limit must be a non-negative integer"))
             (number-to-string (plist-get op :max-bytes)))
-           ;; Blob sources travel as encoded target-local names; the target
-           ;; proves copied bytes against the blob's hash name instead.
-           ((memq (plist-get op :op) '(capture-blob restore-blob))
-            (let ((source (plist-get op :source))
-                  (mode (plist-get op :mode)))
-              (unless (and (stringp source)
-                           (equal (file-remote-p source) (file-remote-p (plist-get op :path)))
-                           (or (eq (plist-get op :op) 'capture-blob) (natnump mode)))
-                (error "Invalid control blob operation"))
-              (base64-encode-string
-               (encode-coding-string
-                (concat (when (eq (plist-get op :op) 'restore-blob) (format "%o\n" mode))
-                        (file-local-name (expand-file-name source)))
-                'utf-8-unix)
-               t)))
            ((eq (plist-get op :op) 'verify-hash)
             (unless (and (stringp content) (string-match-p "\\`[0-9a-f]\\{64\\}\\'" content))
               (error "Invalid expected control file hash"))

@@ -373,15 +373,15 @@ Curated memory is outside journal expiry. Public retrieval uses `memory://journa
 
 Shared working files are not journal input. They are untracked, machine-local
 and temporary. Only Markdown notes (`.md`, case-insensitive) enter model review;
-other files are attachments even when readable text. Managed scratch or done
-notes reach age-readiness after seven days without modification; open handoffs,
-open reports, unmanaged external Markdown and attachments use fourteen days.
+other files are attachments even when readable text. Every note and attachment
+uses one modification-age threshold, fourteen days by default, controlled by
+`mevedel-working-note-max-age-days`. There is no note header or label policy.
 The target clock and actual mtime determine age, inclusively at the boundary;
-future mtimes wait. Creation metadata and reads do not reset age. Exact-version
+future mtimes wait. Reads do not reset age. Exact-version
 pending/recovery holds remain; prior retention/rejection/reversal outcomes do
 not start an additional seven-day reconsideration clock. Local observed use
 retains its independent 24-hour access window. Shared-directory Read generates
-bounded kind/status, owner, age and summary rows, explicitly reporting only
+bounded age and first-heading rows, explicitly reporting only
 age-readiness with capture/application safety checks pending. Each admitted note
 receives an ID-only acknowledgement with deletion implied and an empty body beside
 ordinary qualifying extraction proposals. Every citing extraction is a disposal
@@ -398,7 +398,7 @@ roots, captured instruction targets and their absent companions. Any remaining
 citation, unknown scope, unsaved draft, active use or renewed modification age
 holds the note without deciding it. These checks repeat after preparatory IO
 at the mutation boundary; a same-byte touch after capture resets age too.
-Reversing an extraction restores its applied dependent note deletions first.
+Reversing an extraction never restores deleted temporary notes.
 Fourteen-day-old attachments no surviving text, memory or instructions reference
 and age-ready empty folders receive structured decisions without inference.
 Attachment capture preserves complete permanent-scope evidence and omissions;
@@ -406,7 +406,7 @@ application freshly scans all surviving shared text, including readable scripts
 and JSON, rather than trusting mtimes to identify changed referrers. Named
 containing-folder references hold; generic root navigation does not. Unknown
 scope, active use and unsaved drafts hold without a terminal decision. Target,
-scope and use checks repeat after private-blob preparation. This housekeeping
+scope and use checks repeat at final write admission. This housekeeping
 authority remains separate from model acknowledgement.
 
 Recoverable invalid, duplicate or missing note acknowledgements produce no
@@ -423,14 +423,10 @@ members; they receive no invented review or application credit. This finite
 attempt set replaces capture-history ranking and progress-based catch-up.
 Accepted reviews
 and decisions are the processing record. Note decisions reuse checked intents
-and reversal through a shared-notes target whose coordination stays outside
-the cleaned folder; the previous bytes are retained as content-addressed
-blobs for the ordinary history window, within a quota. Attachments use the same
-private path: quota pressure or unknown usage retains the original with a
-visible hold, never an external trash copy or permanent-delete fallback.
-Fenced blob preparation precedes final local-use/reference checks and the
-ownership-checked mutation. Current retained write references can outlive thirty
-days; a per-disposal payload deadline is not yet enforced. Oversized
+through a shared-notes target whose coordination stays outside the cleaned
+folder. Deletion is permanent for notes and attachments, without undo copies,
+quota accounting, system trash or restoration. Fresh references, active use,
+unsaved buffers and changed reviewed bytes still hold deletion. Oversized
 UTF-8 notes within a configured upper bound are reviewed alone in sequential
 chunks with a compact running summary, retaining whole-file before-state and
 invalidating that summary if the file changes. Attachment reference scanning
@@ -503,6 +499,16 @@ or incomplete observations. Instructions now replaces the complete exact
 captured file, including known absence, because append-only updates could not
 repair an old citation. Checked before-state, ownership, rollback, buffers and
 dependent reversal remain the disposal boundary, not semantic task completion.
+
+### 2026-10-29: Plain temporary files replace headers and undo
+
+Later the same day, the split seven/fourteen-day age policy and the header
+codec were removed. One fourteen-day mtime setting covers every note and
+attachment; editing resets age, so activity needs no labels models may omit.
+Discovery shows age and first heading only. No header migration is needed.
+Undo, blob capture, quota and note restoration were removed as disproportionate
+for ephemeral files. Extraction dependencies and unchanged-file, active-use and
+unsaved-buffer checks remain. Reversing memory extraction never restores notes.
 
 ### 2026-10-29: Metadata and modification age replace quiet-hour readiness
 
@@ -646,9 +652,10 @@ observation granted only a later scheduling opportunity, never write authority.
   initially used verified system trash instead of permanent deletion or an
   unbounded blob exception; remote and unknown platform trash remained
   fail-closed. On 2026-10-29 this alternative was removed to keep one private undo
-  path for all shared files. Quota pressure or unavailable accounting now holds
-  the original rather than creating an external retained copy. Streaming and
-  bounded oversized-note review remain useful independently of that reversal.
+  path for all shared files. Quota pressure or unavailable accounting then held
+  the original rather than creating an external retained copy. Later that day,
+  undo itself was dropped because temporary files do not justify recovery
+  machinery. Streaming and bounded oversized-note review remain useful.
 
 - **Shared files left the journal for a consolidation-owned lifecycle.**
   Capture read shared files before session files within one 32-KiB bound in

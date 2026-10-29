@@ -64,8 +64,6 @@
 (defvar mevedel--session)
 
 ;; `mevedel-tool-patch'
-(declare-function mevedel-tool-patch--fontify-diff
-                  "mevedel-tool-patch" (diff))
 (declare-function mevedel-tool-patch-annotate-line-numbers
                   "mevedel-tool-patch" (proposal))
 (declare-function mevedel-tool-patch-apply
@@ -86,8 +84,6 @@
                   "mevedel-tool-patch" (kind))
 (declare-function mevedel-tool-patch-match-pass-description
                   "mevedel-tool-patch" (pass))
-(declare-function mevedel-tool-patch-normalized-preview
-                  "mevedel-tool-patch" (proposal))
 (declare-function mevedel-tool-patch-operation-stats
                   "mevedel-tool-patch" (operation))
 (declare-function mevedel-tool-patch-physical-path
@@ -244,8 +240,7 @@ OPERATION owns TARGET and is retained as interaction metadata."
 
 (defun mevedel-patch-review--body (proposal)
   "Return the hierarchical interaction body for PROPOSAL."
-  (let* ((normalized (mevedel-tool-patch-normalized-preview proposal))
-         (stats (mevedel-tool-patch-proposal-stats proposal))
+  (let* ((stats (mevedel-tool-patch-proposal-stats proposal))
          (operations (plist-get proposal :operations))
          (file-count (length operations))
          (comments (plist-get stats :comments)))
@@ -543,8 +538,6 @@ OPERATION owns TARGET and is retained as interaction metadata."
                proposal operation operation
                (plist-get operation :rel-path))))
           (ins "\n")
-          (when normalized
-            (ins (mevedel-tool-patch--fontify-diff normalized)))
           (ins (concat "Keys: TAB fold · SPC select · RET visit · e edit"
                        " · f feedback · C-c C-c apply · C-c C-k reject\n")
                'font-lock-face 'help-key-binding)

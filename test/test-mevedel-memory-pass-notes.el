@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Real shared folders, journal records and checked writes exercise note
-;; extraction, disposal, housekeeping, undo and eligibility through the
+;; extraction, permanent disposal, housekeeping and eligibility through the
 ;; consolidation pass without network calls.  The review request is replaced
 ;; by a scripted reply.
 
@@ -45,7 +45,6 @@
                           (mevedel-memory-consolidation-min-digests 5)
 
 
-                          (mevedel-memory-notes-undo-quota (* 1024 1024))
                           (mevedel-memory-pass--inhibit-scheduling nil)
                           (gptel--known-backends nil)
                           (backend (gptel-make-openai "notes-test" :key "test-only" :models '(test-model)))
@@ -217,14 +216,13 @@
                         (should (equal (list (plist-get extraction :id)) (plist-get disposal :requires)))
                         (should (eq 'applied (status extraction)))
                         (should (eq 'applied (status disposal)))
-                        (should (file-exists-p (file-name-concat root ".mevedel" "state" "shared-notes" "blobs"
-                                                                 (secure-hash 'sha256 original))))
-                        ;; Reversing the extraction first restores the note it depended on.
+                        (should-not (file-exists-p (file-name-concat root ".mevedel" "state" "shared-notes" "blobs")))
+                        ;; Reversing durable extraction never restores temporary notes.
                         (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse
                                                           workspace (pass) (plist-get extraction :id))
                                                          :status)))
-                        (should (eq 'reversed (status disposal)))
-                        (should (equal original (bytes path)))
+                        (should (eq 'applied (status disposal)))
+                        (should-not (file-exists-p path))
                         (should-not (file-exists-p (file-name-concat memory "parser.md")))))))
                  :doc "propose mode leaves decisions pending and a disposal waits for its extraction"
                  (let ((mevedel-memory-consolidation-mode 'propose)
@@ -299,8 +297,8 @@
                        (should-not (file-exists-p path))
                        (let ((item (proposal 'note-delete name)))
                          (should (eq 'applied (status item)))
-                         (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace (pass) (plist-get item :id)) :status)))
-                         (should (equal original (bytes path)))))))
+                         (should-error (mevedel-memory-decision-reverse workspace (pass) (plist-get item :id)) :type 'user-error)
+                         (should-not (file-exists-p path))))))
                  :doc "earlier held decisions count only when sync or async jobs actually write, never on replay"
                  (dolist (asynchronous '(nil t))
                    (let* ((name (if asynchronous "pending-async.md" "pending-sync.md"))
@@ -368,15 +366,12 @@
                     (should (file-exists-p young))
                     (should (file-directory-p shared))
                     (should (eq 'applied (status (proposal 'note-prune))))
-                    ;; Undo restores exact bytes, mode and removed parents.
-                    (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse
-                                                      workspace (pass) (plist-get (proposal 'note-delete "x/y/orphan.bin") :id))
-                                                     :status)))
-                    (should (equal binary (bytes orphan)))
-                    (should (= #o640 (file-modes orphan)))))
-                 :doc "quota refusal, concurrent edits and unsaved buffers leave notes untouched"
+                    (should-error (mevedel-memory-decision-reverse
+                                   workspace (pass) (plist-get (proposal 'note-delete "x/y/orphan.bin") :id))
+                                  :type 'user-error)
+                    (should-not (file-exists-p orphan))))
+                 :doc "concurrent edits and unsaved buffers leave notes untouched"
                  (let* ((mevedel-memory-consolidation-mode 'propose)
-                        (attachment (note "big.bin" (make-string 600 0)))
                         (edited (note "edited.md" "Original finding.\n"))
                         (visited (note "visited.md" "Visited finding.\n"))
                         buffer)
@@ -386,14 +381,6 @@
                          (setq reply (text nil (mapcar (lambda (name) (list (address name)))
                                                        '("edited.md" "visited.md"))))
                          (finish)
-                         (let ((mevedel-memory-notes-undo-quota 100))
-                           (should-error (mevedel-memory-decision-apply
-                                          workspace (pass) (plist-get (proposal 'note-delete "big.bin") :id))
-                                         :type 'mevedel-memory-decision-held))
-                         (should (equal (make-string 600 0) (bytes attachment)))
-                         (should-not (status (proposal 'note-delete "big.bin")))
-                         (should (string-match-p "quota" (cdr (assoc "big.bin"
-                                                                    (plist-get (mevedel-memory-notes-observation workspace) :blocked)))))
                          (write-region "Concurrent edit.\n" nil edited nil 'silent)
                          (should (eq 'stale (plist-get (mevedel-memory-decision-apply
                                                         workspace (pass) (plist-get (proposal 'note-delete "edited.md") :id))
@@ -773,19 +760,18 @@
                                                       workspace (pass) (plist-get (proposal 'note-delete "gone.md") :id))
                                                      :status))))
                    (should-not (file-exists-p gone)))
-                 :doc "large binary attachments round trip byte for byte through undo"
-                 (let* ((mevedel-memory-notes-undo-quota (* 16 1024 1024))
-                        (large (let ((bytes (make-string (* 3 1024 1024) 0)))
+                 :doc "large binary attachments are deleted without inference or copies"
+                 (let* ((large (let ((bytes (make-string (* 3 1024 1024) 0)))
                                  (dotimes (index (length bytes) bytes)
                                    (aset bytes index (% (* index 7) 256)))))
                         (path (note "recording.bin" large)))
                    (should (start :automatic t))
                    (should-not (file-exists-p path))
-                   (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse
-                                                     workspace (pass) (plist-get (proposal 'note-delete "recording.bin") :id))
-                                                    :status)))
-                   (should (equal large (bytes path))))
-                 :doc "oversized text retains complete checked deletion undo and modes"
+                   (should (= 0 calls))
+                   (should-error (mevedel-memory-decision-reverse
+                                  workspace (pass) (plist-get (proposal 'note-delete "recording.bin") :id)) :type 'user-error)
+                   (should-not (file-exists-p path)))
+                 :doc "oversized text receives complete chunk review and permanent deletion"
                  (let* ((large (concat (make-string (* 40 1024) ?x) "\nOpen: verify remote.\n"))
                         (path (note "large.md" large)))
                    (set-file-modes path #o640)
@@ -795,47 +781,34 @@
                    (finish)
                    (should-not (file-exists-p path))
                    (should (eq 'applied (status (proposal 'note-delete))))
-                   (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse
-                                                     workspace (pass) (plist-get (proposal 'note-delete) :id)) :status)))
-                   (should (equal large (bytes path)))
-                   (should (= #o640 (file-modes path))))
-                 :doc "worst-case escaped 512 KiB notes fit durable writes and checked undo"
+                   (should-error (mevedel-memory-decision-reverse
+                                  workspace (pass) (plist-get (proposal 'note-delete) :id)) :type 'user-error)
+                   (should-not (file-exists-p path)))
+                 :doc "worst-case escaped 512 KiB notes fit review and permanent deletion"
                  (let* ((large (encode-coding-string (make-string (* 256 1024) #x00e9) 'utf-8-unix))
                         (path (note "escaped.md" large)))
-                   ;; Two snapshots of 512 KiB with fourfold escaping exceed
-                   ;; the old 4 MiB record bound once metadata is included.
                    (should (= mevedel-memory-notes-max-review-bytes (length large)))
                    (should (start :automatic t))
                    (setq reply (text nil (list (list (address "escaped.md")))))
                    (finish)
                    (should (eq 'applied (status (proposal 'note-delete))))
                    (should-not (file-exists-p path))
-                   (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse
-                                                     workspace (pass) (plist-get (proposal 'note-delete) :id)) :status)))
-                   (should (equal large (bytes path))))
-                 :doc "over-quota WAV housekeeping retains the original without inference or an external copy"
+                   (should-not (file-exists-p (file-name-concat root ".mevedel" "state" "shared-notes" "blobs"))))
+                 :doc "large WAV housekeeping deletes without inference, quota or external copies"
                  (let* ((data (file-name-concat root "xdg-data"))
                         (process-environment (cons (concat "XDG_DATA_HOME=" data) process-environment))
                         (large (make-string (* 5 1024 1024) 0))
-                        (hash (secure-hash 'sha256 large))
                         (path (note "recording.wav" large)))
                    (set-file-modes path #o640)
                    (start :automatic t)
                    (should (= 0 calls))
-                   (should-not (plist-get state :prepared))
-                   (should-not (plist-get state :accepted))
                    (should-not (file-exists-p (file-name-concat data "Trash")))
-                   (should-not (file-exists-p (file-name-concat root ".mevedel" "state" "shared-notes" "blobs" hash)))
-                   (should (equal large (bytes path)))
-                   (should (= #o640 (file-modes path)))
-                   (should (string-match-p "quota" (cdr (assoc "recording.wav"
-                                                              (plist-get (mevedel-memory-notes-observation workspace) :blocked))))))
-                 :doc "exact-fit attachment disposal uses private undo and never calls system trash"
-                 (let* ((mevedel-memory-notes-undo-quota 3)
-                        (data (file-name-concat root "xdg-data"))
+                   (should-not (file-exists-p (file-name-concat root ".mevedel" "state" "shared-notes" "blobs")))
+                   (should-not (file-exists-p path)))
+                 :doc "small attachment disposal never calls system trash or creates private copies"
+                 (let* ((data (file-name-concat root "xdg-data"))
                         (process-environment (cons (concat "XDG_DATA_HOME=" data) process-environment))
                         (content (unibyte-string 0 1 2))
-                        (hash (secure-hash 'sha256 content))
                         (path (note "recording.wav" content))
                         (trash-calls 0))
                    (set-file-modes path #o640)
@@ -847,11 +820,10 @@
                    (should (eq 'applied (status (proposal 'note-delete))))
                    (should-not (file-exists-p path))
                    (should-not (file-exists-p (file-name-concat data "Trash")))
-                   (should (equal content (bytes (file-name-concat root ".mevedel" "state" "shared-notes" "blobs" hash))))
-                   (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse
-                                                     workspace (pass) (plist-get (proposal 'note-delete) :id)) :status)))
-                   (should (equal content (bytes path)))
-                   (should (= #o640 (file-modes path))))
+                   (should-not (file-exists-p (file-name-concat root ".mevedel" "state" "shared-notes" "blobs")))
+                   (should-error (mevedel-memory-decision-reverse
+                                  workspace (pass) (plist-get (proposal 'note-delete) :id)) :type 'user-error)
+                   (should-not (file-exists-p path)))
                  :doc "a folder populated after capture is not pruned"
                  (let ((mevedel-memory-consolidation-mode 'propose)
                        (folder (file-name-concat shared "later")))

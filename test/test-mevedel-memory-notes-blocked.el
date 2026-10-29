@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Real-file regressions for chunk review, streaming references and private undo.
+;; Real-file regressions for chunk review and streaming references.
 ;; Model callbacks are scripted; filesystem observations are real.
 
 ;;; Code:
@@ -228,18 +228,16 @@
       (let ((files (plist-get (cdr (plist-get (capture) :root)) :attachments)))
         (should (member "at.bin" files))
         (should-not (member "young.bin" files)))))
-  :doc "a large over-quota attachment stays byte-exact without any alternate copy"
-  (let ((mevedel-memory-notes-undo-quota 100))
-    (let* ((path (put "recording.wav" (make-string (* 5 1024 1024) 0)))
-           (before (mevedel-memory-notes-observe (list :path path)))
-           (capture (capture)))
-      (should (= 0 (plist-get capture :attachments)))
-      (should (string-match-p "quota" (cdr (assoc "recording.wav" (plist-get capture :blocked)))))
-      (should (mevedel-memory-notes-current-p before))
-      (should-not (file-exists-p (mevedel-memory-notes-blob-directory shared)))
-      (should-not (file-exists-p (file-name-concat (getenv "XDG_DATA_HOME") "Trash")))))
-  :doc "an exact-fit private-copy quota admits the attachment without a trash annotation"
-  (let ((mevedel-memory-notes-undo-quota 3))
+  :doc "large attachments need no private-copy quota and capture stores no bytes"
+  (progn
+    (put "large.wav" (make-string (* 5 1024 1024) 0))
+    (let* ((capture (capture)) (row (cdr (plist-get capture :root)))
+           (before (cdr (assoc "large.wav" (plist-get row :before)))))
+      (should (= 1 (plist-get capture :attachments)))
+      (should (= (* 5 1024 1024) (plist-get before :size)))
+      (should-not (plist-member before :bytes))))
+  :doc "small attachments also capture only the observed file version"
+  (progn
     (put "recording.wav" (unibyte-string 0 1 2))
     (let* ((capture (capture)) (row (cdr (plist-get capture :root)))
            (before (cdr (assoc "recording.wav" (plist-get row :before)))))

@@ -34,14 +34,8 @@ directories remain untouched. Domain collectors choose retention and references.
 
 `hash` and `verify-hash` hash a regular leaf on the target through a descriptor
 proved to be that leaf, so large files are compared without transferring
-their bytes. `capture-blob` copies a named source into a content-addressed blob
-in the pinned parent: the copy is proved against its SHA-256 name before an
-exclusive link publishes it, and an existing blob with matching bytes makes
-capture idempotent. `restore-blob` copies a blob beside the pinned leaf, proves
-the copy against the blob's name, sets its mode and renames it into place. The
-source paths of both are not pinned; the content proof is their guarantee, so
-a redirected path can only fail. Callers state the expected current leaf as
-an earlier operation, as with every other mutation.
+their bytes. Shared-file disposal verifies the reviewed hash and mode before
+plain deletion. It needs no blob-capture or restoration operations.
 
 Requests use five fields per operation and NUL framing. Arbitrary content and
 response bytes use base64; numeric limits, modes, and deadlines use validated
@@ -249,7 +243,10 @@ protocol, extraction directory, or generic resolver cache is needed.
   inside 4-MiB escaped Lisp records, and `verify` ships expected bytes in the
   request. Shared folders hold images, recordings and multi-megabyte results,
   which could neither be retained nor compared that way. Hash verification and
-  content-addressed blob capture and restoration keep large bytes on the target.
+  content-addressed blob capture and restoration initially kept large bytes on
+  the target. Later on 2026-10-29, note undo was removed: retaining recovery
+  machinery for temporary files cost more than losing those files. Hash checks
+  remain useful for deletion; the capture/restore verbs were deleted.
 
 - **Large pipe writes stalled remote image saves.** A provisioned SSH browser
   acceptance run measured a 12.5-second median for individual image moves.
