@@ -383,7 +383,7 @@ not start an additional seven-day reconsideration clock. Local observed use
 retains its independent 24-hour access window. Shared-directory Read generates
 bounded kind/status, owner, age and summary rows, explicitly reporting only
 age-readiness with capture/application safety checks pending. Each admitted note
-receives an explicit delete acknowledgement with a reason and empty body beside
+receives an ID-only acknowledgement with deletion implied and an empty body beside
 ordinary qualifying extraction proposals. Every citing extraction is a disposal
 dependency and must be applied first. Notes are disposable working material,
 not an open-work tracker: deletion needs no inventory of unfinished tasks,
@@ -399,9 +399,15 @@ citation, unknown scope, unsaved draft, active use or renewed modification age
 holds the note without deciding it. These checks repeat after preparatory IO
 at the mutation boundary; a same-byte touch after capture resets age too.
 Reversing an extraction restores its applied dependent note deletions first.
-Quiet attachments no surviving text references and quiet empty folders receive
-structured decisions without inference; existing housekeeping safety remains
-separate from model acknowledgement.
+Fourteen-day-old attachments no surviving text, memory or instructions reference
+and age-ready empty folders receive structured decisions without inference.
+Attachment capture preserves complete permanent-scope evidence and omissions;
+application freshly scans all surviving shared text, including readable scripts
+and JSON, rather than trusting mtimes to identify changed referrers. Named
+containing-folder references hold; generic root navigation does not. Unknown
+scope, active use and unsaved drafts hold without a terminal decision. Target,
+scope and use checks repeat after private-blob preparation. This housekeeping
+authority remains separate from model acknowledgement.
 
 Recoverable invalid, duplicate or missing note acknowledgements produce no
 decision for those notes, rather than discarding valid unrelated proposals.
@@ -419,10 +425,12 @@ Accepted reviews
 and decisions are the processing record. Note decisions reuse checked intents
 and reversal through a shared-notes target whose coordination stays outside
 the cleaned folder; the previous bytes are retained as content-addressed
-blobs for the ordinary history window, within a quota. Over-quota attachments
-instead retain a verified copy in local system trash before the locked original
-removal; trash unavailable on the original target means no removal. Undo from
-trash remains checked and depends on those bytes still existing. Oversized
+blobs for the ordinary history window, within a quota. Attachments use the same
+private path: quota pressure or unknown usage retains the original with a
+visible hold, never an external trash copy or permanent-delete fallback.
+Fenced blob preparation precedes final local-use/reference checks and the
+ownership-checked mutation. Current retained write references can outlive thirty
+days; a per-disposal payload deadline is not yet enforced. Oversized
 UTF-8 notes within a configured upper bound are reviewed alone in sequential
 chunks with a compact running summary, retaining whole-file before-state and
 invalidating that summary if the file changes. Attachment reference scanning
@@ -635,8 +643,12 @@ observation granted only a later scheduling opportunity, never write authority.
   limits. Scanning now streams with filename overlap. Useful oversized notes
   can receive bounded chunk review while very large copies remain explicitly
   blocked for manual splitting or relocation. Attachments above the undo quota
-  use verified system trash instead of permanent deletion or an unbounded blob
-  exception. Remote and unknown platform trash remains fail-closed.
+  initially used verified system trash instead of permanent deletion or an
+  unbounded blob exception; remote and unknown platform trash remained
+  fail-closed. On 2026-10-29 this alternative was removed to keep one private undo
+  path for all shared files. Quota pressure or unavailable accounting now holds
+  the original rather than creating an external retained copy. Streaming and
+  bounded oversized-note review remain useful independently of that reversal.
 
 - **Shared files left the journal for a consolidation-owned lifecycle.**
   Capture read shared files before session files within one 32-KiB bound in

@@ -78,7 +78,7 @@
     (should pending)
     (let* ((reply (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n"
                           "## Instructions\n- none\n## Notes\n```proposal\nnote: \"work://shared/open-handoff.md\"\n"
-                          "disposition: \"delete\"\nreason: \"No qualifying durable lesson\"\n---\n```\n## No action\n- none"))
+                          "---\n```\n## No action\n- none"))
            (response (gptel--json-encode
                       (list :choices (vector (list :index 0 :finish_reason "stop"
                                                    :message (list :role "assistant" :content reply)))
@@ -155,9 +155,8 @@
                               "## Remove\n- none\n## Instructions\n- none\n## Notes\n"
                               (mapconcat
                                (lambda (id)
-                                 (format (concat "```proposal\nnote: %S\ndisposition: %S\n"
-                                                 "reason: \"No qualifying durable lesson\"\n---\n```\n")
-                                         id (if (= calls 1) "keep" "delete")))
+                                 (format "```proposal\nnote: %S\n%s---\n```\n"
+                                         id (if (= calls 1) "unknown: true\n" "")))
                                (plist-get pending :ids) "")
                               "## No action\n- none"))
                      (response

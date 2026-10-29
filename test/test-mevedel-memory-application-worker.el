@@ -360,7 +360,7 @@ while constructing retained history.  Recovery still owns final pin release."
                                          "title: \"Lesson\"\nhook: \"Lesson\"\nreason: \"Supported\"\nevidence: [%S]\n---\n"
                                          "Preserve extraction dependencies.\n```\n## Update\n- none\n## Merge\n- none\n"
                                          "## Remove\n- none\n## Instructions\n- none\n## Notes\n```proposal\nnote: %S\n"
-                                         "disposition: \"delete\"\nreason: \"Reviewed\"\n---\n```\n## No action\n- none")
+                                         "---\n```\n## No action\n- none")
                                  memory-id address address))
                    (pending (mevedel-memory-store-accept workspace prepared text nil "test:model" nil (list address)))
                    (items (plist-get pending :proposals))

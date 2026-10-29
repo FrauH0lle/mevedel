@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Real-file regressions for chunk review, streaming references and safe trash.
-;; Model callbacks are scripted; filesystem and trash operations are real.
+;; Real-file regressions for chunk review, streaming references and private undo.
+;; Model callbacks are scripted; filesystem observations are real.
 
 ;;; Code:
 
@@ -14,17 +14,18 @@
 (require 'mevedel-memory-notes)
 (require 'mevedel-memory-review)
 (require 'mevedel-models)
+(require 'mevedel-session-control-fs)
 
 (mevedel-deftest mevedel-memory-notes/blocked
     (:vars* ((root (file-name-as-directory (file-truename (make-temp-file "mevedel-blocked-" t))))
              (workspace (mevedel-workspace--create :root root))
              (shared (file-name-concat root ".mevedel" "shared"))
-             (trash-directory (file-name-concat root "trash"))
-             )
+             (mevedel-memory-dirs nil))
      :before-each ((mevedel-workspace-identity-ensure root) (make-directory shared t))
      :after-each ((delete-directory root t)))
   (cl-labels ((put (name bytes)
                (let ((path (file-name-concat shared name)) (coding-system-for-write 'no-conversion))
+                 (make-directory (file-name-directory path) t)
                  (write-region bytes nil path nil 'silent)
                  (set-file-times path (seconds-to-time (- (float-time) (* 15 86400))))
                  path))
@@ -62,17 +63,16 @@
       (should (= 1 (plist-get capture :attachments)))
       (should (equal '("orphan.wav") (plist-get (cdr (plist-get capture :root)) :attachments)))
       (should-not (assoc "orphan.wav" (plist-get capture :blocked))))
-    (let ((since (- (float-time) 1)))
-      (set-file-times (file-name-concat shared "transcript.md") (current-time))
-      (should (mevedel-memory-notes-recheck (list :dir shared :captured since) "kept.wav"))
-      (should-not (mevedel-memory-notes-recheck (list :dir shared :captured since) "orphan.wav"))))
+    (let ((proof (mevedel-memory-notes--shared-proof shared '("kept.wav" "orphan.wav"))))
+      (should (member "kept.wav" (plist-get proof :referenced)))
+      (should-not (member "orphan.wav" (plist-get proof :referenced)))))
   :doc "links still make a reference scan incomplete even with streaming"
   (let ((path (put "note.md" "No references.\n")))
     (put "orphan.wav" (unibyte-string 0 1 2))
     (make-symbolic-link path (file-name-concat shared "linked.md"))
     (let ((capture (capture)))
       (should (= 0 (plist-get capture :attachments)))
-      (should (string-match-p "checked completely" (cdr (assoc "orphan.wav" (plist-get capture :blocked)))))))
+      (should (equal "Shared reference inventory is incomplete" (cdr (assoc "orphan.wav" (plist-get capture :blocked)))))))
   :doc "chunk review carries summaries sequentially and final review sees only the summary"
   (let* ((mevedel-memory-review-max-tokens 100)
          (mevedel-memory-review-max-bytes 1000)
@@ -213,60 +213,69 @@
     (should (= 37 (plist-get result :output-bytes)))
     (should (= 37 (plist-get (funcall (plist-get handle :usage)) :output-bytes)))
     (should (= 30 (plist-get result :reasoning-bytes))))
-  :doc "a real over-quota attachment is admitted with a verified trash destination"
+  :doc "production attachment capture includes the exact target-clock fourteen-day boundary, not one second younger"
+  (let* ((now 1800000000)
+         (boundary (- now (* 14 86400)))
+         (at (put "at.bin" (unibyte-string 0 1 2)))
+         (young (put "young.bin" (unibyte-string 0 3 4)))
+         (clock (symbol-function 'mevedel-session-control-fs-observation-time)))
+    (set-file-times at (seconds-to-time boundary))
+    (set-file-times young (seconds-to-time (1+ boundary)))
+    (cl-letf (((symbol-function 'mevedel-session-control-fs-observation-time)
+               (lambda (directory)
+                 (if (equal (file-name-as-directory directory) (file-name-as-directory shared)) now
+                   (funcall clock directory)))))
+      (let ((files (plist-get (cdr (plist-get (capture) :root)) :attachments)))
+        (should (member "at.bin" files))
+        (should-not (member "young.bin" files)))))
+  :doc "a large over-quota attachment stays byte-exact without any alternate copy"
   (let ((mevedel-memory-notes-undo-quota 100))
-    (put "recording.wav" (make-string (* 5 1024 1024) 0))
+    (let* ((path (put "recording.wav" (make-string (* 5 1024 1024) 0)))
+           (before (mevedel-memory-notes-observe (list :path path)))
+           (capture (capture)))
+      (should (= 0 (plist-get capture :attachments)))
+      (should (string-match-p "quota" (cdr (assoc "recording.wav" (plist-get capture :blocked)))))
+      (should (mevedel-memory-notes-current-p before))
+      (should-not (file-exists-p (mevedel-memory-notes-blob-directory shared)))
+      (should-not (file-exists-p (file-name-concat (getenv "XDG_DATA_HOME") "Trash")))))
+  :doc "an exact-fit private-copy quota admits the attachment without a trash annotation"
+  (let ((mevedel-memory-notes-undo-quota 3))
+    (put "recording.wav" (unibyte-string 0 1 2))
     (let* ((capture (capture)) (row (cdr (plist-get capture :root)))
            (before (cdr (assoc "recording.wav" (plist-get row :before)))))
       (should (= 1 (plist-get capture :attachments)))
-      (mevedel-memory-notes--prepare-trash row before)
-      (should (file-exists-p (plist-get before :path)))
-      (should (equal (plist-get before :hash)
-                     (plist-get (mevedel-session-control-fs-file-hash (plist-get before :trash-file)) :sha256)))
-      (should-not (directory-files (file-name-concat root ".mevedel" "state" "shared-notes" "trash-staging")
-                                  nil directory-files-no-dot-files-regexp))))
-  :doc "a trash implementation that deletes instead cannot authorize original removal"
-  (let ((mevedel-memory-notes-undo-quota 1))
-    (put "recording.wav" (unibyte-string 0 1 2))
-    (let* ((row (cdr (plist-get (capture) :root)))
-           (before (cdr (assoc "recording.wav" (plist-get row :before)))))
-      (cl-letf (((symbol-function 'move-file-to-trash) (lambda (file) (delete-file file))))
-        (should-error (mevedel-memory-notes--prepare-trash row before)))
-      (should (file-exists-p (plist-get before :path)))
-      (should-not (file-exists-p (plist-get before :trash-file)))))
-  :doc "a failed trash move cleans its staging copy and leaves the original intact"
-  (let ((mevedel-memory-notes-undo-quota 1))
-    (put "recording.wav" (unibyte-string 0 1 2))
-    (let* ((row (cdr (plist-get (capture) :root)))
-           (before (cdr (assoc "recording.wav" (plist-get row :before))))
-           (staging (file-name-concat root ".mevedel" "state" "shared-notes" "trash-staging"
-                                     (plist-get before :hash)))
-           (entered nil))
-      (cl-letf (((symbol-function 'move-file-to-trash)
-                 (lambda (_file) (setq entered t) (error "Trash metadata unavailable"))))
-        (should-error (mevedel-memory-notes--prepare-trash row before)))
-      (should entered)
-      (should-not (file-exists-p staging))
-      (should (file-exists-p (plist-get before :path)))))
-  :doc "a configured trash inside shared cannot consume its own hash-named attachment"
-  (let* ((mevedel-memory-notes-undo-quota 1)
-         (trash-directory shared)
-         (bytes (unibyte-string 0 1 2))
-         (hash (secure-hash 'sha256 bytes))
-         (path (put hash bytes))
-         (before (plist-put (mevedel-memory-notes-observe (list :path path)) :trash-file path)))
-    (should-error (mevedel-memory-notes--prepare-trash (list :dir shared) before))
-    (should (file-exists-p path))
-    (should (string-match-p "outside" (cdr (assoc hash (plist-get (capture) :blocked))))))
-  :doc "remote and unsupported native trash stay blocked without a connection or fallback"
+      (should (= 3 (plist-get before :size)))
+      (should-not (plist-member before :trash-file))))
+  :doc "a canonical named-folder reference without a trailing slash protects its child, not an unrelated folder"
   (progn
-    (should (string-match-p "remote" (mevedel-memory-notes--trash-unavailable "/ssh:unreachable:/tmp/file.wav")))
-    (let ((mevedel-memory-notes-undo-quota 1))
-      (put "recording.wav" (unibyte-string 0 1 2))
-      (cl-letf (((symbol-function 'system-move-file-to-trash) #'ignore))
-        (let ((capture (capture)))
-          (should (= 0 (plist-get capture :attachments)))
-          (should (string-match-p "platform" (cdr (assoc "recording.wav" (plist-get capture :blocked))))))))))
+    (put "folder/kept.wav" (unibyte-string 0 1 2))
+    (put "elsewhere/free.wav" (unibyte-string 0 3 4))
+    (put "references.json" "{\"source\": \"`work://shared/folder`\"}\n")
+    (let* ((capture (capture)) (files (plist-get (cdr (plist-get capture :root)) :attachments)))
+      (should-not (member "folder/kept.wav" files))
+      (should (member "elsewhere/free.wav" files))
+      (should (member "references.json" files))
+      (should (string-match-p "surviving shared" (cdr (assoc "folder/kept.wav" (plist-get capture :blocked)))))))
+  :doc "generic root mentions and a text attachment's self-reference are not references to surviving children"
+  (progn
+    (put "folder/free.wav" (unibyte-string 0 1 2))
+    (put "tool.sh" "# tool.sh mentions `work://shared/`, `.mevedel/shared/`, `.` and `./`\n")
+    (let ((files (plist-get (cdr (plist-get (capture) :root)) :attachments)))
+      (should (member "folder/free.wav" files))
+      (should (member "tool.sh" files))))
+  :doc "a supplied incomplete permanent scope is not silently replaced by a fresh repaired scope"
+  (let* ((memory (file-name-concat root "memory"))
+         (mevedel-memory-dirs (list memory))
+         (index (file-name-concat memory "MEMORY.md")))
+    (make-directory memory t)
+    (write-region (make-string (1+ mevedel-memory-scope--max-file-bytes) ?x) nil index nil 'silent)
+    (put "orphan.wav" (unibyte-string 0 1 2))
+    (let ((scope (mevedel-memory-scope-capture workspace)))
+      (should (plist-get scope :omissions))
+      (write-region "No references.\n" nil index nil 'silent)
+      (let ((captured (mevedel-memory-notes-capture workspace nil :citation-scope scope)))
+        (should (= 0 (plist-get captured :attachments)))
+        (should (string-match-p "incomplete" (cdr (assoc "orphan.wav" (plist-get captured :blocked)))))))))
 
 (mevedel-deftest mevedel-memory-notes--chunks ()
   ,test

@@ -50,10 +50,7 @@
          (write-region new-instructions nil instructions-path nil 'silent))
        (prepare (&optional repairs absent-instructions)
          (setq scope (mevedel-memory-scope-capture workspace))
-         (let* ((texts (cl-loop for (_ . captured) in (plist-get scope :roots)
-                                append (mapcar (lambda (row) (decode-coding-string (or (plist-get (cdr row) :bytes) "") 'utf-8-unix))
-                                               (plist-get captured :before))))
-                (capture (mevedel-memory-notes-capture workspace nil :mode 'auto :external texts))
+         (let* ((capture (mevedel-memory-notes-capture workspace nil :mode 'auto :citation-scope scope))
                 (memory-id (car (seq-find (lambda (row) (eq (plist-get (cdr row) :kind) 'memory)) (plist-get scope :roots))))
                 (instruction-id (car (seq-find (lambda (row) (eq (plist-get (cdr row) :kind) 'instructions)) (plist-get scope :roots))))
                 (note-id "work://shared/task.md"))
@@ -78,8 +75,7 @@
                                 instruction-id (if absent-instructions "AGENTS.local.md" "AGENTS.md") note-id
                                 (if absent-instructions "" new-instructions))
                       "- none\n")
-                    (format (concat "## Notes\n```proposal\nnote: %S\ndisposition: \"delete\"\n"
-                                    "reason: \"Extracted qualifying knowledge; working material is disposable\"\n---\n```\n"
+                    (format (concat "## Notes\n```proposal\nnote: %S\n---\n```\n"
                                     "## No action\n- none") note-id))))
              (setq pass (plist-get prepared :id)
                    accepted (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil (list note-id))

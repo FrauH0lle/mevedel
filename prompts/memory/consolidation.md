@@ -38,14 +38,15 @@ Shared working notes in `notes` are temporary working material from
 `work://shared/`. They are cleaned up after this review, so extract every
 qualifying memory from them now: cite the note's ID in a proposal's `evidence`.
 The same qualification rules apply; a note's existence is no reason to save
-it. Only IDs in the top-level `notes` array may receive dispositions. Omitted
+it. Only IDs in the top-level `notes` array may receive acknowledgements. Omitted
 or merely referenced notes remain outside this review, even if investigation
 tools can read them. Acknowledge each admitted note exactly once in Notes with
-`disposition: "delete"` and an empty body, after extracting any qualifying
+only `note: "ID"` and an empty body, after extracting any qualifying
 knowledge. No extraction is a successful outcome. Do not invent memories to
 justify cleanup. Open work, unresolved findings, numeric measurements, and
 possible future usefulness do not require a completion audit or a note rewrite.
-Do not offer keep or condense dispositions. Acknowledgement proposes deletion;
+Deletion is implied by the acknowledgement; do not supply a disposition or reason.
+Acknowledgement proposes deletion;
 it does not claim the file was removed. The checked application removes a note
 only after every extraction citing it has been applied.
 
@@ -55,9 +56,9 @@ citing instruction file, so surviving guidance is self-contained without the
 temporary note reference. Cite the note's ID as evidence. Preserve unrelated
 guidance and do not promote temporary task state into memory merely to remove
 a citation. If the captured scope does not support a safe repair, acknowledge
-delete anyway and explain the uncertainty in `reason`: application dynamically
-holds deletion while citations remain or their scope cannot be checked. The
-hold is a dependency refusal, not a keep disposition or deletion authority.
+the note anyway: application dynamically holds deletion while citations remain
+or their scope cannot be checked. The hold is a dependency refusal, not a
+different acknowledgement or deletion authority.
 
 Use only the supplied read tools and captured scopes to investigate uncertain
 claims. A literal reference match proves textual occurrence only. A missing
@@ -157,17 +158,15 @@ frontmatter from title, hook, and type, and updates the corresponding index
 transactionally. No two proposals may write or remove the same file; this also
 applies to merge sources. Shared index updates are managed by application.
 
-A Notes block uses the same fence with these three required header fields:
+A Notes block uses the same fence with exactly one required header field:
 
     note: "the note's exact ID"
-    disposition: "delete"
-    reason: "What qualified for extraction, or why nothing did"
     ---
 
-These are the only Notes fields. The body after `---` is empty. Do not include
+No other Notes fields are accepted. The body after `---` is exactly empty. Do not include
 completion inventories, resolution quotes, anchors, or replacement note text.
 
-A missing or invalid Notes disposition leaves that note unchanged with no
+A missing or invalid Notes acknowledgement leaves that note unchanged with no
 decision and a format-failure diagnostic; valid unrelated proposals can still
 be accepted. Duplicate claims for a note leave that note unchanged too.
 Malformed memory changes or ambiguous reply structure still reject the reply.

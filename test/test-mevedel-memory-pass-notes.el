@@ -93,7 +93,7 @@
                                (memory-id ()
                                  (car (seq-find (lambda (row) (eq 'memory (plist-get (cdr row) :kind)))
                                                 (plist-get (mevedel-memory-scope-capture workspace) :roots))))
-                               (text (promotes dispositions)
+                               (text (promotes acknowledgements)
                                  (concat
                                   "## Promote\n"
                                   (if promotes
@@ -106,14 +106,14 @@
                                        promotes "")
                                     "- none\n")
                                   "## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n"
-                                  (when dispositions
+                                  (when acknowledgements
                                     (concat "## Notes\n"
                                             (mapconcat
-                                             (lambda (disposition)
-                                               (format "````proposal\nnote: %S\ndisposition: %S\nreason: \"Reviewed\"\n---\n%s````\n"
-                                                       (nth 0 disposition) (nth 1 disposition)
-                                                       (if (nth 2 disposition) (concat (nth 2 disposition) "\n") "")))
-                                             dispositions "")))
+                                             (lambda (acknowledgement)
+                                               (format "````proposal\nnote: %S\n---\n%s````\n"
+                                                       (car acknowledgement)
+                                                       (if (cadr acknowledgement) (concat (cadr acknowledgement) "\n") "")))
+                                             acknowledgements "")))
                                   "## No action\n- none"))
                                (start (&rest args)
                                  (setq result nil state (apply #'mevedel-memory-pass-start workspace
@@ -150,7 +150,7 @@
                                         (pending-calls 0))
                                    (should (start))
                                    (use buffer "pending-quit.md")
-                                   (setq reply (text nil (list (list (address "pending-quit.md") "delete"))))
+                                   (setq reply (text nil (list (list (address "pending-quit.md")))))
                                    (finish)
                                    (setq earlier (pass) item (proposal 'note-delete "pending-quit.md"))
                                    (should-not (status item))
@@ -205,7 +205,7 @@
                                            (mevedel-memory-notes-documents scope-seen))))
                     (setq reply (text (list (list "parser.md" "Reject duplicate index destinations."
                                                   (list (address "plan.md"))))
-                                      (list (list (address "plan.md") "delete"))))
+                                      (list (list (address "plan.md")))))
                     (let ((original (bytes path)))
                       (finish)
                       (should (eq 'success (plist-get result :outcome)))
@@ -231,7 +231,7 @@
                        (path (note "handoff.md" "Lesson: run clean elc before tests.\n")))
                    (should (start :automatic t))
                    (setq reply (text (list (list "clean.md" "Run clean elc first." (list (address "handoff.md"))))
-                                     (list (list (address "handoff.md") "delete"))))
+                                     (list (list (address "handoff.md")))))
                    (finish)
                    (should (file-exists-p path))
                    (let ((extraction (proposal 'promote)) (disposal (proposal 'note-delete)))
@@ -252,8 +252,8 @@
                        (gone (note "gone.md" "Completed investigation.\n"))
                        (kept (note "kept.md" "Open handoff.\n")))
                    (should (start :automatic t))
-                   (setq reply (text nil (list (list (address "gone.md") "delete")
-                                               (list (address "kept.md") "delete"))))
+                   (setq reply (text nil (list (list (address "gone.md"))
+                                               (list (address "kept.md")))))
                    (finish)
                    (should (eq 'applied (plist-get (mevedel-memory-decision-apply
                                                    workspace (pass) (plist-get (proposal 'note-delete "gone.md") :id)) :status)))
@@ -288,7 +288,7 @@
                                   (when (eq kind 'memory-consolidation-completed) (setq event props))
                                   (apply record ws kind props))))
                        (should (start))
-                       (setq reply (text nil (list (list (address name) "delete"))))
+                       (setq reply (text nil (list (list (address name)))))
                        (finish)
                        (let ((deadline (+ (float-time) 15)))
                          (while (and (not result) (< (float-time) deadline))
@@ -311,7 +311,7 @@
                           earlier-pass earlier-item event)
                      (should (start))
                      (use buffer name)
-                     (setq reply (text nil (list (list (address name) "delete"))))
+                     (setq reply (text nil (list (list (address name)))))
                      (finish)
                      (setq earlier-pass (pass) earlier-item (proposal 'note-delete name))
                      (should-not (status earlier-item))
@@ -383,15 +383,17 @@
                    (unwind-protect
                        (progn
                          (should (start :automatic t))
-                         (setq reply (text nil (mapcar (lambda (name) (list (address name) "delete"))
+                         (setq reply (text nil (mapcar (lambda (name) (list (address name)))
                                                        '("edited.md" "visited.md"))))
                          (finish)
                          (let ((mevedel-memory-notes-undo-quota 100))
-                           (should (eq 'unavailable
-                                       (plist-get (mevedel-memory-decision-apply
-                                                   workspace (pass) (plist-get (proposal 'note-delete "big.bin") :id))
-                                                  :status))))
-                         (should (file-exists-p attachment))
+                           (should-error (mevedel-memory-decision-apply
+                                          workspace (pass) (plist-get (proposal 'note-delete "big.bin") :id))
+                                         :type 'mevedel-memory-decision-held))
+                         (should (equal (make-string 600 0) (bytes attachment)))
+                         (should-not (status (proposal 'note-delete "big.bin")))
+                         (should (string-match-p "quota" (cdr (assoc "big.bin"
+                                                                    (plist-get (mevedel-memory-notes-observation workspace) :blocked)))))
                          (write-region "Concurrent edit.\n" nil edited nil 'silent)
                          (should (eq 'stale (plist-get (mevedel-memory-decision-apply
                                                         workspace (pass) (plist-get (proposal 'note-delete "edited.md") :id))
@@ -429,18 +431,18 @@
                      (should (start :automatic t))
                      (should (plist-get (car (mevedel-memory-notes-documents scope-seen)) :cited))
                      (should-not (plist-get (cdr (mevedel-memory-notes-root scope-seen)) :attachments))
-                     (setq reply (text nil (list (list (address "lab/report.md") "delete"))))
+                     (setq reply (text nil (list (list (address "lab/report.md")))))
                      (finish)
                      (should (proposal 'note-delete "lab/report.md"))
                      (should-not (eq 'applied (status (proposal 'note-delete "lab/report.md"))))
                      (should (file-exists-p report))
                      (should (file-exists-p image))))
-                 :doc "a missing note disposition leaves no decision while valid notes apply and failures stay visible"
+                 :doc "a missing note acknowledgement leaves no decision while valid notes apply and failures stay visible"
                  (let* ((mevedel-telemetry-enabled t)
                         (missing (note "missing.md" "Finished context awaiting an ordinary review.\n"))
                         (good (note "good.md" "Completed and verified.\n")))
                    (should (start :automatic t))
-                   (setq reply (text nil (list (list (address "good.md") "delete"))))
+                   (setq reply (text nil (list (list (address "good.md")))))
                    (finish)
                    (should (eq 'success (plist-get result :outcome)))
                    (should (equal 1 (plist-get result :note-format-failure-count)))
@@ -486,8 +488,8 @@
                    (should (start :automatic t))
                    (setq reply (replace-regexp-in-string
                                 "^````\n" ""
-                                (text nil (list (list (address "kept.md") "delete")
-                                                (list (address "done.md") "delete")))))
+                                (text nil (list (list (address "kept.md"))
+                                                (list (address "done.md"))))))
                    (finish)
                    (should (eq 'success (plist-get result :outcome)))
                    (should (= 0 (plist-get result :note-format-failure-count)))
@@ -499,19 +501,19 @@
                    (should (start))
                    (setq reply (replace-regexp-in-string
                                 "^````\n" "```` \t\n"
-                                (text nil (list (list (address "kept.md") "delete")))))
+                                (text nil (list (list (address "kept.md"))))))
                    (finish)
                    (should (proposal 'note-delete "kept.md"))
                    (should (= 0 (plist-get result :note-format-failure-count))))
                  :doc "a nonempty delete body cannot turn nested metadata into another note's deletion"
                  (let* ((first (note "first.md" "Open handoff: confirm target A activation.\n"))
                         (second (note "second.md" "Completed and verified.\n"))
-                        (body (format "Open handoff: confirm target A activation.\n````proposal\nnote: %S\ndisposition: \"delete\"\nreason: \"Completed\"\n---"
+                        (body (format "Open handoff: confirm target A activation.\n````proposal\nnote: %S\n---"
                                       (address "second.md"))))
                    (should (start :automatic t))
                    (setq reply (replace-regexp-in-string
                                 "^````\n" ""
-                                (text nil (list (list (address "first.md") "delete" body)))))
+                                (text nil (list (list (address "first.md") body)))))
                    (finish)
                    (should (eq 'success (plist-get result :outcome)))
                    (should (= 2 (plist-get result :note-format-failure-count)))
@@ -523,12 +525,12 @@
                  :doc "an apparent nested proposal's close cannot authorize a nonempty delete"
                  (let* ((first (note "first.md" "Open handoff: confirm target A activation.\n"))
                         (second (note "second.md" "Completed and verified.\n"))
-                        (body (format "Open handoff: confirm target A activation.\n````proposal\nnote: %S\ndisposition: \"delete\"\nreason: \"Completed\"\n---\n````"
+                        (body (format "Open handoff: confirm target A activation.\n````proposal\nnote: %S\n---\n````"
                                       (address "second.md"))))
                    (should (start :automatic t))
                    (setq reply (replace-regexp-in-string
                                 "^````\n## No action" "## No action"
-                                (text nil (list (list (address "first.md") "delete" body)))))
+                                (text nil (list (list (address "first.md") body)))))
                    (finish)
                    (should (eq 'success (plist-get result :outcome)))
                    (should (= 2 (plist-get result :note-format-failure-count)))
@@ -538,11 +540,11 @@
                  :doc "a closed invalid body cannot act as a header while an unrelated valid delete survives"
                  (let* ((first (note "first.md" "Open handoff: confirm target A activation.\n"))
                         (second (note "second.md" "Open handoff: confirm target B activation.\n"))
-                        (body (format "Open handoff: confirm target A activation.\n## No action\nnote: %S\ndisposition: \"delete\"\nreason: \"Completed\"\n---"
+                        (body (format "Open handoff: confirm target A activation.\n## No action\nnote: %S\n---"
                                       (address "second.md"))))
                    (should (start :automatic t))
-                   (setq reply (text nil (list (list (address "first.md") "delete" body)
-                                               (list (address "second.md") "delete"))))
+                   (setq reply (text nil (list (list (address "first.md") body)
+                                               (list (address "second.md")))))
                    (finish)
                    (should (eq 'success (plist-get result :outcome)))
                    (should (= 1 (plist-get result :note-format-failure-count)))
@@ -555,7 +557,7 @@
                        (good (note "good.md" "Completed and verified.\n"))
                        (accept-calls 0))
                    (should (start :automatic t))
-                   (setq reply (text nil (list (list (address "good.md") "delete"))))
+                   (setq reply (text nil (list (list (address "good.md")))))
                    (cl-letf (((symbol-function 'mevedel-memory-store-accept)
                               (lambda (&rest _)
                                 (cl-incf accept-calls)
@@ -592,7 +594,7 @@
                    (should-not (member "z-good.md" (plist-get (cdr (plist-get (capture) :root)) :files)))
                    (should (start :automatic t))
                    (should (member "z-good.md" (plist-get (cdr (mevedel-memory-notes-root scope-seen)) :files)))
-                   (setq reply (text nil (list (list (address "z-good.md") "delete"))))
+                   (setq reply (text nil (list (list (address "z-good.md")))))
                    (finish)
                    (should (= 0 (plist-get result :note-format-failure-count)))
                    (should (proposal 'note-delete "z-good.md"))
@@ -601,7 +603,7 @@
                  :doc "a rejected review reply is retained for diagnosis and changes nothing"
                  (let ((path (note "kept.md" "Open item.\n")))
                    (should (start :automatic t))
-                   (funcall callback (list :outcome 'error :error "Note disposition fields are incomplete"
+                   (funcall callback (list :outcome 'error :error "Note acknowledgement has unsupported fields"
                                            :rejected-reply "## Promote\n- none\n"
                                            :policy (list :backend backend :model 'test-model)))
                    (should (eq 'error (plist-get result :outcome)))
@@ -612,7 +614,7 @@
                      (should (= 1 (length retained)))
                      (with-temp-buffer
                        (insert-file-contents (car retained))
-                       (should (string-match-p "Note disposition fields are incomplete" (buffer-string)))
+                       (should (string-match-p "Note acknowledgement has unsupported fields" (buffer-string)))
                        (should (string-match-p "## Promote" (buffer-string))))))
                  :doc "an attachment referenced by a note written after capture is not removed"
                  (let ((mevedel-memory-consolidation-mode 'propose)
@@ -621,10 +623,18 @@
                    (should (eq 'success (plist-get result :outcome)))
                    (let ((late (note "late.md" "See old.png for the regression." 0)))
                      (set-file-times late (seconds-to-time (+ now 60))))
-                   (should (eq 'stale (plist-get (mevedel-memory-decision-apply
-                                                  workspace (pass) (plist-get (proposal 'note-delete "old.png") :id))
-                                                 :status)))
-                   (should (file-exists-p image)))
+                   (let ((input (mevedel-memory-decision--application-input
+                                 (mevedel-memory-store-accepted workspace (pass))
+                                 (proposal 'note-delete "old.png") workspace)))
+                     (should (eq 'waiting (plist-get input :status)))
+                     (should (equal "Citation check held: A surviving shared file references this attachment"
+                                    (plist-get input :reason))))
+                   (should (equal '(user-error "Citation check held: A surviving shared file references this attachment")
+                                  (should-error (mevedel-memory-decision-apply
+                                                 workspace (pass) (plist-get (proposal 'note-delete "old.png") :id))
+                                                :type 'user-error)))
+                   (should-not (status (proposal 'note-delete "old.png")))
+                   (should (equal (unibyte-string 0 1 2 3) (bytes image))))
                  :doc "ready notes admit independently without prematurely covering sparse recent digests"
                  (let ((mevedel-memory-consolidation-min-digests 5)
                        (mevedel-memory-consolidation-min-hours 24))
@@ -642,7 +652,7 @@
                    (should (start :automatic t))
                    (should-not entries-seen)
                    (should (= 1 (length (mevedel-memory-notes-documents scope-seen))))
-                   (setq reply (text nil (list (list (address "finding.md") "delete"))))
+                   (setq reply (text nil (list (list (address "finding.md")))))
                    (finish)
                    (let ((accepted (mevedel-memory-store-accepted workspace (pass))))
                      (should-not (plist-get (plist-get accepted :prepared) :entries))
@@ -663,7 +673,7 @@
                    (should (equal (list (address "quiet.md"))
                                   (mapcar (lambda (document) (plist-get document :id))
                                           (mevedel-memory-notes-documents scope-seen))))
-                   (setq reply (text nil (list (list (address "quiet.md") "delete"))))
+                   (setq reply (text nil (list (list (address "quiet.md")))))
                    (finish)
                    (should (eq 'success (plist-get result :outcome)))
                    (should-not (file-exists-p quiet))
@@ -677,8 +687,8 @@
                        (other (note "other.md" "Nothing durable either.\n"))
                        (reader (session-buffer)))
                    (should (start :automatic t))
-                   (setq reply (text nil (list (list (address "busy.md") "delete")
-                                               (list (address "other.md") "delete"))))
+                   (setq reply (text nil (list (list (address "busy.md"))
+                                               (list (address "other.md")))))
                    ;; Use begins after admission; application rechecks it.
                    (use reader "busy.md")
                    (finish)
@@ -697,17 +707,17 @@
                    (should-not (mevedel-memory-pass-running workspace))
                    (should-not (file-exists-p path))
                    (should (eq 'applied (status (proposal 'note-delete "busy.md")))))
-                 :doc "a later review supersedes an earlier undecided disposition of the same file"
+                 :doc "a later review supersedes an earlier undecided acknowledgement of the same file"
                  (let ((mevedel-memory-consolidation-mode 'propose)
                        (path (note "draft.md" "First draft.\n")))
                    (should (start :automatic t))
-                   (setq reply (text nil (list (list (address "draft.md") "delete"))))
+                   (setq reply (text nil (list (list (address "draft.md")))))
                    (finish)
                    (let ((first-pass (pass)) (first (proposal 'note-delete "draft.md")))
                      (note "draft.md" "Second draft with an open handoff.\n")
                      (cl-incf now (* 2 86400))
                      (should (start :automatic t))
-                     (setq reply (text nil (list (list (address "draft.md") "delete"))))
+                     (setq reply (text nil (list (list (address "draft.md")))))
                      (finish)
                      (let ((decision (mevedel-memory-decision-status workspace (plist-get first :id))))
                        (should (eq 'rejected (plist-get decision :status)))
@@ -719,7 +729,7 @@
                  (let ((path (note "mixed.md" "Finding: index entries must be unique.\nOpen: port the fix.\n")))
                    (should (start :automatic t))
                    (setq reply (text (list (list "unique.md" "Index entries must be unique." (list (address "mixed.md"))))
-                                     (list (list (address "mixed.md") "delete"))))
+                                     (list (list (address "mixed.md")))))
                    (finish)
                    (should (file-exists-p (file-name-concat memory "unique.md")))
                    (should-not (file-exists-p path))
@@ -746,7 +756,7 @@
                        (gone (note "gone.md" "Nothing durable either.\n"))
                        (real (symbol-function 'mevedel-memory-notes-commit)))
                    (should (start :automatic t))
-                   (setq reply (text nil (list (list (address "kept.md") "delete") (list (address "gone.md") "delete"))))
+                   (setq reply (text nil (list (list (address "kept.md")) (list (address "gone.md")))))
                    (finish)
                    ;; Failing before any write leaves the note and an unavailable attempt.
                    (cl-letf (((symbol-function 'mevedel-memory-notes-commit)
@@ -781,7 +791,7 @@
                    (set-file-modes path #o640)
                    (should (start :automatic t))
                    (should (plist-get (car (mevedel-memory-notes-documents scope-seen)) :chunked))
-                   (setq reply (text nil (list (list (address "large.md") "delete"))))
+                   (setq reply (text nil (list (list (address "large.md")))))
                    (finish)
                    (should-not (file-exists-p path))
                    (should (eq 'applied (status (proposal 'note-delete))))
@@ -796,41 +806,52 @@
                    ;; the old 4 MiB record bound once metadata is included.
                    (should (= mevedel-memory-notes-max-review-bytes (length large)))
                    (should (start :automatic t))
-                   (setq reply (text nil (list (list (address "escaped.md") "delete"))))
+                   (setq reply (text nil (list (list (address "escaped.md")))))
                    (finish)
                    (should (eq 'applied (status (proposal 'note-delete))))
                    (should-not (file-exists-p path))
                    (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse
                                                      workspace (pass) (plist-get (proposal 'note-delete) :id)) :status)))
                    (should (equal large (bytes path))))
-                 :doc "over-quota WAV housekeeping uses real freedesktop trash and remains undoable"
-                 (let* ((trash-directory nil)
-                        (data (file-name-concat root "xdg-data"))
+                 :doc "over-quota WAV housekeeping retains the original without inference or an external copy"
+                 (let* ((data (file-name-concat root "xdg-data"))
                         (process-environment (cons (concat "XDG_DATA_HOME=" data) process-environment))
                         (large (make-string (* 5 1024 1024) 0))
                         (hash (secure-hash 'sha256 large))
                         (path (note "recording.wav" large)))
                    (set-file-modes path #o640)
-                   (should (start :automatic t))
+                   (start :automatic t)
                    (should (= 0 calls))
-                   (should (eq 'success (plist-get result :outcome)))
+                   (should-not (plist-get state :prepared))
+                   (should-not (plist-get state :accepted))
+                   (should-not (file-exists-p (file-name-concat data "Trash")))
+                   (should-not (file-exists-p (file-name-concat root ".mevedel" "state" "shared-notes" "blobs" hash)))
+                   (should (equal large (bytes path)))
+                   (should (= #o640 (file-modes path)))
+                   (should (string-match-p "quota" (cdr (assoc "recording.wav"
+                                                              (plist-get (mevedel-memory-notes-observation workspace) :blocked))))))
+                 :doc "exact-fit attachment disposal uses private undo and never calls system trash"
+                 (let* ((mevedel-memory-notes-undo-quota 3)
+                        (data (file-name-concat root "xdg-data"))
+                        (process-environment (cons (concat "XDG_DATA_HOME=" data) process-environment))
+                        (content (unibyte-string 0 1 2))
+                        (hash (secure-hash 'sha256 content))
+                        (path (note "recording.wav" content))
+                        (trash-calls 0))
+                   (set-file-modes path #o640)
+                   (cl-letf (((symbol-function 'move-file-to-trash)
+                              (lambda (&rest _) (cl-incf trash-calls) (ert-fail "Unexpected system trash"))))
+                     (should (start :automatic t)))
+                   (should (= 0 calls))
+                   (should (= 0 trash-calls))
                    (should (eq 'applied (status (proposal 'note-delete))))
                    (should-not (file-exists-p path))
-                   (should (equal large (bytes (file-name-concat data "Trash" "files" hash))))
-                   (should (file-exists-p (file-name-concat data "Trash" "info" (concat hash ".trashinfo"))))
-                   (should-not (file-exists-p (file-name-concat root ".mevedel" "state" "shared-notes" "blobs" hash)))
+                   (should-not (file-exists-p (file-name-concat data "Trash")))
+                   (should (equal content (bytes (file-name-concat root ".mevedel" "state" "shared-notes" "blobs" hash))))
                    (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse
                                                      workspace (pass) (plist-get (proposal 'note-delete) :id)) :status)))
-                   (should (equal large (bytes path)))
+                   (should (equal content (bytes path)))
                    (should (= #o640 (file-modes path))))
-                 :doc "a trash failure cannot delete the original or fabricate a successful housekeeping decision"
-                 (let* ((trash-directory (file-name-concat root "trash"))
-                        (mevedel-memory-notes-undo-quota 1)
-                        (path (note "recording.wav" (unibyte-string 0 1 2))))
-                   (cl-letf (((symbol-function 'move-file-to-trash) (lambda (file) (delete-file file))))
-                     (should (start :automatic t)))
-                   (should (eq 'unavailable (status (proposal 'note-delete))))
-                   (should (equal (unibyte-string 0 1 2) (bytes path))))
                  :doc "a folder populated after capture is not pruned"
                  (let ((mevedel-memory-consolidation-mode 'propose)
                        (folder (file-name-concat shared "later")))

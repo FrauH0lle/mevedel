@@ -305,7 +305,7 @@ Use a monotonic deadline for elapsed-time retries.
                      ("work://shared/c.md" "notes-root" . "c.md")))
              (head (string-remove-suffix "## No action\n- none" mevedel-test-memory-proposal--reply))))
   (cl-labels ((block (id &optional body)
-                (format "````proposal\nnote: %S\ndisposition: \"delete\"\nreason: \"Reviewed\"\n---\n%s````\n"
+                (format "````proposal\nnote: %S\n---\n%s````\n"
                         id (if body (concat body "\n") "")))
               (parse (blocks)
                 (mevedel-memory-proposal-parse
@@ -324,7 +324,9 @@ Use a monotonic deadline for elapsed-time retries.
     (should (equal (mapcar #'car notes) (mapcar (lambda (item) (plist-get item :note)) items)))
     (dolist (item items)
       (should (equal (list (plist-get item :note)) (plist-get item :evidence)))
-      (should (equal "" (plist-get item :body))))
+      (should (equal "" (plist-get item :body)))
+      (should-not (plist-member item :reason))
+      (should-not (plist-member item :disposition)))
     (should (mevedel-memory-proposal-note-action-p 'note-delete))
     (should (mevedel-memory-proposal-note-action-p 'note-prune))
     (should-not (mevedel-memory-proposal-note-action-p 'note-keep))
@@ -332,13 +334,13 @@ Use a monotonic deadline for elapsed-time retries.
   :doc "invalid one-note fields and removed actions never discard valid unrelated proposals"
   (let ((a (block "work://shared/a.md")) (b (block "work://shared/b.md")) (c (block "work://shared/c.md")))
     (dolist (bad (append
-                 (mapcar (lambda (field) (string-replace "reason: \"Reviewed\"" field a))
-                         '("reason: null" "reason: invalid-json" "future-field: true"
+                 (mapcar (lambda (field) (string-replace "---\n" (concat field "\n---\n") a))
+                         '("reason: \"Reviewed\"" "reason: null" "reason: invalid-json" "future-field: true"
                            "open-items: []" "resolved-by: []" "resolution-anchors: []" "unresolved-items: []"
-                           "reason: \"Reviewed\"\nreason: \"Other\""))
-                 (mapcar (lambda (value) (string-replace "disposition: \"delete\"" value a))
-                         '("disposition: \"keep\"" "disposition: \"condense\"" "disposition: null" ""))
-                 (list (block "work://shared/a.md" "Unexpected replacement body."))))
+                           "disposition: \"delete\"" "disposition: \"keep\"" "disposition: \"condense\""
+                           "disposition: null" "disposition: \"delete\"\nreason: \"Reviewed\""))
+                 (mapcar (lambda (body) (block "work://shared/a.md" body))
+                         '("Unexpected replacement body." " " "\t" "\n"))))
       (let ((result (parse (concat bad b c))))
         (should (equal '(promote note-delete note-delete) (actions result)))
         (should (equal '("work://shared/a.md") (skipped result)))
@@ -351,8 +353,9 @@ Use a monotonic deadline for elapsed-time retries.
   :doc "missing duplicate aliased and unadmitted identities receive no service credit"
   (let ((a (block "work://shared/a.md")) (b (block "work://shared/b.md")) (c (block "work://shared/c.md")))
     (dolist (blocks (list (concat a a b c)
-                          (concat (string-replace "reason: \"Reviewed\"" "unknown: true" a) a b c)
-                          (concat a (string-replace "reason: \"Reviewed\"" "unknown: true" a) b c)))
+                          (concat (string-replace "---\n" "unknown: true\n---\n" a) a b c)
+                          (concat a (string-replace "---\n" "unknown: true\n---\n" a) b c)
+                          (concat (string-replace "---\n" "note: \"work://shared/a.md\"\n---\n" a) b c)))
       (let ((result (parse blocks)))
         (should (equal '(promote note-delete note-delete) (actions result)))
         (should (equal '("work://shared/a.md") (skipped result)))))
@@ -362,6 +365,9 @@ Use a monotonic deadline for elapsed-time retries.
                    (append notes '(("alias" "notes-root" . "a.md"))))))
       (should (equal '(promote note-delete note-delete) (actions result)))
       (should (equal '("work://shared/a.md" "alias") (skipped result))))
+    (let ((result (parse (concat (string-replace "---\n" "note: \"work://shared/b.md\"\n---\n" a) c))))
+      (should (equal '(promote note-delete) (actions result)))
+      (should (equal '("work://shared/a.md" "work://shared/b.md") (skipped result))))
     (let ((result (parse (concat b c (block "foreign/a.md")))))
       (should (equal '("work://shared/a.md") (skipped result)))
       (should (= 2 (plist-get result :note-format-failure-count))))
@@ -373,7 +379,7 @@ Use a monotonic deadline for elapsed-time retries.
       (should (equal (mapcar #'car notes) (skipped result)))))
   :doc "store reparse retains isolated note diagnostics and rejects malformed memory"
   (let* ((text (concat head "## Notes\n"
-                       (string-replace "reason: \"Reviewed\"" "future-field: true" (block "work://shared/a.md"))
+                       (string-replace "---\n" "future-field: true\n---\n" (block "work://shared/a.md"))
                        (block "work://shared/b.md") (block "work://shared/c.md")))
          (result (parse (substring text (length (concat head "## Notes\n")))))
          (scope (list :roots (append mevedel-test-memory-proposal--roots
@@ -392,18 +398,19 @@ Use a monotonic deadline for elapsed-time retries.
     (should-error (mevedel-memory-proposal-parse
                    (string-replace "root: \"local-agents\"" "root: \"foreign\"" text)
                    mevedel-test-memory-proposal--roots (list (make-string 64 ?a)) notes)))
-  :doc "bodyless delete blocks accept safe implicit boundaries and identical header repeats"
+  :doc "bodyless acknowledgements accept safe implicit boundaries without header repeats"
   (let* ((blocks (mapconcat (lambda (note) (string-remove-suffix "````\n" (block (car note)))) notes ""))
          (result (parse blocks)))
     (should (equal '(promote note-delete note-delete note-delete) (actions result)))
     (should-not (skipped result))
-    (should-not (skipped (parse (string-replace "reason: \"Reviewed\"" "reason: \"Reviewed\"\nreason: \"Reviewed\"" blocks))))
+    (should-not (skipped (parse (string-replace "---\n" "" (mapconcat (lambda (note) (block (car note))) notes "")))))
+    (should-not (skipped (parse (string-replace "---\n" "---\n\n" (mapconcat (lambda (note) (block (car note))) notes "")))))
     (should-not (skipped (parse (replace-regexp-in-string "^````\\(proposal\\)?$" "````\\1 \t"
                                                          (mapconcat (lambda (note) (block (car note))) notes ""))))))
   :doc "unexpected bodies and ambiguous unclosed tails cannot admit body-shaped targets"
   (let ((a (block "work://shared/a.md")) (c (block "work://shared/c.md")))
-    (dolist (body '("## No action\nnote: \"work://shared/c.md\"\ndisposition: \"delete\"\n---"
-                    "```proposal\nnote: \"work://shared/c.md\"\ndisposition: \"delete\"\n---\n```"))
+    (dolist (body '("## No action\nnote: \"work://shared/c.md\"\n---"
+                    "```proposal\nnote: \"work://shared/c.md\"\n---\n```"))
       (let ((result (parse (concat a (block "work://shared/b.md" body) c))))
         (should (equal '(promote note-delete note-delete) (actions result)))
         (should (equal '("work://shared/b.md") (skipped result)))))

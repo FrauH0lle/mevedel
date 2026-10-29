@@ -10,6 +10,7 @@
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-memory-list)
+(require 'mevedel-memory-notes)
 (require 'mevedel-memory-scope)
 (require 'mevedel-models)
 (require 'mevedel-workspace-identity)
@@ -25,6 +26,76 @@
 (require 'gptel-openai)
 (require 'mevedel-view)
 (require 'mevedel-system)
+
+(mevedel-deftest mevedel-memory-list--details
+    (:vars* ((root (file-name-as-directory (file-truename (make-temp-file "memory-note-report-" t))))
+             (workspace (mevedel-workspace--create :root root))
+             (context (list :workspace workspace))
+             (memory (file-name-concat root "memory"))
+             (shared (file-name-concat root ".mevedel" "shared"))
+             (mevedel-memory-dirs (list memory))
+             (mevedel-journal-cleanup--inhibit-scheduling t)
+             claim accepted pass)
+     :quiet t
+     :after-each ((when claim (mevedel-journal-claim-settle claim 'cancelled ""))
+                  (delete-directory root t)))
+  (progn
+    (mevedel-workspace-identity-ensure root)
+    (make-directory memory t)
+    (write-region "" nil (file-name-concat memory "MEMORY.md") nil 'silent)
+    (make-directory (file-name-concat shared "empty") t)
+    (dolist (name '("note.md" "attachment.txt"))
+      (write-region "Temporary material.\n" nil (file-name-concat shared name) nil 'silent))
+    (dolist (name '("note.md" "attachment.txt" "empty"))
+      (set-file-times (file-name-concat shared name) (seconds-to-time (- (float-time) (* 15 86400)))))
+    (let* ((scope (mevedel-memory-scope-capture workspace))
+           (root-id (caar (plist-get scope :roots)))
+           (notes (mevedel-memory-notes-capture workspace nil)))
+      (should (= 1 (plist-get notes :notes)))
+      (push (plist-get notes :root) (plist-get scope :roots))
+      (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
+      (let* ((prepared (mevedel-memory-store-prepare workspace claim scope nil ""))
+             (reply (format (concat "## Promote\n````proposal\nroot: %S\nfile: \"guide.md\"\n"
+                                    "type: \"project\"\ntitle: \"Guide\"\nhook: \"Context\"\n"
+                                    "reason: \"Qualifying guide\"\nevidence: []\n---\nDurable guide.\n````\n"
+                                    "## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n"
+                                    "## Notes\n````proposal\nnote: \"work://shared/note.md\"\n---\n````\n## No action\n- none") root-id)))
+        (setq accepted (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil
+                                                   '("work://shared/note.md"))
+              pass (plist-get prepared :id))))
+    (cl-labels ((report (proposal)
+                  (mevedel-memory-list--details
+                   (list :kind 'proposal :pass pass :id (plist-get proposal :id) :status 'pending) context))
+                (decision-text (proposal)
+                  (let* ((details (report proposal))
+                         (section (seq-find (lambda (section) (eq 'decision (plist-get section :id)))
+                                            (plist-get details :sections))))
+                    (mevedel-report-test-text (list :title "Decision" :sections (list section))))))
+      ,test))
+  (test)
+  :doc "ID-only note acknowledgement omits model Reason from the rendered report but retains current and decision diagnostics"
+  (let* ((proposal (seq-find (lambda (proposal) (plist-get proposal :note)) (plist-get accepted :proposals)))
+         (text (decision-text proposal)))
+    (should proposal)
+    (should-not (plist-member proposal :reason))
+    (should-not (plist-member proposal :disposition))
+    (should-not (string-search "Reason" text))
+    (should-not (string-search "nil" text))
+    (should (string-search "Current check" text))
+    (should (string-search "Ready to apply" text))
+    (should (string-search "Pending" text))
+    (mevedel-memory-decision-reject workspace pass (plist-get proposal :id) "Manual refusal")
+    (should (string-search "Manual refusal" (decision-text proposal))))
+  :doc "ordinary memory and generated attachment and directory housekeeping retain their genuine rendered reasons"
+  (should (= 4 (length (plist-get accepted :proposals))))
+  (dolist (proposal (plist-get accepted :proposals))
+    (unless (plist-get proposal :note)
+      (should (stringp (plist-get proposal :reason)))
+      (let ((text (decision-text proposal)))
+        (should (string-search "Reason" text))
+        (should (string-search (plist-get proposal :reason) text))
+        (should (string-search "Current check" text))
+        (should (string-search "Pending" text))))))
 
 (mevedel-deftest mevedel-memory-list-open
     (:vars* ((root (make-temp-file "mevedel-memory-cockpit-" t))

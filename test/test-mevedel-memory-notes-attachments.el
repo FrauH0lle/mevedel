@@ -1,0 +1,366 @@
+;;; test-mevedel-memory-notes-attachments.el --- Checked attachment expiry -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Real accepted housekeeping and native blob programs exercise forward safety
+;; and ungated checked undo.  Interleavings enter the actual native capture path;
+;; real child recovery also exercises yielding automatic application.
+
+;;; Code:
+
+(require 'helpers
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
+(require 'mevedel-journal-worker)
+(require 'mevedel-memory-decision)
+(require 'mevedel-memory-notes)
+(require 'mevedel-memory-pass)
+(require 'mevedel-memory-scope)
+(require 'mevedel-memory-store)
+(require 'mevedel-memory-write)
+(require 'mevedel-resource)
+(require 'mevedel-session-control-fs)
+(require 'mevedel-system)
+
+(mevedel-deftest mevedel-memory-notes/attachment-application
+    (:quiet t
+     :vars* ((root (file-name-as-directory (file-truename (make-temp-file "attachment-apply-" t))))
+             (workspace (mevedel-workspace--create :root root))
+             (shared (file-name-concat root ".mevedel" "shared"))
+             (memory (file-name-concat root "memory"))
+             (index (file-name-concat memory "MEMORY.md"))
+             (nested (file-name-concat root "src" "AGENTS.md"))
+             (relative "folder/capture.bin")
+             (path (file-name-concat shared relative))
+             (bytes (unibyte-string 0 1 2 255))
+             (mevedel-memory-dirs (list memory))
+             (mevedel-memory-consolidation-mode 'auto)
+             (mevedel-journal-worker--child-p nil)
+             (key (mevedel-memory-store--claim-directory workspace))
+             claim pass accepted proposal before buffers
+             (entered 0) (completed 0) copied source operations)
+     :before-each ((mevedel-workspace-identity-ensure root)
+                   (make-directory memory t) (make-directory (file-name-directory nested) t)
+                   (write-region "No temporary references.\n" nil index nil 'silent)
+                   (write-region "Nested policy without temporary references.\n" nil nested nil 'silent))
+     :after-each ((mevedel-memory-pass-stop-all)
+                  (dolist (buffer buffers)
+                    (when (buffer-live-p buffer)
+                      (with-current-buffer buffer (set-buffer-modified-p nil))
+                      (kill-buffer buffer)))
+                  (when claim (mevedel-journal-claim-settle claim 'cancelled ""))
+                  (delete-directory root t)))
+  (cl-labels
+      ((put (file body)
+         (make-directory (file-name-directory file) t)
+         (let ((coding-system-for-write 'no-conversion)) (write-region body nil file nil 'silent))
+         (set-file-times file (seconds-to-time (- (float-time) (* 15 86400)))))
+       (prepare (&optional adjust-size)
+         (put path bytes)
+         (set-file-modes path #o640)
+         (setq claim (mevedel-journal-claim-acquire key 180))
+         (should claim)
+         (let* ((scope (mevedel-memory-scope-capture
+                        workspace nil (list :roots (mevedel-system--memory-roots workspace)
+                                            :instructions (list nested))))
+                (capture (mevedel-memory-notes-capture workspace nil :mode 'auto :citation-scope scope))
+                (row (plist-get capture :root)))
+           (should (= 1 (plist-get capture :attachments)))
+           (setq before (cdr (assoc relative (plist-get (cdr row) :before))))
+           (should-not (plist-member before :bytes))
+           (should (= (length bytes) (plist-get before :size)))
+           (when adjust-size
+             (setq before (funcall adjust-size before))
+             (setcdr (assoc relative (plist-get (cdr row) :before)) before))
+           (setf (plist-get scope :roots) (append (plist-get scope :roots) (list row)))
+           (let ((prepared (mevedel-memory-store-prepare workspace claim scope nil "")))
+             (setq pass (plist-get prepared :id)
+                   accepted (mevedel-memory-store-accept workspace prepared nil nil "user" nil)
+                   proposal (car (plist-get accepted :proposals)))
+             (should (equal "attachment" (plist-get proposal :type)))
+             (should (equal relative (plist-get proposal :file)))
+             (mevedel-memory-store-publish workspace pass))))
+       (blob () (file-name-concat (mevedel-memory-notes-blob-directory shared) (plist-get before :hash)))
+       (original ()
+         (should (equal bytes (mevedel-session-control-fs-read-file path 'no-conversion)))
+         (should (= #o640 (file-modes path)))
+         (should (mevedel-memory-notes-current-p before))
+         (should (file-directory-p shared)))
+       (held (pattern)
+         (original)
+         (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))
+         (should (string-match-p pattern
+                                 (cdr (assoc relative (plist-get (mevedel-memory-notes-observation workspace) :blocked)))))
+         (dolist (write (mevedel-memory-write-list workspace))
+           (should-not (plist-get write :error))
+           (should-not (plist-get write :marked)))
+         (should-not (mevedel-memory-write-recovery-candidates workspace)))
+       (native-proof ()
+         (should (= 1 entered))
+         (should (= 1 completed))
+         (should (equal path source))
+         (should (equal (plist-get before :hash) copied)))
+       (inject-native (mutation action &optional after)
+         (let ((program (symbol-function 'mevedel-session-control-fs-run-program)))
+           (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                      (lambda (program-ops &optional lock)
+                        (let ((capture (seq-find (lambda (op) (eq 'capture-blob (plist-get op :op))) program-ops)))
+                          (when capture
+                            (cl-incf entered)
+                            (setq source (plist-get capture :source))
+                            (unless after (funcall mutation)))
+                          (let ((results (funcall program program-ops lock)))
+                            (setq operations (append operations results))
+                            (when capture
+                              (cl-incf completed)
+                              (setq copied (plist-get (mevedel-session-control-fs-file-hash (blob)) :sha256))
+                              (when after (funcall mutation)))
+                            results)))))
+             (funcall action))))
+       (apply-item () (mevedel-memory-decision-apply workspace pass (plist-get proposal :id)))
+       (apply-automatic ()
+         (let ((state (list :workspace workspace :origin-buffer (current-buffer) :settled t
+                            :claim (plist-get (plist-get accepted :prepared) :claim)))
+               (start (symbol-function 'mevedel-journal-worker-start))
+               (children 0) (callbacks 0) result)
+           (puthash key state mevedel-memory-pass--running)
+           (cl-letf (((symbol-function 'mevedel-journal-worker-start)
+                      (lambda (&rest args) (cl-incf children) (apply start args))))
+             (mevedel-memory-pass--apply-async state accepted
+                                             (lambda (value) (cl-incf callbacks) (setq result value)))
+             (should-not result)
+             (let ((deadline (+ (float-time) 30)))
+               (while (and (not result) (< (float-time) deadline)) (accept-process-output nil .01))))
+           (should result)
+           (should (> children 0))
+           (should (= 1 callbacks))
+           result))
+       (use ()
+         (let ((buffer (generate-new-buffer " *attachment-session*")))
+           (push buffer buffers)
+           (with-current-buffer buffer
+             (setq-local mevedel--session (mevedel-session--create :workspace workspace))
+             (mevedel-resource-prepare 'read (mevedel-memory-notes-address relative)
+                                       (list :session mevedel--session)))))
+       (draft ()
+         (let ((buffer (generate-new-buffer " *attachment-unsaved-source*")))
+           (push buffer buffers)
+           (with-current-buffer buffer
+             (setq buffer-file-name (file-name-concat shared "new-source.json"))
+             (insert "{\"source\": \"work://shared/folder\"}\n")
+             (set-buffer-modified-p t)))))
+    ,test)
+  (test)
+  :doc "private deletion prunes only empty parents; checked reverse ignores current references and unsaved sources"
+  (progn
+    (prepare)
+    (should (eq 'applied (plist-get (apply-item) :status)))
+    (should-not (file-exists-p path))
+    (should-not (file-exists-p (file-name-directory path)))
+    (should (file-directory-p shared))
+    (should (equal bytes (mevedel-session-control-fs-read-file (blob) 'no-conversion)))
+    (should (= #o600 (file-modes (blob))))
+    (put index "Keep `work://shared/folder`.\n")
+    (draft)
+    (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get proposal :id)) :status)))
+    (original))
+  :doc "missing attachment size in an authenticated captured scope holds actual application before blob creation"
+  (progn
+    (prepare (lambda (snapshot) (cl-loop for (key value) on snapshot by #'cddr
+                                        unless (eq key :size) append (list key value))))
+    (should (equal '(user-error "Captured attachment size is unavailable")
+                   (should-error (inject-native #'ignore #'apply-item) :type 'user-error)))
+    (should (= 0 entered))
+    (should (= 0 completed))
+    (should-not (file-exists-p (blob)))
+    (held "size is unavailable"))
+  :doc "non-numeric attachment size is not a usable private-quota estimate"
+  (progn
+    (prepare (lambda (snapshot) (plist-put snapshot :size "4")))
+    (should (equal '(user-error "Captured attachment size is unavailable")
+                   (should-error (inject-native #'ignore #'apply-item) :type 'user-error)))
+    (should (= 0 entered))
+    (should-not (file-exists-p (blob)))
+    (held "size is unavailable"))
+  :doc "a captured zero size cannot stand for a nonempty attachment at the actual apply boundary"
+  (progn
+    (prepare (lambda (snapshot) (plist-put snapshot :size 0)))
+    (should (equal '(user-error "Captured attachment size does not match the current file")
+                   (should-error (inject-native #'ignore #'apply-item) :type 'user-error)))
+    (should (= 0 entered))
+    (should-not (file-exists-p (blob)))
+    (held "size does not match"))
+  :doc "a native-capture entry starting local use holds synchronous manual disposal"
+  (progn
+    (prepare)
+    (should-error (inject-native #'use #'apply-item) :type 'mevedel-memory-decision-held)
+    (native-proof)
+    (held "active local use"))
+  :doc "a native-capture entry starting local use holds yielding automatic disposal"
+  (progn
+    (prepare)
+    (let ((result (inject-native #'use #'apply-automatic)))
+      (should (= 1 (plist-get result :held-count)))
+      (should (= 0 (plist-get result :applied-count))))
+    (native-proof)
+    (held "active local use"))
+  :doc "a backdated surviving Markdown reference added at native capture cannot hide behind capture time"
+  (progn
+    (prepare)
+    (should-error (inject-native (lambda () (put (file-name-concat shared "new.md")
+                                                "Keep `work://shared/folder/capture.bin`.\n")) #'apply-item)
+                  :type 'mevedel-memory-decision-held)
+    (native-proof)
+    (held "surviving shared"))
+  :doc "a readable JSON attachment naming only a canonical folder protects its child during automatic disposal"
+  (progn
+    (prepare)
+    (let ((result (inject-native (lambda () (put (file-name-concat shared "new.json")
+                                               "{\"source\": \"`work://shared/folder`\"}\n")) #'apply-automatic)))
+      (should (= 1 (plist-get result :held-count)))
+      (should (= 0 (plist-get result :applied-count))))
+    (native-proof)
+    (held "surviving shared"))
+  :doc "an unrelated backdated JSON arrival under the same native-capture interleaving still deletes and undoes"
+  (progn
+    (prepare)
+    (let ((result (inject-native (lambda () (put (file-name-concat shared "new.json")
+                                               "{\"source\": \"`work://shared/elsewhere`\"}\n")) #'apply-automatic)))
+      (should (= 0 (plist-get result :held-count)))
+      (should (= 1 (plist-get result :applied-count))))
+    (native-proof)
+    (should-not (file-exists-p path))
+    (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get proposal :id)) :status)))
+    (original))
+  :doc "a fresh permanent index reference introduced at native capture holds the original"
+  (progn
+    (prepare)
+    (should-error (inject-native (lambda () (put index "Keep `work://shared/folder`.\n")) #'apply-item)
+                  :type 'mevedel-memory-decision-held)
+    (native-proof)
+    (held "still reference"))
+  :doc "a newly created nested instruction companion is part of fresh permanent citation proof"
+  (progn
+    (prepare)
+    (should-error (inject-native (lambda () (put (file-name-concat root "src" "AGENTS.local.md")
+                                               "Keep `work://shared/folder`.\n")) #'apply-item)
+                  :type 'mevedel-memory-decision-held)
+    (native-proof)
+    (held "still reference"))
+  :doc "an unsaved new JSON source at native capture holds deletion without reading the draft"
+  (progn
+    (prepare)
+    (should-error (inject-native #'draft #'apply-item) :type 'mevedel-memory-decision-held)
+    (native-proof)
+    (held "unsaved"))
+  :doc "a shared symlink makes fresh reference absence unknown, not empty"
+  (progn
+    (prepare)
+    (should-error (inject-native (lambda () (make-symbolic-link index (file-name-concat shared "unknown.json"))) #'apply-item)
+                  :type 'mevedel-memory-decision-held)
+    (native-proof)
+    (held "incomplete"))
+  :doc "permanent files are reverified after the nested shared-reference observation performs I/O"
+  (progn
+    (prepare)
+    (let ((check (symbol-function 'mevedel-memory-notes--shared-check)) injected)
+      (cl-letf (((symbol-function 'mevedel-memory-notes--shared-check)
+                 (lambda (&rest args)
+                   (prog1 (apply check args)
+                     (when (and (= 1 completed) (not injected))
+                       (setq injected t)
+                       (put index "Keep `work://shared/folder`.\n"))))))
+        (should-error (inject-native #'ignore #'apply-item) :type 'mevedel-memory-decision-held))
+      (should injected))
+    (native-proof)
+    (held "changed"))
+  :doc "private quota refuses additional protected preimages before native capture and records its dated hold"
+  (progn
+    (prepare)
+    (should (eq 'applied (plist-get (apply-item) :status)))
+    (setq bytes (unibyte-string 0 3 4 254))
+    (prepare)
+    (let ((mevedel-memory-notes-undo-quota 5))
+      (should-error (inject-native #'ignore #'apply-item) :type 'mevedel-memory-decision-held))
+    (should (= 0 entered))
+    (should (= 0 completed))
+    (should-not (file-exists-p (blob)))
+    (held "quota"))
+  :doc "unavailable private storage accounting cannot be treated as zero usage"
+  (progn
+    (prepare)
+    (let ((sizes (symbol-function 'mevedel-session-control-fs-tree-sizes)) (injected 0))
+      (cl-letf (((symbol-function 'mevedel-session-control-fs-tree-sizes)
+                 (lambda (paths)
+                   (if (equal paths (list (mevedel-memory-notes-blob-directory shared)))
+                       (progn (cl-incf injected) (list (list :path (car paths) :status 'failed :diagnostic "Unobservable tree")))
+                     (funcall sizes paths)))))
+        (should-error (inject-native #'ignore #'apply-item) :type 'mevedel-memory-decision-held))
+      (should (= 1 injected)))
+    (should (= 0 entered))
+    (should-not (file-exists-p (blob)))
+    (held "accounting is unavailable"))
+  :doc "a missing prepared blob fails the final native proof without removing the original or claiming application"
+  (progn
+    (prepare)
+    (let ((decision (inject-native (lambda () (delete-file (blob))) #'apply-item t)))
+      (should (eq 'unavailable (plist-get decision :status)))
+      (should (equal "Attempt left targets unchanged." (plist-get decision :reason))))
+    (native-proof)
+    (should (seq-some (lambda (result) (and (eq 'verify-hash (plist-get result :op))
+                                          (equal (blob) (plist-get result :path))
+                                          (eq 'absent (plist-get result :status)))) operations))
+    (original))
+  :doc "a corrupt prepared blob fails its exact hash proof at the same boundary"
+  (progn
+    (prepare)
+    (let ((decision (inject-native (lambda () (write-region "wrong" nil (blob) nil 'silent)) #'apply-item t)))
+      (should (eq 'unavailable (plist-get decision :status)))
+      (should (equal "Attempt left targets unchanged." (plist-get decision :reason))))
+    (native-proof)
+    (should (seq-some (lambda (result) (and (eq 'verify-hash (plist-get result :op))
+                                          (equal (blob) (plist-get result :path))
+                                          (eq 'mismatch (plist-get result :status)))) operations))
+    (original)))
+
+(mevedel-deftest mevedel-memory-notes--quota/absent
+    (:vars* ((root (make-temp-file "attachment-absent-quota-" t))
+             (workspace (mevedel-workspace--create :root root))
+             (directory (file-name-concat root "absent"))
+             (mevedel-memory-notes-undo-quota 4))
+     :after-each ((delete-directory root t)))
+  ,test
+  (test)
+  :doc "native known absence is zero usage, unlike unknown accounting"
+  (let ((program (symbol-function 'mevedel-session-control-fs-run-program)) results)
+    (should-not (file-exists-p directory))
+    (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+               (lambda (&rest args)
+                 (let ((observed (apply program args)))
+                   (setq results (append results observed)) observed))))
+      (mevedel-memory-notes--quota workspace directory 4))
+    (should (seq-some (lambda (result) (and (eq 'path-exists-p (plist-get result :op))
+                                          (equal directory (plist-get result :path))
+                                          (eq 'absent (plist-get result :status)))) results))
+    (should-not (file-exists-p directory)))
+  :doc "missing and failed native absence results cannot turn unreadable accounting into zero"
+  (let ((program (symbol-function 'mevedel-session-control-fs-run-program)) (entered 0))
+    (dolist (status '(nil failed))
+      (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                 (lambda (ops &optional lock)
+                   (if (seq-some (lambda (op) (and (eq 'path-exists-p (plist-get op :op))
+                                                  (equal directory (plist-get op :path)))) ops)
+                       (progn (cl-incf entered)
+                              (when status (list (list :op 'path-exists-p :path directory :status status))))
+                     (funcall program ops lock)))))
+        (should-error (mevedel-memory-notes--quota workspace directory 4) :type 'mevedel-memory-decision-held)))
+    (should (= 2 entered))
+    (should-not (file-exists-p directory)))
+  :doc "a linked missing directory is not authoritative absence and cannot bypass accounting"
+  (progn
+    (make-symbolic-link (file-name-concat root "missing-target") directory)
+    (should-error (mevedel-memory-notes--quota workspace directory 4) :type 'mevedel-memory-decision-held)
+    (should (file-symlink-p directory))))
+
+(provide 'test-mevedel-memory-notes-attachments)
+;;; test-mevedel-memory-notes-attachments.el ends here

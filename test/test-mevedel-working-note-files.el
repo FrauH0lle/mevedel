@@ -242,31 +242,40 @@ Like TRAMP, return cached data unless `remote-file-name-inhibit-cache' is t."
   (progn
     (write-region (mevedel-working-note-normalize "# Body\n" "owner" "2000-01-01T00:00:00Z") nil path nil 'silent)
     (set-file-times path (seconds-to-time (- now (* 7 86400))))
-    (let ((original (symbol-function 'mevedel-memory-scope--snapshot)) (snapshots 0))
+    (let ((original (symbol-function 'mevedel-memory-scope--snapshot)) (snapshots 0) other-paths)
       (cl-letf (((symbol-function 'mevedel-memory-scope--snapshot)
                  (lambda (&rest args)
-                   (cl-incf snapshots)
-                   (prog1 (apply original args) (set-file-times path (seconds-to-time now))))))
+                   (prog1 (apply original args)
+                     (if (equal (car args) path)
+                         (progn (cl-incf snapshots) (set-file-times path (seconds-to-time now)))
+                       (push (car args) other-paths))))))
         (should (= 0 (plist-get (mevedel-memory-notes-capture workspace nil) :notes))))
-      (should (= 1 snapshots))))
+      (should (= 1 snapshots))
+      (should other-paths)
+      (should (cl-every (lambda (observed) (not (file-in-directory-p observed shared))) other-paths))))
   :doc "final capture bypasses attributes repopulated by snapshot mode reads"
   (progn
     (write-region (mevedel-working-note-normalize "# Body\n" "owner" "2000-01-01T00:00:00Z") nil path nil 'silent)
     (set-file-times path (seconds-to-time (- now (* 7 86400))))
     (let* ((original (symbol-function 'mevedel-memory-scope--snapshot))
-           (snapshots 0) (mode-reads 0) (remote-file-name-inhibit-cache nil)
+           (snapshots 0) (mode-reads 0) other-paths (remote-file-name-inhibit-cache nil)
            (handler (test-mevedel-working-note-files--cached-handler
                      path (file-attributes path) (directory-files-and-attributes shared nil directory-files-no-dot-files-regexp)
                      (lambda () (cl-incf mode-reads))))
            (file-name-handler-alist (cons (cons (concat "\\`" (regexp-quote shared)) handler) file-name-handler-alist)))
       (cl-letf (((symbol-function 'mevedel-memory-scope--snapshot)
                  (lambda (&rest args)
-                   (cl-incf snapshots)
                    (prog1 (apply original args)
-                     ;; External same-byte touch after mode reads leave an old cache entry.
-                     (let ((file-name-handler-alist nil)) (set-file-times path (seconds-to-time now)))))))
+                     (if (equal (car args) path)
+                         (progn
+                           (cl-incf snapshots)
+                           ;; The note's mode read repopulated the old cache entry.
+                           (let ((file-name-handler-alist nil)) (set-file-times path (seconds-to-time now))))
+                       (push (car args) other-paths))))))
         (should (= 0 (plist-get (mevedel-memory-notes-capture workspace nil) :notes))))
       (should (= 1 snapshots))
+      (should other-paths)
+      (should (cl-every (lambda (observed) (not (file-in-directory-p observed shared))) other-paths))
       (should (> mode-reads 0))
       (should (= (- now (* 7 86400)) (float-time (file-attribute-modification-time (file-attributes path)))))
       (let ((remote-file-name-inhibit-cache t))
@@ -291,7 +300,7 @@ Like TRAMP, return cached data unless `remote-file-name-inhibit-cache' is t."
   :doc "a live session beginning exact-file use during snapshot preparation prevents admission"
   (let ((reader (generate-new-buffer " *note-capture-reader*"))
         (original (symbol-function 'mevedel-memory-scope--snapshot))
-        (snapshots 0))
+        (snapshots 0) other-paths)
     (unwind-protect
         (progn
           (write-region "# External\n" nil path nil 'silent)
@@ -299,14 +308,19 @@ Like TRAMP, return cached data unless `remote-file-name-inhibit-cache' is t."
           (with-current-buffer reader (setq-local mevedel--session (mevedel-session--create :workspace workspace)))
           (cl-letf (((symbol-function 'mevedel-memory-scope--snapshot)
                      (lambda (&rest args)
-                       (cl-incf snapshots)
                        (prog1 (apply original args)
-                         (mevedel-resource-execute
-                          (mevedel-resource-prepare 'read "work://shared/note.md"
-                                                    (list :session (buffer-local-value 'mevedel--session reader)))
-                          (lambda (_path _address) nil))))))
+                         (if (equal (car args) path)
+                             (progn
+                               (cl-incf snapshots)
+                               (mevedel-resource-execute
+                                (mevedel-resource-prepare 'read "work://shared/note.md"
+                                                          (list :session (buffer-local-value 'mevedel--session reader)))
+                                (lambda (_path _address) nil)))
+                           (push (car args) other-paths))))))
             (should (= 0 (plist-get (mevedel-memory-notes-capture workspace nil) :notes))))
-          (should (= 1 snapshots)))
+          (should (= 1 snapshots))
+          (should other-paths)
+          (should (cl-every (lambda (observed) (not (file-in-directory-p observed shared))) other-paths)))
       (kill-buffer reader))))
 
 (mevedel-deftest mevedel-working-note-files-cold-load ()

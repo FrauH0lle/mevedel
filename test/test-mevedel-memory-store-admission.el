@@ -58,8 +58,8 @@
                   (delete-directory root t)))
   (cl-labels
       ((block (id &optional invalid)
-         (format "````proposal\nnote: %S\ndisposition: \"delete\"\nreason: %s\n---\n````\n"
-                 id (if invalid "null" "\"Reviewed\"")))
+         (format "````proposal\nnote: %S\n%s---\n````\n"
+                 id (if invalid "disposition: \"delete\"\nreason: \"Reviewed\"\n" "")))
        (reply (acknowledgements)
          (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## Notes\n"
                  acknowledgements "## No action\n- none"))
@@ -77,10 +77,27 @@
     (should (equal ids (plist-get accepted :admitted-notes)))
     (should (= 1 (length proposals)))
     (should (equal "work://shared/a.md" (plist-get (car proposals) :note)))
+    (should-not (plist-member (car proposals) :reason))
+    (should-not (plist-member (car proposals) :disposition))
     (should (string-search "unadmitted note blocks skipped" (plist-get accepted :no-action)))
     (should-not (mevedel-journal-store-entries root))
     ;; Restart-readable immutable input metadata exists before publication.
-    (should (equal accepted (readback))))
+    (should (equal accepted (readback)))
+    (should-not (plist-member (car (plist-get (readback) :proposals)) :reason))
+    (should-not (plist-member (car (plist-get (readback) :proposals)) :disposition)))
+  :doc "duplicate acknowledgements quarantine their note while omitted and unadmitted notes remain unchanged"
+  (let* ((accepted (accept (reply (concat (block "work://shared/a.md")
+                                         (block "work://shared/a.md")
+                                         (block "work://shared/c.md"))) ids))
+         (no-action (plist-get accepted :no-action)))
+    (should-not (plist-get accepted :proposals))
+    (should (equal ids (plist-get accepted :admitted-notes)))
+    (should (string-search "Duplicate note target" no-action))
+    (should (string-search "Missing note acknowledgement" no-action))
+    (should (string-search "unadmitted note blocks skipped" no-action))
+    (should (equal accepted (readback)))
+    (dolist (name '("a.md" "b.md" "c.md"))
+      (should (file-exists-p (file-name-concat shared name)))))
   :doc "all invalid or missing acknowledgements retain input admission through publication recovery"
   (let* ((accepted (accept (reply (block "work://shared/a.md" t)) ids))
          (pass (plist-get prepared :id)))

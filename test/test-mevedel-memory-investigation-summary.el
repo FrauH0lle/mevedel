@@ -282,8 +282,7 @@
              (real-supported (symbol-function 'mevedel-journal-worker-supported-p))
              (real-worker (symbol-function 'mevedel-journal-worker-start))
              (reply (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n"
-                            "## Notes\n````proposal\nnote: \"work://shared/note.md\"\ndisposition: \"delete\"\n"
-                            "reason: \"Nothing qualifies for extraction\"\n---\n````\n"
+                            "## Notes\n````proposal\nnote: \"work://shared/note.md\"\n---\n````\n"
                             "## No action\n- none"))
              worker-enabled worker-operations state result fsm callback)
      :before-each ((put model :context-window 128) (put model :capabilities '(tool-use)))

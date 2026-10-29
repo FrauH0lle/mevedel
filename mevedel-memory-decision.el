@@ -25,11 +25,11 @@
 (declare-function mevedel-memory-notes-in-use-p "mevedel-memory-notes" (workspace relative))
 (declare-function mevedel-memory-notes-mutation-hold "mevedel-memory-notes" (workspace root relative &optional captured-scope))
 (declare-function mevedel-memory-notes-passes "mevedel-memory-notes" (workspace entries))
-(declare-function mevedel-memory-notes-recheck "mevedel-memory-notes" (root relative))
+(declare-function mevedel-memory-notes-record-hold "mevedel-memory-notes" (workspace directory relative reason))
 (autoload 'mevedel-memory-notes-in-use-p "mevedel-memory-notes")
 (autoload 'mevedel-memory-notes-mutation-hold "mevedel-memory-notes")
 (autoload 'mevedel-memory-notes-passes "mevedel-memory-notes")
-(autoload 'mevedel-memory-notes-recheck "mevedel-memory-notes")
+(autoload 'mevedel-memory-notes-record-hold "mevedel-memory-notes")
 
 ;; `mevedel-memory-pass'
 (defvar mevedel-memory-pass--drains)
@@ -476,16 +476,10 @@ With WORKSPACE, a note disposal also checks its required extractions."
                                                    (mapcar #'car (plist-get item :before)))))
           (when (and workspace (eq (plist-get check :status) 'fresh)
                      (eq (plist-get item :action) 'note-delete)
-                     (equal (plist-get item :type) "note"))
+                     (member (plist-get item :type) '("note" "attachment")))
             (when-let* ((reason (mevedel-memory-notes-mutation-hold
                                 workspace root (plist-get item :file) scope)))
-              (setq check (list :status 'waiting :reason reason))))
-          ;; Housekeeping proved an attachment unreferenced at capture; a
-          ;; note written since then may reference it.
-          (when (and (eq (plist-get check :status) 'fresh)
-                     (equal (plist-get item :type) "attachment"))
-            (when-let* ((reason (mevedel-memory-notes-recheck root (plist-get item :file))))
-              (setq check (list :status 'stale :reason reason)))))
+              (setq check (list :status 'waiting :reason reason)))))
       (error (setq check (list :status 'unavailable :reason (error-message-string err)))))
     (append check (list :scope scope :proposal item))))
 
@@ -495,11 +489,14 @@ ON-APPLIED receives newly confirmed paths.  CURRENTP guards automatic
 forward writes; note decisions also recheck that no open session uses their
 file.  PENDING skips any existing decision.  No observation crosses recovery
 or a previous attempt."
-  (cl-labels ((live (item)
+  (cl-labels ((live (item scope)
 		(and (or (null currentp) (funcall currentp))
-		     (or (null currentp)
-			 (not (mevedel-memory-proposal-note-action-p (plist-get item :action)))
-			 (not (mevedel-memory-notes-in-use-p workspace (plist-get item :file)))))))
+		     (or (not (mevedel-memory-proposal-note-action-p (plist-get item :action)))
+			 (not (when (mevedel-memory-notes-in-use-p workspace (plist-get item :file))
+                                (mevedel-memory-notes-record-hold
+                                 workspace (plist-get (mevedel-memory-scope--root scope (plist-get item :root)) :dir)
+                                 (plist-get item :file) "Shared file is in active local use")
+                                t))))))
     (let* ((accepted (mevedel-memory-store-accepted workspace pass))
 	   (item (seq-find (lambda (item) (equal proposal (plist-get item :id))) (plist-get accepted :proposals)))
 	   (scope (plist-get (plist-get accepted :prepared) :scope))
@@ -509,7 +506,7 @@ or a previous attempt."
       (when (and pending previous)
 	(cl-return-from mevedel-memory-decision--apply-owned '(:status skipped)))
       (if (mevedel-memory-decision-terminal-status-p (plist-get previous :status)) previous
-	(unless (live item)
+		(unless (live item scope)
 	  (cl-return-from mevedel-memory-decision--apply-owned '(:status held)))
 	(mevedel-memory-write-call
 	 scope (plist-get item :root)
@@ -517,10 +514,13 @@ or a previous attempt."
 	   (let* ((input (mevedel-memory-decision--application-input accepted item workspace))
 		  (scope (plist-get input :scope)) (effective (plist-get input :proposal)))
 	     (when (eq (plist-get input :status) 'waiting)
+		       (mevedel-memory-notes-record-hold workspace
+                                                      (plist-get (mevedel-memory-scope--root scope (plist-get item :root)) :dir)
+                                                      (plist-get item :file) (plist-get input :reason))
                        (if currentp
                            (signal 'mevedel-memory-decision-held (list (plist-get input :reason)))
                          (user-error "%s" (plist-get input :reason))))
-	     (unless (live item)
+		     (unless (live item scope)
 	       (cl-return-from mevedel-memory-decision--apply-owned '(:status held)))
 	     (if (not (eq (plist-get input :status) 'fresh))
 		 (mevedel-memory-decision--publish
@@ -536,13 +536,16 @@ or a previous attempt."
 		     (mevedel-memory-write-run
 		      workspace claim target intent
                               (lambda ()
-                                (unless (live item) (signal 'mevedel-memory-decision-held nil))
+	                                (unless (live item scope) (signal 'mevedel-memory-decision-held nil))
                                 (when (and (eq (plist-get item :action) 'note-delete)
-                                           (equal (plist-get item :type) "note"))
+                                           (member (plist-get item :type) '("note" "attachment")))
                                   (when-let* ((reason (mevedel-memory-notes-mutation-hold
                                                       workspace
                                                       (mevedel-memory-scope--root scope (plist-get item :root))
                                                       (plist-get item :file) scope)))
+                                    (mevedel-memory-notes-record-hold
+                                     workspace (plist-get (mevedel-memory-scope--root scope (plist-get item :root)) :dir)
+                                     (plist-get item :file) reason)
                                     (signal 'mevedel-memory-decision-held (list reason))))))
 		   ((error quit) (setq failure err)))
                  (setq original (if (eq (car-safe failure) 'mevedel-tool-patch-partial-rollback)

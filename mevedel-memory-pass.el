@@ -1080,13 +1080,13 @@ inference and is marked :housekeeping-only."
                                ((mevedel-session-control-fs-directory-p configured)))
                      (mevedel-memory-notes-cohort
                       workspace observed :mode (plist-get payload :mode)
-                      :external (mevedel-memory-pass--cited-texts scope)
+                      :citation-scope scope
                       :in-use (plist-get payload :in-use-notes))))
                  (not automatic))))
         (when cycle
           (setq notes (or (mevedel-memory-pass--capture-notes
                            workspace observed (plist-get payload :mode)
-                           (mevedel-memory-pass--cited-texts scope)
+                           scope
                            (plist-get payload :in-use-notes)
                            (mevedel-memory-cycle-cohort cycle)) (list :root nil)))
           (setq cycle (mevedel-memory-cycle-stage workspace claim cycle :capture notes))
@@ -1128,16 +1128,9 @@ inference and is marked :housekeeping-only."
                 :housekeeping-only (and root (not entries) (not (plist-get payload :memory-only))
                                         (null (plist-get (cdr root) :files)))))))))
 
-(defun mevedel-memory-pass--cited-texts (scope)
-  "Return the captured memory and instruction texts in SCOPE."
-  (cl-loop for row in (plist-get scope :roots)
-           append (cl-loop for file in (plist-get (cdr row) :before)
-                           when (plist-get (cdr file) :bytes)
-                           collect (decode-coding-string (plist-get (cdr file) :bytes) 'utf-8-unix))))
-
-(defun mevedel-memory-pass--capture-notes (workspace entries mode cited in-use cohort)
+(defun mevedel-memory-pass--capture-notes (workspace entries mode scope in-use cohort)
   "Capture WORKSPACE's ready shared files from public ENTRIES under MODE.
-CITED are memory and instruction texts whose citations protect files.
+SCOPE retains complete memory and instruction citation evidence and omissions.
 IN-USE lists relative paths open sessions are using; they wait.
 COHORT is a closed ordered allowlist of frozen full file versions.
 First collect undo blobs no retained write needs.  The caller holds the
@@ -1149,7 +1142,7 @@ consolidation claim, which also excludes concurrent application."
     (ignore-errors
       (mevedel-memory-notes-collect-blobs
        workspace (mevedel-memory-notes-blob-directory (file-truename configured))))
-    (mevedel-memory-notes-capture workspace entries :mode mode :external cited :in-use in-use :cohort cohort)))
+    (mevedel-memory-notes-capture workspace entries :mode mode :citation-scope scope :in-use in-use :cohort cohort)))
 
 (defun mevedel-memory-pass--prepared (state result focus memory-only)
   "Start STATE's configured review from prepared RESULT, FOCUS and MEMORY-ONLY.

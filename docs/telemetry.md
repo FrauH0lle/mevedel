@@ -294,12 +294,12 @@ cancellation releases the fence and leaves the machine retryable.
   confirmed written by that run, without exposing those paths or claiming that
   the resulting memory is better.
   `:note-format-failure-count` counts admitted notes whose missing, invalid or
-  duplicate dispositions were recovered as no-ops, plus unadmitted note blocks
+  duplicate acknowledgements were recovered as no-ops, plus unadmitted note blocks
   skipped in that pass. A completed
   pass with a nonzero count is not a clean-format review; these failures must be
   counted alongside whole-review rejections when evaluating reply quality.
   Only the scalar count is emitted, never note IDs or parser diagnostic text.
-  Notes have delete-only acknowledgements. Retention-guard, model-keep and
+  Notes have ID-only acknowledgements with deletion implied. Retention-guard, model-keep and
   preserved-condensation counters are not emitted; acknowledgement alone is
   not proof of application or useful service.
   The daily shared-note cycle and a pass are different units. One finite cycle

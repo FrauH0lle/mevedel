@@ -217,10 +217,10 @@ The consolidation output contract is implemented in
 root IDs, admitted files, complete filename observations for creation, and
 admitted digest IDs before returning any proposals. The fixed ordered sections
 are Promote, Update, Merge, Remove, Instructions, Notes, and No action; Notes is
-required exactly when shared notes were admitted, with one disposition per
+required exactly when shared notes were admitted, with one acknowledgement per
 admitted note, and may otherwise be omitted or `- none`. The request's notes-root
 filename roster lists only admitted notes; references and investigation reads do
-not admit additional notes for disposition. Proposal fences
+not admit additional notes for acknowledgement. Proposal fences
 contain JSON-valued header lines, a `---` separator, and Markdown replacement
 content. The header is a sequence of `key: value` lines, not a JSON object;
 only the values use JSON syntax. Merge sources must be admitted files; overlapping file operations
@@ -230,8 +230,9 @@ owns index consistency. This parser performs no reads or writes and does not
 establish current authority, freshness, or factual correctness. The request uses
 this parser at terminal settlement before accepting proposals into the durable
 review and decision lifecycle exposed by the memory cockpit.
-A Notes block contains only `note`, `disposition: "delete"`, and `reason`,
-with an empty body. No completion inventory, resolution evidence or replacement
+A Notes block contains only `note: "ID"`, with deletion implied and an exactly
+empty body. Extra fields, including `disposition` and `reason`, are invalid for
+that note. No completion inventory, resolution evidence or replacement
 note text is required or accepted. Instructions proposals supply the complete
 desired content of an exact captured applicable file, preserving unrelated
 guidance, rather than appended text. Captured known-absent instruction targets
@@ -239,8 +240,8 @@ remain creatable. Empty Instructions bodies mean zero bytes, not path deletion;
 other decoded body bytes, including a final newline, are preserved exactly.
 One newline immediately before the closing fence is structural, so retaining
 a final newline in the desired body requires an extra newline before the fence.
-A block with an empty body may omit the `---` separator, a note disposition may
-repeat a header line with an identical value, sections may appear in any order
+A block with an empty body may omit the `---` separator. Repeated header fields
+are invalid, including identical note IDs. Sections may appear in any order
 (each once; every action section required, so a truncated reply still fails),
 and a reply may end without `## No action`; text between proposal blocks still
 invalidates the reply. These accept shapes real replies
@@ -1146,7 +1147,7 @@ additional evidence, verifies relevant claims, and acknowledges omissions.
 
 Shared files (`.mevedel/shared/`) are untracked, machine-local and temporary.
 `mevedel-memory-notes.el` owns their lifecycle: general consolidation reviews
-extract lasting knowledge from quiet files into memory and then dispose of
+extract lasting knowledge from age-ready files into memory and then dispose of
 them. Focused reviews do not include notes. Accepted reviews and decisions are
 the only processing record.
 
@@ -1223,8 +1224,9 @@ an unavailable or incomplete scope hold deletion; capture cannot prove their
 later absence.
 
 **Decisions.** The reply's Notes section gives every admitted note exactly one
-acknowledgement with `note`, `disposition: "delete"`, `reason`, and an empty
-body. Extraction is selective: a note may yield no qualifying memory. Tasks,
+acknowledgement with only `note: "ID"`, deletion implied, and an exactly empty
+body. Neither `disposition` nor `reason` is accepted. Extraction is selective:
+a note may yield no qualifying memory. Tasks,
 unresolved findings, measurements and possible future usefulness do not require
 a completion audit or automatically retain a note. Open work belongs in its
 tracker or maintained documentation, not in permanent memory merely to permit
@@ -1238,7 +1240,7 @@ only after every required extraction is applied; an undecided requirement
 waits without a decision, and any other requirement outcome makes the
 disposition stale, leaving the note for a later review.
 
-Missing or invalid note dispositions, including unknown note fields, leave the
+Missing or invalid note acknowledgements, including unknown note fields, leave the
 affected notes unchanged without a proposal or decision. Duplicate claims for
 one admitted note quarantine that note; valid unrelated proposals survive.
 The private no-action text records bounded diagnostics, and the callback's
@@ -1251,7 +1253,8 @@ as do required memory sections missing outside a quarantined tail.
 Each skipped note counts as a format failure, not a successful keep or service:
 the pass reports it in `note-format-failure-count` (which also counts unadmitted
 note blocks), subtracts it from
-`notes-reviewed` and includes it in `notes-remaining`. The accepted pass still
+`notes-reviewed`. `notes-remaining` reports capture-bounded remaining members,
+not an immediate retry obligation for malformed acknowledgements. The accepted pass still
 proves an attempt for each exact admitted version in the finite daily cohort;
 no acknowledgement or deletion is invented. Other cohort members remain
 serviceable even after a batch whose acknowledgements are all invalid. The
@@ -1265,24 +1268,38 @@ checks, exact before-state, checked writes, recovery and byte-exact undo still
 apply. A write confirmed before cancellation retains its count; a prepared
 proposal or a deferred retry does not establish that a deletion occurred.
 
-**Housekeeping.** Quiet attachments that no surviving text file references
-(conservatively by root-relative, note-relative, URL-encoded or address
-spelling) and quiet empty folders receive delete and prune decisions without
-inference, at most 128 per review. Reference scans stream large texts in
+**Housekeeping.** Attachments at least fourteen elapsed days old that no
+surviving text file, memory topic or instruction references receive delete
+decisions without inference; age-ready empty folders receive prune decisions,
+at most 128 housekeeping items per review. Matching is conservative across
+root-relative, note-relative, URL-encoded and address spellings, including named
+containing folders below the shared root. Generic root navigation does not
+protect every child. All other surviving Markdown and readable attachments,
+including scripts, JSON and plain text, participate, even if they have pending
+deletion proposals; only the target itself is excluded. Reference scans stream large texts in
 1 MiB chunks with overlapping filename spellings, so transcript copies above
 1 MiB do not make the scan incomplete; references split across chunk
 boundaries still protect attachments. Read failures, changing files and
-incomplete inventories block attachment cleanup, not text review.
-Application rechecks text written since
-capture, so a newly referenced attachment becomes stale. A review with only
-housekeeping starts no model request.
+incomplete inventories block attachment cleanup, not text review. Captured
+permanent scope retains omissions and completeness, not merely flattened text;
+unknown scope cannot prove reference absence. Before actual deletion, complete
+fresh shared and applicable permanent scopes are checked again, including
+backdated edits and unsaved drafts. Inventories, file versions and configuration
+are revalidated after I/O. New references, renewed age, active use or unavailable
+evidence hold the original without a terminal decision. These checks repeat
+after private-blob preparation for both synchronous and yielding application.
+A review with only housekeeping starts no model request. The dated capture and
+application observation explains holds in the cockpit; generated resource
+discovery remains age-readiness-only with safety checks explicitly pending.
 
 **Application and undo.** Note decisions use the checked decision, write
 intent, recovery and reversal paths with a shared-notes target whose
 coordination lives in `.mevedel/state/shared-notes/`, outside the folder it
-cleans. Each change runs as one locked target program: ownership guard, exact
-hash and mode proof, capture of the previous bytes as a private
-content-addressed blob, mutation, then removal of ancestors left empty. The
+cleans. A fenced preparatory program verifies before-state and retains the
+previous bytes as a private content-addressed blob within the undo quota. The
+final use, unsaved-buffer, age and reference checks run after that preparatory
+I/O. A locked target program then repeats ownership and exact hash/mode/blob
+proof before mutation and removal of ancestors left empty. The
 shared root is preserved. Undo restores exact bytes, mode and parent folders
 from the blob. Reversing an extraction first restores every applied note
 disposal that required it; if that fails, the extraction stays applied.
@@ -1290,24 +1307,13 @@ Blobs are retained while any write intent references them, so they follow the
 ordinary resolution-based history window. `mevedel-memory-notes-undo-quota`
 (default 1 GiB) bounds them: collection of unreferenced blobs runs before each
 review and before refusing a capture, and a change that would exceed the quota
-is refused with the note left in place. Unsaved visiting buffers and changed
-content refuse mutation.
-
-An attachment larger than the undo quota instead uses verified **system
-trash**, recorded as ordinary housekeeping. On GNU/Linux with Emacs's
-standard trash implementation, a private staging copy is moved with
-`move-file-to-trash` and `delete-by-moving-to-trash` enabled; its retained
-trash bytes must match the whole-file hash before the locked program can
-remove the original. Failure (including an implementation that deletes
-instead of trashing) leaves the original in place. The intent retains the
-exact content-addressed trash location for checked undo without consuming
-the undo-blob quota. With the default freedesktop trash Emacs also writes
-`.trashinfo`; an explicitly configured local `trash-directory` uses Emacs's
-configured trash semantics. Emptying or editing trash can make later undo
-unavailable, and never authorizes an unchecked restoration. TRAMP attachments,
-unknown/native platform trash implementations, and linked or unwritable
-trash locations remain blocked with an explicit reason; there is no permanent
-deletion fallback.
+is refused with the original left in place. Unknown quota accounting also holds
+the original; it is never interpreted as zero usage. Unsaved visiting buffers
+and changed content refuse mutation. Attachments use exactly this private undo
+path regardless of platform or size. There is no system-trash staging, external
+trash copy or permanent-deletion fallback. Current retained write references
+can keep raw preimages beyond thirty days; a per-disposal thirty-day payload
+expiry is not yet enforced.
 
 **Modes.** `manual` processes notes only through `/remember`; `propose` leaves
 their decisions in the cockpit; `auto` applies extraction, deletion and

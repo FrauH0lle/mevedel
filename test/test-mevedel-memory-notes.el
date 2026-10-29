@@ -121,8 +121,7 @@
     (accept (capture))
     (let* ((accepted (accept (capture)
                              (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n"
-                                     "## Notes\n````proposal\nnote: \"work://shared/old.md\"\ndisposition: \"delete\"\n"
-                                     "reason: \"No qualifying memory\"\n---\n````\n"
+                                     "## Notes\n````proposal\nnote: \"work://shared/old.md\"\n---\n````\n"
                                      "## No action\n- none")))
            (proposal (car (plist-get accepted :proposals))))
       (should (eq 'note-delete (plist-get proposal :action)))
@@ -299,22 +298,36 @@
       (should (= 2 (plist-get capture :remaining)))
       (should (equal "n00.md" (car (plist-get root-row :files)))))))
 
-(mevedel-deftest mevedel-memory-notes-recheck
+(mevedel-deftest mevedel-memory-notes--shared-proof
     (:vars* ((root (file-name-as-directory (file-truename (make-temp-file "mevedel-notes-recheck-" t)))))
      :after-each ((delete-directory root t)))
   ,test
   (test)
-  :doc "only text written since capture can newly protect an attachment"
+  :doc "complete shared proof includes backdated surviving text and fails closed on unsafe inventories"
   (let ((since (float-time)))
     (write-region "Old note about a.png.\n" nil (file-name-concat root "old.md") nil 'silent)
     (set-file-times (file-name-concat root "old.md") (seconds-to-time (- since 3600)))
-    (should-not (mevedel-memory-notes-recheck (list :dir root :captured since) "a.png"))
+    (should (member "a.png" (plist-get (mevedel-memory-notes--shared-proof root '("a.png")) :referenced)))
     (write-region "New note about a.png.\n" nil (file-name-concat root "new.md") nil 'silent)
     (set-file-times (file-name-concat root "new.md") (seconds-to-time (+ since 60)))
-    (should (mevedel-memory-notes-recheck (list :dir root :captured since) "a.png"))
-    (should-not (mevedel-memory-notes-recheck (list :dir root :captured since) "b.png"))
+    (should (member "a.png" (plist-get (mevedel-memory-notes--shared-proof root '("a.png")) :referenced)))
+    (should-not (plist-get (mevedel-memory-notes--shared-proof root '("b.png")) :referenced))
     (make-symbolic-link "new.md" (file-name-concat root "link.md"))
-    (should (mevedel-memory-notes-recheck (list :dir root :captured since) "b.png"))))
+    (should (file-symlink-p (file-name-concat root "link.md")))
+    (should-error (mevedel-memory-notes--shared-proof root '("b.png"))))
+  :doc "same-size source edits with restored mtime still invalidate the bracketed reference proof"
+  (let ((path (file-name-concat root "source.md")))
+    (write-region "See aaa.wav.\n" nil path nil 'silent)
+    (let* ((modified (file-attribute-modification-time (file-attributes path)))
+           (proof (mevedel-memory-notes--shared-proof root '("bbb.wav"))))
+      (should-not (plist-get proof :referenced))
+      (should-not (mevedel-memory-notes--shared-check proof))
+      (write-region "See bbb.wav.\n" nil path nil 'silent)
+      (set-file-times path modified)
+      (should (time-equal-p modified (file-attribute-modification-time (file-attributes path))))
+      (should (equal '(error "A shared reference source changed during the check")
+                     (should-error (mevedel-memory-notes--shared-check proof))))
+      (should (member "bbb.wav" (plist-get (mevedel-memory-notes--shared-proof root '("bbb.wav")) :referenced))))))
 
 (mevedel-deftest mevedel-memory-notes-collect-blobs
     (:vars* ((root (file-name-as-directory (file-truename (make-temp-file "mevedel-notes-blobs-" t))))

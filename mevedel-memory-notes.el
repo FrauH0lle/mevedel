@@ -23,7 +23,6 @@
 (require 'mevedel-system)
 (require 'mevedel-working-note-files)
 (require 'url-util)
-(require 'xdg)
 
 ;; `mevedel-context-summary'
 (declare-function mevedel-context-summary-generate "mevedel-context-summary"
@@ -165,7 +164,7 @@ and concurrent changes fail closed, independently of the text-review bound."
                               (cons attachment
                                     (mapcar (lambda (text) (encode-coding-string text 'utf-8-unix))
                                             (mevedel-memory-notes--spellings attachment (car row)))))
-                            attachments))
+                            (remove (car row) attachments)))
                    (overlap (max 0 (1- (apply #'max 1 (mapcar #'length (apply #'append (mapcar #'cdr spellings)))))))
                    (offset 0) (tail ""))
               (while (and spellings (< offset size))
@@ -194,12 +193,22 @@ and concurrent changes fail closed, independently of the text-review bound."
 
 (defun mevedel-memory-notes--spellings (attachment note)
   "Return reference spellings for ATTACHMENT seen from text file NOTE.
-Both are relative to the shared root."
-  (let* ((relative (file-relative-name attachment (or (file-name-directory note) "./")))
-         (encoded (lambda (path) (mapconcat #'url-hexify-string (split-string path "/") "/"))))
-    (delete-dups
-     (list attachment relative (funcall encoded attachment) (funcall encoded relative)
-           (mevedel-memory-notes-address attachment)))))
+Both are relative to the shared root.  Named containing folders count too;
+generic root or current-directory mentions do not cite every child."
+  (let ((parts (split-string attachment "/")) spellings)
+    (dotimes (index (length parts))
+      (let* ((prefix (string-join (seq-take parts (1+ index)) "/"))
+             (folder (< (1+ index) (length parts)))
+             (name (if folder (concat prefix "/") prefix))
+             (relative (file-relative-name name (or (file-name-directory note) "./"))))
+        (dolist (path (append (list name relative)
+                             (when folder (list prefix (directory-file-name relative)))))
+          (unless (member path '("" "." "./" ".." "../"))
+            (push path spellings)
+            (push (mapconcat #'url-hexify-string (split-string path "/") "/") spellings)))
+        (push (mevedel-memory-notes-address prefix) spellings)
+        (push (concat ".mevedel/shared/" name) spellings)))
+    (delete-dups spellings)))
 
 (defun mevedel-memory-notes--referenced (attachments texts)
   "Return the members of ATTACHMENTS referenced by any of TEXTS.
@@ -209,8 +218,9 @@ Markdown links, backticked paths, prose paths and addresses all protect."
   (seq-filter
    (lambda (attachment)
      (cl-some (lambda (row)
-                (cl-some (lambda (spelling) (string-search spelling (cdr row)))
-                         (mevedel-memory-notes--spellings attachment (car row))))
+                (and (not (equal attachment (car row)))
+                     (cl-some (lambda (spelling) (string-search spelling (cdr row)))
+                              (mevedel-memory-notes--spellings attachment (car row)))))
               texts))
    attachments))
 
@@ -283,10 +293,12 @@ Inspect buffer identity and modification state, never draft contents."
             roots)))
        (buffer-list))))
 
-(defun mevedel-memory-notes-citation-hold (workspace relative &optional captured-scope)
+(defun mevedel-memory-notes-citation-hold (workspace relative &optional captured-scope observer)
   "Return a bounded hold reason if WORKSPACE might still cite RELATIVE.
 Nil proves complete current disk citation absence, not mutation authority.
 CAPTURED-SCOPE preserves applicable instruction paths across approval waits.
+Nil RELATIVE checks scope completeness only.  Optional OBSERVER receives
+complete texts before final verification and may return a final checker.
 Fresh configuration, inventories, complete bodies (including memory indexes),
 snapshot rereads and unsaved visiting buffers all participate in the proof."
   (condition-case err
@@ -301,7 +313,7 @@ snapshot rereads and unsaved visiting buffers all participate in the proof."
              (buffer-roots (append roots (mapcar #'cdr (seq-filter
                                                        (lambda (row) (eq (plist-get (cdr row) :kind) 'memory))
                                                        observed))))
-             paths texts)
+             paths texts final-check)
         (when (plist-get scope :omissions)
           (error "The current memory and instruction scope is incomplete"))
         ;; An index failure can exclude an entire original memory root.  A
@@ -335,6 +347,7 @@ snapshot rereads and unsaved visiting buffers all participate in the proof."
                          (plist-get snapshot :bytes) mevedel-memory-scope--max-file-bytes) texts))))))
         (when (mevedel-memory-notes--citation-unsaved-p paths buffer-roots)
           (error "Memory or instruction files have unsaved changes"))
+        (when observer (setq final-check (funcall observer texts)))
         ;; Verify bodies after the whole read, then inventories after those
         ;; rereads.  An arrival cannot hide behind an earlier name observation.
         (dolist (row observed)
@@ -353,7 +366,8 @@ snapshot rereads and unsaved visiting buffers all participate in the proof."
           (error "Citation scope configuration changed during the check"))
         (when (mevedel-memory-notes--citation-unsaved-p paths buffer-roots)
           (error "Memory or instruction files have unsaved changes"))
-        (when (mevedel-memory-notes--external-p relative texts)
+        (when final-check (funcall final-check))
+        (when (and relative (mevedel-memory-notes--external-p relative texts))
           (error "Current memory or instructions still reference this shared note"))
         nil)
     (error (truncate-string-to-width (format "Citation check held: %s" (error-message-string err)) 240 nil nil t))))
@@ -368,17 +382,24 @@ snapshot rereads and unsaved visiting buffers all participate in the proof."
          (attributes (file-attributes path)))
     (cond
      ((or (null before) (not (equal path (plist-get before :path)))
-          (not (plist-get before :bytes))) "Captured note metadata is unavailable")
+          (not (plist-get before :hash)) (not (plist-get before :mode))) "Captured note metadata is unavailable")
+     ((and (not (mevedel-working-note-markdown-p relative)) (not (natnump (plist-get before :size))))
+      "Captured attachment size is unavailable")
      ((or (null attributes) (file-attribute-type attributes)
           (not (mevedel-memory-notes-current-p before))) "The shared note changed since capture")
+     ((and (not (mevedel-working-note-markdown-p relative))
+           (/= (plist-get before :size) (file-attribute-size attributes)))
+      "Captured attachment size does not match the current file")
      ((and cohort-version (not (equal cohort-version (mevedel-memory-notes--version path))))
       "The shared note no longer matches its frozen cohort version")
      ((when-let* ((buffer (find-buffer-visiting path))) (buffer-modified-p buffer))
       "The shared note has unsaved buffer changes")
      ((mevedel-memory-notes-in-use-p workspace relative) "The shared note is in active local use")
      (t
-      (let* ((metadata (mevedel-working-note-classify relative
-                                                    (mevedel-working-note-files-text (plist-get before :bytes))))
+      (let* ((metadata (when (mevedel-working-note-markdown-p relative)
+                         (unless (plist-get before :bytes) (error "Captured Markdown body is unavailable"))
+                         (mevedel-working-note-classify relative
+                                                       (mevedel-working-note-files-text (plist-get before :bytes)))))
              (readiness (mevedel-working-note-eligibility
                          metadata (float-time (file-attribute-modification-time attributes))
                          (mevedel-session-control-fs-observation-time directory)))
@@ -396,89 +417,72 @@ snapshot rereads and unsaved visiting buffers all participate in the proof."
          ((not (plist-get readiness :eligible))
           (format "The shared note is not age-ready: %s" (plist-get readiness :reason)))))))))
 
+(defun mevedel-memory-notes--shared-unsaved-p (directory)
+  "Return non-nil for any modified visiting buffer beneath shared DIRECTORY.
+Do not inspect drafts, including new unsaved non-Markdown reference sources."
+  (seq-some (lambda (buffer)
+              (when-let* (((buffer-modified-p buffer))
+                          (path (buffer-local-value 'buffer-file-name buffer)))
+                (or (string-prefix-p (file-name-as-directory directory) (expand-file-name path))
+                    (ignore-errors (file-in-directory-p path directory)))))
+            (buffer-list)))
+
+(defun mevedel-memory-notes--shared-check (proof)
+  "Signal unless shared reference PROOF still covers every surviving source."
+  (let* ((directory (plist-get proof :dir))
+         (inventory (plist-get proof :inventory)))
+    (when (mevedel-memory-notes--shared-unsaved-p directory)
+      (error "Shared reference sources have unsaved buffer changes"))
+    (dolist (row (plist-get proof :versions))
+      (unless (equal (cdr row) (mevedel-memory-notes--version-attributes (file-name-concat directory (car row))))
+        (error "A shared reference source changed during the check")))
+    (let ((current (mevedel-working-note-files-inventory directory)))
+      (unless (and (plist-get current :complete)
+                   (equal (plist-get inventory :files) (plist-get current :files))
+                   (equal (plist-get inventory :directories) (plist-get current :directories)))
+        (error "Shared reference inventory changed or is incomplete")))
+    (when (mevedel-memory-notes--shared-unsaved-p directory)
+      (error "Shared reference sources have unsaved buffer changes"))))
+
+(defun mevedel-memory-notes--shared-proof (directory &optional targets)
+  "Observe complete surviving shared references in DIRECTORY to TARGETS.
+Nil TARGETS scans all observed attachments.  Keep streamed large-text overlap;
+the target itself does not survive its deletion, but other pending files do.
+Return rows and referenced targets together with a recheckable version proof."
+  (when (mevedel-memory-notes--shared-unsaved-p directory)
+    (error "Shared reference sources have unsaved buffer changes"))
+  (let* ((inventory (mevedel-working-note-files-inventory directory))
+         (_ (unless (plist-get inventory :complete) (error "Shared reference inventory is incomplete")))
+         (versions (mapcar (lambda (row) (cons (car row) (mevedel-memory-notes--version-attributes
+                                                        (file-name-concat directory (car row)))))
+                           (plist-get inventory :files)))
+         (rows (mevedel-working-note-files-read directory (plist-get inventory :files)))
+         (scan (mevedel-memory-notes--scan
+                directory rows (or targets (mapcar #'car (seq-filter (lambda (row) (eq (plist-get (cdr row) :kind) 'attachment)) rows)))))
+         (proof (list :complete t :dir directory :inventory inventory :versions versions
+                      :rows rows :referenced (plist-get scan :referenced))))
+    (unless (plist-get scan :complete) (error "Shared references could not be checked completely"))
+    (mevedel-memory-notes--shared-check proof)
+    proof))
+
 (defun mevedel-memory-notes-mutation-hold (workspace root relative &optional captured-scope)
   "Return a bounded hold reason before deleting ROOT's RELATIVE in WORKSPACE.
-Check current captured bytes, actual mtime age, local use and unsaved edits,
-then complete fresh citations using CAPTURED-SCOPE's instruction paths.
-Recheck the note after citation I/O.  Nil grants no write authority."
+Check captured hash/mode, actual mtime age, local use and unsaved edits,
+then fresh citations using CAPTURED-SCOPE's instruction paths.  Attachments
+also need complete surviving shared-file references.  Recheck the target
+after all I/O.  Nil grants no write authority."
   (condition-case err
       (or (mevedel-memory-notes--note-hold workspace root relative)
-          (mevedel-memory-notes-citation-hold workspace relative captured-scope)
+          (mevedel-memory-notes-citation-hold
+           workspace relative captured-scope
+           (unless (mevedel-working-note-markdown-p relative)
+             (lambda (_texts)
+               (let ((proof (mevedel-memory-notes--shared-proof (plist-get root :dir) (list relative))))
+                 (when (member relative (plist-get proof :referenced))
+                   (error "A surviving shared file references this attachment"))
+                 (lambda () (mevedel-memory-notes--shared-check proof))))))
           (mevedel-memory-notes--note-hold workspace root relative))
     (error (truncate-string-to-width (format "Note mutation check held: %s" (error-message-string err)) 240 nil nil t))))
-
-(defun mevedel-memory-notes--trash-directory ()
-  "Return the local directory where Emacs will place trashed files.
-Only the known GNU/Linux implementation is admitted by the safety check."
-  (file-name-as-directory
-   (expand-file-name (or trash-directory (file-name-concat (xdg-data-home) "Trash" "files")))))
-
-(defun mevedel-memory-notes--trash-unavailable (path &optional shared)
-  "Return why PATH cannot safely use trash, or nil when it can.
-Never fall back to permanent deletion on TRAMP, unknown platforms, file
-handlers, native trash overrides, or linked/unwritable trash parents.
-SHARED, when supplied, excludes the managed shared tree from trash storage."
-  (cond
-   ((file-remote-p path) "System trash is unavailable for remote shared attachments")
-   ((or (not (eq system-type 'gnu/linux)) (fboundp 'system-move-file-to-trash))
-    "System trash cannot be verified on this platform")
-   ((find-file-name-handler path 'rename-file) "System trash cannot be verified for this file handler")
-   (t
-    (condition-case nil
-        (let ((directory (directory-file-name (mevedel-memory-notes--trash-directory)))
-              linked writable)
-          (cond
-           ((file-remote-p directory) "System trash must be local")
-           ((and shared (or (equal (file-name-as-directory directory) (file-name-as-directory shared))
-                            (file-in-directory-p directory shared)))
-            "System trash must be outside the managed shared directory")
-           (t
-            (while directory
-              (when (file-symlink-p directory) (setq linked t))
-              (when (and (not writable) (file-directory-p directory))
-                (setq writable (if (file-writable-p directory) 'yes 'no)))
-              (let ((parent (file-name-directory directory)))
-                (setq directory (unless (equal directory parent) (and parent (directory-file-name parent))))))
-            (cond (linked "System trash has a linked parent")
-                  ((not (eq writable 'yes)) "System trash is not writable")))))
-      (error "System trash could not be verified")))))
-
-(defun mevedel-memory-notes--trash-file (hash)
-  "Return the content-addressed system-trash location for attachment HASH."
-  (file-name-concat (mevedel-memory-notes--trash-directory) hash))
-
-(defun mevedel-memory-notes--prepare-trash (root snapshot)
-  "Place a verified recoverable copy of SNAPSHOT in system trash for ROOT.
-Only after this succeeds may the locked program remove the original.  A
-trash failure or an implementation that merely deletes its input leaves
-the original intact.  The retained intent names the exact trash file."
-  (let* ((path (plist-get snapshot :path))
-         (hash (plist-get snapshot :hash))
-         (destination (plist-get snapshot :trash-file))
-         (staging (file-name-concat (mevedel-memory-notes-control-directory (plist-get root :dir))
-                                   "trash-staging" hash)))
-    (when-let* ((reason (mevedel-memory-notes--trash-unavailable path (plist-get root :dir)))) (error "%s" reason))
-    (unless (equal destination (mevedel-memory-notes--trash-file hash))
-      (error "System trash configuration changed since capture"))
-    (when (equal path destination) (error "System trash aliases the attachment itself"))
-    (unless (file-exists-p destination)
-      (mevedel-session-control-fs-make-directory (file-name-directory staging) t)
-      (unwind-protect
-          (progn
-            (dolist (result (mevedel-session-control-fs-run-program
-                            (list (list :op 'capture-blob :path staging :source path))))
-              (mevedel-session-control-fs-program-value result))
-            (let ((delete-by-moving-to-trash t)
-                  (default-directory (file-name-directory staging)))
-              (move-file-to-trash staging)))
-        ;; Staging is never undo authority.  A failed trash operation must
-        ;; not accumulate over-quota copies outside the blob collector.
-        (when (file-exists-p staging) (mevedel-session-control-fs-delete-file staging))))
-    (unless (and (not (file-symlink-p destination))
-                 (file-regular-p destination)
-                 (equal hash (plist-get (mevedel-session-control-fs-file-hash destination) :sha256)))
-      (error "System trash did not retain the attachment; original left untouched"))))
-
 
 ;;
 ;;; Eligibility from retained decisions
@@ -578,15 +582,53 @@ attributes.  Atime is intentionally excluded; reading is not an edit."
     (list :workspace identity :dir directory :configured-dir configured
           :target (mevedel-execution-target-identity (mevedel-execution-target-create directory)))))
 
-(cl-defun mevedel-memory-notes-cohort (workspace entries &key mode external in-use)
+(defun mevedel-memory-notes--capture-citations (scope)
+  "Return complete captured citation SCOPE's :texts or a bounded :hold reason.
+Never repair supplied omissions by silently substituting another capture."
+  (condition-case err
+      (let (texts paths roots)
+        (unless (and (plist-member scope :roots) (not (plist-get scope :omissions)))
+          (error "Captured memory and instruction scope is incomplete"))
+        (dolist (row (plist-get scope :roots))
+          (let ((root (cdr row)))
+            (when (memq (plist-get root :kind) '(memory instructions))
+              (when (eq (plist-get root :kind) 'memory)
+                (push root roots)
+                (unless (plist-get root :complete) (error "Captured memory inventory is incomplete"))
+                (dolist (file (plist-get root :existing))
+                  (when (and (mevedel-working-note-markdown-p file)
+                             (not (member file (plist-get root :directories)))
+                             (not (assoc file (plist-get root :before))))
+                    (error "Captured Markdown memory body is unavailable"))))
+              (dolist (before (plist-get root :before))
+                (push (plist-get (cdr before) :path) paths)
+                (when (plist-get (cdr before) :exists)
+                  (push (mevedel-memory-scope--text (plist-get (cdr before) :bytes)
+                                                   mevedel-memory-scope--max-file-bytes) texts)))
+              (unless (eq 'fresh (plist-get (mevedel-memory-scope-check scope (car row)
+                                                                     (mapcar #'car (plist-get root :before))) :status))
+                (error "Captured citation files changed or are unavailable"))
+              (when (eq (plist-get root :kind) 'memory)
+                (let ((inventory (mevedel-memory-scope--inventory (plist-get root :dir))))
+                  (unless (and (plist-get inventory :complete)
+                               (equal (plist-get inventory :existing) (plist-get root :existing))
+                               (equal (plist-get inventory :directories) (plist-get root :directories)))
+                    (error "Captured memory inventory changed")))))))
+        (when (mevedel-memory-notes--citation-unsaved-p paths roots)
+          (error "Memory or instruction files have unsaved changes"))
+        (list :texts texts))
+    (error (list :hold (truncate-string-to-width (error-message-string err) 240 nil nil t)))))
+
+(cl-defun mevedel-memory-notes-cohort (workspace entries &key mode in-use (citation-scope nil citation-scope-p))
   "Freeze WORKSPACE's entire eligible cohort from accepted ENTRIES metadata.
-MODE, EXTERNAL citing text and IN-USE paths have the capture meanings.
+MODE, CITATION-SCOPE and IN-USE paths have the capture meanings.
 Freeze before request note, byte and housekeeping bounds.  The envelope's
 :members are ordered (:file RELATIVE :kind KIND :version METADATA) plists,
 never bodies.  The existing consolidation claim must be held by the caller.
 Incomplete inventories signal rather than masquerading as a whole cohort."
   (let* ((context (mevedel-memory-notes--cohort-context workspace))
-         (capture (mevedel-memory-notes--capture workspace entries :mode mode :external external :in-use in-use :freeze t))
+         (capture (apply #'mevedel-memory-notes--capture workspace entries :mode mode :in-use in-use :freeze t
+                         (when citation-scope-p (list :citation-scope citation-scope))))
          (row (plist-get capture :root)))
     (unless (equal context (mevedel-memory-notes--cohort-context workspace))
       (error "Shared-root namespace changed during cohort capture"))
@@ -597,28 +639,31 @@ Incomplete inventories signal rather than masquerading as a whole cohort."
                   :blocked (plist-get capture :blocked) :blocked-count (plist-get capture :blocked-count)))))
 
 (cl-defun mevedel-memory-notes-capture (workspace entries &key (quota mevedel-memory-notes-undo-quota)
-                                               mode external in-use (cohort nil cohort-p))
+                                               mode in-use (cohort nil cohort-p) (citation-scope nil citation-scope-p))
   "Capture WORKSPACE's next bounded ready batch from accepted ENTRIES.
-QUOTA, MODE, EXTERNAL citing text and IN-USE paths
+QUOTA, MODE and IN-USE paths
 freeze ordinary capture settings.  Supplied COHORT is a closed allowlist,
 including when empty.  Preserve its order and recheck every full version.
 Return :root, counts, :remaining bounded-out members, and :deferred exact
-members that cannot be admitted now.  Scheduling metadata is not authority."
+members that cannot be admitted now.  CITATION-SCOPE is complete captured
+memory/instruction evidence; omitted scope is freshly captured once.  Its
+omissions hold attachments rather than proving absence.  Scheduling metadata
+is not authority."
   (apply #'mevedel-memory-notes--capture workspace entries
-         :quota quota :mode mode :external external :in-use in-use
-         (when cohort-p (list :cohort cohort))))
+         :quota quota :mode mode :in-use in-use
+         (append (when cohort-p (list :cohort cohort))
+                 (when citation-scope-p (list :citation-scope citation-scope)))))
 
 (cl-defun mevedel-memory-notes--capture (workspace entries &key (quota mevedel-memory-notes-undo-quota)
-                                                mode external in-use (cohort nil cohort-p) freeze)
+                                                mode in-use (cohort nil cohort-p) freeze (citation-scope nil citation-scope-p))
   "Select WORKSPACE's ready shared working files for consolidation.
 ENTRIES is one public journal observation.  Return nil without a shared
 folder, otherwise a plist with :root, a (ID . ROOT) scope row or nil when
 nothing is ready, :notes, :attachments, :directories and :remaining counts,
 :blocked, at most `mevedel-memory-notes--max-blocked' (RELATIVE . REASON)
 rows, and :blocked-count.  QUOTA bounds private undo bytes.  MODE freezes
-the consolidation mode.  EXTERNAL
-lists memory and instruction texts; files they cite are never removed as
-housekeeping, and cited notes are flagged for the review.  IN-USE lists
+the consolidation mode.  CITATION-SCOPE retains complete captured memory and
+instruction evidence, freshly captured when omitted.  IN-USE lists
 relative paths open sessions are using; like recent files, they wait.
 COHORT, when supplied, is a closed allowlist.  FREEZE
 selects metadata only for the whole eligible cohort, not request bodies.
@@ -652,14 +697,20 @@ changed; the summary is recorded as the latest observation."
              (_ (when (and (or freeze cohort-p) (not (plist-get inventory :complete)))
                   (error "Cannot freeze or prepare an incomplete shared-note inventory")))
              (rows (mevedel-working-note-files-read directory (plist-get inventory :files)))
+             (citations (mevedel-memory-notes--capture-citations
+                         (if citation-scope-p citation-scope (mevedel-memory-scope-capture workspace))))
+             (external (plist-get citations :texts))
              (paths (make-hash-table :test #'equal))
              (history (progn
                         (dolist (row (append rows (plist-get inventory :directories)))
                           (puthash (car row) t paths))
                         (mevedel-memory-notes--history workspace entries paths)))
-             (scan (mevedel-memory-notes--scan
-                    directory rows
-                    (mapcar #'car (seq-filter (lambda (row) (eq (plist-get (cdr row) :kind) 'attachment)) rows))))
+             (attachments-to-check (mapcar #'car (seq-filter (lambda (row) (eq (plist-get (cdr row) :kind) 'attachment)) rows)))
+             (reference-proof (when attachments-to-check
+                                (condition-case err
+                                    (mevedel-memory-notes--shared-proof directory)
+                                  (error (list :hold (error-message-string err))))))
+             (scan reference-proof)
              (scan-complete (and (plist-get inventory :complete) (plist-get scan :complete)))
              (referenced (plist-get scan :referenced))
              (budget mevedel-memory-notes--max-bytes)
@@ -685,10 +736,11 @@ changed; the summary is recorded as the latest observation."
                           (ignore-errors
                             (equal (plist-get member :version)
                                    (mevedel-memory-notes--version (file-name-concat directory relative))))))
-                    (not (member relative in-use))
-                    (not (mevedel-memory-notes-in-use-p workspace relative))
-                    (not (when-let* ((buffer (find-buffer-visiting (file-name-concat directory relative))))
-                           (buffer-modified-p buffer)))
+                    (not (cond ((or (member relative in-use) (mevedel-memory-notes-in-use-p workspace relative))
+                                (block relative "Shared file is in active local use") t)
+                               ((when-let* ((buffer (find-buffer-visiting (file-name-concat directory relative))))
+                                  (buffer-modified-p buffer))
+                                (block relative "Shared file has unsaved buffer changes") t)))
                     (not (mevedel-memory-notes--suppressed
                           (gethash relative history) version)))))
           (dolist (row selected-rows)
@@ -752,13 +804,15 @@ changed; the summary is recorded as the latest observation."
                 ('attachment
                  (cond
                   ((not (plist-get (mevedel-working-note-eligibility nil (float-time modified) now) :eligible)))
-                  ((member relative referenced))
-                  ((mevedel-memory-notes--external-p relative external))
+                  ((member relative referenced) (block relative "A surviving shared file references this attachment"))
+                  ((mevedel-memory-notes--external-p relative external)
+                   (block relative "Captured memory or instructions reference this attachment"))
+                  ((plist-get citations :hold) (block relative (plist-get citations :hold)))
+                  ((plist-get reference-proof :hold) (block relative (plist-get reference-proof :hold)))
                   ((not scan-complete)
                    (block relative "Attachment references could not be checked completely"))
-                  ((and (> (or (plist-get (cdr row) :size) 0) quota)
-                        (mevedel-memory-notes--trash-unavailable path directory))
-                   (block relative (mevedel-memory-notes--trash-unavailable path directory)))
+                  ((> (or (plist-get (cdr row) :size) 0) quota)
+                   (block relative "Shared-note undo storage quota would be exceeded"))
                   ((and (not freeze) (>= housekeeping mevedel-memory-notes--max-attachments))
                    (push relative limited)
                    (cl-incf remaining))
@@ -772,9 +826,7 @@ changed; the summary is recorded as the latest observation."
                              (setq snapshot (plist-put snapshot :cohort-version version)))
                            (when (and (mevedel-working-note-files-current-p directory row)
                                       (ready-p relative modified (plist-get snapshot :hash)))
-                             (when (> (plist-get snapshot :size) quota)
-                               (setq snapshot (plist-put snapshot :trash-file
-                                                         (mevedel-memory-notes--trash-file (plist-get snapshot :hash)))))
+                             (mevedel-memory-notes--shared-check reference-proof)
                              (cl-incf housekeeping)
                              (when freeze (push (list :file relative :kind 'attachment :version version) members))
                              (push (cons relative snapshot) before)
@@ -861,6 +913,22 @@ failure to write it never blocks the review."
                  (mevedel-memory-notes--observation-path (file-truename configured))
                  'utf-8-unix (* 256 1024)))))
       (error nil))))
+
+(defun mevedel-memory-notes-record-hold (workspace directory relative reason)
+  "Record WORKSPACE's forward application hold on DIRECTORY's RELATIVE.
+REASON is dated independently of the last review observation; its selection
+counts and timestamp remain historical, not a claim of current safety."
+  (let* ((observation (copy-tree (mevedel-memory-notes-observation workspace)))
+         (at (format-time-string "%FT%TZ" nil t))
+         (blocked (plist-get observation :blocked))
+         (existing (assoc relative blocked)))
+    (unless observation (setq observation (list :at at)))
+    (setq observation (plist-put observation :blocked-count
+                                 (+ (or (plist-get observation :blocked-count) 0) (if existing 0 1))))
+    (when (or existing (< (length blocked) mevedel-memory-notes--max-blocked))
+      (setf (alist-get relative blocked nil nil #'equal)
+            (truncate-string-to-width (format "Application held %s: %s" at reason) 320 nil nil t)))
+    (mevedel-memory-notes--record directory (plist-put observation :blocked blocked))))
 
 (defun mevedel-memory-notes-documents (scope)
   "Return the complete text notes captured in SCOPE as review documents.
@@ -1040,25 +1108,6 @@ TELEMETRY-CONTEXT correlates chunk and final provider calls with their pass."
                               :sections (list (list :id 'evidence :title (car note) :mode 'markdown-mode
                                                     :body (with-current-buffer buffer (buffer-string)))))))))))
 
-(defun mevedel-memory-notes-recheck (root relative)
-  "Return why attachment RELATIVE in captured notes ROOT may not be removed.
-Return nil when no text file changed since capture references it.  Files
-unchanged since capture were already scanned, so only newer text is read.
-An incomplete observation is a reason not to remove."
-  (let* ((directory (plist-get root :dir))
-         (since (plist-get root :captured))
-         (inventory (mevedel-working-note-files-inventory directory))
-         (rows (mevedel-working-note-files-read
-                directory (seq-filter (lambda (row) (>= (float-time (plist-get (cdr row) :modified)) since))
-                                      (plist-get inventory :files))))
-         (scan (mevedel-memory-notes--scan directory rows (list relative))))
-    (cond ((not (plist-get inventory :complete))
-           "The shared folder could not be observed completely")
-          ((not (plist-get scan :complete))
-           "References to this attachment could not be rechecked")
-          ((member relative (plist-get scan :referenced))
-           "A shared note written after capture references this attachment"))))
-
 (defun mevedel-memory-notes-housekeeping (scope)
   "Return structured housekeeping proposals for SCOPE's attachments and folders.
 They need no inference: the captured observation already proved quiet,
@@ -1067,9 +1116,7 @@ unreferenced attachments and quiet empty directories."
     (append
      (mapcar (lambda (file)
                (list :action 'note-delete :root (car row) :file file :type "attachment" :title file :hook ""
-                     :reason (if (plist-get (cdr (assoc file (plist-get (cdr row) :before))) :trash-file)
-                                 "Quiet unreferenced attachment; system trash retains its undo copy."
-                               "Quiet attachment that no remaining shared note references.")
+                     :reason "Age-ready attachment with no observed surviving references; private undo required."
                      :evidence nil :body ""))
              (plist-get (cdr row) :attachments))
      (mapcar (lambda (file)
@@ -1169,7 +1216,6 @@ empty; absence is a state.  Links and other entries signal."
     (dolist (row (append (plist-get intent :before) (plist-get intent :after)) hashes)
       (let ((snapshot (cdr row)))
         (when (and (plist-get snapshot :exists) (not (plist-get snapshot :directory))
-                   (not (plist-get snapshot :trash-file))
                    (plist-get snapshot :hash))
           (push (plist-get snapshot :hash) hashes))))))
 
@@ -1192,12 +1238,24 @@ holds WORKSPACE's consolidation claim.  Return the number deleted."
 (defun mevedel-memory-notes--quota (workspace directory needed)
   "Ensure undo blob DIRECTORY in WORKSPACE has room for NEEDED more bytes."
   (cl-labels ((used ()
-                (let ((result (car (mevedel-session-control-fs-tree-sizes (list directory)))))
-                  (if (eq (plist-get result :status) 'ok) (plist-get result :value) 0))))
+                (condition-case nil
+                    (let ((result (car (mevedel-session-control-fs-tree-sizes (list directory)))))
+                      (cond ((and (eq (plist-get result :status) 'ok) (natnump (plist-get result :value)))
+                             (plist-get result :value))
+                            ;; `tree-size' refuses a missing leaf as a non-directory.
+                            ;; This native predicate returns nil ONLY for proven
+                            ;; absence; other failures signal and stay held below.
+                            ((and (not (eq (plist-get result :status) 'ok))
+                                  (not (mevedel-session-control-fs-path-exists-p directory))) 0)
+                            (t (error "Unavailable undo accounting"))))
+                  (error (signal 'mevedel-memory-decision-held '("Shared-note undo storage accounting is unavailable"))))))
     (when (> (+ (used) needed) mevedel-memory-notes-undo-quota)
-      (mevedel-memory-notes-collect-blobs workspace directory)
+      (condition-case err
+          (mevedel-memory-notes-collect-blobs workspace directory)
+        (error (signal 'mevedel-memory-decision-held
+                       (list (format "Shared-note undo storage cannot be collected safely: %s" (error-message-string err))))))
       (when (> (+ (used) needed) mevedel-memory-notes-undo-quota)
-        (error "Shared-note undo storage quota would be exceeded")))))
+        (signal 'mevedel-memory-decision-held '("Shared-note undo storage quota would be exceeded"))))))
 
 (defun mevedel-memory-notes--ancestors (path root)
   "Return PATH's ancestor directories strictly below ROOT, innermost first."
@@ -1212,9 +1270,10 @@ holds WORKSPACE's consolidation claim.  Return the number deleted."
 
 (defun mevedel-memory-notes-commit (workspace root target changes currentp &optional before-write)
   "Apply shared-note CHANGES below captured ROOT under WORKSPACE TARGET.
-Each change runs as one program under TARGET's lock: ownership guard, exact
-before-state proof, capture of the previous bytes as an undo blob, mutation,
-then optional pruning of ancestors left empty.  CURRENTP must keep
+Each change prepares its undo blob under TARGET's lock, then rechecks
+BEFORE-WRITE after that I/O.  A second fenced program proves the exact
+before-state before mutation and optional pruning of ancestors left empty.
+CURRENTP must keep
 authorizing every change.  A failure leaves earlier changes for checked
 recovery from the retained intent.  BEFORE-WRITE rechecks editor admission
 immediately before each forward mutation, after preparatory IO."
@@ -1229,19 +1288,42 @@ immediately before each forward mutation, after preparatory IO."
                           (error "Shared-note change lacks its after-state"))))
              (path (plist-get before :path))
              (file-before (and (plist-get before :exists) (not (plist-get before :directory))))
-             (trash (and file-before (not (plist-get after :exists)) (plist-get before :trash-file)))
+             (needed (when file-before
+                       (cond ((stringp (plist-get before :bytes)) (string-bytes (plist-get before :bytes)))
+                             ((natnump (plist-get before :size)) (plist-get before :size))
+                             (t (error "Captured shared-note undo size is unavailable")))))
+             (fence (list (list :op 'verify :path (mevedel-journal-claim--path target nil)
+                                :content (json-serialize (mevedel-journal-claim--record target)))
+                          (list :op 'absent :path (mevedel-journal-claim--path target t))
+                          (list :op 'before-time :path lock
+                                :content (number-to-string (plist-get target :expires-at)))))
+             (proof (cond ((not (plist-get before :exists)) (list (list :op 'absent :path path)))
+                          ((plist-get before :directory)
+                           (list (list :op 'directory-p :path path) (list :op 'verify-list :path path :content "")))
+                          (t (list (list :op 'verify-hash :path path :content (plist-get before :hash))
+                                   (list :op 'verify-mode :path path :content (format "%o" (plist-get before :mode)))))))
              (restore (and (plist-get after :exists) (not (plist-get after :directory))
                            (null (plist-get after :bytes)))))
         (unless (equal path (plist-get after :path)) (error "Shared-note mutation paths differ"))
         (when-let* ((buffer (find-buffer-visiting path)) ((buffer-modified-p buffer)))
           (error "Shared note has unsaved buffer changes: %s" path))
-        (when trash (mevedel-memory-notes--prepare-trash root before))
         (mevedel-session-control-fs-make-directory blobs t)
-        (when (and file-before (not trash)
-                   (not (mevedel-session-control-fs-path-exists-p
-                         (file-name-concat blobs (plist-get before :hash)))))
-          (mevedel-memory-notes--quota workspace blobs
-                                       (or (plist-get before :size) (length (plist-get before :bytes)) 0)))
+        (condition-case err
+            (when (and file-before
+                       (not (mevedel-session-control-fs-path-exists-p
+                             (file-name-concat blobs (plist-get before :hash)))))
+              (mevedel-memory-notes--quota workspace blobs needed))
+          (mevedel-memory-decision-held
+           (mevedel-memory-notes-record-hold workspace (plist-get root :dir)
+                                           (file-relative-name path (plist-get root :dir))
+                                           (error-message-string err))
+           (signal (car err) (cdr err))))
+        (when file-before
+          (dolist (result (mevedel-session-control-fs-run-program
+                          (append fence proof
+                                  (list (list :op 'capture-blob :source path
+                                              :path (file-name-concat blobs (plist-get before :hash))))) lock))
+            (mevedel-session-control-fs-program-value result)))
         (when (plist-get after :exists)
           (mevedel-session-control-fs-make-directory
            (if (plist-get after :directory) (file-name-directory (directory-file-name path))
@@ -1254,22 +1336,10 @@ immediately before each forward mutation, after preparatory IO."
         (dolist (result
                  (mevedel-session-control-fs-run-program
                   (append
-                   (list (list :op 'verify :path (mevedel-journal-claim--path target nil)
-                               :content (json-serialize (mevedel-journal-claim--record target)))
-                         (list :op 'absent :path (mevedel-journal-claim--path target t))
-                         (list :op 'before-time :path lock
-                               :content (number-to-string (plist-get target :expires-at))))
-                   (cond ((not (plist-get before :exists)) (list (list :op 'absent :path path)))
-                         ((plist-get before :directory)
-                          (list (list :op 'directory-p :path path)
-                                (list :op 'verify-list :path path :content "")))
-                         (t (list (list :op 'verify-hash :path path :content (plist-get before :hash))
-                                  (list :op 'verify-mode :path path
-                                        :content (format "%o" (plist-get before :mode)))
-                                  (if trash
-                                      (list :op 'verify-hash :path trash :content (plist-get before :hash))
-                                    (list :op 'capture-blob :source path
-                                          :path (file-name-concat blobs (plist-get before :hash)))))))
+                   fence proof
+                   (when file-before
+                     (list (list :op 'verify-hash :path (file-name-concat blobs (plist-get before :hash))
+                                 :content (plist-get before :hash))))
                    (cond ((not (plist-get after :exists))
                           (cons (list :op (if (plist-get before :directory) 'delete-empty-directory 'delete-file)
                                       :path path)
@@ -1278,8 +1348,7 @@ immediately before each forward mutation, after preparatory IO."
                                         (mevedel-memory-notes--ancestors path (plist-get root :dir)))))
                          ((plist-get after :directory) (list (list :op 'make-directory :path path)))
                          (restore (list (list :op 'restore-blob :path path :mode (plist-get after :mode)
-                                              :source (or (plist-get after :trash-file)
-                                                          (file-name-concat blobs (plist-get after :hash))))))
+                                              :source (file-name-concat blobs (plist-get after :hash)))))
                          (t (list (list :op 'write-mode :path path :coding 'no-conversion
                                         :content (concat (format "%o\n" (plist-get after :mode))
                                                          (plist-get after :bytes)))))))

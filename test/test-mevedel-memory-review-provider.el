@@ -3,8 +3,8 @@
 ;;; Commentary:
 
 ;; Exercise sessionless review timing through native gptel request preparation,
-;; URL transport completion, parsing and scoped tool loops.  Only url-retrieve
-;; is replaced: fixtures never open a connection or contact a provider.
+;; transport completion, parsing and scoped tool loops.  URL replies and a local
+;; stdin-draining curl substitute never open a connection or contact a provider.
 
 ;;; Code:
 
@@ -326,7 +326,6 @@
          (reply (replace-regexp-in-string
                  "## No action"
                  (concat "## Notes\n````proposal\nnote: \"work://shared/large.md\"\n"
-                         "disposition: \"delete\"\nreason: \"Nothing qualifies for extraction.\"\n"
                          "---\n````\n## No action")
                  test-mevedel-review-provider--none t t)))
     (start scope)
@@ -352,14 +351,21 @@
         (gptel-use-curl t)
         (gptel-stream t)
         (mevedel-memory-review-max-bytes 100)
+        (real-make-process (symbol-function 'make-process))
         processes)
     (unwind-protect
         (cl-letf (((symbol-function 'make-process)
                    (lambda (&rest args)
                      (should (equal "gptel-curl" (plist-get args :name)))
-                     (let ((process (make-pipe-process :name "review-provider-inert"
-                                                       :buffer (plist-get args :buffer)
-                                                       :noquery t :sentinel #'ignore)))
+                     ;; Native dispatch sends the complete config synchronously.
+                     ;; Drain it, then stay live for stream injection and abort.
+                     (let ((process (funcall real-make-process
+                                             :name "review-provider-draining"
+                                             :buffer (plist-get args :buffer)
+                                             :command (list (executable-find "python3") "-c"
+                                                            "import sys,time; sys.stdin.buffer.read(); time.sleep(60)")
+                                             :connection-type 'pipe
+                                             :noquery t :sentinel #'ignore)))
                        (push (process-buffer process) transport-buffers)
                        (push process processes)
                        process))))
@@ -371,6 +377,7 @@
                  (fsm (cadr (assq process gptel--request-alist)))
                  (info (gptel-fsm-info fsm))
                  (late (plist-get info :callback)))
+            (should (process-live-p process))
             (should (plist-get info :stream))
             (cl-incf clock 0.625)
             (gptel-curl--stream-filter

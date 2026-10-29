@@ -243,9 +243,14 @@ mtime as creation time on first tool write. Malformed supplied metadata fails
 visibly. Other working scopes and non-Markdown attachments are not decorated.
 See the [note-authoring contract](memory.md#shared-working-note-lifecycle).
 
-Memory consolidation reviews quiet shared files automatically, extracts their
-lasting knowledge and then deletes, keeps or condenses each one, preferring
-deletion; quiet unreferenced attachments and empty folders are removed too.
+Memory consolidation reviews a finite daily cohort of age-ready shared notes,
+extracts qualifying lasting knowledge and proposes deletion through ID-only
+acknowledgements. Attachments expire without inference after fourteen days,
+only when complete fresh reference, local-use and unsaved-buffer checks permit
+private reversible disposal. Unknown scope or quota pressure holds the original;
+there is no system-trash alternative. Age-ready empty folders can be pruned,
+but the shared root remains. These safety outcomes appear in capture/application
+observations, not as current guarantees from an age-readiness listing.
 See [Shared working-note lifecycle](memory.md#shared-working-note-lifecycle).
 `/clean-work [focus]` remains an explicit, interactive cleanup through normal
 ApplyPatch permissions and review; `/learn` handles requested promotion.

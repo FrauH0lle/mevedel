@@ -178,10 +178,11 @@ It does not enumerate open work, prove resolution, reproduce every measurement,
 search Git for completion, or decide whether a note should become a tracker.
 No qualifying memory is a successful extraction result and still permits deletion.
 
-Keep a small per-admitted-note acknowledgement in the Notes output: exact `note`,
-`disposition: "delete"`, `reason`, and an empty body. There is no keep or condense
-alternative and no open-items, resolved-by, resolution-anchors or unresolved-items
-header. Invalid, missing or duplicate acknowledgements leave that particular note
+Keep a small per-admitted-note acknowledgement in the Notes output: only
+`note: "ID"`, with deletion implied and an exactly empty body. There is no
+`disposition` or `reason` field, no keep or condense alternative, and no open-items,
+resolved-by, resolution-anchors or unresolved-items header. Invalid, missing or
+duplicate acknowledgements leave that particular note
 unchanged with a format diagnostic; they do not discard unrelated valid memory
 proposals or cause same-cycle retries. A malformed memory proposal or ambiguous
 target ownership still fails the review. Chunk summaries carry potentially

@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Decodes one bounded consolidation reply against its captured file and
-;; evidence scope. Invalid note dispositions are isolated as no-ops; memory,
+;; evidence scope. Invalid note acknowledgements are isolated as no-ops; memory,
 ;; instruction and structural failures still invalidate the complete reply.
 ;; This module performs no filesystem access or writes. Scope capture owns
 ;; canonical roots and before-state; application must recheck their authority
@@ -23,7 +23,7 @@
     ("Remove" . remove) ("Instructions" . instructions) ("Notes" . notes)
     ("No action" . nil))
   "Closed ordered consolidation sections and their actions.
-Notes may be omitted; omitted dispositions leave their notes unchanged.")
+Notes may be omitted; omitted acknowledgements leave their notes unchanged.")
 
 (defconst mevedel-memory-proposal--fields
   '(("root" . :root) ("file" . :file) ("type" . :type)
@@ -32,12 +32,8 @@ Notes may be omitted; omitted dispositions leave their notes unchanged.")
   "Closed proposal header fields; values use JSON syntax.")
 
 (defconst mevedel-memory-proposal--note-fields
-  '(("note" . :note) ("disposition" . :disposition) ("reason" . :reason))
-  "Closed shared-note deletion header fields; values use JSON syntax.")
-
-(defconst mevedel-memory-proposal--dispositions
-  '(("delete" . note-delete))
-  "Model-selectable shared-note dispositions and their actions.")
+  '(("note" . :note))
+  "Closed shared-note acknowledgement header; its value uses JSON syntax.")
 
 (defconst mevedel-memory-proposal-note-actions '(note-delete note-prune)
   "Proposal actions disposing of shared working files, not memory topics.")
@@ -68,12 +64,11 @@ PATH must satisfy `mevedel-memory-proposal-relative-path-p'."
        (cl-every (lambda (part) (not (member part '("" "." ".mevedel"))))
                  (split-string file "/"))))
 
-(defun mevedel-memory-proposal--fenced (text names &optional repeats)
+(defun mevedel-memory-proposal--fenced (text names)
   "Split fenced proposal TEXT into its decoded header plist and body.
 NAMES maps the closed header field names to keywords.  Without a `---'
 separator the body is empty and every line must be a header line; the
-action's own body rule then decides whether an empty body is valid.
-With REPEATS, an exactly repeated header line is accepted."
+action's own body rule then decides whether an empty body is valid."
   (let* ((separated (string-match "^-\\{3,\\}\\(?:\n\\|\\'\\)" text))
          (header (if separated (substring text 0 (match-beginning 0)) text))
          (body (if separated (string-remove-suffix "\n" (substring text (match-end 0))) ""))
@@ -94,9 +89,7 @@ With REPEATS, an exactly repeated header line is accepted."
           (setq encoded (concat encoded "\n" (pop lines))))
         (let ((value (and key (json-parse-string encoded :null-object :null
                                                  :false-object :false))))
-          ;; An exactly repeated line is unambiguous; a differing repeat is not.
-          (unless (and key (or (not (plist-member fields key))
-                               (and repeats (equal value (plist-get fields key)))))
+          (unless (and key (not (plist-member fields key)))
             (error "Unknown or repeated proposal field"))
           (setq fields (plist-put fields key value)))))))
     (cons fields body)))
@@ -114,35 +107,28 @@ rather than letting a later same-note proposal escape quarantine."
       (let ((line (pop lines)))
         (when (string-prefix-p "note:" line)
           (unless (string-match "\\`note: \\(.+\\)\\'" line)
-            (error "Ambiguous note disposition target"))
+            (error "Ambiguous note acknowledgement target"))
           (let ((value (condition-case nil
                            (json-parse-string (match-string 1 line) :null-object :null :false-object :false)
-                         (error (error "Ambiguous note disposition target")))))
+                         (error (error "Ambiguous note acknowledgement target")))))
             (unless (and (stringp value) (not (string-blank-p value))
                          (not (string-match-p "[[:cntrl:]]" value)))
-              (error "Ambiguous note disposition target"))
+              (error "Ambiguous note acknowledgement target"))
             (cl-pushnew value claims :test #'equal)))))
-    (unless claims (error "Missing note disposition target; ownership is ambiguous"))
+    (unless claims (error "Missing note acknowledgement target; ownership is ambiguous"))
     (nreverse claims)))
 
-(defun mevedel-memory-proposal--disposition (text notes)
-  "Decode one shared-note disposition TEXT for admitted NOTES.
+(defun mevedel-memory-proposal--note (text notes)
+  "Decode one shared-note acknowledgement TEXT for admitted NOTES.
 NOTES maps each admitted note ID to (ROOT-ID . RELATIVE-PATH).
-Only deletion with an empty body acknowledges a note."
-  (let* ((decoded (mevedel-memory-proposal--fenced text mevedel-memory-proposal--note-fields t))
+Deletion is implied by the sole note ID header and an exactly empty body."
+  (let* ((decoded (mevedel-memory-proposal--fenced text mevedel-memory-proposal--note-fields))
          (fields (car decoded)) (body (cdr decoded))
-         (note (assoc (plist-get fields :note) notes))
-         (action (cdr (assoc (plist-get fields :disposition) mevedel-memory-proposal--dispositions)))
-         (reason (plist-get fields :reason)))
-    (unless (cl-every (lambda (key) (plist-member fields key)) '(:note :disposition :reason))
-      (error "Note disposition fields are incomplete"))
-    (unless (and note action (stringp reason) (not (string-blank-p reason))
-                 (not (string-match-p "[[:cntrl:]]" reason)))
-      (error "Note disposition names an unadmitted note or unknown disposition"))
-    (unless (string-blank-p body)
-      (error "Note disposition body does not match its disposition"))
-    (list :action action :root (cadr note) :file (cddr note) :note (car note)
-          :type "note" :title (cddr note) :hook "" :reason reason
+         (note (assoc (plist-get fields :note) notes)))
+    (unless note (error "Note acknowledgement names an unadmitted note"))
+    (unless (string-empty-p body) (error "Note acknowledgement body is not empty"))
+    (list :action 'note-delete :root (cadr note) :file (cddr note) :note (car note)
+          :type "note" :title (cddr note) :hook ""
           :evidence (list (car note)) :body "")))
 
 (defun mevedel-memory-proposal--item (text action roots evidence)
@@ -217,7 +203,7 @@ replies are accepted too: a separator of three or more dashes; a
 backtick-only line or the next proposal opener closing a block whose body is
 still empty; and a section heading closing a header-only block without a
 separator.  After a separator a heading is body text.
-With NOTE-P, implicit boundaries require empty deletion metadata; only
+With NOTE-P, implicit boundaries require an ID-only empty acknowledgement; only
 a matching-width proposal opener or a final No action section can end it.
 A note body without its matching fence consumes the unresolved tail and returns
 an (END . ERROR) pair instead of rejecting unrelated proposals.  Header-looking
@@ -229,11 +215,12 @@ inside that tail remain a structural error in the complete reply."
     (cl-labels ((bodyless-note-p ()
                   (and note-p empty
                        (ignore-errors
-                         (member (plist-get (car (mevedel-memory-proposal--fenced
-                                                  (buffer-substring-no-properties start (point))
-                                                  mevedel-memory-proposal--note-fields t))
-                                            :disposition)
-                                 '("delete"))))))
+                         (let* ((decoded (mevedel-memory-proposal--fenced
+                                          (buffer-substring-no-properties start (point))
+                                          mevedel-memory-proposal--note-fields))
+                                (id (plist-get (car decoded) :note)))
+                           (and (stringp id) (not (string-blank-p id))
+                                (string-empty-p (cdr decoded))))))))
       (while (not end)
         (cond
          ((eobp)
@@ -280,7 +267,7 @@ EVIDENCE lists the digest IDs admitted to this pass. This interface checks
 names only; the scope owner retains canonical locators and content snapshots.
 NOTES maps each admitted shared working note ID to (ROOT-ID . RELATIVE).
 Memory proposals may cite those IDs as evidence.  Missing or invalid note
-dispositions produce no proposal, leaving the note for a later review.
+acknowledgements produce no proposal, leaving the note for a later review.
 Duplicate note targets quarantine every attempt on that target, even when
 one block is invalid.  Unknown IDs never resolve to admitted targets.
 :skipped-notes is an alist of (ADMITTED-ID . ERROR), one bounded diagnostic
@@ -346,7 +333,7 @@ section order.  Conflicting file operations make the entire reply invalid."
                                item (failure (and (consp boundary) (cdr boundary))))
                           (unless failure
                             (condition-case err
-                                (setq item (mevedel-memory-proposal--disposition block notes))
+                                (setq item (mevedel-memory-proposal--note block notes))
                               (error (setq failure (error-message-string err)))))
                           (push (list claims item failure) note-attempts))
                       (let* ((item (mevedel-memory-proposal--item
@@ -367,7 +354,7 @@ section order.  Conflicting file operations make the entire reply invalid."
           (blank-lines))
         ;; Every action section is required, so a reply truncated after an
         ;; early section cannot pass as complete.  Notes can be missing:
-        ;; unlike a memory edit, an omitted disposition changes nothing.
+        ;; unlike a memory edit, an omitted acknowledgement changes nothing.
         (dolist (section mevedel-memory-proposal--sections)
           (unless (or (member (car section) seen) (null (cdr section))
                       (eq (cdr section) 'notes))
@@ -403,7 +390,7 @@ section order.  Conflicting file operations make the entire reply invalid."
                           (truncate-string-to-width
                            (replace-regexp-in-string
                             "[[:cntrl:]]" " "
-                            (or (cdr (assoc (car note) failures)) "Missing note disposition"))
+                            (or (cdr (assoc (car note) failures)) "Missing note acknowledgement"))
                            240 nil nil t)) skipped)))))
       (setq skipped (nreverse skipped))
       (when skipped

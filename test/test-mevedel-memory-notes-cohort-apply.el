@@ -43,8 +43,7 @@
                 (scope (mevedel-memory-scope-capture workspace))
                 (reply (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n"
                                "## Remove\n- none\n## Instructions\n- none\n## Notes\n"
-                               "```proposal\nnote: \"work://shared/note.md\"\ndisposition: \"delete\"\n"
-                               "reason: \"No qualifying durable extraction\"\n---\n```\n## No action\n- none")))
+                               "```proposal\nnote: \"work://shared/note.md\"\n---\n```\n## No action\n- none")))
            (should row)
            (setq before (cdr (assoc "note.md" (plist-get (cdr row) :before))))
            (if ordinary (should-not (plist-get before :cohort-version))

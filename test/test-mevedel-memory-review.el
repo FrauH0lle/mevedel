@@ -178,7 +178,7 @@
     (dolist (rule '("`user`:" "`feedback`:" "`project`:" "`reference`:"
                     "Tasks, blockers, deadlines, progress, and decisions belong"
                     "reviewing older notes containing project progress"
-                    "`disposition: \"delete\"` and an empty body"
+                    "only `note: \"ID\"` and an empty body"
                     "No extraction is a successful outcome."
                     "do not require a completion audit or a note rewrite."
                     "The checked application removes a note"
@@ -190,7 +190,7 @@
                     "it never deletes the file path. Body bytes are used exactly as decoded,"
                     "Analysis, lists and explanations outside proposal blocks invalidate the reply."
                     "No action is a successful"))
-      (should (string-search rule sent-system)))
+      (should (string-search rule (replace-regexp-in-string "[[:space:]]+" " " sent-system))))
     (dolist (obsolete '("open-items" "resolved-by" "resolution-anchors" "unresolved-items"
                         "GIT-HISTORY" "sequential_summary" "Preserved measurements"))
       (should-not (string-search obsolete sent-system)))
@@ -252,7 +252,7 @@
       (review)
       (respond (replace-regexp-in-string
                 "## No action" (concat "## Notes\n````proposal\nnote: \"work://shared/note.md\"\n"
-                                       "disposition: \"delete\"\nreason: \"Nothing durable.\"\n---\n````\n## No action")
+                                       "---\n````\n## No action")
                 mevedel-test-memory-review--none t t))
       (gptel--fsm-transition request 'DONE)
       (ert-info ((format "Review error: %s" (plist-get result :error)))
@@ -266,7 +266,7 @@
         (should (equal "" (plist-get proposal :body)))
         (dolist (key '(:open-items :resolved-by :resolution-anchors :unresolved-items))
           (should-not (plist-member proposal key))))))
-  :doc "request admission lists only supplied notes and ignores omitted-note dispositions without widening authority"
+  :doc "request admission lists only supplied notes and ignores omitted-note acknowledgements without widening authority"
   (let* ((shared (file-name-concat directory ".mevedel" "shared"))
          scope)
     (put model :context-window 32)
@@ -292,7 +292,7 @@
                      (concat "## Notes\n"
                              (mapconcat
                               (lambda (note)
-                                (format "````proposal\nnote: %s\ndisposition: \"delete\"\nreason: \"Nothing durable.\"\n---\n````\n"
+                                (format "````proposal\nnote: %s\n---\n````\n"
                                         (json-serialize (plist-get note :id))))
                               notes "")
                              "## No action")
