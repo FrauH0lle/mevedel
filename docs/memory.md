@@ -309,7 +309,10 @@ integrate or commit are usually completed only in history.
 
 Searches reuse ordinary Glob/Grep over private admitted copies. Source search
 examines at most 256 entries, copies at most 2 MiB, and omits files larger than
-512 KiB. Omitted, unavailable, and excluded source paths produce a partial-search
+512 KiB. Directory batches rotate one entry at a time, so pending root siblings
+do not consume all descendant visits. Each directory listing is bounded by the
+remaining visit allowance; this is a partial snapshot, not an exhaustive search.
+Omitted, unavailable, and excluded source paths produce a partial-search
 notice. Narrowing the subtree or reading a named source file supports further
 investigation. Results use relative filenames and omit private copy paths.
 Each result is capped at 8 KiB of UTF-8; a request may return at most 64 KiB
@@ -322,6 +325,22 @@ the overall deadline and generation check.
 Search completion restores the caller's working directory before delivering
 the result, including synchronous empty results. A provider follow-up never
 inherits a deleted investigation snapshot as its working directory.
+
+Review results and live usage snapshots also carry a metadata-only investigation
+summary. The terminal pass telemetry event retains it under the pass identity,
+not in the accepted bundle, public review or model prompt. Each admitted call records its tool,
+root, normalized relative path, pattern or Git command and Read range when
+present, delivery status, delivered UTF-8 byte count and SHA-256, and partial
+snapshot and truncation flags. No result text or error message is retained in
+this summary. Target/query fields are capped at 256 UTF-8 bytes each and marked
+when shortened. At most 32 call rows fit within 32 KiB of serialized UTF-8;
+an explicit omitted-row count distinguishes summary omissions from unused
+tools. A bounded roster of admitted note addresses supports joining the pass to
+its proposals, without attributing any call to a particular note. This follows
+the telemetry enable switch and rotation lifetime, not immutable acceptance.
+Cancelled calls and results refused by the aggregate output budget have
+zero delivered bytes. These observations establish delivery, not whether the
+model understood evidence or used it for any particular note.
 
 ### Request limits and settlement
 

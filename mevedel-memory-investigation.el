@@ -28,6 +28,9 @@
 (defconst mevedel-memory-investigation--max-bytes 65536
   "Maximum aggregate UTF-8 tool result bytes per review request.")
 
+(defconst mevedel-memory-investigation--summary-bytes 32768
+  "Maximum serialized UTF-8 bytes in one investigation summary.")
+
 (defconst mevedel-memory-investigation-git-evidence "GIT-HISTORY"
   "Evidence key recording Git history a review read.
 A note delete cites it in `resolved-by' as \"GIT-HISTORY: quote\".")
@@ -35,17 +38,69 @@ A note delete cites it in `resolved-by' as \"GIT-HISTORY: quote\".")
 (cl-defstruct (mevedel-memory-investigation
                (:constructor mevedel-memory-investigation-create
                              (scope entries currentp exhausted)))
-	      "One bounded investigation; CURRENTP and EXHAUSTED belong to its owner.
+  "One bounded investigation; CURRENTP and EXHAUSTED belong to its owner.
 SCOPE contains captured roots. ENTRIES are the owner's admitted public
 journal snapshots. CURRENTP must reject expired generations. EXHAUSTED is
 called with a reason when a tool budget prevents valid completion.
-INSPECTED maps each normalized workspace path to the Read text delivered for it."
-	      scope entries currentp exhausted (calls 0) (bytes 0) stopped active inspected)
+INSPECTED maps each normalized workspace path to the Read text delivered for it.
+SUMMARIES retains bounded target fields and delivery metadata, never bodies."
+  scope entries currentp exhausted (calls 0) (bytes 0) stopped active inspected summaries)
+
+(defun mevedel-memory-investigation-summary (state)
+  "Return STATE's bounded metadata-only call summary as an independent snapshot.
+Calls remain in admission order.  Omitted rows are counted, never silently
+treated as unmade calls.  Neither results nor error messages are retained."
+  (let ((remaining (- mevedel-memory-investigation--summary-bytes 256))
+        (print-length nil) (print-level nil) (print-circle nil)
+        (print-escape-nonascii t) (print-escape-multibyte t) rows)
+    (dolist (row (seq-take (reverse (mevedel-memory-investigation-summaries state)) 32))
+      (let ((size (string-bytes (prin1-to-string row))))
+        (when (>= remaining size)
+          (cl-decf remaining size)
+          (push (mapcar (lambda (value) (if (stringp value) (copy-sequence value) value)) row) rows))))
+    (setq rows (nreverse rows))
+    (list :calls rows
+          :omitted-count (- (mevedel-memory-investigation-calls state) (length rows)))))
+
+(defun mevedel-memory-investigation--summary-call (state operation args)
+  "Admit a metadata row for OPERATION and ARGS in STATE.
+Each target field is limited to 256 UTF-8 bytes, independently of execution."
+  (let ((row (list :call-id (mevedel-memory-investigation-calls state)
+                   :tool-name (pcase operation ('read "Read") ('glob "Glob") ('grep "Grep") ('git "Git") (_ "unknown"))
+                   :status 'pending :result-bytes 0 :partial nil :truncated nil)))
+    (dolist (pair '((:root . :investigation-root) (:path . :investigation-path)
+                    (:pattern . :investigation-pattern) (:command . :investigation-command)))
+     (let ((key (car pair)))
+      (when-let* ((value (plist-get args key)) ((stringp value)))
+        (when (eq key :path)
+          (setq value (string-trim value))
+          (setq value (cond ((string-empty-p value) ".")
+                            ((mevedel-memory-proposal-relative-path-p value)
+                             (mevedel-memory-proposal-normalize-path value))
+                            (t "<invalid>"))))
+        (when (and (eq key :command) (not (member value '("log" "show"))))
+          (setq value "<invalid>"))
+        (when (and (eq key :root)
+                   (not (member value (append '("workspace" "journal")
+                                               (mapcar #'car (plist-get (mevedel-memory-investigation-scope state) :roots))))))
+          (setq value "<invalid>"))
+        (when (> (string-bytes value) 256) (plist-put row :target-truncated t))
+        (setq row (plist-put row (cdr pair) (mevedel--truncate-bytes value 256 ""))))))
+    (unless (plist-member row :investigation-path) (setq row (plist-put row :investigation-path ".")))
+    (when (eq operation 'git) (setq row (plist-put row :investigation-root "workspace")))
+    (dolist (key '(:offset :limit))
+      (when (and (integerp (plist-get args key))
+                 (<= 0 (plist-get args key) most-positive-fixnum))
+        (setq row (plist-put row key (plist-get args key)))))
+    (push row (mevedel-memory-investigation-summaries state))
+    row))
 
 (defun mevedel-memory-investigation-stop (state)
   "Retire STATE and cancel its active helpers without delivering late results."
   (unless (mevedel-memory-investigation-stopped state)
     (setf (mevedel-memory-investigation-stopped state) t)
+    (dolist (row (mevedel-memory-investigation-summaries state))
+      (when (eq (plist-get row :status) 'pending) (plist-put row :status 'cancelled)))
     (dolist (cancel (mevedel-memory-investigation-active state)) (funcall cancel))
     (setf (mevedel-memory-investigation-active state) nil)))
 
@@ -75,15 +130,35 @@ a whole large document otherwise shows only its beginning."
             (concat prefix (format continue (match-string 1 prefix)))
           (mevedel--truncate-bytes text 8192 "\n[Result truncated at 8 KiB; narrow the query.]"))))))
 
-(defun mevedel-memory-investigation--deliver (state callback text &optional read)
+(defun mevedel-memory-investigation--deliver (state callback text &optional read summary)
   "Deliver bounded TEXT to CALLBACK if STATE remains live and within budget.
-READ marks a numbered Read result.  Return the delivered text, or nil."
+READ marks a numbered Read result; SUMMARY is its metadata row.
+Return the delivered text, or nil."
   (when (mevedel-memory-investigation--live-p state)
-    (let ((text (mevedel-memory-investigation--bounded text read)))
+    (let* ((original (mevedel--normalize-message-text text))
+           (text (mevedel-memory-investigation--bounded original read)))
+      (when summary
+        (plist-put summary :partial
+                   (and (string-match-p "\\`\\[Partial source snapshot:\\|^Warning: .*results are partial[.]" text) t))
+        (plist-put summary :truncated
+                   (or (not (equal original text))
+                       (and (string-match-p "^[.]\\{3\\} \\(Read output\\|Results\\|Output\\) truncated" original) t)
+                       (and read
+                            (string-match-p
+                             "^ *[0-9]+\t[^\n]\\{2000\\} \\[\\.\\.\\. Read(file_path=.*, offset=[0-9]+, limit=1, char_offset=[0-9]+) to continue this line]$"
+                             original)
+                            t))))
       (if (> (+ (mevedel-memory-investigation-bytes state) (string-bytes text))
              mevedel-memory-investigation--max-bytes)
-          (progn (mevedel-memory-investigation--exhaust state "Tool output budget exhausted") nil)
+          (progn
+            (when summary (plist-put summary :status 'output-limit))
+            (mevedel-memory-investigation--exhaust state "Tool output budget exhausted") nil)
         (cl-incf (mevedel-memory-investigation-bytes state) (string-bytes text))
+        (when summary
+          (plist-put summary :status (if (or (eq (plist-get summary :status) 'error)
+                                            (string-prefix-p "Error:" text)) 'error 'delivered))
+          (plist-put summary :result-bytes (string-bytes text))
+          (plist-put summary :result-hash (secure-hash 'sha256 (encode-coding-string text 'utf-8-unix))))
         (funcall callback text)
         text))))
 
@@ -121,22 +196,28 @@ The caller labels omitted source data; model tools can narrow the subtree."
                    (string-prefix-p (file-name-as-directory path) (car document))))
              (mevedel-memory-investigation--evidence state root)) nil)
     (let* ((scope (mevedel-memory-investigation-scope state))
-           (pending (list (mevedel-memory-scope-source-path scope path)))
+           (pending (list (list (mevedel-memory-scope-source-path scope path))))
            (count 0) (remaining (* 2 1024 1024)) documents partial)
       (while (and pending (< count 256))
         (unless (mevedel-memory-investigation--live-p state) (error "Investigation retired"))
-        (let* ((native (pop pending))
+        (let* ((siblings (pop pending))
+               (native (car siblings))
                (relative (file-relative-name native (plist-get scope :workspace-root))))
+          ;; Rotate directory batches one entry at a time.  Pending siblings
+          ;; must not reserve every visit: a wide root would starve descendants.
+          (when (cdr siblings)
+            (setq pending (nconc pending (list (cdr siblings)))))
           (cl-incf count)
           (condition-case nil
               (progn
                 (mevedel-memory-scope-source-path scope relative)
                 (if (file-directory-p native)
-                    (let* ((available (max 0 (- 256 count (length pending))))
+                    (let* ((available (- 256 count))
                            (children (and (> available 0)
                                           (directory-files native t directory-files-no-dot-files-regexp nil (1+ available)))))
                       (when (or (= available 0) (> (length children) available)) (setq partial t))
-                      (setq pending (append (seq-take children available) pending)))
+                      (when children
+                        (setq pending (nconc pending (list (seq-take children available))))))
                   (when (file-regular-p native)
                     (let* ((snapshot (and contents (mevedel-memory-scope--snapshot native (min remaining (* 512 1024)))))
                            (bytes (plist-get snapshot :bytes)))
@@ -145,10 +226,11 @@ The caller labels omitted source data; model tools can narrow the subtree."
             (error (setq partial t)))))
       (cons (nreverse documents) (or partial pending)))))
 
-(defun mevedel-memory-investigation--search (state operation args root path callback)
+(defun mevedel-memory-investigation--search (state operation args root path callback &optional summary)
   "Run bounded search OPERATION using ARGS over STATE's ROOT and PATH.
 Only admitted copies enter the ordinary helper's read scope. CALLBACK gets
-relative filenames; private copy paths are removed from results and errors."
+relative filenames; private copy paths are removed from results and errors.
+SUMMARY is the call's metadata row."
   (let ((directory (make-temp-file "mevedel-memory-search-" t))
         (caller-directory default-directory)
         done cancel stopper)
@@ -166,7 +248,7 @@ relative filenames; private copy paths are removed from results and errors."
             (mevedel-memory-investigation--deliver
              state callback
              (string-replace directory "."
-                             (string-replace (file-name-as-directory directory) "" text))))))
+                             (string-replace (file-name-as-directory directory) "" text)) nil summary))))
       (abort-search ()
         (unless done
           (setq done t)
@@ -189,6 +271,9 @@ relative filenames; private copy paths are removed from results and errors."
            (setq cancel
                  (funcall (if (eq operation 'glob) #'mevedel-tool-fs-search-glob #'mevedel-tool-fs-search-grep)
                           (lambda (result)
+                            (when (and summary (mevedel-memory-investigation--live-p state)
+                                       (string-prefix-p "Error:" (plist-get result :result)))
+                              (plist-put summary :status 'error))
                             (finish (concat (when partial "[Partial source snapshot: excluded, unavailable, or bounded paths were not searched. Missing matches remain unknown.]\n")
                                             (plist-get result :result))))
                           (list :path directory :pattern (plist-get args :pattern)
@@ -202,13 +287,13 @@ relative filenames; private copy paths are removed from results and errors."
       (if row (setcdr row (concat (cdr row) "\n" delivered))
         (push (cons key delivered) (mevedel-memory-investigation-inspected state))))))
 
-(defun mevedel-memory-investigation--git (state args path callback)
+(defun mevedel-memory-investigation--git (state args path callback &optional summary)
   "Run read-only Git history query ARGS for STATE, limited to PATH.
 `log' searches commit messages for :pattern; `show' prints one :pattern
 commit's message, changed-file summary and whether the current HEAD
 contains it.  A commit hash given to `log' is shown instead.  No shell,
 pager, hook or optional lock is involved; output is bounded and recorded
-as evidence."
+as evidence.  SUMMARY is the call's metadata row."
   (let* ((scope (mevedel-memory-investigation-scope state))
          (root (plist-get scope :workspace-root))
          (pattern (plist-get args :pattern))
@@ -254,7 +339,7 @@ as evidence."
              (when text
                (mevedel-memory-investigation--record
                 state mevedel-memory-investigation-git-evidence
-                (mevedel-memory-investigation--deliver state callback text)))))
+                (mevedel-memory-investigation--deliver state callback text nil summary)))))
          (run (remaining)
            (with-current-buffer output (erase-buffer))
            (setq process
@@ -295,7 +380,8 @@ another model follow-up. Calls after retirement have no effects or callback."
     (if (>= (mevedel-memory-investigation-calls state) mevedel-memory-investigation--max-calls)
         (mevedel-memory-investigation--exhaust state "Tool call budget exhausted")
       (cl-incf (mevedel-memory-investigation-calls state))
-      (condition-case err
+      (let ((summary (mevedel-memory-investigation--summary-call state operation args)))
+       (condition-case err
           (let* ((root (plist-get args :root))
                  (path (mevedel-memory-investigation--relative
                         (let ((given (string-trim (or (plist-get args :path) ""))))
@@ -309,9 +395,9 @@ another model follow-up. Calls after retirement have no effects or callback."
                 (error "Invalid investigation search pattern")))
             (cond
              ((eq operation 'git)
-              (mevedel-memory-investigation--git state args path callback))
+              (mevedel-memory-investigation--git state args path callback summary))
              ((memq operation '(glob grep))
-              (mevedel-memory-investigation--search state operation args root path callback))
+              (mevedel-memory-investigation--search state operation args root path callback summary))
              (t
               (dolist (key '(:offset :limit))
 		(when-let* ((value (plist-get args key)))
@@ -337,7 +423,7 @@ another model follow-up. Calls after retirement have no effects or callback."
                                         state callback
                                         (mevedel-tool-fs-read-slurp-file-contents
                                          temporary (plist-get args :offset) (plist-get args :limit) path)
-                                        t)))
+                                        t summary)))
                         (when (and delivered (equal root "workspace"))
                           ;; A delete's resolution quotes must come from text the
                           ;; review actually read, not from a search match.
@@ -345,7 +431,7 @@ another model follow-up. Calls after retirement have no effects or callback."
                            state (mevedel-memory-proposal-normalize-path path) delivered))))
                   (when temporary (delete-file temporary)))))))
         (error (mevedel-memory-investigation--deliver
-                state callback (concat "Error: " (error-message-string err))))))))
+                state callback (concat "Error: " (error-message-string err)) nil summary)))))))
 
 (defun mevedel-memory-investigation-tools (state)
   "Return STATE's four scoped asynchronous gptel tools.

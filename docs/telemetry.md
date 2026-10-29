@@ -76,6 +76,24 @@ scope key is hashed for the same reason; Eask test paths are extracted only when
 `test/*.el` names. Cache identity is a hash of the relevant parent environment,
 not the environment values.
 
+Memory-consolidation terminal events have one narrow target/query exception:
+`:investigation` contains at most 32 call rows within 32 KiB of serialized
+UTF-8, with an explicit omitted-row count. Dedicated `:investigation-root`,
+`:investigation-path`, `:investigation-pattern` and `:investigation-command`
+fields retain the scoped root, normalized relative target and search query
+(or Git subcommand), each capped at 256 UTF-8 bytes. `:target-truncated` marks
+shortened target fields. Rows retain admission-order call identity, tool name,
+Read range, status, delivered byte count, result SHA-256, and partial/truncated
+flags, never delivered content or error messages. `:investigation-notes` lists
+at most 32 admitted note addresses of at most 256 UTF-8 bytes each, with
+`:investigation-notes-omitted` counting oversized or excess addresses. The pass ID joins
+these observations to accepted proposals; it does not attribute a call to any
+particular note or establish what the model understood. This exception does not
+allow arbitrary tool arguments, absolute source paths, shell commands, or
+results in ordinary telemetry. It follows the normal enable switch, nil-field
+omission and workspace rotation lifetime; accepted bundle and public review
+schemas remain unchanged.
+
 The ordinary hook, permission, execution, and repair logs remain available for
 their subsystem-specific details. Telemetry connects their lifetimes through
 shared session, request, tool-use, execution, interaction, agent, Goal, and

@@ -180,7 +180,7 @@ profile file larger and cost a little more per sample."
     :artifacts-local :attempt-generation :backend :baseline-marker-position
     :backend-type :baseline-request-id :blocked :boundary :bubblewrap-available :bucket
     :budget-kind :budget-status :buffer-chars-total
-    :buffers :cache-identity :cache-write-tokens :cached-tokens :call-id :call-source :candidate-count :capture-id
+    :buffers :cache-identity :cache-write-tokens :cached-tokens :call-id :call-source :calls :candidate-count :capture-id
     :captured-goal-id
     :chosen-active-context-tokens :chosen-source :chunk-bytes
     :command-class :command-hash :command-name :context :context-chars :cpu-ms
@@ -196,15 +196,17 @@ profile file larger and cost a little more per sample."
     :gptel-commit :gptel-file-hash :gptel-version :guard-converted-keep-count :handler-count
     :handler-id :handler-source :handler-type :hook-event
     :ineligible-reason :input-bytes :input-p :input-pending :input-tokens
+    :investigation :investigation-command :investigation-notes :investigation-notes-omitted
+    :investigation-path :investigation-pattern :investigation-root
     :interaction-id :issue-count
-    :kind :lane
+    :kind :lane :limit
     :max-ms :message-chars :message-hash :mode :model :model-context-source :model-context-window :model-keep-count :modes
     :native-resource-capture :native-resource-report-bytes :nested-call-count
     :network
-    :new-count :new-segment :note-format-failure-count :old-segment :omitted-count :operation-count :origin :outcome
+    :new-count :new-segment :note-format-failure-count :offset :old-segment :omitted-count :operation-count :origin :outcome
     :output-bytes :output-estimated-tokens :output-limit :output-tokens
     :over-1000-ms :over-200-ms :over-500-ms :overlap-count :owner
-    :parent-tool-use-id :parent-turn :pass-id :pending-count :permission-id :permission-mode
+    :parent-tool-use-id :parent-turn :partial :pass-id :pending-count :permission-id :permission-mode
     :permission-mode-base
     :permission-mode-effective :permission-via :preexisting-count
     :preparation-duration-ms :preparation-recovery-duration-ms :preparation-state
@@ -218,18 +220,18 @@ profile file larger and cost a little more per sample."
     :reason-class :reasoning-bytes :remaining-count :repair-count :reply-bytes
     :report-bytes-total :report-file-names
     :request-id :requested-yield-time-ms :resolved-count :resource-access
-    :restored :result-bytes :result-chars :retained :retained-count :retirement-duration-ms
+    :restored :result-bytes :result-chars :result-hash :retained :retained-count :retirement-duration-ms
     :review-request-duration-ms :reviewed-count :roster-chars :rounds
     :sandbox :sandbox-mode :sandbox-permissions :scope :settled :settlement-source
     :skill-count :skill-name :skill-names :skip-gates :span-id
     :specifier-key :stage :status :step :summary-context-source :summary-context-window
     :summary-model :summary-reserve-tokens :summary-threshold :summary-usable-tokens
     :system-configuration :target-model :target-origin :target-pressure
-    :target-reserve-tokens :target-threshold :target-usable-tokens
+    :target-reserve-tokens :target-threshold :target-truncated :target-usable-tokens
     :termination :test-scope :threshold :threshold-ms :threshold-ratio
     :timed-out :timeout-ms :timer-callback :timer-gc-count :timer-gc-ms :timer-ms :token-source :tokens-after :tokens-before
     :tokens-used :tool-call-bytes :tool-call-count :tool-name :tool-use-id
-    :trigger :tty :turns-run :updated-file-count :usage-status :via
+    :trigger :truncated :tty :turns-run :updated-file-count :usage-status :via
     :workload :yield-time-ms)
   "Metadata keys telemetry may persist.
 
