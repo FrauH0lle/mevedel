@@ -180,3 +180,6 @@ to the decision bearing that ID.
 
 - [ADR 0127: Open one Ask question at a time](0127-open-one-ask-question-at-a-time.md)
   shows one open question and one line for each other question.
+
+- [ADR 0128: Extract memory and expire working notes](0128-extract-memory-and-expire-working-notes.md)
+  is Proposed; it separates disposable note review from unfinished-work tracking.
