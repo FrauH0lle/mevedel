@@ -204,7 +204,8 @@ Return the number of pins released; already absent pins are not counted."
 
 (defun mevedel-memory-store--proposal (scope id proposal)
   "Bind PROPOSAL to pass ID, original SCOPE targets, and complete before-state.
-A condensed note also records the hash of its resulting version."
+A byte-identical canonical condensation becomes a keep before freezing identity.
+A changed condensed note records the hash of its resulting version."
   (let* ((root (cdr (assoc (plist-get proposal :root) (plist-get scope :roots))))
          (action (plist-get proposal :action))
          (files (delete-dups
@@ -214,10 +215,11 @@ A condensed note also records the hash of its resulting version."
          (before (mapcar (lambda (file) (cons file (mevedel-memory-scope-before scope (plist-get proposal :root) file)))
                          (sort files #'string<)))
          (proposal (if (eq action 'note-condense)
-                       (append proposal
-                               (list :result (secure-hash
-                                              'sha256 (mevedel-memory-proposal-condensed-bytes
-                                                       (plist-get proposal :body)))))
+                       (let ((bytes (mevedel-memory-proposal-condensed-bytes (plist-get proposal :body))))
+                         (if (equal bytes (plist-get (cdr (assoc (plist-get proposal :file) before)) :bytes))
+                             (mevedel-memory-store--kept
+                              proposal "the canonical condensation is byte-identical to the captured note.")
+                           (append proposal (list :result (secure-hash 'sha256 bytes)))))
                      proposal))
          (identity (list id (plist-get root :dir) (plist-get root :client) (plist-get root :target)
                          proposal before)))

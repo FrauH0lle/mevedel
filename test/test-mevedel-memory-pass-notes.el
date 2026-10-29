@@ -541,7 +541,7 @@
                    (should (proposal 'note-delete "done.md"))
                    (should (file-exists-p kept))
                    (should-not (file-exists-p done))
-                   (note "kept.md" "Open handoff: confirm target B activation.\n")
+                   (note "kept.md" "Finished background.\n\nOpen handoff: confirm target B activation.\n")
                    (should (start))
                    (setq reply (replace-regexp-in-string
                                 "^````\n" "```` \t\n"

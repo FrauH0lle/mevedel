@@ -557,16 +557,24 @@ another client's completion cannot be missed merely because the initial
 observation was stale. Journaling can be disabled while existing digests remain
 eligible for consolidation. Exit cancels queued and active review work.
 
-In **auto** mode, a successful general review with ready notes or digests
-remaining makes the next idle/maintenance opportunity a catch-up batch only if
-that batch made measurable shared-note progress: at least one authenticated
+In **auto** mode, a successful general review makes the next idle/maintenance
+opportunity eligible for catch-up only if that batch made measurable shared-note
+progress: at least one authenticated
 applied delete (including relocation to verified trash) or condense, or an applied
 keep that suppresses the reviewed note version. Proposal counts, aggregate
 application totals, digest coverage, older pending applications, empty-directory
 pruning, and rejected, held or unchanged unsuppressed notes do not establish
 progress. Application errors, recovery requirements and
 cancellation also prevent continuation. Catch-up bypasses the ordinary time and
-digest-count thresholds; completion never starts another review recursively.
+digest-count thresholds, but fresh owned admission must find eligible digests or
+currently ready shared files: quiet-period-passed, not suppressed, not in use,
+and within capture limits. The last capture's remaining count does not gate
+continuation: arrivals after capture, including ones that become ready later,
+can enter a subsequent batch. An empty opportunity starts no inference and
+retains the progress-qualified catch-up opportunity, with the ordinary ten-minute
+empty-check cache; it is not a zero-progress batch. Completion never scans for
+new arrivals or starts another review recursively. Cleanup or claim contention
+before admission preserves catch-up for the next activity offer too.
 `mevedel-memory-consolidation-max-batches-per-day` remains a hard spend ceiling,
 defaulting to **48** successful general batches per rolling 24 hours. Admission
 counts published and retired general reviews on the target clock, including
@@ -1150,6 +1158,14 @@ its reason states which resolution evidence remains missing after investigation.
 An empty or missing array invalidates that note's disposition rather than treating
 generic future usefulness as continuing use. Completed items with available resolution evidence
 should not be kept merely because the reviewer has not checked it yet.
+
+A valid condense whose canonical UTF-8 replacement (including its final newline)
+is byte-identical to the captured note is accepted as an unchanged keep, with
+an explicit reason and ordinary version suppression. Applying it records the
+decision without writing the note: bytes, modification time and permissions
+remain unchanged. A real byte change, including adding a missing final newline,
+still follows the checked condensation write and undo path. Write settlement
+describes observed unchanged targets without inferring an interruption.
 
 Missing or invalid note dispositions, including unknown note fields, leave the
 affected notes unchanged without a proposal or decision. Duplicate claims for

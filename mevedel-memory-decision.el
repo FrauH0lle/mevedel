@@ -422,7 +422,7 @@ targets retain the root marker for checked recovery, never blind reapplication."
                                    (t "Applied captured memory proposal.")))
                    ('reversed (if note "Restored the shared note from its retained content."
                                 "Reversed the captured memory application."))
-                   ('unavailable (if failed "Attempt left targets unchanged." "Application was interrupted before completion."))
+                   ('unavailable (if failed "Attempt left targets unchanged." "Application left targets unchanged."))
                    (_ "Targets need checked recovery.")))
          (decision (mevedel-memory-decision--accept workspace claim (plist-get intent :accepted) (plist-get intent :item)
                                                      status reason intent))

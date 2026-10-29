@@ -243,12 +243,18 @@ processing; display responsiveness does not establish nonblocking manual actions
 Explicit backlog drain coordinates successive bounded general reviews through
 the same claim and settlement owner; it yields between batches and waits while
 local consolidation, application or cleanup runs; other sessions' turns do not
-stop it, and notes they use wait. Auto mode offers a remaining ready backlog at the
+stop it, and notes they use wait. Auto mode offers currently ready work at the
 next idle opportunity instead of waiting another day only while each successful
 general batch makes shared-note progress. An authenticated applied delete
 (including verified trash relocation), condense, or a keep that suppresses the
 reviewed version qualifies;
 proposal counts, digest coverage and older pending applications do not.
+The frozen capture's remaining count does not restrict continuation. Fresh
+owned admission checks eligible digests and ready shared files, including later
+arrivals; quiet-period, suppression, in-use and capture limits still apply.
+An empty opportunity runs no inference and preserves the progress-qualified
+opportunity with a ten-minute retry observation, rather than ending the chain.
+Cleanup or claim contention before admission also preserves it for a later offer.
 A successful batch with zero progress ends the chain just like a failed batch:
 later offers must pass the ordinary successful-review clock again. A rolling
 24-hour ceiling remains (48 successful general reviews by default, including
@@ -269,6 +275,11 @@ writes, rollback, claim settlement, and marker retirement share a target-side
 marker. Reconciliation compares exact before/after states; it does not infer a
 successful write from an unmarked intent. Reversal is a separate accepted intent
 and decision, preserving the original application as evidence.
+Acceptance converts a condense whose canonical replacement bytes equal the
+captured note to an unchanged keep before proposal identity is fixed. Its checked
+application records normal keep suppression without a note write or changed
+mtime/mode, rather than creating an identical before/after mutation. Settlement
+reports observed unchanged targets without inferring an interruption.
 A known admission hold or cancellation may abandon an exact prepared intent
 without deciding the proposal only after checked rollback and freshly proven
 complete before-state. Original authority, tokens and live buffers are checked
@@ -409,6 +420,30 @@ longer than ordinary recall when evidence or recovery still needs it; the recall
 limit is not an erasure guarantee.
 
 ## Decision history
+
+### 2026-10-29: Catch-up follows fresh arrivals; identical condensation is retention
+
+The acceptance rerun on source `42a3f1e9` exposed two gaps after the progress
+guard from `d6e43b3a`. The continuation check still required the last capture's
+remaining count to be positive before authenticating progress. A note arriving
+after capture is absent from that count, so a productive final batch could
+strand steady new arrivals behind the ordinary 24-hour gate. A progress-qualified
+completion now offers fresh owned admission regardless of the frozen remainder.
+That admission still enforces the rolling-day ceiling and current quiet-period,
+suppression, in-use and capture checks. Empty opportunities retain the offer
+without inference, and pre-admission cleanup or claim contention does not erase
+it; a failed or zero-progress batch ends it. This extends the
+bounded opportunities introduced in `2d2b0991`, not the size or write authority
+of any request, and avoids another folder scan inside completion.
+
+The same rerun accepted a condensation whose canonical final-newline bytes
+equalled the original. It created a mutation with identical before/after states;
+the native classifier correctly observed before-state, but settlement called it
+unavailable and incorrectly inferred an interruption. The redundant write also
+advanced mtime, delaying readiness. Acceptance now classifies this as an unchanged
+keep, with normal suppression and no note filesystem write. Genuine byte changes
+retain ordinary checked application and undo. The diagnostic for observed
+unchanged targets no longer claims an interruption that may never have occurred.
 
 ### 2026-10-28: Progress guards automatic catch-up; the cap is a ceiling
 

@@ -136,10 +136,11 @@ malformed retirement marker stops automatic admission for inspection."
   "Return an eligible automatic batch from fresh WORKSPACE ENTRIES, or nil.
 The caller owns consolidation admission and has recovered prior publications.
 Check elapsed target time before selecting completed published evidence.
-NOTES-READY, when non-nil, is called only after the time gate passes and the
-digest thresholds fail; non-nil makes ready shared-folder work sufficient by
-itself, irrespective of the digest count or whether journaling is enabled.
-With CATCH-UP in auto mode, bypass time/count gates, but not the daily cap.
+NOTES-READY freshly checks eligible shared-folder work after the applicable
+time/ceiling gate passes and digest thresholds fail; non-nil work suffices
+irrespective of the digest count or whether journaling is enabled.
+With CATCH-UP in auto mode, bypass time/count gates, but not the daily cap
+or fresh readiness.  The previous capture's remainder is not admission evidence.
 Cache only the next client-side opportunity, never coverage or write authority."
   (unless (and (numberp mevedel-memory-consolidation-min-hours)
                (>= mevedel-memory-consolidation-min-hours 0)
@@ -223,9 +224,10 @@ a candidate, so shared notes are cleaned up even with journaling disabled."
                             workspace (lambda (result) (mevedel-memory-list--finished workspace result))
                             :automatic t :queued-at queued-at)
                      ;; A busy owner is not an admission observation. Preserve
-                     ;; any fresh gate result, but allow the next activity offer.
+                     ;; any fresh gate result or progress-qualified catch-up,
+                     ;; but allow the next activity offer.
                      (when (eq opportunity (mevedel-workspace-memory-schedule workspace))
-                       (setf (mevedel-workspace-memory-schedule workspace) nil))))
+                       (plist-put opportunity :after 0))))
                (error (display-warning 'mevedel
                                        (format "Automatic memory review failed: %s" (error-message-string err))
                                        :warning))))))))))
@@ -930,8 +932,6 @@ older pending applications and digest coverage alone do not."
 				       (not (plist-get (plist-get state :result) :recovery-required))
 			       (string-empty-p (plist-get entry :focus))
 			       (eq mevedel-memory-consolidation-mode 'auto)
-			       (or (> (plist-get (plist-get state :result) :remaining) 0)
-					   (> (plist-get (plist-get state :result) :notes-remaining) 0))
                                        (condition-case err
                                            (mevedel-memory-pass--progress-p workspace accepted)
                                          (error
@@ -945,6 +945,7 @@ older pending applications and digest coverage alone do not."
                                        (not (plist-get state :stop-apply)))
 		      ;; Offer, do not recurse: the next maintenance/activity boundary
 			      ;; rechecks the rolling ceiling and readiness under ownership.
+			      ;; Fresh arrivals are absent from this capture's remainder.
 			      ;; Publication cleared the old chain; zero progress leaves it ended.
 		      (setf (mevedel-workspace-memory-schedule workspace)
 			    (list :after 0 :catch-up t)))
