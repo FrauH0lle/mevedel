@@ -232,6 +232,15 @@ than reconstructing missing bytes or overwriting current files. Physical purge
 occurs at the next available maintenance opportunity, not while the host is off.
 This is application-level removal, not secure erasure of backups or storage media.
 
+The proposed thirty-day guarantee covers retained **raw note preimage copies**:
+captured scope, transaction intents, worker IPC payloads and rejected raw replies
+must not become a second indefinite archive. It does not promise erasure of
+model- or user-authored text. Memory proposals and No action bullets may quote
+fragments of a note and follow ordinary review-history retention; deliberately
+extracted durable memory follows its normal lifecycle. This is an explicit
+limitation of the proposal, not a global text-scrubbing requirement. Do not add
+quote-tracking sidecars or scrub unrelated authored text to implement it.
+
 The single-preimage/deadline collector is a separate implementation slice after
 the core lifecycle. **Until that slice lands, existing private preimage copies may
 outlive 30 days.** Do not advertise the complete retention guarantee or enable

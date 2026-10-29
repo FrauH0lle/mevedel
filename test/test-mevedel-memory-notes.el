@@ -77,20 +77,6 @@
                    (mevedel-memory-notes--ancestors "/w/.mevedel/shared/a/b/c.md" "/w/.mevedel/shared/")))
     (should-not (mevedel-memory-notes--ancestors "/w/.mevedel/shared/c.md" "/w/.mevedel/shared"))))
 
-(mevedel-deftest mevedel-memory-notes--admission-rank ()
-  ,test
-  (test)
-  :doc "only the latest generation for the exact source version determines priority"
-  (let* ((miss '(:capture captured-without-proposal :root "r1" :path "/s/n.md" :hash "v1" :generation 2))
-         (proposal '(:capture proposal :root "r1" :path "/s/n.md" :hash "v1" :generation 3)))
-    (should (= 0 (mevedel-memory-notes--admission-rank nil "r1" "/s/n.md" "v1")))
-    (should (= 1 (mevedel-memory-notes--admission-rank (list miss) "r1" "/s/n.md" "v1")))
-    (should (= 0 (mevedel-memory-notes--admission-rank (list miss) "r1" "/s/n.md" "v2")))
-    (should (= 0 (mevedel-memory-notes--admission-rank (list miss) "r1" "/other/n.md" "v1")))
-    (should (= 0 (mevedel-memory-notes--admission-rank (list miss) "r2" "/s/n.md" "v1")))
-    (should (= 0 (mevedel-memory-notes--admission-rank (list miss proposal) "r1" "/s/n.md" "v1")))
-    (should (= 0 (mevedel-memory-notes--admission-rank (list proposal miss) "r1" "/s/n.md" "v1")))))
-
 (mevedel-deftest mevedel-memory-notes--history
     (:vars* ((root (file-name-as-directory (file-truename (make-temp-file "mevedel-notes-history-" t))))
              (workspace (mevedel-workspace--create :root root))
@@ -124,36 +110,12 @@
               (or reply no-action) nil "test:model" nil (or admitted notes)))))
       ,test))
   (test)
-  :doc "sixteen repeated no-proposal versions cannot exclude a seventeenth new note"
-  (progn
-    (dotimes (index 16) (note (format "n%02d.md" index) index))
-    (let ((initial (capture)))
-      (should (= 16 (plist-get initial :notes)))
-      (accept initial)
-      ;; Repeated accepted omissions do not suppress, delete or mutate notes.
-      (accept (capture))
-      (dotimes (index 16)
-        (should (equal "Completed observation.\n"
-                       (with-temp-buffer
-                         (insert-file-contents (file-name-concat shared (format "n%02d.md" index)))
-                         (buffer-string)))))
-      (note "valid.md" 100)
-      (let ((next (capture)))
-        (should (= 16 (plist-get next :notes)))
-        (should (= 1 (plist-get next :remaining)))
-        (should (equal (cons "valid.md" (cl-loop for index below 15 collect (format "n%02d.md" index)))
-                       (files next))))))
-  :doc "editing a previously omitted version resets its priority without bypassing readiness"
+  :doc "accepted no-proposal captures create no secondary admission history"
   (progn
     (note "old.md" 0)
     (accept (capture))
-    (note "new.md" 1)
-    (should (equal '("new.md" "old.md") (files (capture))))
-    (let ((path (note "old.md" 0 "Edited observation.\n")))
-      (should (equal '("old.md" "new.md") (files (capture))))
-      (set-file-times path (seconds-to-time now))
-      (should (equal '("new.md") (files (capture))))))
-  :doc "a later legitimate proposal supersedes an omission even when timestamps tie"
+    (should (= 0 (hash-table-count (mevedel-memory-notes--history workspace nil)))))
+  :doc "pending decisions suppress their exact version until explicitly rejected"
   (progn
     (note "old.md" 0)
     (accept (capture))
@@ -164,43 +126,12 @@
                                      "## No action\n- none")))
            (proposal (car (plist-get accepted :proposals))))
       (should (eq 'note-delete (plist-get proposal :action)))
-      ;; Pending decisions still suppress normally, independently of rank.
+      (should (equal (list :hash (secure-hash 'sha256 "Completed observation.\n") :status 'pending)
+                     (car (gethash "old.md" (mevedel-memory-notes--history workspace nil)))))
+      ;; Cohort scheduling does not weaken pending-decision protection.
       (should-not (files (capture)))
       (mevedel-memory-decision-reject workspace (plist-get (plist-get accepted :review) :pass-id)
                                       (plist-get proposal :id) "Reconsider now")
-      (note "new.md" 1)
-      (should (equal '("old.md" "new.md") (files (capture))))))
-  :doc "captured but nonadmitted notes are labeled without claiming inference service"
-  (progn
-    (note "admitted.md" 0)
-    (note "not-admitted.md" 1)
-    (accept (capture) nil '("work://shared/admitted.md"))
-    (let* ((paths (make-hash-table :test #'equal))
-           (_ (puthash "not-admitted.md" t paths))
-           (history (mevedel-memory-notes--history workspace nil paths))
-           (observation (car (gethash "not-admitted.md" history))))
-      (should (= 1 (hash-table-count history)))
-      (should (eq 'captured-without-proposal (plist-get observation :capture)))
-      (should-not (plist-get observation :status))
-      (should-not (mevedel-memory-notes--suppressed (list observation) (plist-get observation :hash)))))
-  :doc "another client's accepted omission cannot rank the same absolute path and hash"
-  (progn
-    (note "old.md" 0)
-    (cl-letf (((symbol-function 'mevedel-workspace-identity-client) (lambda () "another-client")))
-      (accept (capture)))
-    (note "new.md" 1)
-    (should (equal '("old.md" "new.md") (files (capture)))))
-  :doc "a different configured shared root cannot inherit another source's omission rank"
-  (let ((first (file-name-concat root "first" ".mevedel" "shared"))
-        (second (file-name-concat root "second" ".mevedel" "shared")))
-    (make-directory first t)
-    (make-directory second t)
-    (cl-letf (((symbol-function 'mevedel-memory-notes-directory) (lambda (_) shared)))
-      (setq shared first)
-      (note "old.md" 0)
-      (accept (capture))
-      (setq shared second)
-      (note "old.md" 0)
       (note "new.md" 1)
       (should (equal '("old.md" "new.md") (files (capture))))))
   :doc "changed accepted bytes fail authentication rather than influencing admission"

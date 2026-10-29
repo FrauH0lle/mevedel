@@ -10,6 +10,10 @@
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-memory-decision)
 
+;; `mevedel-memory-cycle'
+(declare-function mevedel-memory-cycle-pins-pass-p "mevedel-memory-cycle" (workspace pass))
+(autoload 'mevedel-memory-cycle-pins-pass-p "mevedel-memory-cycle")
+
 (defun mevedel-memory-cleanup--file (workspace file expected)
   "Capture private FILE in WORKSPACE when its bytes match EXPECTED hash.
 FILE is relative to the private journal state directory."
@@ -86,6 +90,8 @@ dependencies; this function never deletes or publishes state."
                  (_ (when (> (+ created (* mevedel-memory-history-max-age-days 86400))
                              (mevedel-session-control-fs-target-time (mevedel-workspace-root workspace)))
                       (error "Memory history is still recent")))
+                 (_ (when (mevedel-memory-cycle-pins-pass-p workspace id)
+                      (error "Note cycle has not reconciled its accepted admission")))
                  (accepted (mevedel-memory-store-accepted workspace id))
                  (review (plist-get accepted :review))
                  (prepared (plist-get accepted :prepared)))
@@ -101,6 +107,7 @@ dependencies; this function never deletes or publishes state."
                   (error "Memory history is still recent"))
                 (list :kind "consolidation" :id id :file (plist-get entry :file)
                     :scope (if (string-empty-p (plist-get review :focus)) "general" "focused")
+                    :journal-bearing (if (plist-get review :digests) t :false)
                     :sha256 (secure-hash 'sha256 (plist-get entry :text))
                     :related (plist-get history :related)
                     :private

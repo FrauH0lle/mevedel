@@ -277,21 +277,17 @@ Like TRAMP, return cached data unless `remote-file-name-inhibit-cache' is t."
     (set-file-times path (seconds-to-time (- now (* 14 86400))))
     (with-current-buffer (find-file-noselect path) (goto-char (point-max)) (insert "Unsaved"))
     (should (= 0 (plist-get (mevedel-memory-notes-capture workspace nil) :notes))))
-  :doc "an attempted exact version waits only for this drain, while an edited version can be freshly selected"
+  :doc "cohort admission excludes edited versions until a fresh cohort is frozen"
   (progn
     (write-region "# External\n" nil path nil 'silent)
     (set-file-times path (seconds-to-time (- now (* 14 86400))))
-    (let* ((capture (mevedel-memory-notes-capture workspace nil))
-           (scope (list :roots (list (plist-get capture :root))))
-           (attempted (mevedel-memory-notes-attempts scope '("work://shared/note.md"))))
-      (should (= 0 (plist-get (mevedel-memory-notes-capture workspace nil :attempted attempted) :notes)))
-      ;; A forged root/path cannot exclude the actual source version.
-      (should (= 1 (plist-get (mevedel-memory-notes-capture
-                               workspace nil :attempted (list (list "wrong-root" path (nth 2 (car attempted))))) :notes)))
-      (should-not (mevedel-memory-notes-attempts scope '("work://shared/forged.md")))
+    (let ((cohort (mevedel-memory-notes-cohort workspace nil)))
+      (should (= 1 (plist-get (mevedel-memory-notes-capture workspace nil :cohort cohort) :notes)))
       (write-region "# Changed external\n" nil path nil 'silent)
       (set-file-times path (seconds-to-time (- now (* 14 86400))))
-      (should (= 1 (plist-get (mevedel-memory-notes-capture workspace nil :attempted attempted) :notes)))))
+      (should (= 0 (plist-get (mevedel-memory-notes-capture workspace nil :cohort cohort) :notes)))
+      (should (= 1 (plist-get (mevedel-memory-notes-capture
+                               workspace nil :cohort (mevedel-memory-notes-cohort workspace nil)) :notes)))))
   :doc "a live session beginning exact-file use during snapshot preparation prevents admission"
   (let ((reader (generate-new-buffer " *note-capture-reader*"))
         (original (symbol-function 'mevedel-memory-scope--snapshot))
@@ -312,19 +308,6 @@ Like TRAMP, return cached data unless `remote-file-name-inhibit-cache' is t."
             (should (= 0 (plist-get (mevedel-memory-notes-capture workspace nil) :notes))))
           (should (= 1 snapshots)))
       (kill-buffer reader))))
-
-(mevedel-deftest mevedel-memory-notes-attempts ()
-  (let* ((root '(:kind notes :notes (("a.md" :id "work://shared/a.md")
-                                    ("omitted.md" :id "work://shared/omitted.md"))
-                :attachments ("a.png") :directories ("empty")
-                :before (("a.md" :path "/s/a.md" :hash "a")
-                         ("omitted.md" :path "/s/omitted.md" :hash "o")
-                         ("a.png" :path "/s/a.png" :hash "p")
-                         ("empty" :path "/s/empty" :directory t :empty t))))
-         (scope (list :roots (list (cons "root" root))))
-         (attempted (mevedel-memory-notes-attempts scope '("work://shared/a.md" "work://shared/forged.md"))))
-    (should (equal '(("root" "/s/a.md" "a") ("root" "/s/a.png" "p") ("root" "/s/empty" directory)) attempted))
-    (should-not (member '("root" "/s/omitted.md" "o") attempted))))
 
 (mevedel-deftest mevedel-working-note-files-cold-load ()
   (let* ((root (make-temp-file "mevedel-note-discovery-cold-" t))

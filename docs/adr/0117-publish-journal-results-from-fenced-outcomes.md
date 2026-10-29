@@ -243,29 +243,54 @@ processing; display responsiveness does not establish nonblocking manual actions
 Explicit backlog drain coordinates successive bounded general reviews through
 the same claim and settlement owner; it yields between batches and waits while
 local consolidation, application or cleanup runs; other sessions' turns do not
-stop it, and notes they use wait. Auto mode offers currently ready work at the
-next idle opportunity instead of waiting another day only while each successful
-general batch makes shared-note progress. An authenticated applied delete
-(including verified trash relocation) qualifies;
-proposal counts, digest coverage and older pending applications do not.
-The frozen capture's remaining count does not restrict continuation. Fresh
-owned admission checks eligible digests and ready shared files, including later
-arrivals; modification-age, pending/recovery, in-use and capture limits still apply.
-An empty opportunity runs no inference and preserves the progress-qualified
-opportunity with a ten-minute retry observation, rather than ending the chain.
-Cleanup or claim contention before admission also preserves it for a later offer.
-A successful batch with zero progress ends the chain just like a failed batch:
-later offers must pass the ordinary successful-review clock again. A rolling
-24-hour ceiling remains (48 successful general reviews by default, including
-explicit ones). Published and retired timestamps enforce admission under ownership;
-explicit drain bypasses the automatic cap. A returned application error or
-recovery requirement stops successor
-drain batches even when review acceptance succeeded; the accepted outcome,
-confirmed application counts and original diagnostic remain distinct and intact.
-This replaces one-batch-per-interval catch-up: a roughly 250-note ready backlog
-otherwise took weeks at sixteen
-notes per daily review. Request bounds stay unchanged rather than making one
-oversized request. The cap limits admissions, not provider billing.
+stop it, and notes they use wait. Automatic shared-note review has one
+target-clock daily cycle, due inclusively 24 hours after the preceding cycle's
+admission. It freezes a bounded eligible path/version cohort under existing
+ownership and services that finite cohort through ordinary bounded passes in
+propose or auto mode. Manual mode requires a request. Empty cohorts start no
+note inference; independent journal reviews and explicit allow-empty memory
+reviews retain their ordinary behavior. New arrivals and changed versions wait
+for the next cohort. General `/remember` participates for one bounded pass,
+including when its allow-empty option is set; a focused review excludes notes.
+
+`mevedel-memory-cycle.el` owns the private metadata-only
+`.mevedel/state/shared-notes/cycle.el` record per actual workspace journal, bound
+to the workspace identity, physical shared root and target. It is not a
+directory/target-tuple store or a cross-alias mapping. A directory or target
+identity change while the cycle is active or unreconciled fails visibly closed;
+finishing or resolving it needs the original namespace and authority. A
+completed, reconciled cycle may freeze the current namespace at its next due
+admission. Local-to-TRAMP takeover and alias equivalence are not proven by this
+design. The record includes admission, cohort/hash, attempts,
+deferred members, an original pass/claim reservation and active/complete/paused
+state. Admission persists the reservation before yielding capture, so failure
+before immutable preparation still leaves a fenced predecessor for recovery.
+Cleanup retains that predecessor even without a prepared record; its strict
+claim observation grants retention only, never write authority. Preparation
+failure without a returned bundle can adopt only its exact original reserved
+claim before fresh-owned reconciliation and pause. Attempt completion is
+authenticated against accepted passes and exact admitted notes; the cycle record
+is neither a second review ledger nor mutation authority. Accepted invalid or missing note
+acknowledgements count as attempts, not reviewed or deleted notes. A successful
+batch with no deletions cannot starve later cohort members. Recovery resumes
+without repeating completed attempts; failure, cancellation and application
+recovery requirements pause the current cycle. An explicit review or drain can
+resume it immediately. Automatic offers do not resume that paused cycle before
+admission plus 24 hours, but at the inclusive daily boundary can admit a new
+cohort that includes its still-eligible remaining versions. An active cycle
+retains its original cohort when resumed. Pausing grants no permanent exemption.
+Pre-admission contention preserves
+the opportunity, with nonzero busy retries and fresh owned admission.
+
+Applied-progress catch-up, capture-history ranking and the rolling successful-
+batch cap are removed. Explicit drain can bypass cycle time and journal
+timing/count thresholds, never age, current-use, unsaved-buffer, pending/recovery
+or mutation checks. The independent journal-only minimum-hours, minimum-digests
+and sparse-digest policy remain. Only journal-bearing general reviews advance
+that review clock, including through retirement metadata; a note-only cycle
+does not postpone journal work. Accepted outcomes, confirmed application counts
+and diagnostics remain distinct. Request bounds do not grow, and finite
+batching makes no provider-cost, throughput or capacity claim.
 
 Application holds both workspace and original target-root claims. It persists
 complete private intent and a hash-only target marker before mutations. Curated
@@ -386,10 +411,10 @@ bodies remain unauthorized; quoted header-like content never admits a target.
 Their per-pass
 format failure count remains visible; ambiguous ownership, required memory
 sections missing outside that tail and invalid memory changes still reject the
-reply. No-op notes remain eligible and do not establish applied
-progress. Existing authenticated capture history places unchanged versions whose
-latest capture had no proposal after fresh offers, preserving oldest-first order
-within groups so a batch of repeated no-ops cannot starve a fresh note.
+reply. The accepted pass still proves an attempt for each admitted version in
+the frozen daily cohort. Repeated no-op versions cannot displace later cohort
+members; they receive no invented review or application credit. This finite
+attempt set replaces capture-history ranking and progress-based catch-up.
 Accepted reviews
 and decisions are the processing record. Note decisions reuse checked intents
 and reversal through a shared-notes target whose coordination stays outside
@@ -430,6 +455,28 @@ limit is not an erasure guarantee.
 
 ## Decision history
 
+### 2026-10-29: Freeze one daily note cohort independently of journal cadence
+
+The earlier progress/cap policy below tried to distinguish useful cleanup from
+repeated unchanged reviews and to catch up a roughly 250-note backlog that could
+otherwise take weeks at sixteen notes per daily review. It still coupled service
+to successful deletion: an invalid acknowledgement or a held first batch could
+stop later useful work, while fresh arrivals could keep extending a productive
+chain. A larger cap bounded successful admissions, not the finite work offered
+for that day, and could not establish cost or capacity.
+
+The replacement freezes a metadata-only eligible cohort once per target-clock
+day and authenticates completed attempts through accepted pass identities.
+Zero deletions and per-note format failures do not repeat the same version or
+prevent later members being attempted; later arrivals and changed versions wait
+for the next cohort. A durable cycle record supports checked resumption, not
+write authority. Cancellation, failed requests, recovery and local-use safety
+remain real stops. Explicit drain can bypass timing and digest-count thresholds,
+not safety. Automatic journal-only admission and its journal-bearing successful-
+review clock remain independent.
+The previous rolling ceiling, progress qualification and fresh-arrival chain
+are historical choices, not alternate runtime modes.
+
 ### 2026-10-29: Extract knowledge and acknowledge deletion, not task resolution
 
 The conservative open-item, authenticated-quote and measurement guards below
@@ -467,31 +514,37 @@ Explicit drains exclude exact versions already attempted by their authenticated
 accepted passes, including malformed note acknowledgements and housekeeping;
 otherwise removing retention timers would repeatedly select unchanged keeps
 forever. This local attempt set grants no service credit or write authority.
-The disposition, scheduling and private retention contracts below remain until
-their corresponding implementation slices replace them.
+Delete-only acknowledgements and finite-cohort scheduling subsequently replaced
+the earlier disposition and catch-up contracts below. Private payload retention
+remains a separate boundary; this history does not promise a new purge deadline.
 
 ### 2026-10-29: Catch-up follows fresh arrivals; identical condensation is retention
+
+The catch-up policy in this entry was superseded by the daily frozen cohort
+above; no-op condensation was removed with delete-only acknowledgements. The
+failure observations and unchanged-state diagnostic rationale remain historical
+evidence.
 
 The acceptance rerun on source `42a3f1e9` exposed two gaps after the progress
 guard from `d6e43b3a`. The continuation check still required the last capture's
 remaining count to be positive before authenticating progress. A note arriving
 after capture is absent from that count, so a productive final batch could
 strand steady new arrivals behind the ordinary 24-hour gate. A progress-qualified
-completion now offers fresh owned admission regardless of the frozen remainder.
-That admission still enforces the rolling-day ceiling and current quiet-period,
-suppression, in-use and capture checks. Empty opportunities retain the offer
-without inference, and pre-admission cleanup or claim contention does not erase
-it; a failed or zero-progress batch ends it. This extends the
+completion then offered fresh owned admission regardless of the frozen remainder.
+That admission enforced the rolling-day ceiling and then-current quiet-period,
+suppression, in-use and capture checks. Empty opportunities retained the offer
+without inference, and pre-admission cleanup or claim contention did not erase
+it; a failed or zero-progress batch ended it. This extended the
 bounded opportunities introduced in `2d2b0991`, not the size or write authority
-of any request, and avoids another folder scan inside completion.
+of any request, and avoided another folder scan inside completion.
 
 The same rerun accepted a condensation whose canonical final-newline bytes
 equalled the original. It created a mutation with identical before/after states;
 the native classifier correctly observed before-state, but settlement called it
 unavailable and incorrectly inferred an interruption. The redundant write also
-advanced mtime, delaying readiness. Acceptance now classifies this as an unchanged
+advanced mtime, delaying readiness. Acceptance then classified this as an unchanged
 keep, with normal suppression and no note filesystem write. Genuine byte changes
-retain ordinary checked application and undo. The diagnostic for observed
+retained ordinary checked application and undo. The diagnostic for observed
 unchanged targets no longer claims an interruption that may never have occurred.
 
 ### 2026-10-29: Preserve numeric paragraphs structurally instead of keeping whole notes
@@ -526,26 +579,31 @@ not reconstruct every terminal or failed outcome observed before interruption.
 
 ### 2026-10-28: Progress guards automatic catch-up; the cap is a ceiling
 
+This progress/cap policy was superseded by the daily finite-cohort scheduler
+above. Its original spending concern and distinction between accepted proposals
+and actual effects remain relevant; neither the old cap nor progress observation
+is retained as a second scheduling path.
+
 The 2026-10-24 catch-up change in `2d2b0991` used an eight-batch rolling-day
 cap to bound unattended spend while draining large ready backlogs. Successful
 publication alone could rearm catch-up even when every disposition was
 rejected, deferred or left unchanged without suppression. Repeated successful
 reviews could therefore spend the entire allowance without reducing ready work.
 
-Catch-up now requires authenticated applied note dispositions from that batch,
-including keep only when it actually suppresses the reviewed version. This
-distinguishes useful retention from a no-op without trusting proposal or
-application totals. Zero progress ends the chain and restores ordinary clock
-admission. The default ceiling rises from eight to 48 to allow productive
-backlogs to drain, but remains a rolling-day spend backstop; zero still disables
-automatic review. It bounds successful batches, not provider calls or billing.
-Explicit general reviews need progress to seed unattended catch-up, but a failed
-progress observation only records its class in telemetry and prevents catch-up;
-it does not change the review result. Explicit drain skips this scheduling-only
-observation and retains its continuation behavior. Empty-directory pruning
-removes no note content and does not qualify as progress. Claims, freshness,
-recovery, cancellation and idempotent application are unchanged; the new
-observation grants only a later scheduling opportunity, never write authority.
+Catch-up then required authenticated applied note dispositions from that batch,
+including keep only when it actually suppressed the reviewed version. This
+distinguished useful retention from a no-op without trusting proposal or
+application totals. Zero progress ended the chain and restored ordinary clock
+admission. The default ceiling rose from eight to 48 to allow productive
+backlogs to drain, while remaining a rolling-day spend backstop; zero disabled
+automatic review. It bounded successful batches, not provider calls or billing.
+Explicit general reviews needed progress to seed unattended catch-up, but a failed
+progress observation only recorded its class in telemetry and prevented catch-up;
+it did not change the review result. Explicit drain skipped this scheduling-only
+observation and retained its continuation behavior. Empty-directory pruning
+removed no note content and did not qualify as progress. Claims, freshness,
+recovery, cancellation and idempotent application were unchanged; the
+observation granted only a later scheduling opportunity, never write authority.
 
 - **Display collection and retry admission gained separate ownership.** On
   2026-10-27, an authentic four-pass, 32-note fixture spent seconds opening and

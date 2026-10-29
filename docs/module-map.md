@@ -35,6 +35,7 @@ Data model
   mevedel-memory-reference.el bounded, dated workspace-path reference observations
   mevedel-memory-investigation.el request-local Read/Glob/Grep scope, budgets, and cancellation
   mevedel-memory-review.el    bounded sessionless consolidation request and validated reply
+  mevedel-memory-cycle.el     target-clock finite shared-note cohort admission and authenticated attempt recovery
   mevedel-memory-pass.el      consolidation gates, admission, settlement, and checked auto apply
   mevedel-working-note.el     pure shared Markdown lifecycle metadata codec and classifier
   mevedel-working-note-files.el bounded shared-note filesystem observations for discovery and capture

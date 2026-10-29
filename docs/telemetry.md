@@ -265,13 +265,31 @@ cancellation releases the fence and leaves the machine retryable.
   can report publication without provider usage when those counts were not
   retained. Retries and failed publication remain diagnostic events; logs are
   not used as completion or review-coverage authority;
+- `memory-note-cycle-observed` in workspace diagnostics after a preparation
+  response, including an empty or skipped metadata-only opportunity. Its scalar
+  fields describe the last observed durable scheduling snapshot:
+  - `:note-cycle-id`: opaque cycle identity;
+  - `:note-cycle-count`: total frozen cohort members;
+  - `:note-cycle-attempted`: members authenticated as attempted by accepted passes;
+  - `:note-cycle-deferred`: members deferred without an admitted attempt;
+  - `:note-cycle-remaining`: frozen members not yet attempted or deferred;
+  - `:note-cycle-status`: `active`, `complete`, or `paused`.
+  The same fields accompany pass terminal events and results as the last
+  observed durable snapshot, not increments to sum across passes. A successful
+  pass can finish before its own admission receipt has been reconciled: only
+  fresh owned reconciliation can credit that accepted pass. A following
+  metadata-only admission can therefore report the final complete snapshot
+  without another provider request. An observation event alone proves neither
+  inference, an accepted review, nor any deletion. No cohort paths, member
+  bodies or parser diagnostic text enter these fields;
 - `memory-consolidation-fired`, `memory-consolidation-completed`,
   `memory-consolidation-failed`, and `memory-consolidation-killed` in workspace
   diagnostics. Each pass carries its identity, ownership generation, frozen
   mode, general/focused scope, and `memory` workload. Terminal events add duration,
   available provider usage, published proposal/review counts, consumed coverage,
   and the frozen eligible backlog remaining. Focused passes consume no general
-  coverage; failed or cancelled passes leave the selected batch in the backlog.
+  coverage; failed or cancelled passes do not fabricate reviewed notes or
+  consumed digest coverage.
   Auto completion also records `updated-file-count`, the distinct paths newly
   confirmed written by that run, without exposing those paths or claiming that
   the resulting memory is better.
@@ -284,6 +302,19 @@ cancellation releases the fence and leaves the machine retryable.
   Notes have delete-only acknowledgements. Retention-guard, model-keep and
   preserved-condensation counters are not emitted; acknowledgement alone is
   not proof of application or useful service.
+  The daily shared-note cycle and a pass are different units. One finite cycle
+  can use several ordinary passes; the private cycle record tracks the frozen
+  cohort, accepted-pass-authenticated attempts, deferred versions and scheduling
+  status. Its scheduling metadata contains no note bodies and grants no write
+  authority. An admitted note in an accepted pass can count as attempted even
+  when its acknowledgement is missing or invalid, while that pass still reports
+  a format failure and no reviewed/deleted credit for the note. Deferral is not
+  an attempt, and an attempt is not extraction or confirmed deletion. A cycle
+  continuing after a zero-delete batch is not evidence of applied progress.
+  The former catch-up-progress observation and rolling batch-cap fields are
+  removed, not emitted with zero values. Provider usage, request timing, format
+  failures and confirmed application counts remain per-pass observations;
+  cycle scheduling does not establish provider cost or throughput.
   Phase durations accumulate in memory and join only that existing terminal
   event; phase transitions append no additional workspace events.
   `:duration-ms` starts after claim acquisition. `:queue-duration-ms`, when

@@ -13,6 +13,7 @@
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-memory-pass)
+(require 'mevedel-memory-cycle)
 (require 'mevedel-memory-decision)
 (require 'mevedel-memory-notes)
 (require 'mevedel-memory-review)
@@ -127,6 +128,12 @@
                                                    reply (plist-get scope-seen :roots) nil
                                                    (mevedel-memory-notes-index scope-seen)))))
                                (pass () (plist-get (plist-get state :claim) :owner))
+                               (reconcile-cycle ()
+                                 (let ((claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180)))
+                                   (should claim)
+                                   (unwind-protect
+                                       (mevedel-memory-cycle-recover workspace claim)
+                                     (mevedel-journal-claim-settle claim 'completed ""))))
                                (proposals () (plist-get (mevedel-memory-store-accepted workspace (pass)) :proposals))
                                (proposal (action &optional file)
                                  (seq-find (lambda (item) (and (eq action (plist-get item :action))
@@ -180,7 +187,9 @@
                                    (should (eq (not confirmed) (file-exists-p path)))
                                    (unless confirmed (should (equal original (bytes path))))
                                    (should-not (gethash workspace mevedel-memory-pass--deferred))
-                                   (should-not (plist-get (mevedel-workspace-memory-schedule workspace) :catch-up))
+                                   (let ((cycle (car (mevedel-memory-cycle--read workspace))))
+                                     (should (eq 'paused (plist-get cycle :status)))
+                                     (should (eq 'cancelled (plist-get cycle :error))))
                                    (should-not (mevedel-memory-pass-running workspace))))
                                (capture () (mevedel-memory-notes-capture workspace (mevedel-journal-store-entries root))))
                      ,test))
@@ -436,7 +445,14 @@
                    (should (eq 'success (plist-get result :outcome)))
                    (should (equal 1 (plist-get result :note-format-failure-count)))
                    (should (equal 1 (plist-get result :notes-reviewed)))
-                   (should (equal 1 (plist-get result :notes-remaining)))
+                   (should (equal 0 (plist-get result :notes-remaining)))
+                   (let ((cycle (reconcile-cycle)))
+                     (should (eq 'complete (plist-get cycle :status)))
+                     (should (= 2 (length (plist-get cycle :attempted))))
+                     (should-not (plist-get cycle :deferred))
+                     (should (equal '("good.md" "missing.md")
+                                    (sort (mapcar (lambda (row) (plist-get (plist-get row :member) :file))
+                                                  (plist-get cycle :attempted)) #'string<))))
                    (should-not (file-exists-p good))
                    (should (file-exists-p missing))
                    (should-not (seq-find (lambda (item) (equal "missing.md" (plist-get item :file))) (proposals)))
@@ -452,13 +468,17 @@
                                                   (eq 'memory-consolidation-completed (plist-get event :event)))
                                                 events)))))
                      (should (equal 1 (plist-get completed :note-format-failure-count))))
-                   ;; A repeated omission still yields no proposal and no progress.
+                   ;; An explicit new review can reconsider the remaining file.
+                   ;; Its accepted omission is an attempt, not a disposal.
                    (should (start))
                    (setq reply (text nil nil))
                    (finish)
                    (should (equal 1 (plist-get result :note-format-failure-count)))
                    (should-not (proposals))
-                   (should-not (mevedel-memory-pass--progress-p workspace (mevedel-memory-store-accepted workspace (pass))))
+                   (let ((cycle (reconcile-cycle)))
+                     (should (eq 'complete (plist-get cycle :status)))
+                     (should (= 1 (length (plist-get cycle :attempted))))
+                     (should-not (plist-get cycle :deferred)))
                    (should (equal 1 (plist-get (capture) :notes))))
                  :doc "bodyless missing closers and whitespace fence lines preserve valid note actions"
                  (let ((kept (note "kept.md" "Open handoff: confirm target activation.\n"))
@@ -546,7 +566,12 @@
                    (should (equal "Injected note acceptance failure" (plist-get result :error)))
                    (should (= 1 (plist-get result :note-format-failure-count)))
                    (should (= 1 (plist-get result :notes-reviewed)))
-                   (should (= 1 (plist-get result :notes-remaining)))
+                   (should (= 0 (plist-get result :notes-remaining)))
+                   (let ((cycle (car (mevedel-memory-cycle--read workspace))))
+                     (should (eq 'paused (plist-get cycle :status)))
+                     (should-not (plist-get cycle :attempted))
+                     (should-not (plist-get cycle :deferred))
+                     (should (= 2 (length (mevedel-memory-cycle-pending cycle)))))
                    (should (file-exists-p missing))
                    (should (file-exists-p good))
                    (should-not (mevedel-memory-store-accepted workspace (pass)))
@@ -561,16 +586,15 @@
                    (finish)
                    (should (= 16 (plist-get result :note-format-failure-count)))
                    (should-not (proposals))
-                   (should-not (mevedel-memory-pass--progress-p workspace (mevedel-memory-store-accepted workspace (pass))))
-                   ;; Disabling only the ordering rank recreates the starvation:
-                   ;; the same sixteen oldest notes still fill the next capture.
-                   (cl-letf (((symbol-function 'mevedel-memory-notes--admission-rank) (lambda (&rest _) 0)))
-                     (should-not (member "z-good.md" (plist-get (cdr (plist-get (capture) :root)) :files))))
-                   (should (start))
+                   ;; Without the cycle's closed pending cohort, ordinary capture
+                   ;; still selects the same sixteen oldest files.  No ranking
+                   ;; side ledger makes a no-op look like successful disposal.
+                   (should-not (member "z-good.md" (plist-get (cdr (plist-get (capture) :root)) :files)))
+                   (should (start :automatic t))
                    (should (member "z-good.md" (plist-get (cdr (mevedel-memory-notes-root scope-seen)) :files)))
                    (setq reply (text nil (list (list (address "z-good.md") "delete"))))
                    (finish)
-                   (should (= 15 (plist-get result :note-format-failure-count)))
+                   (should (= 0 (plist-get result :note-format-failure-count)))
                    (should (proposal 'note-delete "z-good.md"))
                    (should-not (file-exists-p good))
                    (should (cl-every #'file-exists-p invalid)))
@@ -601,8 +625,9 @@
                                                   workspace (pass) (plist-get (proposal 'note-delete "old.png") :id))
                                                  :status)))
                    (should (file-exists-p image)))
-                 :doc "digests and ready notes are reviewed together and notes alone admit a review"
-                 (progn
+                 :doc "ready notes admit independently without prematurely covering sparse recent digests"
+                 (let ((mevedel-memory-consolidation-min-digests 5)
+                       (mevedel-memory-consolidation-min-hours 24))
                    (dotimes (number 2)
                      (mevedel-journal-store-publish-digest
                       root (list :capture-id (format "%064x" (1+ number)) :session "closed" :session-name "Closed"
@@ -612,10 +637,18 @@
                                  :created (format-time-string "%Y-%m-%dT%H:%M:%SZ" (- now 3600) t) :model "test:model")
                       "## Done\n- Observed: Tests passed.\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none"))
                    (note "finding.md" "A finding.\n")
-                   ;; Two digests stay below the digest threshold; the ready note admits the review.
+                   ;; The note admits only its own work; the two one-hour-old
+                   ;; digests remain below both independent journal gates.
                    (should (start :automatic t))
-                   (should (= 2 (length entries-seen)))
-                   (should (= 1 (length (mevedel-memory-notes-documents scope-seen)))))
+                   (should-not entries-seen)
+                   (should (= 1 (length (mevedel-memory-notes-documents scope-seen))))
+                   (setq reply (text nil (list (list (address "finding.md") "delete"))))
+                   (finish)
+                   (let ((accepted (mevedel-memory-store-accepted workspace (pass))))
+                     (should-not (plist-get (plist-get accepted :prepared) :entries))
+                     (should-not (plist-get (plist-get accepted :review) :digests)))
+                   (should-not (file-exists-p (file-name-concat shared "finding.md")))
+                   (should (= 2 (plist-get (mevedel-memory-pass-select (mevedel-journal-store-entries root)) :eligible))))
                  :doc "an old handoff an open session uses waits while an unrelated note applies during another turn"
                  (let ((handoff (note "handoff.md" "Open handoff: port the fix.\n" 240))
                        (quiet (note "quiet.md" "Nothing durable.\n"))

@@ -539,8 +539,9 @@ buffer; the pass remains registered while its result is being published.
 that buffer, retires only this client's attempt. Failure and expired callbacks
 cannot publish fresh results or change a successor's claim or pins. Success
 returns the immutable public review, usage, and remaining frozen backlog count;
-arrivals after selection remain eligible. A single pass never recursively drains
-the backlog; explicit drain coordinates successive separately owned passes.
+arrivals after selection do not widen an admitted daily note cohort. A single
+pass never recursively drains the backlog; the cycle coordinator and explicit
+drain coordinate successive separately owned passes.
 Explicit callers may allow an empty batch for current-memory review. The proposal
 cockpit and `/remember [focus]` command are available. Workspace telemetry records
 pass starts and terminal outcomes, usage received so far, published proposal and
@@ -557,70 +558,108 @@ memory and instruction proposals, including changes to `AGENTS.md`, through the
 ordinary checked decision path without prior review, followed by shared-note
 decisions. The mode is frozen at pass admission.
 
-The automatic gate checks mode, then elapsed time since the last successful
-general review, then the eligible unreviewed digest count. The settings
+Automatic admission has two independent clocks: a daily shared-note cycle and
+the ordinary journal-only review gate. Ready shared notes do not need journal
+digests or journaling to be enabled, and note-only reviews do not postpone a
+later journal review.
+
+The **journal-only** gate checks mode, then elapsed time since the last successful
+journal-bearing general review, then the eligible unreviewed digest count. The settings
 `mevedel-memory-consolidation-min-hours` and
 `mevedel-memory-consolidation-min-digests` default to 24 hours and five digests.
-Both automatic and general on-demand completion move the clock; focused reviews
-do not. Retired review metadata preserves that clock after history expiry.
+Automatic and general on-demand reviews that admit journal digests move this
+clock; focused and note-only reviews do not. Retirement records preserve the
+journal-bearing distinction and clock after ordinary review-history expiry.
 A smaller backlog becomes eligible one day before its oldest digest reaches the
 configured ordinary-recall age limit (13 days under the default). Disabled expiry
 keeps the count threshold; the elapsed-time gate still applies in either case.
 This creates review opportunities for sparse workspaces and completed work from
-long-running sessions. Ready shared-folder work (a quiet note, attachment or
-empty folder; see [Shared working-note lifecycle](#shared-working-note-lifecycle))
-satisfies the count by itself, so a workspace without digests or with
-journaling disabled is still cleaned up; a shared folder alone makes the
-workspace a candidate. The admitted review then also carries any eligible
-digests, unless an oversized note owns the batch alone. `/remember` bypasses
-timing and count thresholds.
+long-running sessions. A note-cycle batch can also carry digests when their
+independent journal gate is due, under the ordinary admission bounds, unless an
+oversized note owns that batch alone. Ready notes do not bypass the journal
+time or count gate.
+General `/remember` bypasses timing and digest-count thresholds, not capture or
+mutation safety. It participates in or resumes the note cycle for one bounded
+pass; its existing allow-empty/current-memory-review option is not an exclusion
+of notes. A nonempty focus excludes notes and does not join the note cycle.
+
+The **shared-note cycle** uses the target clock and becomes due inclusively
+24 hours after the preceding cycle's admission, independently of the journal
+settings above. Under the existing workspace claim, it freezes a bounded finite
+cohort of eligible path/version metadata before starting bounded batches. The
+private `.mevedel/state/shared-notes/cycle.el` record binds the workspace identity,
+physical shared root and execution target. It contains cycle identity, admission
+time, frozen cohort and hash, attempted members with accepted pass identities,
+deferred members and reasons, an in-flight original pass/claim reservation, and
+active, complete or paused status with a bounded error class, not note bodies.
+It is scheduling state, never authority to read, review or delete a file.
+Accepted passes and decisions remain the evidence for review and application.
+
+There is one cycle record per actual workspace journal, not one per
+directory/target tuple or a registry mapping aliases to shared physical state.
+Changing the shared directory or execution-target identity while a cycle is
+active or unreconciled fails visibly closed. Finishing or resolving that cycle
+requires its original namespace and authority; operators must restore them
+rather than treating a new path or target as a continuation. A completed,
+reconciled cycle can freeze the current namespace at the next due admission.
+Local-to-TRAMP takeover and alias equivalence have not been established for this
+cycle protocol; physical identity fields are checks, not a cross-access mapping
+or proof of remote portability.
+
+Admission atomically persists that reservation before yielding note capture,
+not only before immutable preparation. A failed preparation that returns no
+bundle can be adopted for metadata recovery only when its exact original claim
+still owns the slot; fresh ownership then reconciles and pauses it. Cleanup pins
+the reserved predecessor even when no prepared record exists. The strict
+`mevedel-memory-cycle-inflight-claim` observation supplies that retention pin,
+never admission or mutation authority.
+
+Each frozen version is attempted at most once in that cycle. Attempts are
+authenticated against the accepted pass and its exact admitted note IDs, not
+the model's acknowledgements or the number of files deleted. An invalid or
+missing acknowledgement therefore remains a format failure and leaves that
+note unchanged, but cannot force the coordinator to review that same version
+again before reaching later cohort members. A batch with no deletions does not
+stop an otherwise successful cycle. Capture-history ranking, applied-progress
+catch-up and the rolling successful-batch ceiling are removed.
+
+Later arrivals and versions changed after the cohort was frozen wait for the
+next cycle rather than extending the current run. A captured member that can no
+longer be safely admitted is deferred, not silently rebound to its new content;
+deferral is not an attempt. An empty cohort is recorded as complete and starts
+no note-review inference. An independently due journal review or an explicitly
+requested allow-empty current-memory review can still run. Ordinary note,
+digest, request, chunk-summary and output bounds
+still apply to each batch; the coordinator does not create one oversized
+request. Both propose and auto can service the finite cohort; propose leaves
+decisions for approval, while auto uses checked application. Manual mode needs
+an explicit request.
 
 Turn completion checks cached timing and settings without target I/O. Queued
 turns coalesce, and filesystem work waits for idle transport. A failed count
-check is cached for ten minutes; a recent successful general review postpones
-the next check until its interval ends. The coordinator acquires target
+check is cached for ten minutes; timing observations respect the separate
+journal and note-cycle clocks. The coordinator acquires target
 ownership and recovers accepted publications before rechecking the gate, so
 another client's completion cannot be missed merely because the initial
 observation was stale. Journaling can be disabled while existing digests remain
 eligible for consolidation. Exit cancels queued and active review work.
 
-In **auto** mode, a successful general review makes the next idle/maintenance
-opportunity eligible for catch-up only if that batch made measurable shared-note
-progress: at least one authenticated
-applied delete (including relocation to verified trash). Proposal counts, aggregate
-application totals, digest coverage, older pending applications, empty-directory
-pruning, and rejected, held or unchanged unsuppressed notes do not establish
-progress. Application errors, recovery requirements and
-cancellation also prevent continuation. Catch-up bypasses the ordinary time and
-digest-count thresholds, but fresh owned admission must find eligible digests or
-currently ready shared files: age-ready, not held by pending/recovery work, not in use,
-and within capture limits. The last capture's remaining count does not gate
-continuation: arrivals after capture, including ones that become ready later,
-can enter a subsequent batch. An empty opportunity starts no inference and
-retains the progress-qualified catch-up opportunity, with the ordinary ten-minute
-empty-check cache; it is not a zero-progress batch. Completion never scans for
-new arrivals or starts another review recursively. Cleanup or claim contention
-before admission preserves catch-up for the next activity offer too.
-`mevedel-memory-consolidation-max-batches-per-day` remains a hard spend ceiling,
-defaulting to **48** successful general batches per rolling 24 hours. Admission
-counts published and retired general reviews on the target clock, including
-explicit reviews, under the existing workspace claim. Focused reviews do not
-count. Zero disables automatic review in auto mode. Propose retains the ordinary
-interval. A failed catch-up review or a successful batch with zero progress ends
-the catch-up chain; later offers must pass the ordinary successful-review clock
-again. Explicit general reviews also need progress to seed an unattended chain;
-explicit drain does not perform this catch-up-only observation. An observation
-failure prevents catch-up and records its class in completion telemetry without
-changing the accepted review result; an interrupted observation completes
-cancellation and releases this client's registration. Progress is the main
-catch-up throttle. The ceiling bounds successful
-batch admissions, not tokens or billing: catch-up can
-cost up to 48 successful review batches per day rather than one. Ordinary
-batches keep the same note/digest/request bounds; an oversized note is a
-single batch with bounded additional sequential summary calls, followed by
-its final review, all sharing the review's deadline and output limits.
-The cap counts batches, not provider calls. Failed attempts
-still may incur provider charges. Explicit review and drain bypass the cap.
+Cycle continuation preserves fresh ownership, pending/recovery holds, age and
+current-use checks, and unsaved-buffer protection. Cleanup or claim contention
+before admission preserves the offered opportunity; busy work waits with a
+nonzero retry rather than spinning. Failure, cancellation or an application
+recovery requirement pauses successor batches without rewriting accepted
+outcomes or confirmed-write counts. Automatic opportunities do not resume the
+same paused cycle before its daily boundary; an explicit review or drain can
+resume it immediately. At or after admission plus 24 hours, an automatic offer
+can freeze a new cohort, including still-eligible versions left by the paused
+cycle; pausing is not permanent suppression. An active cycle instead retains
+its original cohort across later opportunities. Active-cycle recovery uses the
+private record and accepted pass evidence without duplicating completed attempts
+or reapplying the journal-only gates.
+There is no completion-time scan that expands the cohort to newly ready files.
+An attempted version is not necessarily reviewed, extracted or deleted. Finite
+batching establishes no provider-cost, throughput or capacity guarantee.
 
 Auto applies proposals sequentially with fresh workspace and original-root
 ownership for each application. Unrelated index edits are preserved across
@@ -1012,12 +1051,14 @@ start the same operation. The header shows batch number, status and the last
 observed notes-remaining count; completion messages report each batch's notes
 and digest backlog. Drain runs successive general reviews, with ordinary-note
 batches bounded to 16 notes / 96 KiB and oversized notes reviewed alone in
-bounded chunks; digest/request limits remain unchanged. It stops when a fresh
-selection finds no ready shared notes, housekeeping or uncovered digests. It
-does not request an empty current-memory review. A drain remembers exact shared
-root/path/version identities from its authenticated accepted passes and attempts
-each version at most once during that drain, even when the result is retention
-or an invalid/missing acknowledgement. Attempted is not reviewed or deleted.
+bounded chunks; digest/request limits remain unchanged. Its first offer can explicitly
+bypass the daily note-cycle time gate and journal timing/count thresholds, but
+not claim ownership, cohort/version checks, pending recovery, age, current use,
+unsaved buffers or mutation checks. It services a finite frozen note cohort;
+new arrivals and changed versions do not extend that cohort. Completed attempts
+are authenticated against accepted pass identities and exact admitted notes,
+including invalid or missing acknowledgements. Attempted is not reviewed or
+deleted. An empty selection requests no empty current-memory review.
 Pending/recovery-required and blocked notes remain held; propose/manual drain leaves decisions for approval rather
 than deleting their files. Other sessions' turns do not stop the drain; notes
 they use wait (see Readiness). Running local consolidation, application or
@@ -1027,9 +1068,13 @@ originating buffer or exiting stops it; a failed review stops without retry.
 An accepted review also stops the drain if application reports an error or a
 recovery requirement. Acceptance, actual application counts and the diagnostic
 remain unchanged; a published review is not proof that every proposal applied.
-A changed chunked note reports `restart-required`, not a failed review; drain
-continues to the next ready batch and automatic catch-up remains armed.
-The explicit command is not subject to the automatic daily cap.
+A changed chunked note reports `restart-required`, not a failed review; its
+changed version waits for a later cohort rather than being retried in the
+current one. The persistent cycle record allows a later resume without
+repeating already accepted attempts. Successor batches retain the cycle identity
+rather than refreezing another note cohort. Once the note cohort is complete,
+drain can service remaining eligible ordinary digests without admitting new
+notes. There is no rolling successful-batch cap.
 
 `m` runs another consolidation; a prefix argument asks for focus. The first-class
 `/remember [focus]` command and `M-x mevedel-remember` use the same bounded
@@ -1206,14 +1251,13 @@ as do required memory sections missing outside a quarantined tail.
 Each skipped note counts as a format failure, not a successful keep or service:
 the pass reports it in `note-format-failure-count` (which also counts unadmitted
 note blocks), subtracts it from
-`notes-reviewed` and includes it in `notes-remaining`. No decision means no
-seven-day suppression. Existing authenticated captured-pass history places
-unchanged versions last when their latest capture had no note proposal, keeping
-oldest-first order within each priority group. Newly offered or edited notes
-therefore do not sit behind a full batch of repeated no-ops. This advisory rank
-neither suppresses nor authorizes changes and requires no new persistent store.
-The zero-applied-progress guard still stops automatic catch-up on an all-no-op
-batch instead of inventing a decision.
+`notes-reviewed` and includes it in `notes-remaining`. The accepted pass still
+proves an attempt for each exact admitted version in the finite daily cohort;
+no acknowledgement or deletion is invented. Other cohort members remain
+serviceable even after a batch whose acknowledgements are all invalid. The
+cycle's persistent attempt set replaces captured-without-proposal ranking and
+the zero-applied-progress catch-up guard. A new version or later arrival waits
+for the next cohort; a format failure is never credited as reviewed or deleted.
 
 Confirmed deletions, held work and format failures remain distinct outcomes.
 Extraction dependencies, target ownership, current-use and unsaved-buffer

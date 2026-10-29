@@ -203,7 +203,9 @@ profile file larger and cost a little more per sample."
     :max-ms :message-chars :message-hash :mode :model :model-context-source :model-context-window :modes
     :native-resource-capture :native-resource-report-bytes :nested-call-count
     :network
-    :new-count :new-segment :note-format-failure-count :offset :old-segment :omitted-count :operation-count :origin :outcome
+    :new-count :new-segment :note-cycle-attempted :note-cycle-count :note-cycle-deferred
+    :note-cycle-id :note-cycle-remaining :note-cycle-status :note-format-failure-count
+    :offset :old-segment :omitted-count :operation-count :origin :outcome
     :output-bytes :output-estimated-tokens :output-limit :output-tokens
     :over-1000-ms :over-200-ms :over-500-ms :overlap-count :owner
     :parent-tool-use-id :parent-turn :partial :pass-id :pending-count :permission-id :permission-mode
