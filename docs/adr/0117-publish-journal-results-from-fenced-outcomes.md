@@ -42,6 +42,9 @@ with both predecessor records freshly verified alongside the new claim's exact
 identity, latest generation, absence of outcome and unexpired deadline in one
 pinned program. Only that continuity proof omits repeated history recovery;
 the next proposal, current status and target authorization are still read anew.
+The child discovers the selected proposal's previous public decision under that
+claim; the editor freshly authenticates that selection's private acceptance
+evidence, never treating a child observation as write authority.
 Intervening consolidation claims, context changes, failures, holds, cancellation,
 expired/failed outcomes or incomplete accounting discard continuity. New jobs and
 deferred retries begin with recovery. Pending discovery remains at the original
@@ -58,6 +61,15 @@ registered through application completion rather than reporting the queue entry
 as completion. Scheduled marked-write reconciliation uses the same owned
 recovery prelude, but its live state classification remains in the editor.
 Original-target ownership never crosses the child in this design. Automatic
+local decisions are accepted durably in the editor, and resolved write markers
+retire under its still-owned target claim. A targeted child reauthenticates only
+the exact accepted decision identity/hash and performs publication and the pass
+settlement/pin-release check, rather than running full recovery again. The
+operation remains registered through publication; acceptance alone, failed
+marker retirement or interrupted publication cannot establish continuity.
+Confirmed newly written-file accounting survives publication failure or
+cancellation, and accepted unpublished decisions remain recoverable.
+Automatic
 note forward writes recheck that no open session uses the note, cancellation
 and unsaved buffers at their mutation boundary; checked rollback keeps its
 separate ownership proof.
@@ -459,6 +471,26 @@ longer than ordinary recall when evidence or recovery still needs it; the recall
 limit is not an erasure guarantee.
 
 ## Decision history
+
+### 2026-10-30: split application history bookkeeping from target mutation
+
+A compiled large-history replay attributed about 2.42 seconds of a 3.31-second
+single-proposal editor transaction to two complete public-journal scans:
+previous-decision discovery and post-publication settlement. Both depend on
+unrelated retained history, not the target write. Increasing synchronous read
+batches barely reduced the block and made individual control programs slower.
+
+Selected-decision discovery now runs in the existing owned recovery child;
+the editor retains fresh authentication of that selection and every target and
+live-buffer check. Previously the editor published before retiring a resolved
+marker. It now accepts the durable decision, retires the marker under its target
+claim, and waits for a targeted publication child that authenticates the exact
+decision hash. The accepted outcome already makes an unpublished decision
+recoverable. No clean predecessor is produced until marker retirement and
+publication both finish, so interruption cannot skip required recovery.
+The child does not repeat full recovery and never owns target mutation. The
+remaining editor intent/check/write/acceptance sequence is still synchronous;
+this change does not establish the approximately 50 ms responsiveness budget.
 
 ### 2026-10-29: Freeze one daily note cohort independently of journal cadence
 

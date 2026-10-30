@@ -514,13 +514,14 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
 		    (plist-put job :operation
 			       (mevedel-memory-decision--start-operation
 				workspace
-				(lambda (claim currentp _reply)
+					(lambda (claim currentp reply)
 				  (mevedel-memory-decision--apply-owned
 				   workspace claim (plist-get item :pass) (plist-get item :proposal)
 				   (lambda (paths)
 				     (cl-incf (plist-get job :applied))
 					     (plist-put job :files (append paths (plist-get job :files))))
-				   currentp (plist-get item :pending)))
+					   currentp (plist-get item :pending)
+                                           (unless (plist-get reply :synchronous) reply)))
 				(lambda (reply)
 				  (plist-put job :operation nil)
 				  (when (and (eq job (plist-get state :application)) (not (plist-get job :done)))
@@ -550,7 +551,8 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
 					    ;; accepted/status/target proofs are always read afresh.
 				    (mevedel-memory-pass--application-next state job)))
 					(lambda () (mevedel-memory-pass--application-live-p state job))
-                                        nil nil (plist-get job :recovery)))))
+	                                        nil (list :application t :proposal-id (plist-get item :proposal))
+                                                (plist-get job :recovery)))))
 	      (plist-put job :done t)
 	      (when (and (plist-get job :deferred) (not (plist-get state :stop-apply)))
 		(mevedel-memory-pass--defer-notes state (plist-get job :deferred)))

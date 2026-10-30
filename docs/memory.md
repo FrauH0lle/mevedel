@@ -755,19 +755,29 @@ scopes; inventory does not descend into their directory.
 For local Linux automatic application, a sequential job runs publication and
 store recovery in a maintenance child under one parent-owned, fixed-deadline
 180-second workspace claim per operation. Pending automatic proposal discovery
-also runs in that child. It freshly authenticates decision status to omit every
+and discovery of a selected proposal's previous public decision also run in
+that child. It freshly authenticates decision status to omit every
 already-decided proposal, rather than starting another recovery child just to
 skip it; undecided extractions and their waiting dependent disposals remain
 eligible. Selection returns identities only, never reusable acceptance proofs.
 The editor checks the worker reply's operation identity, current job,
 originating session/workspace binding, unchanged root and freshly read workspace
 identity, cancellation, mode and fresh ownership on return, then freshly reads
-the proposal and status. Reentrant and late duplicate replies cannot reenter
+the proposal and authenticates the selected decision against private accepted
+evidence. A missing decision observation is an error, not an empty roster.
+Reentrant and late duplicate replies cannot reenter
 an executing or finished operation. Automatic admission reads the live origin
 buffer's mode, not whichever buffer happens to run a timer or continuation.
 Only the editor acquires original-target ownership, prepares the intent, checks
 unsaved visiting buffers, writes files and synchronizes buffers. No target claim
-crosses the child boundary. It yields between proposals and refreshes status
+crosses the child boundary. The editor durably accepts each decision and retires
+a resolved write's marker while it still owns the target. A targeted child then
+reauthenticates that exact decision identity and hash, publishes it and checks
+pass settlement/pin release, without repeating full recovery or target mutation.
+The operation remains registered until this reply; neither acceptance alone nor
+an interrupted publication produces a clean recovery predecessor. Failure or
+cancellation preserves the accepted decision for recovery and any confirmed
+newly written-file accounting. It yields between proposals and refreshes status
 after every attempt; the pass stays registered until application finishes and
 its final callback runs once. Manual and unsupported remote application retain
 the synchronous API. Deferred automatic retries retain their original buffer,
@@ -784,8 +794,9 @@ checked native editor recovery under the same continuously held claim instead.
 This preflight passes no accepted proofs back to the editor and does not bypass
 accepted-expiry or marked-write recovery. It adds a history scan per operation;
 offloading editor work does not imply lower total CPU or IO cost.
-This split removes eligible recovery scans from the editor, not all
-remaining commit/publication IO: an editor continuation can still block.
+This split removes eligible recovery and selected-status/publication history
+scans from the editor, not the synchronous intent/check/write/acceptance sequence:
+an editor continuation can still block.
 
 Scheduled publication recovery yields to this client's registered pass or
 explicit drain, including waiting gaps, and to already-admitted local cleanup.

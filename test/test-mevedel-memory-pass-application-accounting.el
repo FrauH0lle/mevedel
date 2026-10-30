@@ -224,7 +224,7 @@ Drive a bounded sequence directly, retaining native ownership operations."
            (calls 0)
            (result (mevedel-test-application--async
                     state accepted
-                    (lambda (_workspace claim _pass proposal notify currentp &optional _pending)
+                    (lambda (_workspace claim _pass proposal notify currentp &optional _pending _observation)
                       (should (funcall currentp))
                       (mevedel-memory-store--assert-owned claim)
                       (cl-incf calls)
@@ -258,7 +258,7 @@ Drive a bounded sequence directly, retaining native ownership operations."
              (result (mevedel-test-application--async
                       state (mevedel-test-application--accepted
                              (mapcar #'mevedel-test-application--proposal '("first" "later")))
-                      (lambda (_workspace _claim _pass _proposal notify currentp &optional _pending)
+                      (lambda (_workspace _claim _pass _proposal notify currentp &optional _pending _observation)
                         (should (funcall currentp))
                         (cl-incf calls)
                         (when confirmed (funcall notify '("confirmed.md")))

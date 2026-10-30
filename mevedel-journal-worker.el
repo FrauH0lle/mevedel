@@ -30,13 +30,19 @@
 (declare-function mevedel-journal-recovery-run "mevedel-journal-recovery" (workspace))
 
 ;; `mevedel-journal-store'
+(declare-function mevedel-journal-store-id-p "mevedel-journal-store" (id))
 (defvar mevedel-journal-max-age-days)
+(defvar mevedel-journal-store--decision-fields)
 (defvar mevedel-memory-history-max-age-days)
 
 ;; `mevedel-memory-decision'
+(declare-function mevedel-memory-decision--directory "mevedel-memory-decision" (workspace))
+(declare-function mevedel-memory-decision--publish "mevedel-memory-decision" (workspace decision))
+(declare-function mevedel-memory-decision--read "mevedel-memory-decision" (workspace path &optional passes writes record))
 (declare-function mevedel-memory-decision--recovery-successor-p "mevedel-memory-decision" (job predecessor))
 (declare-function mevedel-memory-decision--worker-local-p "mevedel-memory-decision" (workspace))
 (declare-function mevedel-memory-decision-recover "mevedel-memory-decision" (workspace))
+(declare-function mevedel-memory-decision-status "mevedel-memory-decision" (workspace proposal &optional entries passes writes records))
 
 ;; `mevedel-memory-pass'
 (declare-function mevedel-memory-pass--prepare "mevedel-memory-pass" (workspace payload))
@@ -92,8 +98,8 @@ non-ASCII string into unibyte bytes."
 (defun mevedel-journal-worker-start (workspace operation callback &optional force payload owner)
   "Run WORKSPACE OPERATION in a child and call CALLBACK with its result.
 OPERATION is `capture-prepare', `digest-prepare', `recovery', `cleanup',
-`memory-recover', `memory-prepare', `memory-publish', or
-`generation-observations'.
+`memory-recover', `memory-decision-publish', `memory-prepare',
+`memory-publish', or `generation-observations'.
 FORCE bypasses cleanup throttling.  PAYLOAD freezes consolidation inputs.
 OWNER, when non-nil, is the parent lifecycle's mutable job plist.  Record its
 :worker before pending quit delivery; that owner fences and retires the child
@@ -103,7 +109,7 @@ Return the child process.  CALLBACK receives (:ok t :count N :more BOOL
 or (:error MESSAGE). Capture preparation returns bounded frozen evidence.
 Deleting the process cancels work; durable claims fence interrupted attempts."
   (unless (and (mevedel-journal-worker-supported-p workspace)
-               (memq operation '(capture-prepare digest-prepare recovery cleanup memory-recover memory-prepare memory-publish generation-observations)))
+               (memq operation '(capture-prepare digest-prepare recovery cleanup memory-recover memory-decision-publish memory-prepare memory-publish generation-observations)))
     (error "Unsupported journal worker operation"))
   (let* ((directory (make-temp-file "mevedel-journal-worker-" t))
          (request (file-name-concat directory "request.el"))
@@ -147,9 +153,12 @@ Deleting the process cancels work; durable claims fence interrupted attempts."
                                     (unless (and (zerop (process-exit-status child))
 						 (file-exists-p reply)
 						 (<= (file-attribute-size (file-attributes reply))
-                                                     (if (or (memq operation '(capture-prepare memory-prepare memory-publish generation-observations))
-                                                             (and (eq operation 'memory-recover) (plist-get payload :pending-selection)))
-							 (* 8 1024 1024) 4096)))
+                                                     (cond ((or (memq operation '(capture-prepare memory-prepare memory-publish generation-observations))
+                                                                (and (eq operation 'memory-recover) (plist-get payload :pending-selection)))
+                                                            (* 8 1024 1024))
+                                                           ((and (eq operation 'memory-recover) (plist-get payload :application))
+                                                            (* 64 1024))
+                                                           (t 4096))))
                                       (error "Journal worker exited with status %s" (process-exit-status child)))
                                     (mevedel-journal-worker--read reply))
 				(error (list :error (error-message-string failure))))))
@@ -234,21 +243,47 @@ Deleting the process cancels work; durable claims fence interrupted attempts."
                                 (or (mevedel-memory-decision--recovery-successor-p
                                      (list :claim (plist-get payload :claim)) predecessor)
                                     (error "Memory recovery predecessor changed")))))
-                     (when (and recovered (not (plist-get payload :pending-selection)))
-                       (error "Recovery continuity only permits pending selection"))
+                     (when (and recovered (not (or (plist-get payload :pending-selection)
+                                                   (plist-get payload :application))))
+                       (error "Recovery continuity requires decision discovery"))
                      (if (and (not recovered) (not (mevedel-memory-decision--worker-local-p workspace)))
                          (list :ok t :operation-id (plist-get payload :operation-id) :synchronous t)
                        (let ((changed (unless recovered (mevedel-memory-decision-recover workspace))))
                          (unless (or recovered (plist-get payload :decisions-only))
                            (when (mevedel-memory-store-recover workspace) (setq changed t)))
-                         (if (plist-get payload :pending-selection)
+                         (cond
+                          ((plist-get payload :application)
+                           (unless (mevedel-journal-store-id-p (plist-get payload :proposal-id))
+                             (error "Invalid application proposal identity"))
+                           (let ((previous (mevedel-memory-decision-status workspace (plist-get payload :proposal-id))))
+                             (list :ok t :operation-id (plist-get payload :operation-id)
+                                   :changed changed :previous
+                                   (when previous
+                                     (cl-loop for field in mevedel-journal-store--decision-fields
+                                              append (list (cdr field) (plist-get previous (cdr field))))))))
+                          ((plist-get payload :pending-selection)
                              (progn
                                (require 'mevedel-memory-pass)
                                (list :ok t :operation-id (plist-get payload :operation-id)
                                      :changed changed :items
-                                     (mevedel-memory-pass--pending-items workspace (plist-get payload :skip))))
-                           (list :ok t :operation-id (plist-get payload :operation-id)
-                                 :changed changed))))))
+                                     (mevedel-memory-pass--pending-items workspace (plist-get payload :skip)))))
+                          (t (list :ok t :operation-id (plist-get payload :operation-id)
+                                   :changed changed)))))))
+                  ('memory-decision-publish
+                   (require 'mevedel-memory-decision)
+                   (let* ((payload (plist-get options :payload))
+                          (id (plist-get payload :decision-id))
+                          (_ (unless (and (mevedel-journal-store-id-p id)
+                                          (equal id (plist-get payload :operation-id)))
+                               (error "Invalid decision publication identity")))
+                          (decision (mevedel-memory-decision--read
+                                     workspace (file-name-concat (mevedel-memory-decision--directory workspace)
+                                                                 (concat id ".el")))))
+                     (unless (and decision (equal (plist-get payload :hash) (plist-get decision :hash)))
+                       (error "Accepted decision publication changed"))
+                     (mevedel-memory-decision--publish workspace decision)
+                     (list :ok t :operation-id id
+                           :publication (list :decision-id id :hash (plist-get decision :hash)))))
                   ((or 'memory-prepare 'memory-publish)
                    (require 'mevedel-memory-pass)
                    (if (eq (plist-get options :operation) 'memory-prepare)
