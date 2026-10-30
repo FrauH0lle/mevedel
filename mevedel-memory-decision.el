@@ -78,27 +78,35 @@
   "Return the private decision directory for WORKSPACE."
   (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "decisions"))
 
-(defun mevedel-memory-decision-status (workspace proposal &optional entries passes writes)
+(defun mevedel-memory-decision-status (workspace proposal &optional entries passes writes records)
   "Return the latest accepted public decision for PROPOSAL in WORKSPACE.
 Verify its immutable acceptance evidence; public text alone cannot authorize
 a decision. Recover accepted decisions before using this to decide or apply.
 ENTRIES, PASSES and WRITES, when non-nil, are one current read observation,
-shared across a scan as `mevedel-memory-decision--read' describes."
+shared across a scan as `mevedel-memory-decision--read' describes.
+RECORDS may hold this scan's batched decision metadata, keyed by path."
   (let ((generation 0) (passes (or passes (make-hash-table :test #'equal))) latest)
     (dolist (entry (or entries (mevedel-journal-store-entries (mevedel-workspace-root workspace))))
       (when (and (eq (plist-get entry :kind) 'decision) (equal proposal (plist-get entry :proposal-id))
                  (not (mevedel-journal-cleanup-pass-retired-p (mevedel-workspace-root workspace) (plist-get entry :pass-id))))
-        (let* ((accepted (mevedel-memory-decision--published workspace entry passes writes))
+        (let* ((accepted (mevedel-memory-decision--published workspace entry passes writes records))
                (number (plist-get (plist-get accepted :claim) :generation)))
           (when (> number generation) (setq generation number latest entry)))))
     latest))
 
-(defun mevedel-memory-decision--published (workspace entry &optional passes writes)
+(defun mevedel-memory-decision--published (workspace entry &optional passes writes records)
   "Return accepted private state matching public decision ENTRY in WORKSPACE.
-PASSES and WRITES are the current observation described by the private reader."
+PASSES, WRITES and RECORDS are the current observation described by the readers."
   (let* ((path (file-name-concat (mevedel-memory-decision--directory workspace)
                                 (concat (plist-get entry :decision-id) ".el")))
-         (accepted (mevedel-memory-decision--read workspace path passes writes))
+         (record (and records (gethash path records)))
+         (accepted (progn
+                     (when (and records (not record)) (error "Unavailable decision record"))
+                     (when (stringp record) (error "%s" record))
+                     (when (and record
+                                (not (equal (plist-get entry :pass-id) (plist-get (plist-get record :metadata) :pass-id))))
+                       (error "Published decision source pass changed"))
+                     (mevedel-memory-decision--read workspace path passes writes record)))
          (metadata (plist-get accepted :metadata)))
     (unless (and accepted
                  (cl-every (lambda (field) (equal (plist-get entry (cdr field)) (plist-get metadata (cdr field))))
@@ -597,11 +605,15 @@ as status `held' or signal `mevedel-memory-decision-held'."
    (lambda (claim)
      (mevedel-memory-decision--apply-owned workspace claim pass proposal on-applied currentp))))
 
-(defun mevedel-memory-decision--worker-local-p (workspace)
+(defun mevedel-memory-decision--worker-local-p (workspace &optional display)
   "Whether WORKSPACE's authenticated retained scopes need no remote target IO.
 Current configuration alone cannot classify historical original-root authority.
-Read only local acceptance metadata here, before target-sensitive recovery."
-  (condition-case nil
+Read only local acceptance metadata here, before target-sensitive recovery.
+DISPLAY checks only workspace locality: the display collector classifies each
+authenticated bundle before target IO, and reports invalid bundles unavailable."
+  (if display
+      (not (file-remote-p (mevedel-workspace-root workspace)))
+    (condition-case nil
       (not (cl-some
             (lambda (accepted)
               (cl-some (lambda (root) (file-remote-p (plist-get (cdr root) :dir)))
@@ -610,7 +622,7 @@ Read only local acceptance metadata here, before target-sensitive recovery."
              workspace (mevedel-journal-store-entries (mevedel-workspace-root workspace)))))
     ;; Recovery, not this metadata preflight, owns interrupted accepted expiry
     ;; and incomplete state.  Uncertainty selects the checked native path.
-    (error nil)))
+      (error nil))))
 
 (define-error 'mevedel-memory-decision-held "Memory application is held")
 (define-error 'mevedel-memory-decision-interrupted "Memory application interrupted" 'quit)

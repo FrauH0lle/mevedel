@@ -181,12 +181,18 @@ number of public files deleted; finishing the manifest now also sets
         (setq mevedel-journal-cleanup--finished t)))
     deleted))
 
+(defvar mevedel-journal-cleanup--retired-observation nil
+  "Display scan's (WORKSPACE-ROOT . IDS) retirement observation, or nil.
+Bind only around read-only collection; never reuse for recovery or mutation.")
+
 (defun mevedel-journal-cleanup-pass-retired-p (workspace-root id)
   "Return non-nil when pass ID in WORKSPACE-ROOT is durably retired.
 This only prevents reuse of expired private state; it never authorizes deletion."
   (unless (mevedel-journal-store-id-p id) (error "Invalid memory pass identity"))
-  (mevedel-session-control-fs-path-exists-p
-   (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory workspace-root)) "retired-passes" id)))
+  (if (equal workspace-root (car mevedel-journal-cleanup--retired-observation))
+      (member id (cdr mevedel-journal-cleanup--retired-observation))
+    (mevedel-session-control-fs-path-exists-p
+     (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory workspace-root)) "retired-passes" id))))
 
 (defun mevedel-journal-cleanup-recover (root)
   "Finish accepted expiry manifests under journal ROOT before new mutations.

@@ -235,8 +235,14 @@ and full-data readiness differ. Background printing can restore buffer point
 while leaving a nonselected window on another row. The memory surface retains
 each displayed window's per-tab row identity across loading gaps and restores
 its window point without selecting it, preserving independent selections and
-the active composer. Remote/uncertain inspection and topic directory listing
-can still block; offloading a scan does not establish lower total IO.
+the active composer. Authenticated remote display scopes and topic directory
+listing can still block. Invalid local bundles stay unavailable in the child;
+they cannot supply target paths. Display collection now classifies locality
+while authenticating one pass at a time, reusing only scan-local proofs and
+batching metadata IO. This replaces the uncertain-display fallback introduced
+in 61fd2f60: real retained-history scans spent most of their time repeating
+pinned programs, and invalid bundles moved that work onto the editor thread.
+Target-sensitive recovery retains its conservative uncertain-scope preflight.
 Explicit inspection and decision commands retain synchronous authentication and
 processing; display responsiveness does not establish nonblocking manual actions.
 

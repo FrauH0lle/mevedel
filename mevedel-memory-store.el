@@ -92,14 +92,15 @@ OBSERVATION may supply PATH's pinned read from this operation's bounded batch."
     (error "Invalid memory evidence identity"))
   (file-name-concat (mevedel-journal-store-state-directory (mevedel-journal-store-directory (mevedel-workspace-root workspace))) "evidence-pins" digest (concat id ".pin")))
 
-(defun mevedel-memory-store-read (workspace id)
+(defun mevedel-memory-store-read (workspace id &optional observation evidence)
   "Read WORKSPACE's immutable prepared pass ID, including its private scope.
 This internal storage interface grants no right to display original memory
-bodies; inspection must use the original authority checks on the returned scope."
+bodies; inspection must use the original authority checks on the returned scope.
+OBSERVATION and EVIDENCE may supply this operation's prepared and claim reads."
   (when (mevedel-journal-cleanup-pass-retired-p (mevedel-workspace-root workspace) id)
     (error "Memory pass has expired"))
   (let* ((record (mevedel-memory-store--read-lisp
-                  (file-name-concat (mevedel-memory-store--directory workspace id) "prepared.el")))
+                  (file-name-concat (mevedel-memory-store--directory workspace id) "prepared.el") observation))
          (data (car record)) (text (cdr record))
          (claim (and (proper-list-p data) (plist-get data :claim)))
          (entries (plist-get data :entries)))
@@ -123,7 +124,7 @@ bodies; inspection must use the original authority checks on the returned scope.
                                   (<= (string-bytes (plist-get entry :body)) mevedel-context-summary--digest-max-bytes))) entries))
       (error "Invalid prepared memory pass"))
     (let ((token (append (list :directory (mevedel-memory-store--claim-directory workspace)) claim)))
-      (unless (equal claim (mevedel-journal-claim--read (mevedel-journal-claim--path token nil) nil))
+      (unless (equal claim (mevedel-journal-claim--read (mevedel-journal-claim--path token nil) nil evidence))
         (error "Prepared pass does not match its ownership record"))
       (plist-put data :claim token))
     (append data (list :hash (secure-hash 'sha256 text)))))
@@ -227,17 +228,33 @@ the review.  Only the producer's admitted roster establishes disposal targets."
            (let ((index (mevedel-memory-notes-index scope)))
              (cl-every (lambda (id) (and (stringp id) (assoc id index))) notes)))))
 
-(defun mevedel-memory-store-accepted (workspace id)
+(defun mevedel-memory-store-accepted (workspace id &optional batch)
   "Return the fenced accepted bundle for WORKSPACE pass ID, or nil.
 Verify its exact bytes against the claim outcome before reading its private
 proposal data.  The required :admitted-notes records actual review input IDs,
 independently of memory proposal contents.  Return the immutable prepared
-record under :prepared and the authenticated accepted bytes' hash under :hash."
-  (let* ((prepared (mevedel-memory-store-read workspace id))
-         (outcome (mevedel-journal-claim-outcome (plist-get prepared :claim))))
+record under :prepared and the authenticated accepted bytes' hash under :hash.
+BATCH requests bounded pinned reads for this pass alone."
+  (let* ((directory (mevedel-memory-store--directory workspace id))
+         (reads (when batch
+                  (mevedel-session-control-fs-run-program
+                   (mapcar (lambda (name)
+                             (list :op 'read :path (file-name-concat directory name)
+                                   :optional t :coding 'utf-8-unix :max-bytes (1+ mevedel-memory-store--max-bytes)))
+                           '("prepared.el" "accepted.el")))))
+         (claim (when batch
+                  (append (list :directory (mevedel-memory-store--claim-directory workspace))
+                          (plist-get (car (mevedel-memory-store--read-lisp
+                                           (file-name-concat directory "prepared.el") (car reads))) :claim))))
+         (evidence (when batch
+                     (mevedel-session-control-fs-run-program
+                      (list (list :op 'read :path (mevedel-journal-claim--path claim nil))
+                            (list :op 'read :path (mevedel-journal-claim--path claim t) :optional t)))))
+         (prepared (mevedel-memory-store-read workspace id (car reads) (car evidence)))
+         (outcome (mevedel-journal-claim-outcome (plist-get prepared :claim) (cadr evidence))))
     (when (eq (plist-get outcome :status) 'completed)
       (let* ((record (mevedel-memory-store--read-lisp
-                      (file-name-concat (mevedel-memory-store--directory workspace id) "accepted.el")))
+                      (file-name-concat directory "accepted.el") (cadr reads)))
              (text (cdr record)))
         (unless (equal (secure-hash 'sha256 text) (plist-get outcome :payload))
           (error "Accepted memory bundle changed"))

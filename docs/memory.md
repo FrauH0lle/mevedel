@@ -955,9 +955,10 @@ Rows show action, type, title, status, and exact target/origin. A candidate's
 status reflects the same read-only freshness check acceptance runs: a recorded
 `stale` decision that would now apply reads `ready`, and a pending or stale
 candidate whose targets changed since capture reads `superseded` (only `r`
-resolves it). The history collector shares one public journal observation across
-proposal checks and authenticates each decision; locality and checked-recovery
-preflights read separately. The header shows workspace, pending/recovery counts,
+resolves it). The history collector batches decision and write evidence and
+shares one authenticated bundle at a time across each pass's rows. Locality
+classification happens in that same scan; checked recovery still reads separately.
+The header shows workspace, pending/recovery counts,
 history retention, and this client's running pass. Opening requests checked workspace
 recovery without blocking the table. Initial history collection independently
 reads committed data even while recovery is pending, dispatching or active; the
@@ -982,8 +983,13 @@ Memories inventories configured topics independently. `g`, completed decisions
 and settled review updates request fresh observations. Current job, context,
 session, root, fresh workspace identity, client and configured roots fence replies.
 Closing the table retires its display work, not workspace-owned checked recovery.
-Remote or uncertain retained scopes keep native checked inspection and can still
-block. Display snapshots never authorize inspection or mutation: those paths
+Authenticated remote retained scopes keep native inspection and can still
+block. Invalid local bundles instead produce unavailable rows in the child,
+without accessing their untrusted targets or selecting editor-thread collection.
+A scan-local retirement listing avoids repeated checks; a final pinned check
+rejects a pass whose retirement or bundle removal raced its held proofs. This
+is a display observation, not an atomic snapshot or recovery authorization.
+Display snapshots never authorize inspection or mutation: those paths
 freshly authenticate accepted evidence, original authority and current status.
 Explicit accept, reject and reversal commands retain synchronous authentication
 and decision processing, which can still block; asynchronous display collection

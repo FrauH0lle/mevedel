@@ -145,7 +145,7 @@ checked rollback retains CURRENTP's ownership without a cancelled forward gate."
                                         (plist-get intent :before)))))
              before-write))))))
 
-(cl-defun mevedel-memory-write-read (workspace id hash &optional accepted observation coordinator)
+(cl-defun mevedel-memory-write-read (workspace id hash &optional accepted observation coordinator evidence)
   "Read WORKSPACE write ID only when its bytes match expected HASH.
 Validate its source pass and closed affected-file states. Private scope remains
 bound to the originating client; reading does not authorize target access.
@@ -157,6 +157,7 @@ COORDINATOR may supply this read's freshly authenticated decision claim.
 When it matches the intent's original claim exactly, reuse its immutable
 acceptance evidence together with ACCEPTED.  Recovered writes can instead
 belong to an older coordinator; read their original evidence normally.
+EVIDENCE may supply the pair of original claim/source outcome batch reads.
 Neither proof authorizes a later mutation or survives this read observation."
   (unless (and (mevedel-journal-store-id-p id) (mevedel-journal-store-id-p hash)) (error "Invalid memory write identity"))
   (let* ((record (mevedel-memory-store--read-lisp
@@ -178,9 +179,9 @@ Neither proof authorizes a later mutation or survives this read observation."
                                       (mevedel-journal-claim--record claim))
                                coordinator))
              (evidence (unless coordinator
-                         (mevedel-session-control-fs-run-program
+                         (or evidence (mevedel-session-control-fs-run-program
                           (list (list :op 'read :optional t :path (mevedel-journal-claim--path claim nil))
-                                (list :op 'read :optional t :path (mevedel-journal-claim--path source t))))))
+                                (list :op 'read :optional t :path (mevedel-journal-claim--path source t)))))))
              (proposal (seq-find (lambda (item) (equal (plist-get data :proposal) (plist-get item :id))) (plist-get accepted :proposals))))
 	(unless (and (proper-list-p data) (= (length data) 20)
                      (cl-every (lambda (key) (plist-member data key))
@@ -535,7 +536,25 @@ batches.  Reject incomplete control responses rather than losing identities."
                        (list :path (plist-get op :path) :status 'failed
                              :diagnostic (error-message-string err))) operations)))))
 
-(defun mevedel-memory-write-list (workspace &optional ids)
+(defun mevedel-memory-write--groups (workspace ids)
+  "Group WORKSPACE write IDS by untrusted pass hint using bounded reads.
+The nil key holds unavailable rows.  No bundle or intent body survives here."
+  (let ((groups (make-hash-table :test #'equal)))
+    (while ids
+      (let* ((batch (seq-take ids 8))
+             (reads (mevedel-memory-write--read-batch workspace batch)))
+        (setq ids (nthcdr (length batch) ids))
+        (cl-mapc
+         (lambda (id read)
+           (condition-case err
+               (let ((pass (plist-get (car (mevedel-memory-store--read-lisp (plist-get read :path) read)) :pass)))
+                 (unless (mevedel-journal-store-id-p pass) (error "Invalid memory write source pass"))
+                 (push id (gethash pass groups)))
+             (error (push (list :id id :error (error-message-string err)) (gethash nil groups)))))
+         batch reads)))
+    groups))
+
+(cl-defun mevedel-memory-write-list (workspace &optional ids (bundle nil supplied) coordinators)
   "Inspect retained write records in WORKSPACE without mutating targets.
 Each row has :id, and readable rows have :hash and :intent. Check original root
 authority before reporting :marked. Preserve unreadable or unavailable records
@@ -543,7 +562,10 @@ with :error instead of dropping them or rebinding their target. Private intent
 bodies require a separate original-root authority check before presentation.
 IDS restricts inspection to those write identities, still reading each afresh.
 Remember each readable identity's marker path for
-`mevedel-memory-write-recovery-candidates'."
+`mevedel-memory-write-recovery-candidates'.
+BUNDLE, when supplied, is this read-only scan's authenticated single-pass proof;
+IDS must then belong to that pass.  Discard all returned proofs after the scan.
+COORDINATORS may map write IDs to this scan's authenticated decision claims."
   (let ((inspected (or (gethash workspace mevedel-memory-write--inspected)
                        (puthash workspace (make-hash-table :test #'equal)
                                 mevedel-memory-write--inspected)))
@@ -551,58 +573,82 @@ Remember each readable identity's marker path for
                  (mapcar (lambda (path) (file-name-sans-extension (file-name-nondirectory path)))
                          (mevedel-session-control-fs-list-directory
                           (mevedel-memory-write--directory workspace) mevedel-memory-write-intent-file-regexp))))
-        (groups (make-hash-table :test #'equal))
         (rows (make-hash-table :test #'equal)))
     ;; Group only identities, not complete bodies, by an untrusted pass hint.
     ;; Each group is reread in bounded batches and fully authenticated below.
     (dolist (id ids)
       (unless (mevedel-journal-store-id-p id) (error "Invalid memory write identity")))
-    (let ((pending ids))
-      (while pending
-        (let* ((batch (seq-take pending 8))
-               (reads (mevedel-memory-write--read-batch workspace batch)))
-          (setq pending (nthcdr (length batch) pending))
-          (cl-mapc
-           (lambda (id read)
-             (condition-case err
-                 (let* ((record (mevedel-memory-store--read-lisp (plist-get read :path) read))
-                        (pass (plist-get (car record) :pass)))
-                   (unless (mevedel-journal-store-id-p pass) (error "Invalid memory write source pass"))
-                   (push id (gethash pass groups)))
-               (error (puthash id (list :id id :error (error-message-string err)) rows))))
-           batch reads))))
-    (maphash
+    (let ((groups (if supplied
+                      (let ((table (make-hash-table :test #'equal)))
+                        (puthash (plist-get (plist-get bundle :prepared) :id) ids table) table)
+                    (mevedel-memory-write--groups workspace ids))))
+      (dolist (row (gethash nil groups)) (puthash (plist-get row :id) row rows))
+      (remhash nil groups)
+      (maphash
      (lambda (pass pending)
        (let (accepted failure)
          (condition-case err
              (unless (mevedel-journal-cleanup-pass-retired-p (mevedel-workspace-root workspace) pass)
-               (setq accepted (mevedel-memory-store-accepted workspace pass)))
+               (setq accepted (if supplied bundle (mevedel-memory-store-accepted workspace pass))))
            (error (setq failure (error-message-string err))))
          (while pending
            (let* ((batch (seq-take pending 8))
-                  (reads (mevedel-memory-write--read-batch workspace batch)))
+                  (reads (mevedel-memory-write--read-batch workspace batch))
+                  (evidence
+                   (condition-case nil
+                     (when (and accepted
+                              (not (and coordinators (cl-every (lambda (id) (gethash id coordinators)) batch))))
+                     (mevedel-session-control-fs-run-program
+                      (cl-mapcan
+                       (lambda (read)
+                         (let* ((data (car (mevedel-memory-store--read-lisp (plist-get read :path) read)))
+                                (claim (append (list :directory (mevedel-memory-store--claim-directory workspace))
+                                               (plist-get data :claim))))
+                           (list (list :op 'read :optional t :path (mevedel-journal-claim--path claim nil))
+                                 (list :op 'read :optional t :path (mevedel-journal-claim--path
+                                                                (plist-get (plist-get accepted :prepared) :claim) t))))) reads)))
+                     ;; Fall back to each row's ordinary evidence reader.
+                     (error nil)))
+                  pins)
              (setq pending (nthcdr (length batch) pending))
              (cl-mapc
               (lambda (id read)
-                (let ((row (list :id id)))
+                (let ((row (list :id id)) (proof (list (pop evidence) (pop evidence))))
                   (condition-case err
                       (progn
                         (when failure (error "%s" failure))
                         (let* ((hash (secure-hash 'sha256 (mevedel-session-control-fs-program-value read)))
-                               (intent (mevedel-memory-write-read workspace id hash accepted read)))
+                               (intent (mevedel-memory-write-read workspace id hash accepted read
+                                                                  (and coordinators (gethash id coordinators)) proof)))
                           (if (not intent)
                               (progn (puthash id 'retired inspected) (setq row nil))
                             (setq row (append row (list :hash hash :intent intent)))
                             (let ((pin (mevedel-memory-write--pin intent)))
                               (puthash id pin inspected)
-                              (when (mevedel-session-control-fs-path-exists-p pin)
-                                (unless (equal hash (mevedel-session-control-fs-read-file pin))
-                                  (error "Memory root marker changed"))
-                                (setq row (append row (list :marked t))))))))
+                              (push (cons row pin) pins)))))
                     (error (setq row (append row (list :error (error-message-string err))))))
                   (when row (puthash id row rows))))
-              batch reads)))))
-     groups)
+              batch reads)
+             ;; Authenticate original authority before inspecting target markers.
+             (let (targets)
+               (dolist (pin pins) (push pin (alist-get (file-remote-p (cdr pin)) targets nil nil #'equal)))
+               (dolist (target targets)
+                 (let* ((pins (cdr target))
+                        (markers (when pins
+                                   (condition-case err
+                                       (mevedel-session-control-fs-run-program
+                                        (mapcar (lambda (pin) (list :op 'read :path (cdr pin) :optional t :max-bytes 65)) pins))
+                                     (error (mapcar (lambda (pin) (list :status 'failed :path (cdr pin)
+                                                                      :diagnostic (error-message-string err))) pins))))))
+               (cl-mapc (lambda (pin read)
+                          (condition-case err
+                              (unless (eq (plist-get read :status) 'absent)
+                                (unless (equal (plist-get (car pin) :hash) (mevedel-session-control-fs-program-value read))
+                                  (error "Memory root marker changed"))
+                                (setf (plist-get (car pin) :marked) t))
+                            (error (setf (plist-get (car pin) :error) (error-message-string err))))
+                          (puthash (plist-get (car pin) :id) (car pin) rows)) pins markers))))))))
+       groups))
     (delq nil (mapcar (lambda (id) (gethash id rows)) ids))))
 
 (defun mevedel-memory-write-recovery-candidates (workspace)

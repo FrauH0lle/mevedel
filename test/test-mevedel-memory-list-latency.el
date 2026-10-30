@@ -10,15 +10,17 @@
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'memory-history-fixtures
          (file-name-concat
-          (file-name-directory (or buffer-file-name load-file-name)) "memory-history-fixtures"))
+          (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "memory-history-fixtures"))
 (require 'mevedel-memory-list)
 (require 'mevedel-memory-library)
 (require 'mevedel-memory-store)
+(require 'mevedel-memory-write)
 (require 'mevedel-journal-worker)
+(require 'mevedel-session-control-fs)
 (require 'mevedel-view)
 (require 'mevedel-memory-list-test-support
          (file-name-concat
-          (file-name-directory (or buffer-file-name load-file-name)) "mevedel-memory-list-test-support"))
+          (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "mevedel-memory-list-test-support"))
 
 (mevedel-deftest mevedel-memory-list-latency
     (:vars* ((root (make-temp-file "mevedel-cockpit-latency-" t))
@@ -99,6 +101,81 @@
                            :timer-period .01 :gc-cons-threshold gc-cons-threshold
                            :gc-cons-percentage gc-cons-percentage :passes batches :notes (* batches items)
                            :bytes-per-note 8192))))))
+
+(mevedel-deftest mevedel-memory-list-scan-batches
+    (:vars* ((root (make-temp-file "mevedel-scan-batches-" t))
+             (workspace (mevedel-workspace--create :root root :type 'project))
+             (mevedel-memory-dirs nil)
+             (mevedel-journal-cleanup--inhibit-scheduling t))
+     :after-each ((delete-directory root t)))
+  (progn (mevedel-workspace-identity-ensure root) ,test)
+  (test)
+  :doc "control programs grow by pass and bounded batches, not by decision row"
+  (let ((run (symbol-function 'mevedel-session-control-fs--run-program)) samples)
+    (dolist (items '(2 8))
+      (mevedel-test-memory-history-create workspace 3 items 64)
+      (let ((calls 0))
+        (cl-letf (((symbol-function 'mevedel-session-control-fs--run-program)
+                   (lambda (&rest args) (cl-incf calls) (apply run args))))
+          (let ((rows (mevedel-memory-list--collect (mevedel-cockpit-workspace-context workspace))))
+            (should (= (if (= items 2) 6 30) (length rows)))
+            (should (cl-every (lambda (row) (eq 'applied (plist-get row :status))) rows))))
+        (push calls samples)))
+    ;; The second scan adds three passes with eight rows each.  Row-at-a-time
+    ;; IO exceeds this budget even before accounting for the original passes.
+    (should (< (- (car samples) (cadr samples)) 45)))
+  :doc "invalid local bundles remain unavailable in the actual child reader"
+  (let* ((bundles (mevedel-test-memory-history-create workspace 2 1 64))
+         (pass (plist-get (plist-get (car bundles) :prepared) :id))
+         (request (file-name-concat root "request.el"))
+         (reply (file-name-concat root "reply.el")))
+    (write-region "invalid" nil (file-name-concat (mevedel-memory-store--directory workspace pass) "accepted.el") nil 'silent)
+    (mevedel-journal-worker--write request (list :root root :client (mevedel-workspace-identity-client) :roots nil))
+    (mevedel-memory-list--run request reply)
+    (let* ((result (mevedel-journal-worker--read reply)) (rows (plist-get result :rows)))
+      (should-not (plist-get result :native))
+      (should-not (plist-get result :error))
+      (should (= 1 (seq-count (lambda (row) (eq 'applied (plist-get row :status))) rows)))
+      (should (= 2 (seq-count (lambda (row) (eq 'unavailable (plist-get row :status))) rows)))))
+  :doc "retirement after proof authentication cannot leave an applied row"
+  (progn
+    (mevedel-test-memory-history-create workspace 1 2 64)
+    (let ((run (symbol-function 'mevedel-session-control-fs-run-program)) raced)
+    (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+               (lambda (operations &rest args)
+                 (when (eq (plist-get (car operations) :op) 'absent)
+                   (setq raced t)
+                   (make-directory (file-name-directory (plist-get (car operations) :path)) t)
+                   (write-region "retired" nil (plist-get (car operations) :path) nil 'silent))
+                 (apply run operations args))))
+      (let ((rows (mevedel-memory-list--collect (mevedel-cockpit-workspace-context workspace))))
+        (should raced)
+        (should (= 3 (length rows)))
+        (should (cl-every (lambda (row) (eq 'unavailable (plist-get row :status))) rows))))))
+  :doc "a corrupt decision does not contaminate a healthy pass in the same batch"
+  (progn
+    (mevedel-test-memory-history-create workspace 2 1 64)
+    (write-region "invalid" nil (car (mevedel-session-control-fs-list-directory
+                                    (mevedel-memory-decision--directory workspace) mevedel-memory-write-intent-file-regexp)) nil 'silent)
+  (let ((rows (mevedel-memory-list--collect (mevedel-cockpit-workspace-context workspace))))
+    (should (= 1 (seq-count (lambda (row) (eq 'applied (plist-get row :status))) rows)))
+    (should (seq-some (lambda (row) (eq 'unavailable (plist-get row :status))) rows))))
+  :doc "a write disappearing after grouping does not abort independent passes"
+  (progn
+    (mevedel-test-memory-history-create workspace 2 1 64)
+    (let ((group (symbol-function 'mevedel-memory-write--groups)) removed)
+    (cl-letf (((symbol-function 'mevedel-memory-write--groups)
+               (lambda (&rest args)
+                 (let ((groups (apply group args)))
+                   (maphash (lambda (pass ids)
+                              (when (and pass (not removed))
+                                (setq removed t)
+                                (delete-file (file-name-concat (mevedel-memory-write--directory workspace)
+                                                               (concat (car ids) ".el"))))) groups)
+                   groups))))
+      (let ((rows (mevedel-memory-list--collect (mevedel-cockpit-workspace-context workspace))))
+        (should removed)
+        (should (= 1 (seq-count (lambda (row) (eq 'applied (plist-get row :status))) rows))))))))
 
 (mevedel-deftest mevedel-memory-list--received
     (:vars* ((root (make-temp-file "mevedel-cockpit-race-" t))
