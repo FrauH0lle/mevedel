@@ -19,14 +19,27 @@
           "helpers"))
 
 (defun mevedel-profile-hint-test--bash (command &rest args)
-  "Run registered Bash COMMAND with ARGS and return its settled outcome."
-  (let (result)
-    (mevedel-pipeline-run-tool-outcome
-     (mevedel-tool-ensure "Bash") (lambda (value) (setq result value))
-     (append (list :command command :description "Check compound profile diagnostic") args))
-    (with-timeout (15 (ert-fail "Confined Bash did not settle"))
-      (while (null result) (accept-process-output nil 0.02)))
-    result))
+  "Run registered Bash COMMAND with ARGS and return its settled outcome.
+Unless ARGS request a yield, a command still running at Bash's default yield
+\(a loaded machine) is polled to completion, joining its output."
+  (let ((run (lambda (tool tool-args)
+               (let (result)
+                 (mevedel-pipeline-run-tool-outcome
+                  (mevedel-tool-ensure tool) (lambda (value) (setq result value)) tool-args)
+                 (with-timeout (60 (ert-fail (format "Confined %s did not settle" tool)))
+                   (while (null result) (accept-process-output nil 0.02)))
+                 result))))
+    (let ((result (funcall run "Bash" (append (list :command command
+                                                    :description "Check compound profile diagnostic")
+                                              args))))
+      (unless (plist-member args :yield_time_ms)
+        (while (eq 'running (plist-get (plist-get result :render-data) :state))
+          (let ((next (funcall run "WriteStdin"
+                               (list :execution_id (plist-get (plist-get result :render-data) :execution-id)
+                                     :yield_time_ms 30000))))
+            (setq result (plist-put next :result (concat (plist-get result :result) "\n"
+                                                         (plist-get next :result)))))))
+      result)))
 
 (mevedel-deftest mevedel-tool-exec--bash/profile-hint
   (:quiet t :doc "confined segment-profile misses are diagnostic only, including after yield")
@@ -91,7 +104,7 @@
               (mevedel-pipeline-run-tool-outcome
                (mevedel-tool-ensure "WriteStdin") (lambda (value) (setq settled value))
                (list :execution_id id :yield_time_ms 5000))
-              (with-timeout (15 (ert-fail "Profile-hint poll did not settle"))
+              (with-timeout (60 (ert-fail "Profile-hint poll did not settle"))
                 (while (null settled) (accept-process-output nil 0.02)))
               (should (eq 'error (plist-get settled :status)))
               (should (string-search "profile not attached" (plist-get settled :result)))
