@@ -983,6 +983,17 @@ return. An empty table also shows a static loading notice while its observation
 is pending, rather than looking like a completed empty result. Completed empty
 views and failed scans show distinct notices; these are not selectable rows or
 decision targets. Switching views reuses snapshots rather than rescanning history.
+Reopening Candidates or History can also reuse unchanged terminal rows (applied,
+rejected, reversed and completed) from this Emacs process. The display child
+compares pinned recursive metadata for workspace state, public journal and
+original write-marker parents: membership, type, device, inode, size, mtime,
+ctime, mode and owner. Symlinks, failed or unrunnable checks, changed metadata,
+or a different workspace root, workspace identity, client or configured memory
+roots select a full scan. Non-terminal passes are always authenticated again,
+including their terminal siblings. Newly discovered historical marker locations
+need a covered scan before they can seed reuse; changes during collection also
+withhold reuse. No reuse state is persisted or shared between clients. Metadata
+equality is only a display hint, not content authentication or an atomic snapshot.
 Memories inventories configured topics independently. `g`, completed decisions
 and settled review updates request fresh observations. Current job, context,
 session, root, fresh workspace identity, client and configured roots fence replies.

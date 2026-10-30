@@ -447,6 +447,16 @@ before the operation ran."
    "        done\n"
    "      } | base64 -w0\n"
    "      ;;\n"
+   "    stat-tree)\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      test -e \"$leaf\" || exit 77\n"
+   "      test -d \"$leaf\" || exit 68\n"
+   "      exec 8<\"$leaf\" || exit 70\n"
+   "      cd -P -e -- /proc/self/fd/8 || exit 70\n"
+   "      test \"$PWD\" = \"${parent%/}/$leaf\" || exit 70\n"
+   "      export LC_ALL=C\n"
+   "      (set -o pipefail; find -P . -printf '%y\\0%p\\0%D\\0%i\\0%s\\0%T@\\0%C@\\0%m\\0%U\\0%G\\0' | base64 -w0) || exit 67\n"
+   "      ;;\n"
    "    tree-size)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      test -d \"$leaf\" || exit 68\n"
@@ -607,6 +617,7 @@ parent must not turn into a `Setting current directory' failure."
     (target-time . "clock")
     (observation-time . "observation-clock")
     (list-directory . "list")
+    (stat-tree . "stat-tree")
     (verify-list . "verify-list")
     (tree-size . "tree-size")
     (file-hash . "hash")
@@ -627,7 +638,7 @@ parent must not turn into a `Setting current directory' failure."
   (pcase (plist-get op :op)
     ('read (decode-coding-string payload
                                  (or (plist-get op :coding) 'utf-8-unix)))
-    ('list-directory (split-string payload "\0" t))
+    ((or 'list-directory 'stat-tree) (split-string payload "\0" t))
     ('observation-time
      (unless (string-match-p "\\`[0-9]+\\.[0-9]+\\'" payload)
        (signal 'file-error (list "Target observation clock is unavailable" (plist-get op :path))))

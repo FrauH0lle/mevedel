@@ -33,6 +33,9 @@
 (defvar-local mevedel-memory-list--recovery-warning nil "Retired recovery watch limitation.")
 (defvar-local mevedel-memory-list--notice nil "Non-row table status overlay.")
 
+(defvar mevedel-memory-list--reuse (make-hash-table :test #'eq :weakness 'key)
+  "Last display replies by workspace, forgotten when this Emacs exits.")
+
 (defun mevedel-memory-list--update-notice (items &optional unavailable)
   "Show static table status for ITEMS, or UNAVAILABLE owner, without adding rows."
   (let ((text (cond
@@ -289,6 +292,7 @@ token stops it; a changed root or memory configuration restarts it."
                                          (plist-get reply :rows)))
                     (error "Invalid memory display observation"))
                   (setq mevedel-memory-list--snapshot (mevedel-memory-library-copy reply))
+                  (puthash workspace mevedel-memory-list--snapshot mevedel-memory-list--reuse)
                   (setf (mevedel-workspace-memory-observation workspace)
                         (mevedel-memory-library-copy (plist-get reply :observation))))
               (error (setq mevedel-memory-list--error (error-message-string err))))
@@ -301,6 +305,79 @@ token stops it; a changed root or memory configuration restarts it."
               ;; The owner check intentionally prevents the ordinary refresh.
               ;; Clear old rows and update the error header without resurrecting it.
               (mevedel-memory-list--unavailable mevedel-memory-list--error))))))))
+
+(defun mevedel-memory-list--fingerprint (workspace markers)
+  "Return WORKSPACE history and MARKERS' metadata hashes, or nil on uncertainty.
+This is a display hint, not content authentication or an atomic snapshot."
+  (condition-case nil
+      (let* ((journal (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
+             (directories (delete-dups
+                           (append (list (directory-file-name
+                                          (file-name-directory (mevedel-journal-store-state-directory journal))) journal) markers)))
+             (results (mevedel-session-control-fs-run-program
+                       (mapcar (lambda (path)
+                                 (when (file-remote-p path) (error "Remote history metadata"))
+                                 (list :op 'stat-tree :path path :optional t)) directories)))
+             manifest)
+        (unless (= (length results) (length directories)) (error "Incomplete history metadata"))
+        (dolist (result results)
+          (let ((path (plist-get result :path)) (fields (plist-get result :value)) entries)
+            (if (eq (plist-get result :status) 'absent)
+                (push (cons path 'absent) manifest)
+              (unless (and (eq (plist-get result :status) 'ok) fields (zerop (% (length fields) 10)))
+                (error "Unavailable history metadata"))
+              (while fields
+                (let ((entry (cl-loop repeat 10 collect (pop fields))))
+                  (unless (member (car entry) '("f" "d")) (error "Unsafe history metadata"))
+                  (push entry entries)))
+              (push (cons path (secure-hash 'sha256
+                                           (prin1-to-string (sort entries (lambda (a b) (string< (cadr a) (cadr b))))))) manifest))))
+        (nreverse manifest))
+    (error nil)))
+
+(defun mevedel-memory-list--scan (workspace options)
+  "Return display rows for WORKSPACE, reusing unchanged terminal OPTIONS rows."
+  (let* ((previous (plist-get options :previous))
+         (key (list (mevedel-workspace-root workspace)
+                    (mevedel-workspace-identity-read (mevedel-workspace-root workspace))
+                    (plist-get options :client) (plist-get options :roots)))
+         (configured (mapcar (lambda (root)
+                               (file-name-concat (mevedel-memory-write-control-directory (plist-get root :dir)) "pending"))
+                             (plist-get options :roots)))
+         (markers (sort (delete-dups (append configured (plist-get previous :markers))) #'string<))
+         (fingerprint (mevedel-memory-list--fingerprint workspace markers))
+         (same (and fingerprint (equal key (plist-get previous :key))
+                    (equal fingerprint (plist-get previous :fingerprint))))
+         (old (and same (plist-get previous :rows)))
+         (changing (seq-remove (lambda (row) (memq (plist-get row :status) '(applied rejected reversed completed))) old))
+         (passes (mapcar (lambda (row) (plist-get row :pass)) changing))
+         (reused (and same (not (memq nil passes))
+                      (seq-remove (lambda (row) (member (plist-get row :pass) passes)) old)))
+         (rows (if (and same (not changing)) old
+                 (mevedel-memory-list--collect (mevedel-cockpit-workspace-context workspace) t reused))))
+    (when (and same (not changing))
+      (setf (mevedel-workspace-memory-observation workspace)
+            (plist-put (copy-sequence (plist-get previous :observation)) :at (float-time))))
+    ;; Write inspection records only authenticated original marker locations.
+    ;; Keep prior locations when some passes were skipped in this scan.
+    (unless same (setq markers (copy-sequence configured)))
+    (when-let* ((inspected (gethash workspace mevedel-memory-write--inspected)))
+      (maphash (lambda (_ pin)
+                 (when (stringp pin) (cl-pushnew (directory-file-name (file-name-directory pin)) markers :test #'equal)))
+               inspected))
+    (setq markers (sort markers #'string<))
+    (let ((after (mevedel-memory-list--fingerprint workspace markers)))
+      (list :rows rows :key key :markers markers
+            ;; Never label rows with newer metadata than the scan observed.
+            :fingerprint (and fingerprint after
+                              (cl-every (lambda (path)
+                                          (seq-some (lambda (entry)
+                                                      (or (equal path (car entry))
+                                                          (string-prefix-p (file-name-as-directory (car entry)) path)))
+                                                    fingerprint)) markers)
+                              (cl-every (lambda (entry) (equal entry (assoc (car entry) after))) fingerprint)
+                              after)
+            :observation (mevedel-workspace-memory-observation workspace)))))
 
 (defun mevedel-memory-list--run (request reply)
   "Read cockpit REQUEST in a batch child and write display-only REPLY."
@@ -315,8 +392,7 @@ token stops it; a changed root or memory configuration restarts it."
                        (catch 'mevedel-memory-list-native
                          (unless (mevedel-memory-decision--worker-local-p workspace t)
                            (throw 'mevedel-memory-list-native '(:native t)))
-                         (list :rows (mevedel-memory-list--collect (mevedel-cockpit-workspace-context workspace) t)
-                               :observation (mevedel-workspace-memory-observation workspace))))
+                         (mevedel-memory-list--scan workspace options)))
             (error (list :error (error-message-string err))))))
     (mevedel-journal-worker--write reply result)))
 
@@ -341,7 +417,8 @@ token stops it; a changed root or memory configuration restarts it."
                    (reply (file-name-concat directory "reply.el")))
               (mevedel-journal-worker--write request
                                              (list :root (plist-get job :root) :client (plist-get job :client)
-                                                   :roots (plist-get job :roots)))
+                                                   :roots (plist-get job :roots)
+                                                   :previous (gethash workspace mevedel-memory-list--reuse)))
               (let ((inhibit-quit t))
                 (plist-put job :worker
                            (make-process
@@ -461,11 +538,12 @@ Count pending, recovery-required and unavailable rows, as Candidates shows."
               (user-error "%s" (or (plist-get decision :reason) "Memory deletion was not applied"))))
         (mevedel-memory-list-refresh)))))
 
-(defun mevedel-memory-list--collect (context &optional local-only)
+(defun mevedel-memory-list--collect (context &optional local-only reused)
   "Return detached persisted proposal rows for CONTEXT without writing.
 LOCAL-ONLY throws `mevedel-memory-list-native' with a native reply before
 accessing any authenticated remote target.  Invalid local evidence stays
-unavailable; it cannot supply target paths or authorize recovery."
+unavailable; it cannot supply target paths or authorize recovery.
+REUSED contains display-only rows of unchanged, entirely terminal passes."
   (let* ((workspace (mevedel-cockpit-context-workspace context))
          (root (mevedel-workspace-root workspace))
          (state (mevedel-journal-store-state-directory (mevedel-journal-store-directory root)))
@@ -475,14 +553,19 @@ unavailable; it cannot supply target paths or authorize recovery."
           (cons root (mapcar #'file-name-nondirectory
                             (mevedel-session-control-fs-list-directory
                              (file-name-concat state "retired-passes") mevedel-journal-store-id-regexp))))
-         (entries (mevedel-journal-store-entries root))
+         (skipped (mapcar (lambda (row) (plist-get row :pass)) reused))
+         (entries (seq-remove (lambda (entry) (member (plist-get entry :pass-id) skipped))
+                              (mevedel-journal-store-entries root)))
          (groups (mevedel-memory-write--groups
                   workspace (mapcar (lambda (path) (file-name-sans-extension (file-name-nondirectory path)))
                                     (mevedel-session-control-fs-list-directory
                                      (mevedel-memory-write--directory workspace) mevedel-memory-write-intent-file-regexp))))
          (records (make-hash-table :test #'equal))
          (coordinators (make-hash-table :test #'equal))
-         (passes (make-hash-table :test #'equal)) last-pass seen rows)
+         (passes (make-hash-table :test #'equal)) last-pass seen (rows reused))
+    (dolist (row reused)
+      (when (string> (or (plist-get row :created) "") (or last-pass ""))
+        (setq last-pass (plist-get row :created))))
     (let ((paths (delete-dups
                   (cl-loop for entry in entries when (eq (plist-get entry :kind) 'decision)
                            collect (file-name-concat (mevedel-memory-decision--directory workspace)
@@ -501,7 +584,8 @@ unavailable; it cannot supply target paths or authorize recovery."
                (puthash path (condition-case failure (mevedel-memory-decision--record workspace path)
                                (error (error-message-string failure))) records)))))))
     ;; Accepted private state remains inspectable if public publication failed.
-    (let* ((directories (mevedel-session-control-fs-list-directory (file-name-concat state "passes") mevedel-journal-store-id-regexp))
+    (let* ((directories (seq-remove (lambda (path) (member (file-name-nondirectory path) skipped))
+                                    (mevedel-session-control-fs-list-directory (file-name-concat state "passes") mevedel-journal-store-id-regexp)))
            (exists (mevedel-session-control-fs-paths-exist
                     (mapcar (lambda (directory) (file-name-concat directory "accepted.el")) directories))))
       (cl-mapc (lambda (directory present)
@@ -509,7 +593,8 @@ unavailable; it cannot supply target paths or authorize recovery."
                    (push (list :kind 'consolidation :pass-id (file-name-nondirectory (directory-file-name directory))) entries)))
                directories exists))
     (maphash (lambda (pass _ids)
-               (when pass (push (list :kind 'consolidation :pass-id pass) entries))) groups)
+               (when (and pass (not (member pass skipped)))
+                 (push (list :kind 'consolidation :pass-id pass) entries))) groups)
     (dolist (entry entries)
       (when (and (eq (plist-get entry :kind) 'consolidation)
                  (not (mevedel-journal-cleanup-pass-retired-p (mevedel-workspace-root workspace) (plist-get entry :pass-id)))
