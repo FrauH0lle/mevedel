@@ -251,8 +251,11 @@ disposals (see [Shared working-note lifecycle](#shared-working-note-lifecycle)).
 
 `mevedel-memory-scope-capture` supplies the parser's root and file allowlist.
 It reads complete topic, index, and root instruction files without changing
-them: at most 32 KiB per file and 96 KiB total, with a 256-entry inventory per
-memory root. A review admits at most sixteen configured memory roots; exceeding
+them: at most 32 KiB per file and 256 KiB total, with a 256-entry inventory per
+memory root. Topics are taken in name order starting at an offset that changes
+each UTC day, so when memory exceeds the total, a different subset is omitted
+each day and curation still reaches every topic over time. A review admits at
+most sixteen configured memory roots; exceeding
 that count refuses capture. Omitted files remain known existing names; an incomplete inventory
 cannot authorize creation. Symlinked files and symlinked parents cannot supply
 before-state or new proposal targets. The captured index is reserved for the

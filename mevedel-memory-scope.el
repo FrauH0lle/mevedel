@@ -31,8 +31,18 @@
 (defconst mevedel-memory-scope--max-file-bytes (* 32 1024)
   "Maximum complete bytes admitted from any one memory or instruction file.")
 
-(defconst mevedel-memory-scope--max-bytes (* 96 1024)
-  "Maximum total before-state bytes captured for one consolidation pass.")
+(defconst mevedel-memory-scope--max-bytes (* 256 1024)
+  "Maximum total before-state bytes captured for one consolidation pass.
+Topics beyond it are omitted; `mevedel-memory-scope--rotate' varies which
+ones from day to day so curation can still reach every topic.")
+
+(defun mevedel-memory-scope--rotate (names &optional day)
+  "Return NAMES rotated by DAY, the current UTC day number by default.
+Each daily review then starts its byte-bounded capture at a different topic."
+  (if (cdr names)
+      (let ((offset (mod (or day (floor (float-time) 86400)) (length names))))
+        (append (nthcdr offset names) (seq-take names offset)))
+    names))
 
 (defun mevedel-memory-scope--inventory (directory &optional attributes)
   "Return DIRECTORY's bounded names and whether their observation is complete.
@@ -142,10 +152,13 @@ The request owner must account for these snapshots in context admission."
               (let* ((inventory (and (eq kind 'memory) (mevedel-memory-scope--inventory directory)))
                      (candidates
                       (if (eq kind 'memory)
-                          (cons "MEMORY.md" (cl-remove-if-not
-                                             (lambda (name) (and (string-suffix-p ".md" name)
-                                                                 (not (equal name "MEMORY.md"))))
-                                             (plist-get inventory :existing)))
+                          (cons "MEMORY.md" (mevedel-memory-scope--rotate
+                                             (sort (copy-sequence
+                                                    (cl-remove-if-not
+                                                    (lambda (name) (and (string-suffix-p ".md" name)
+                                                                        (not (equal name "MEMORY.md"))))
+                                                     (plist-get inventory :existing)))
+                                                   #'string<)))
                         (delete-dups
                          (append '("AGENTS.md" "AGENTS.local.md")
                                  (mapcar (lambda (path) (file-relative-name path directory))
