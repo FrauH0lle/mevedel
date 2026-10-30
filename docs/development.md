@@ -541,12 +541,8 @@ follow-up budget, not a gate that fails an otherwise valid measurement.
 
 The JSON file retains raw samples, completion results, source/dependency hashes,
 and configuration. Existing output files are refused. Incompatible backups fail
-validation rather than silently changing runtime behavior. An explicitly supplied
-external `--legacy-shim /path/to/diagnostic-shim.el` may replay a legacy backup;
-it is loaded only in isolated benchmark processes and the report labels that
-scenario **legacy replay (validation shim)**. Its timings do not establish
-current-format correctness. The shim is neither bundled nor added to runtime
-validation. Failed completions are labeled unmeasured, retain their raw results,
+validation rather than silently changing runtime behavior. Failed completions
+are labeled unmeasured, retain their raw results,
 and return a nonzero exit status. Measurements are maintainer diagnostics, not
 part of the ERT suite.
 

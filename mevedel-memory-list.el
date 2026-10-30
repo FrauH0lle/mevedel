@@ -36,6 +36,10 @@
 (defvar mevedel-memory-list--reuse (make-hash-table :test #'eq :weakness 'key)
   "Last display replies by workspace, forgotten when this Emacs exits.")
 
+(defun mevedel-memory-list--terminal-p (row)
+  "Return non-nil when display ROW has a terminal status that cannot change."
+  (memq (plist-get row :status) '(applied rejected reversed completed)))
+
 (defun mevedel-memory-list--update-notice (items &optional unavailable)
   "Show static table status for ITEMS, or UNAVAILABLE owner, without adding rows."
   (let ((text (cond
@@ -285,8 +289,9 @@ token stops it; a changed root or memory configuration restarts it."
                                (proper-list-p (plist-get reply :rows))
                                (cl-every (lambda (row)
                                            (and (plist-get row :id)
-                                                (memq (plist-get row :status)
-                                                      '(pending stale unavailable recovery-required applied rejected reversed completed))
+                                                (or (memq (plist-get row :status)
+                                                          '(pending stale unavailable recovery-required))
+                                                    (mevedel-memory-list--terminal-p row))
                                                 (not (cl-some (lambda (key) (plist-member row key))
                                                               '(:accepted :decision :write)))))
                                          (plist-get reply :rows)))
@@ -340,7 +345,11 @@ This is a display hint, not content authentication or an atomic snapshot."
   (let* ((previous (plist-get options :previous))
          (key (list (mevedel-workspace-root workspace)
                     (mevedel-workspace-identity-read (mevedel-workspace-root workspace))
-                    (plist-get options :client) (plist-get options :roots)))
+                    (plist-get options :client) (plist-get options :roots)
+                    ;; Root authority compares physical roots, so a replaced root
+                    ;; must not reuse rows its fresh check would make unavailable.
+                    (mapcar (lambda (root) (file-truename (expand-file-name (plist-get root :dir))))
+                            (plist-get options :roots))))
          (configured (mapcar (lambda (root)
                                (file-name-concat (mevedel-memory-write-control-directory (plist-get root :dir)) "pending"))
                              (plist-get options :roots)))
@@ -349,7 +358,7 @@ This is a display hint, not content authentication or an atomic snapshot."
          (same (and fingerprint (equal key (plist-get previous :key))
                     (equal fingerprint (plist-get previous :fingerprint))))
          (old (and same (plist-get previous :rows)))
-         (changing (seq-remove (lambda (row) (memq (plist-get row :status) '(applied rejected reversed completed))) old))
+         (changing (seq-remove #'mevedel-memory-list--terminal-p old))
          (passes (mapcar (lambda (row) (plist-get row :pass)) changing))
          (reused (and same (not (memq nil passes))
                       (seq-remove (lambda (row) (member (plist-get row :pass) passes)) old)))
@@ -366,18 +375,21 @@ This is a display hint, not content authentication or an atomic snapshot."
                  (when (stringp pin) (cl-pushnew (directory-file-name (file-name-directory pin)) markers :test #'equal)))
                inspected))
     (setq markers (sort markers #'string<))
-    (let ((after (mevedel-memory-list--fingerprint workspace markers)))
-      (list :rows rows :key key :markers markers
-            ;; Never label rows with newer metadata than the scan observed.
-            :fingerprint (and fingerprint after
-                              (cl-every (lambda (path)
-                                          (seq-some (lambda (entry)
-                                                      (or (equal path (car entry))
-                                                          (string-prefix-p (file-name-as-directory (car entry)) path)))
-                                                    fingerprint)) markers)
-                              (cl-every (lambda (entry) (equal entry (assoc (car entry) after))) fingerprint)
-                              after)
-            :observation (mevedel-workspace-memory-observation workspace)))))
+    (let* ((after (mevedel-memory-list--fingerprint workspace markers))
+           ;; Never label rows with newer metadata than the scan observed.
+           (stable (and fingerprint after
+                        (cl-every (lambda (path)
+                                    (seq-some (lambda (entry)
+                                                (or (equal path (car entry))
+                                                    (string-prefix-p (file-name-as-directory (car entry)) path)))
+                                              fingerprint)) markers)
+                        (cl-every (lambda (entry) (equal entry (assoc (car entry) after))) fingerprint)
+                        after)))
+      (if (and same (not stable))
+          ;; Reused rows may be stale: this open performs the normal full scan.
+          (mevedel-memory-list--scan workspace (append '(:previous nil) options))
+        (list :rows rows :key key :markers markers :fingerprint stable
+              :observation (mevedel-workspace-memory-observation workspace))))))
 
 (defun mevedel-memory-list--run (request reply)
   "Read cockpit REQUEST in a batch child and write display-only REPLY."
@@ -506,7 +518,7 @@ Count pending, recovery-required and unavailable rows, as Candidates shows."
                 (and (eq mevedel-memory-list--view 'memories) counts))
       (mevedel-memory-list--start context)))
   (let* ((rows (plist-get mevedel-memory-list--snapshot :rows))
-         (pending (seq-remove (lambda (row) (memq (plist-get row :status) '(applied rejected reversed completed))) rows)))
+         (pending (seq-remove #'mevedel-memory-list--terminal-p rows)))
     (let ((items
            (pcase mevedel-memory-list--view
              ('candidates pending)
@@ -514,7 +526,7 @@ Count pending, recovery-required and unavailable rows, as Candidates shows."
               (when (eq mevedel-memory-list--memories-state 'stale)
                 (mevedel-memory-list--observe-memories context))
               mevedel-memory-list--memories)
-             ('history (seq-filter (lambda (row) (memq (plist-get row :status) '(applied rejected reversed completed))) rows)))))
+             ('history (seq-filter #'mevedel-memory-list--terminal-p rows)))))
       (mevedel-memory-list--update-notice items)
       (mevedel-memory-library-copy items))))
 

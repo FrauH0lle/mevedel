@@ -27,6 +27,13 @@
 (require 'mevedel-view)
 (require 'mevedel-system)
 
+(mevedel-deftest mevedel-memory-list--terminal-p
+    (:doc "decided and completed rows are terminal; undecided and unreadable rows are not")
+  (should (equal ,expected (and (mevedel-memory-list--terminal-p (list :status ,status)) t)))
+  (status expected)
+  'applied t 'rejected t 'reversed t 'completed t
+  'pending nil 'stale nil 'unavailable nil 'recovery-required nil)
+
 (mevedel-deftest mevedel-memory-list--details
     (:vars* ((root (file-name-as-directory (file-truename (make-temp-file "memory-note-report-" t))))
              (workspace (mevedel-workspace--create :root root))

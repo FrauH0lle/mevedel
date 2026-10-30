@@ -37,7 +37,6 @@ LISP = r''';;; -*- lexical-binding: t -*-
       mevedel-memory-consolidation-mode 'auto
       mevedel-memory-history-max-age-days 14
       mevedel-journal-max-age-days 14)
-(when (getenv "BENCH_SHIM") (load (getenv "BENCH_SHIM") nil t))
 (let* ((root (file-name-as-directory (getenv "BENCH_WORKSPACE")))
        (workspace (mevedel-workspace--create :root root :id root :type 'project))
        (step (getenv "BENCH_STEP"))
@@ -222,15 +221,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path, help="Source workspace (read-only)")
     parser.add_argument("--backup", type=Path, help="Backup containing journal/ and state-journal/")
-    parser.add_argument("--legacy-shim", type=Path, help="External diagnostic shim; labels this a legacy replay")
     parser.add_argument("--synthetic", action="store_true", help="Add valid 80-pass/320-proposal history")
     parser.add_argument("--self-test", action="store_true", help="Check a known 120 ms editor block")
     parser.add_argument("--output", type=Path, help="New JSON result file")
     args = parser.parse_args()
     if not args.self_test and (not args.workspace or not args.output):
         parser.error("--workspace and --output are required")
-    if args.legacy_shim and not args.backup:
-        parser.error("--legacy-shim requires --backup")
     if args.synthetic and args.backup:
         parser.error("--synthetic and --backup are separate scenarios")
     if args.output and args.output.exists():
@@ -283,16 +279,6 @@ def main():
             else:
                 copy_state(source, baseline, args.backup.resolve() if args.backup else None)
         paths = ["-L", str(build), "-L", str(snapshot / "test")] + dependencies
-        if args.legacy_shim:
-            shim = temporary / "legacy-shim.el"
-            shutil.copy2(args.legacy_shim, shim)
-            environment["BENCH_SHIM"] = str(shim)
-            wrapper = temporary / "legacy-loader"
-            wrapper.mkdir()
-            (wrapper / "mevedel-journal-worker.el").write_text(
-                f'(load {json.dumps(str(build / "mevedel-journal-worker.elc"))} nil t)\n'
-                f'(load {json.dumps(str(shim))} nil t)\n')
-            paths = ["-L", str(wrapper)] + paths
 
         def measure(step, sample):
             run = temporary / f"{step}-{sample}"
@@ -360,11 +346,8 @@ def main():
                       f"value: {row[metric + '_median']:.1f}; unit: ms; "
                       f"statistic: median; samples: {len(rows)}")
             summary.append(row)
-        report = {"configuration": "legacy replay (validation shim)" if args.legacy_shim else
-                  "valid synthetic history" if args.synthetic else "current-state copy",
+        report = {"configuration": "valid synthetic history" if args.synthetic else "current-state copy",
                   "workspace": str(source), "backup": str(args.backup),
-                  "legacy_shim_sha256": hashlib.sha256(args.legacy_shim.read_bytes()).hexdigest()
-                  if args.legacy_shim else None,
                   "retention_days": 14, "cleanup_forced": True,
                   "baseline_inventory": inventory, "synthetic_note_bytes": 16384 if args.synthetic else None,
                   "measurement_lisp_sha256": hashlib.sha256(LISP.encode()).hexdigest(),

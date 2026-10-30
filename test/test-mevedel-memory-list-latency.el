@@ -242,7 +242,7 @@
         (should (equal (plist-get (car first) :fingerprint) (plist-get (car second) :fingerprint)))
         (should (eq 'stale (plist-get row :check)))
         (should (= 4 (seq-count (lambda (row) (eq 'applied (plist-get row :status))) (plist-get (car second) :rows)))))))
-  :doc "history changing during reuse cannot seed another unchanged observation"
+  :doc "history changing during reuse falls back to a full scan on the same open"
   (let* ((first (scan))
          (run (symbol-function 'mevedel-session-control-fs--run-program))
          (pass (plist-get (car (plist-get (car first) :rows)) :pass))
@@ -257,9 +257,10 @@
                  (apply run operations args))))
       (setq second (scan (car first))))
     (should raced)
-    (should-not (plist-get (car second) :fingerprint))
+    (should (= 2 (length (plist-get (car second) :rows))))
+    (should-not (member pass (mapcar (lambda (row) (plist-get row :pass)) (plist-get (car second) :rows))))
     (let ((third (scan (car second))))
-      (should (= 2 (length (plist-get (car third) :rows))))))
+      (should (equal (plist-get (car second) :rows) (plist-get (car third) :rows)))))
   :doc "a new decision invalidates reuse and mixed passes have no duplicate rows"
   (let* ((accepted (car (mevedel-test-memory-history-create workspace 1 2 64 t)))
          (pass (plist-get (plist-get accepted :prepared) :id))
@@ -326,7 +327,7 @@
   :doc "configured roots, workspace identity and client identity invalidate unchanged metadata"
   (let* ((first (scan)) (previous (car first)))
     (should (plist-get previous :fingerprint))
-    (dolist (position '(0 1 2 3))
+    (dolist (position '(0 1 2 3 4))
       (let ((changed (mevedel-memory-library-copy previous)))
         (setf (nth position (plist-get changed :key)) 'other-context)
         (let ((second (scan changed)))
@@ -337,6 +338,21 @@
       (let ((second (scan previous)))
         (should-not (equal (plist-get previous :key) (plist-get (car second) :key)))
         (should (>= (cdr second) (cdr first))))))
+  :doc "a configured root replaced by a symlink to another directory forces a full scan"
+  (let* ((memory (file-name-concat root "memory"))
+         (replacement (file-name-concat root "replacement-memory")))
+    (topic)
+    ;; Without write markers the replacement leaves the history metadata unchanged.
+    (delete-directory (file-name-concat memory ".mevedel/state/memory-write/root/pending"))
+    (let* ((mevedel-memory-dirs (list memory))
+           (baseline (scan (car (scan)))))
+      (should (plist-get (car baseline) :fingerprint))
+      (rename-file memory (file-name-concat root "original-memory"))
+      (make-directory replacement)
+      (make-symbolic-link replacement memory)
+      (let ((second (scan (car baseline))))
+        (should (memq 'unavailable (mapcar (lambda (row) (plist-get row :status)) (plist-get (car second) :rows))))
+        (should (equal (plist-get (car second) :rows) (plist-get (car (scan)) :rows))))))
   :doc "same-size rewrites with restored mtime still invalidate the history observation"
   (let* ((first (scan)) (warm (scan (car first)))
          (pass (plist-get (car (plist-get (car first) :rows)) :pass))
