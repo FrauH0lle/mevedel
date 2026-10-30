@@ -227,9 +227,34 @@ that execution level. Qualified and ordinary explicit denies remain final.
 matching Bash or batch-Eval allow rule. The profile records the additive child
 authority approved with that operation; it is not a workload classifier.
 Single-segment Bash approvals may use the recognized safe command pattern.
-Compound commands keep generalized operation rules for their segments but
-store the profile against the complete compound command, preventing one
-segment from inheriting another segment's capability.
+Compound commands keep generalized operation rules for their segments and
+remember the profile against the complete compound command. A later compound
+command also receives the union of its segments' direct profiles when every
+command segment that is not read-only is allowed by a direct rule. A segment no
+direct rule allows prevents that union, so it never inherits another segment's
+capability; `cd DIR && npx ...` receives the `npx` rule's profile, while
+`npx ... && rm -rf build` receives none.
+
+A Bash allow pattern's `*`, `?`, and trailing `:*` stand for ordinary
+arguments only. They never cover an unquoted `;`, `|`, `&` (other than
+redirections such as `2>&1`), newline, parenthesis, or a backtick or `$(`, even
+inside double quotes. `npx @emacs-eask/cli *` therefore matches
+`npx @emacs-eask/cli eval '(load "x")'` but not
+`npx @emacs-eask/cli test $(rm -rf build)`. Syntax written literally in a
+pattern still matches itself, so `make -j$(nproc) *` authorizes that form.
+This applies wherever an allow rule grants something: the Ask decision,
+execution profiles, and full-escalation rules. Deny and ask patterns keep
+matching any text, because over-matching there only restricts.
+
+Before Bash rules match, leading `NAME=value` assignments are removed from
+each command segment when `NAME` is a safe environment variable and the value
+is plain text. The built-in list covers locale, terminal, color and similar
+variables that cannot load code or choose another executable
+(`mevedel-permission-rules-builtin-safe-env-vars`); permission stores add
+names through `:safe-env-vars`. Classification uses the same stripped command,
+so `LANG=C cat file` is read-only. Other assignments, and values containing
+expansions, keep the command complex. Explicit denies, Plan, and protected-path
+checks still see the command as written.
 Filesystem entries are `(:path PATH :access read-or-write [:recursive t])`
 grants. `PATH` is absolute or home-relative with `~`/`~/`; the workspace
 permission file also accepts workspace-relative exact paths as described below.
@@ -347,7 +372,9 @@ to independent grants. Independent selections remain unchanged. The `g` extent
 selector preserves each path's remembering scope.
 The current invocation always receives the complete approved request.
 `.mevedel/permissions.el` stores a plist containing both `:rules` and
-`:resource-grants`. It lives with the project on its execution target and stores
+`:resource-grants`, and optionally `:safe-env-vars`, a list of environment
+variable names (see [Rule format](#rule-format)). It lives with the project on
+its execution target and stores
 target-native paths, so reopening the same workspace through an equivalent
 TRAMP alias reuses its authority. Ordinary absolute paths under the target's
 home directory are written abbreviated as `~/...` and expanded against the
@@ -363,7 +390,8 @@ to the session's execution target:
 | Local | `mevedel-user-dir/permissions.el` (default `~/.mevedel/permissions.el`) | `PROJECT/.mevedel/permissions.el` |
 | TRAMP | Target user's `~/.mevedel/permissions.el` | Target's `PROJECT/.mevedel/permissions.el` |
 
-Both stores contribute `:rules` and `:resource-grants`. Global and project
+Both stores contribute `:rules`, `:resource-grants`, and `:safe-env-vars`; the
+safe variable names of both stores are combined. Global and project
 rules share the persistent rule bucket and its ordinary matching precedence;
 explicit denies still win. Resource grants are additive, retaining their read
 or write access and exact or recursive extent. Paths in either store refer to
@@ -472,7 +500,9 @@ global and project stores. Invocation-only authority is consumed by the approved
 call and is not stored.
 
 The permissions cockpit shows `session`, `workspace`, and `global` entries,
-including their backing store in the details. Refresh reads current stores.
+including their backing store in the details. Each stored safe environment
+variable is a removable `safe-env` row; the built-in variables share one
+read-only `built-in` row. Refresh reads current stores.
 Revoking a global entry edits the target user's global file and affects every
 project using it; revoking a workspace entry edits only that project's file.
 Identical entries in different scopes remain separate and independently
@@ -1273,7 +1303,8 @@ an interactive decision, `full-auto`, or a deliberately authored direct-user
 pattern.
 
 A portable project-local store that authorizes the Eask CLI, network access,
-and writes within npm's cache directory is:
+and writes within npm's cache directory, also when a command starts with a
+`CHECK_BASE=...` assignment, is:
 
 ```elisp
 (:rules
@@ -1281,7 +1312,8 @@ and writes within npm's cache directory is:
    :network t
    :file-system ((:path "~/.npm" :access write :recursive t))
    :action allow))
- :resource-grants nil)
+ :resource-grants nil
+ :safe-env-vars ("CHECK_BASE"))
 ```
 
 For workspace-relative authority, the workspace store can instead contain:

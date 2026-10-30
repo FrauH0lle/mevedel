@@ -42,7 +42,7 @@ Unless ARGS request a yield, a command still running at Bash's default yield
       result)))
 
 (mevedel-deftest mevedel-tool-exec--bash/profile-hint
-  (:quiet t :doc "confined segment-profile misses are diagnostic only, including after yield")
+  (:quiet t :doc "an unallowed segment keeps segment profiles off the confined command")
   (progn
     (let ((availability (mevedel-sandbox-probe)))
       (unless (plist-get availability :available)
@@ -50,7 +50,7 @@ Unless ARGS request a yield, a command still running at Bash's default yield
     (let* ((root (make-temp-file "mevedel-profile-hint-" t))
            (session (mevedel-skills-test--make-session "profile-hint" root))
            (metadata (file-name-concat root ".git"))
-           (command "printf 'built\\n' | tail -1 && git add -- example.txt")
+           (command "touch built.txt && git add -- example.txt")
            (grant (list :path metadata :access 'write :recursive t))
            (rule (list "Bash" :pattern "git add *" :action 'allow
                        :file-system (list grant)))
@@ -79,6 +79,20 @@ Unless ARGS request a yield, a command still running at Bash's default yield
               (should (string-search "git add *" text))
               (should (string-search "separate Bash calls" text))
               (should-not (mevedel-session-permission-queue session)))
+            ;; The unallowed segment itself cannot write the profile path.
+            (let ((result (mevedel-profile-hint-test--bash
+                           "touch .git/probe && git add -- example.txt")))
+              (should (eq 'error (plist-get result :status)))
+              (should-not (file-exists-p (file-name-concat metadata "probe")))
+              (should-not (file-exists-p (file-name-concat metadata "index"))))
+            ;; Read-only segments need no rule, so the allowed segment's
+            ;; profile attaches to the whole confined command.
+            (let ((result (mevedel-profile-hint-test--bash
+                           "cat example.txt | tail -1 && git add -- example.txt")))
+              (should (eq 'success (plist-get result :status)))
+              (should (file-exists-p (file-name-concat metadata "index")))
+              (should-not (string-search "profile not attached" (plist-get result :result))))
+            (delete-file (file-name-concat metadata "index"))
             ;; No profile, success, and unrelated errors never advertise a miss.
             (setf (mevedel-session-permission-rules session) nil)
             (let ((result (mevedel-profile-hint-test--bash command)))

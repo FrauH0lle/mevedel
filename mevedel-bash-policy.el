@@ -51,6 +51,8 @@
 ;; `mevedel-permission-persistence'
 (declare-function mevedel-permission-persistence-load-rules
                   "mevedel-permission-persistence" (workspace))
+(declare-function mevedel-permission-persistence-load-safe-env-vars
+                  "mevedel-permission-persistence" (workspace))
 
 ;; `mevedel-permission-rules'
 (declare-function mevedel-permission-protected-path-policy
@@ -71,6 +73,9 @@
 (declare-function mevedel-permission-rules-resource-granted-p
                   "mevedel-permission-rules"
                   (path access grants &optional recursive))
+(declare-function mevedel-permission-rules-strip-safe-assignments
+                  "mevedel-permission-rules" (command names))
+(defvar mevedel-permission-rules-builtin-safe-env-vars)
 
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-mode-effective
@@ -701,15 +706,33 @@ When PATTERN-ONLY-P is non-nil, ignore generic fallback rules."
 (defun mevedel-bash-policy-explicit-deny-p
     (buckets command &optional analysis)
   "Return non-nil when an effective Bash deny covers COMMAND.
-Generic fallback denies are evaluated against the original command and its
-recognized top-level segments.  Harvested nested candidates use only pattern
-rules, so a generic fallback cannot defeat a specific allow for the containing
-command.  ANALYSIS is the normalized result for COMMAND when already known."
+Generic fallback denies are evaluated against the recognized top-level
+segments, and against the original command when it is a single segment.  A
+compound command as a whole, like harvested nested candidates, is checked
+only against pattern rules: allow wildcards never span a separator, so a
+generic fallback would otherwise deny every compound whose segments are each
+allowed.  ANALYSIS is the normalized result for COMMAND when already known."
   (let* ((analysis (or analysis (mevedel-bash-analysis-analyze command)))
-         (top-level (cons command (plist-get analysis :segments)))
+         (segments (plist-get analysis :segments))
+         (compound-p (cdr segments))
          (harvested (mevedel-bash-policy--bash-deny-candidates command analysis)))
-    (or (mevedel-bash-policy--bash-deny-match-p buckets top-level)
+    (or (mevedel-bash-policy--bash-deny-match-p
+         buckets (if compound-p segments (cons command segments)))
         (mevedel-bash-policy--bash-deny-match-p buckets harvested t))))
+
+(defun mevedel-bash-policy--context-session (permission-context)
+  "Return PERMISSION-CONTEXT's session, or the ambient one without a context."
+  (if permission-context
+      (plist-get permission-context :session)
+    (and (boundp 'mevedel--session) mevedel--session)))
+
+(defun mevedel-bash-policy--context-workspace (permission-context)
+  "Return PERMISSION-CONTEXT's workspace, or the ambient one without a context."
+  (let ((session (mevedel-bash-policy--context-session permission-context)))
+    (or (and session (mevedel-session-workspace session))
+        (if permission-context
+            (plist-get permission-context :workspace)
+          (and (boundp 'mevedel--workspace) mevedel--workspace)))))
 
 (defun mevedel-bash-policy-buckets (&optional permission-context)
   "Return Bash buckets for PERMISSION-CONTEXT, innermost-first.
@@ -720,17 +743,8 @@ permission check; without this, skill rules silently failed for
 the Bash tool path because Bash had its own flattened resolver."
   (if (plist-member permission-context :buckets)
       (plist-get permission-context :buckets)
-      (let* ((session (if permission-context
-                          (plist-get permission-context :session)
-                        (and (boundp 'mevedel--session)
-                             mevedel--session)))
-             (workspace
-              (if permission-context
-                  (or (and session (mevedel-session-workspace session))
-                      (plist-get permission-context :workspace))
-                (or (and session (mevedel-session-workspace session))
-                    (and (boundp 'mevedel--workspace)
-                         mevedel--workspace))))
+      (let* ((session (mevedel-bash-policy--context-session permission-context))
+             (workspace (mevedel-bash-policy--context-workspace permission-context))
              (request
               (if permission-context
                   (plist-get permission-context :request)
@@ -754,6 +768,53 @@ the Bash tool path because Bash had its own flattened resolver."
                             workspace))))
         (mevedel-permission-rules-collect-buckets
          invocation-rules request-rules session-rules persistent))))
+
+(defun mevedel-bash-policy-safe-env-vars (&optional permission-context)
+  "Return the variables whose leading assignments rule matching ignores.
+These are `mevedel-permission-rules-builtin-safe-env-vars' plus the
+`:safe-env-vars' of the global and workspace permission stores.  A
+PERMISSION-CONTEXT with `:safe-env-vars' supplies the store entries
+itself."
+  (append
+   mevedel-permission-rules-builtin-safe-env-vars
+   (if (plist-member permission-context :safe-env-vars)
+       (plist-get permission-context :safe-env-vars)
+     (let ((workspace (mevedel-bash-policy--context-workspace permission-context)))
+       (and workspace
+            (mevedel-permission-persistence-load-safe-env-vars workspace))))))
+
+(defun mevedel-bash-policy-rule-command (command &optional permission-context)
+  "Return COMMAND as permission rules see it under PERMISSION-CONTEXT.
+Leading assignments to safe variables are removed from every segment; see
+`mevedel-bash-policy-safe-env-vars'."
+  (mevedel-permission-rules-strip-safe-assignments
+   command (mevedel-bash-policy-safe-env-vars permission-context)))
+
+(defun mevedel-bash-policy--segments-covered-p (actions classes)
+  "Return non-nil when every segment is allowed or read-only.
+ACTIONS and CLASSES hold each segment's rule action and analysis class, in
+segment order.  A read-only segment needs no rule."
+  (cl-loop for action in actions
+           for class in classes
+           always (or (eq action 'allow) (eq class 'read-only))))
+
+(defun mevedel-bash-policy-profile-segments (command direct-buckets)
+  "Return compound COMMAND's segments whose direct profiles it may receive.
+Return them only when DIRECT-BUCKETS allow every segment that is not
+read-only; otherwise, and for a single command, return nil, so one segment
+never inherits another's capability.  COMMAND is already in rule form; see
+`mevedel-bash-policy-rule-command'."
+  (let ((segments (plist-get (mevedel-bash-analysis-analyze command) :segments)))
+    (when (and (cdr segments)
+               (mevedel-bash-policy--segments-covered-p
+                (mapcar (lambda (segment)
+                          (car (mevedel-bash-policy--bash-bucket-match
+                                direct-buckets segment)))
+                        segments)
+                (mapcar (lambda (segment)
+                          (plist-get (mevedel-bash-analysis-analyze segment) :class))
+                        segments)))
+      segments)))
 
 (defun mevedel-bash-policy--bash-bucket-match (buckets command)
   "Return the first non-deny (ACTION . BUCKET) matching COMMAND in BUCKETS."
@@ -789,12 +850,20 @@ unknown commands, but only session, persistent, and global user rules may
 authorize dangerous or complex syntax."
   (let* ((analysis (mevedel-bash-analysis-analyze command))
          (class (plist-get analysis :class))
-         (segments (plist-get analysis :segments))
+         ;; Denies and mode restrictions see the command as written; rule
+         ;; matching and classification ignore safe leading assignments.
+         (rule-command (mevedel-bash-policy-rule-command
+                        command permission-context))
+         (rule-analysis (if (equal rule-command command)
+                            analysis
+                          (mevedel-bash-analysis-analyze rule-command)))
+         (rule-class (plist-get rule-analysis :class))
+         (segments (plist-get rule-analysis :segments))
          (buckets (mevedel-bash-policy-buckets permission-context))
          (mode (mevedel-bash-policy-effective-permission-mode
                 permission-context))
-         (full-match (mevedel-bash-policy--bash-bucket-match buckets command))
-         (direct-match (mevedel-bash-policy--bash-direct-match buckets command))
+         (full-match (mevedel-bash-policy--bash-bucket-match buckets rule-command))
+         (direct-match (mevedel-bash-policy--bash-direct-match buckets rule-command))
          (segment-matches
           (mapcar (lambda (segment)
                     (mevedel-bash-policy--bash-bucket-match buckets segment))
@@ -855,22 +924,21 @@ authorize dangerous or complex syntax."
        ((eq (car full-match) 'ask) (decide 'ask 'rule))
        ((memq 'ask segment-actions) (decide 'ask 'rule))
        ((eq mode 'edits) (decide 'allow 'mode))
-       ((and (memq class '(dangerous complex))
+       ((and (memq rule-class '(dangerous complex))
              (eq (car direct-match) 'allow))
         (decide 'allow 'rule))
-       ((and (eq class 'dangerous)
+       ((and (eq rule-class 'dangerous)
              segments
-             (cl-loop for action in direct-segment-actions
-                      for segment-class in segment-classes
-                      always (or (eq action 'allow)
-                                 (eq segment-class 'read-only))))
+             (mevedel-bash-policy--segments-covered-p
+              direct-segment-actions segment-classes))
         (decide 'allow 'rule))
-       ((memq class '(dangerous complex))
+       ((memq rule-class '(dangerous complex))
         (decide 'ask 'mode))
-       ((and segments (cl-every (lambda (action) (eq action 'allow))
-                                segment-actions))
+       ((and (memq 'allow segment-actions)
+             (mevedel-bash-policy--segments-covered-p
+              segment-actions segment-classes))
         (decide 'allow 'rule))
-       ((eq class 'read-only)
+       ((eq rule-class 'read-only)
         (decide 'allow 'read-only))
        ((eq (car full-match) 'allow) (decide 'allow 'rule))
        (t (decide 'ask 'mode))))))

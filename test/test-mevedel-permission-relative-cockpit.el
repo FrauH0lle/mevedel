@@ -50,7 +50,8 @@
                       (mevedel-permissions-list-open
                        (mevedel-cockpit-current-context)))))
             (with-current-buffer cockpit
-              (should (= 2 (length tabulated-list-entries)))
+              ;; Two grants plus the read-only built-in safe-variable row.
+              (should (= 3 (length tabulated-list-entries)))
               (should (string-search absolute-label (buffer-string)))
               (should (string-search relative-label (buffer-string)))
               (goto-char (point-min))
@@ -70,7 +71,7 @@
                  #'mevedel-permission-persistence-save-resource-grant
                  workspace path 'write t origin))
               (mevedel-cockpit-surface-refresh)
-              (should (= 2 (length tabulated-list-entries)))
+              (should (= 3 (length tabulated-list-entries)))
               (goto-char (point-min))
               (search-forward absolute-label)
               (should (equal "read" (aref (tabulated-list-get-entry) 2)))
@@ -82,7 +83,7 @@
               (should (string-search
                        (concat "revoked workspace resource: path " relative-label)
                        revoked))
-              (should (= 1 (length tabulated-list-entries)))
+              (should (= 2 (length tabulated-list-entries)))
               (should (string-search absolute-label (buffer-string)))
               (should-not (string-search relative-label (buffer-string)))))
           (let ((remaining (plist-get

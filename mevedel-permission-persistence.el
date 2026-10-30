@@ -217,16 +217,34 @@ ENCODE writes runtime origins."
                       (plist-put (cdr normalized) :path normalized-path)))
             normalized))))))
 
+(defun mevedel-permission--valid-safe-env-vars-p (names)
+  "Return non-nil when NAMES is a list of environment variable names."
+  (and (proper-list-p names)
+       (cl-every (lambda (name)
+                   (and (stringp name)
+                        (string-match-p "\\`[A-Za-z_][A-Za-z0-9_]*\\'" name)))
+                 names)))
+
+(defun mevedel-permission--with-safe-env-vars (store names)
+  "Return STORE carrying safe environment variable NAMES when non-nil."
+  (if names
+      (append store (list :safe-env-vars names))
+    store))
+
 (defun mevedel-permission--normalize-store
     (store &optional exact-path-normalizer path-pattern-normalizer workspace-root encode)
   "Return normalized permission STORE, or nil when invalid.
 EXACT-PATH-NORMALIZER normalizes grants, and PATH-PATTERN-NORMALIZER
 normalizes rule path patterns.  WORKSPACE-ROOT permits relative exact grants;
-ENCODE writes runtime origins."
+ENCODE writes runtime origins.  An optional `:safe-env-vars' list of
+variable names is kept as is."
   (when (and (mevedel-permission--valid-plist-p
-              store '(:rules :resource-grants) '(:rules :resource-grants))
+              store '(:rules :resource-grants :safe-env-vars)
+              '(:rules :resource-grants))
              (proper-list-p (plist-get store :rules))
-             (proper-list-p (plist-get store :resource-grants)))
+             (proper-list-p (plist-get store :resource-grants))
+             (mevedel-permission--valid-safe-env-vars-p
+              (plist-get store :safe-env-vars)))
     (let ((rules
            (mapcar
             (lambda (rule)
@@ -241,7 +259,9 @@ ENCODE writes runtime origins."
             (plist-get store :resource-grants))))
       (when (and (cl-every #'identity rules)
                  (cl-every #'identity grants))
-        (list :rules rules :resource-grants grants)))))
+        (mevedel-permission--with-safe-env-vars
+         (list :rules rules :resource-grants grants)
+         (plist-get store :safe-env-vars))))))
 
 (defun mevedel-permission--home-path-p (path)
   "Return non-nil when PATH is `~' or starts with `~/'."
@@ -425,6 +445,10 @@ TARGET restores portable target paths when non-nil.  Reads are cached; see
                            (format "%s: invalid rule shape or value" location)))))
        (and (proper-list-p raw)
             (bad-grant (plist-get raw :resource-grants) "resource"))
+       (and (proper-list-p raw)
+            (not (mevedel-permission--valid-safe-env-vars-p
+                  (plist-get raw :safe-env-vars)))
+            ":safe-env-vars must be a list of variable names")
        "invalid store shape or value"))))
 
 (defun mevedel-permission--read-store-file-uncached (file &optional target workspace-root)
@@ -443,12 +467,17 @@ WORKSPACE-ROOT enables relative grants in a workspace store only."
 		 (store
                   (if (and target
                            (mevedel-permission--valid-plist-p
-                            raw '(:rules :resource-grants)
-                            '(:rules :resource-grants)))
-                      (mevedel-permission-deserialize-authority
-                       (plist-get raw :rules)
-                       (plist-get raw :resource-grants)
-                       target workspace-root)
+                            raw '(:rules :resource-grants :safe-env-vars)
+                            '(:rules :resource-grants))
+                           (mevedel-permission--valid-safe-env-vars-p
+                            (plist-get raw :safe-env-vars)))
+                      (when-let* ((authority
+                                   (mevedel-permission-deserialize-authority
+                                    (plist-get raw :rules)
+                                    (plist-get raw :resource-grants)
+                                    target workspace-root)))
+                        (mevedel-permission--with-safe-env-vars
+                         authority (plist-get raw :safe-env-vars)))
                     (mevedel-permission--normalize-store raw)))
 		 (single-form-p
                   (condition-case nil
@@ -551,10 +580,13 @@ ON-ERROR receives a refresh error instead of leaving deferred work unsettled."
   "Write permission STORE plist to FILE for TARGET.
 WORKSPACE-ROOT enables origin encoding for a workspace store only."
   (let* ((store (if target
-                    (mevedel-permission-serialize-authority
-                     (plist-get store :rules)
-                     (plist-get store :resource-grants)
-                     target workspace-root)
+                    (when-let* ((authority
+                                 (mevedel-permission-serialize-authority
+                                  (plist-get store :rules)
+                                  (plist-get store :resource-grants)
+                                  target workspace-root)))
+                      (mevedel-permission--with-safe-env-vars
+                       authority (plist-get store :safe-env-vars)))
                   store))
          (_ (unless store
               (user-error "Permission authority names another execution target")))
@@ -601,8 +633,16 @@ Returns a merged list in `mevedel-permission-rules' format."
           (plist-get (mevedel-permission-persistent-authority workspace 'workspace)
                     :resource-grants)))
 
+(defun mevedel-permission-persistence-load-safe-env-vars (workspace)
+  "Load the `:safe-env-vars' of WORKSPACE's global and workspace stores."
+  (delete-dups
+   (append (plist-get (mevedel-permission-persistent-authority workspace 'global)
+                      :safe-env-vars)
+           (plist-get (mevedel-permission-persistent-authority workspace 'workspace)
+                      :safe-env-vars))))
+
 (defun mevedel-permission-persistent-authority (workspace scope)
-  "Return WORKSPACE's rules and grants from SCOPE's store only."
+  "Return WORKSPACE's rules, grants, and safe variables from SCOPE's store."
   (or (mevedel-permission--read-store-file
        (mevedel-permission-persistence-file workspace scope)
        (mevedel-permission--workspace-target workspace)
@@ -669,6 +709,21 @@ ORIGIN identifies a bounded workspace-relative grant separately."
        file
        (plist-put store :rules
                   (delete rule (copy-sequence (plist-get store :rules))))
+       target root))))
+
+(defun mevedel-permission-remove-persistent-safe-env-var (workspace scope name)
+  "Remove safe environment variable NAME from WORKSPACE's SCOPE store."
+  (let* ((file (mevedel-permission-persistence-file workspace scope))
+         (target (mevedel-permission--workspace-target workspace))
+         (root (and (eq scope 'workspace) (mevedel-workspace-root workspace)))
+         (store (mevedel-permission-persistence-editable-store file target root)))
+    (when (file-exists-p file)
+      (mevedel-permission-persistence-write-store
+       file
+       (mevedel-permission--with-safe-env-vars
+        (list :rules (plist-get store :rules)
+              :resource-grants (plist-get store :resource-grants))
+        (remove name (plist-get store :safe-env-vars)))
        target root))))
 
 (provide 'mevedel-permission-persistence)

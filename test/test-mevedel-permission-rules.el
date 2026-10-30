@@ -111,6 +111,64 @@
 ;;
 ;;; Rule matching
 
+(mevedel-deftest mevedel-permission--match-command-grant ()
+  ,test
+  (test)
+  :doc "wildcards cover ordinary arguments, never syntax that runs another command"
+  (pcase-dolist (`(,pattern ,command ,expected)
+                 '(("npx a *" "npx a test" t)
+                   ("npx a *" "npx a eval '(load \"x\"); (y)'" t)
+                   ("npx a *" "npx a $'x;y'" t)
+                   ("npx a *" "npx a test \\; rm b" t)
+                   ("npx a *" "npx a test 2>&1" t)
+                   ("npx a *" "npx a test &>log" t)
+                   ("npx a *" "npx a test && rm b" nil)
+                   ("npx a *" "npx a test; rm b" nil)
+                   ("npx a *" "npx a test | sh" nil)
+                   ("npx a *" "npx a test\nrm b" nil)
+                   ("npx a *" "npx a test & rm b" nil)
+                   ("npx a *" "npx a $(rm b)" nil)
+                   ("npx a *" "npx a \"$(rm b)\"" nil)
+                   ("npx a *" "npx a `rm b`" nil)
+                   ("npx a *" "npx a (rm b)" nil)
+                   ("npx a *" "npx a $'\\''; rm b '" nil)
+                   ("npx a *" "npx a \\>& rm b" nil)
+                   ("npx a *" "NPX a test" nil)
+                   ("git add:*" "git add" t)
+                   ("git add:*" "git add x" t)
+                   ("git add:*" "git addx" nil)
+                   ("git add:*" "git add x; rm y" nil)
+                   ("make -j$(nproc) *" "make -j$(nproc) all" t)
+                   ("cd * && make" "cd sub && make" t)
+                   ("cd * && make" "cd $(rm b) && make" nil)))
+    (should (eq expected
+                (and (mevedel-permission--match-command-grant pattern command) t)))))
+
+(mevedel-deftest mevedel-permission-rules-strip-safe-assignments ()
+  ,test
+  (test)
+  :doc "removes plain leading assignments to listed names from each segment"
+  (pcase-dolist (`(,command ,expected)
+                 '(("A=1 cmd" "cmd")
+                   ("A=1 A=2 cmd x" "cmd x")
+                   ("A='a b' cmd" "cmd")
+                   ("A=\"a b\" cmd" "cmd")
+                   ("cd x && A=1 cmd" "cd x && cmd")
+                   ("A=1 B=2 cmd" "B=2 cmd")
+                   ("B=2 A=1 cmd" "B=2 A=1 cmd")
+                   ("a=1 cmd" "a=1 cmd")
+                   ("A=$(x) cmd" "A=$(x) cmd")
+                   ("A=\"$(x)\" cmd" "A=\"$(x)\" cmd")
+                   ("A=$HOME cmd" "A=$HOME cmd")
+                   ("A=1" "A=1")
+                   ("echo A=1" "echo A=1")))
+    (should (equal expected
+                   (mevedel-permission-rules-strip-safe-assignments
+                    command '("A")))))
+  :doc "leaves commands unchanged without names or a string"
+  (should (equal "A=1 cmd" (mevedel-permission-rules-strip-safe-assignments "A=1 cmd" nil)))
+  (should-not (mevedel-permission-rules-strip-safe-assignments nil '("A"))))
+
 (mevedel-deftest mevedel-permission-rules-find ()
   ,test
   (test)

@@ -912,8 +912,127 @@ for effects despite reusable authority"
               (should (eq 'deny
                           (mevedel-bash-policy-check-permission
                            "rm /tmp/foo"))))))
-      (delete-directory root t))))
+      (delete-directory root t)))
 
+  :doc "an allow rule's wildcard covers ordinary arguments, never shell syntax"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands '("rm")))
+    (pcase-dolist (`(,rule ,command ,expected)
+                   '(("npx @emacs-eask/cli *" "npx @emacs-eask/cli test ert a.el" allow)
+                     ("npx @emacs-eask/cli *"
+                      "npx @emacs-eask/cli eval '(progn (load \"a\") (b))'" allow)
+                     ("npx @emacs-eask/cli *"
+                      "npx @emacs-eask/cli test && rm -rf build" ask)
+                     ("npx @emacs-eask/cli *"
+                      "npx @emacs-eask/cli test; rm -rf build" ask)
+                     ("npx @emacs-eask/cli *"
+                      "npx @emacs-eask/cli test $(rm -rf build)" ask)
+                     ("npx @emacs-eask/cli *"
+                      "npx @emacs-eask/cli test \"$(rm -rf build)\"" ask)
+                     ("npx @emacs-eask/cli *"
+                      "npx @emacs-eask/cli test `rm -rf build`" ask)
+                     ("npx @emacs-eask/cli *"
+                      "npx @emacs-eask/cli test & rm -rf build" ask)
+                     ("git add:*" "git add a && rm -rf b" ask)
+                     ("make -j$(nproc) *" "make -j$(nproc) all" allow)
+                     ("cd * && rm -rf build" "cd sub && rm -rf build" allow)
+                     ("cd * && rm -rf build" "cd $(rm -rf x) && rm -rf build" ask)))
+      (should
+       (eq expected
+           (mevedel-bash-policy-check-permission
+            command
+            :permission-context
+            (list :mode 'ask
+                  :buckets (list (list :persistent
+                                       (list "Bash" :pattern rule :action 'allow)))
+                  :execution-directory temporary-file-directory
+                  :resource-authority-separated-p t))))))
+
+  :doc "a generic deny judges each segment, so allowed segments may combine"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands nil))
+    (pcase-dolist (`(,command ,expected)
+                   '(("git show a && git diff b" allow)
+                     ("git show a && make test" deny)
+                     ("git show $(make test)" deny)))
+      (should
+       (eq expected
+           (mevedel-bash-policy-check-permission
+            command
+            :permission-context
+            (list :mode 'ask
+                  :buckets '((:defcustom
+                              ("Bash" :pattern "git show:*" :action allow)
+                              ("Bash" :pattern "git diff:*" :action allow)
+                              ("Bash" :action deny)))
+                  :execution-directory temporary-file-directory
+                  :resource-authority-separated-p t))))))
+
+  :doc "allow rules ignore leading assignments only to listed safe variables"
+  (let ((mevedel-permission-rules nil))
+    (pcase-dolist (`(,command ,safe ,expected)
+                   '(("CHECK_BASE=abc npx @emacs-eask/cli run script check"
+                      ("CHECK_BASE") allow)
+                     ("CHECK_BASE=abc npx @emacs-eask/cli run script check" nil ask)
+                     ("LANG=C NO_COLOR=1 npx @emacs-eask/cli test" nil allow)
+                     ("CHECK_BASE='a b' npx @emacs-eask/cli test" ("CHECK_BASE") allow)
+                     ("CHECK_BASE=$(rm -rf x) npx @emacs-eask/cli test" ("CHECK_BASE") ask)
+                     ("CHECK_BASE=\"`rm -rf x`\" npx @emacs-eask/cli test" ("CHECK_BASE") ask)
+                     ("PATH=/tmp/evil npx @emacs-eask/cli test" nil ask)
+                     ("cd sub && LANG=C npx @emacs-eask/cli test" nil allow)))
+      (should
+       (eq expected
+           (mevedel-bash-policy-check-permission
+            command
+            :permission-context
+            (list :mode 'ask
+                  :buckets '((:persistent
+                              ("Bash" :pattern "npx @emacs-eask/cli *" :action allow)))
+                  :safe-env-vars safe
+                  :execution-directory temporary-file-directory
+                  :resource-authority-separated-p t)))))))
+
+
+(mevedel-deftest mevedel-bash-policy-profile-segments ()
+  ,test
+  (test)
+  :doc "returns compound segments only when every effectful segment is allowed"
+  (let ((buckets '((:persistent
+                    ("Bash" :pattern "npx a *" :action allow)
+                    ("Bash" :pattern "git add:*" :action allow)))))
+    (pcase-dolist (`(,command ,expected)
+                   '(("npx a test" nil)
+                     ("cd sub && npx a test" ("cd sub" "npx a test"))
+                     ("npx a test && git add x" ("npx a test" "git add x"))
+                     ("npx a test && rm -rf b" nil)
+                     ("cat a > b && npx a test" nil)
+                     ("npx a test | tee log" nil)))
+      (should (equal expected
+                     (mevedel-bash-policy-profile-segments command buckets))))))
+
+(mevedel-deftest mevedel-bash-policy-safe-env-vars ()
+  ,test
+  (test)
+  :doc "adds the context's names to the built-in list"
+  (let ((names (mevedel-bash-policy-safe-env-vars '(:safe-env-vars ("CHECK_BASE")))))
+    (should (member "CHECK_BASE" names))
+    (should (member "LANG" names))
+    (should-not (member "PATH" names)))
+  :doc "reads the names of the workspace's permission stores"
+  (let* ((dir (make-temp-file "mevedel-policy-safe-env-" t))
+         (mevedel-user-dir (file-name-concat dir "user"))
+         (ws (mevedel-workspace--create :type 'project :root dir)))
+    (unwind-protect
+        (progn
+          (mevedel-permission-persistence-write-store
+           (mevedel-permission-persistence-file ws 'workspace)
+           '(:rules nil :resource-grants nil :safe-env-vars ("CHECK_BASE")))
+          (should (member "CHECK_BASE"
+                          (mevedel-bash-policy-safe-env-vars (list :workspace ws))))
+          (should (equal "npx test"
+                         (mevedel-bash-policy-rule-command
+                          "CHECK_BASE=x LANG=C npx test" (list :workspace ws)))))
+      (delete-directory dir t))))
 
 (mevedel-deftest mevedel-bash-policy-missing-resource-paths ()
   ,test
