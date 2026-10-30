@@ -55,6 +55,9 @@ journal expiry, a smaller backlog may be reviewed. Explicit commands bypass
 this threshold."
   :type '(integer :tag "Digests") :group 'mevedel)
 
+(defconst mevedel-memory-pass--application-idle-seconds 1
+  "Seconds without input before a local automatic application may start.")
+
 (defvar mevedel-memory-pass--inhibit-scheduling nil
   "Non-nil suppresses automatic opportunities during exit or isolated tests.")
 
@@ -445,10 +448,23 @@ Stored identity is an expectation, not authority; read it afresh on each check."
        (not (plist-get state :stop-apply))
        (mevedel-memory-pass--application-context-current-p job)))
 
+(defun mevedel-memory-pass--application-idle-p (job)
+  "Return non-nil when JOB may proceed without interrupting activity.
+Unsupported jobs retain their synchronous scheduling behavior."
+  (or (not (plist-get job :idle))
+      (and (not (input-pending-p))
+           (when-let* ((idle (current-idle-time)))
+             (>= (float-time idle) mevedel-memory-pass--application-idle-seconds)))))
+
 (defun mevedel-memory-pass--application-next (state job)
-  "Yield before continuing STATE's current application JOB."
+  "Continue STATE's current application JOB after editor idleness.
+Cancellation completes promptly, without waiting for another idle period."
   (when (and (eq job (plist-get state :application)) (not (plist-get job :done)))
-    (plist-put job :timer (run-at-time .01 nil #'mevedel-memory-pass--application-step state job))))
+    (plist-put job :timer
+               (if (or (plist-get state :stop-apply) (not (plist-get job :idle)))
+                   (run-at-time .01 nil #'mevedel-memory-pass--application-step state job)
+                 (run-with-idle-timer mevedel-memory-pass--application-idle-seconds nil
+                                      #'mevedel-memory-pass--application-step state job)))))
 
 (defun mevedel-memory-pass--hold-file (job file)
   "Record held note FILE in JOB, mutating the shared plist in place.
@@ -490,6 +506,10 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
   "Run one owned recovery/commit operation for STATE's sequential JOB."
   (when (and (eq job (plist-get state :application)) (not (plist-get job :done)))
     (plist-put job :timer nil)
+    (when (and (not (plist-get state :stop-apply))
+               (not (mevedel-memory-pass--application-idle-p job)))
+      (mevedel-memory-pass--application-next state job)
+      (cl-return-from mevedel-memory-pass--application-step nil))
     (let ((workspace (plist-get state :workspace)) item)
       (condition-case err
 	  (progn
@@ -515,13 +535,19 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
 			       (mevedel-memory-decision--start-operation
 				workspace
 					(lambda (claim currentp reply)
-				  (mevedel-memory-decision--apply-owned
+					  (if (not (or (plist-get reply :synchronous)
+                                                         (mevedel-memory-pass--application-idle-p job)))
+                                              ;; Recovery yielded to the editor. Release
+                                              ;; this fixed claim before waiting for idle;
+                                              ;; retain only the pending proposal identity.
+                                              '(:status idle-wait)
+                                            (mevedel-memory-decision--apply-owned
 				   workspace claim (plist-get item :pass) (plist-get item :proposal)
 				   (lambda (paths)
 				     (cl-incf (plist-get job :applied))
 					     (plist-put job :files (append paths (plist-get job :files))))
 					   currentp (plist-get item :pending)
-                                           (unless (plist-get reply :synchronous) reply)))
+	                                           (unless (plist-get reply :synchronous) reply))))
 				(lambda (reply)
 				  (plist-put job :operation nil)
 				  (when (and (eq job (plist-get state :application)) (not (plist-get job :done)))
@@ -535,6 +561,9 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
                                       (plist-put state :stop-apply t))
 				    (let ((status (plist-get (plist-get reply :value) :status)))
 				      (cond
+                                               ((and (eq status 'idle-wait) (not (plist-get reply :error))
+                                                     (not (plist-get reply :cancelled)) (not (plist-get reply :held)))
+                                                (push item (plist-get job :items)))
                                                ((or (eq status 'skipped) (mevedel-memory-decision-terminal-status-p status)))
                                        ((plist-get reply :error) (cl-incf (plist-get job :unapplied)))
                                        ((and (not status) (or (plist-get reply :held) (plist-get reply :cancelled)))
@@ -586,6 +615,7 @@ automatic proposals without starting inference.  Return the application job."
                       (mevedel-memory-decision--operation-context
                        (plist-get state :workspace) (plist-get state :origin-buffer))))
          (job (append (list :pass pass :callback callback :applied 0 :held 0 :unapplied 0 :deferred nil
+                            :idle (mevedel-memory-pass--async-application-p (plist-get state :workspace) accepted)
                             :items (mapcar (lambda (proposal)
                                              (list :pass pass :proposal (plist-get proposal :id)
                                                    :note (mevedel-memory-proposal-note-action-p (plist-get proposal :action))

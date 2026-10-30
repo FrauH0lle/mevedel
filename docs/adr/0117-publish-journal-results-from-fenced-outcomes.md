@@ -56,7 +56,15 @@ target ownership and committing with live-buffer protections. Pending selection
 authenticates current status and omits every already-decided proposal, retaining
 undecided extractions and their waiting dependencies. It returns identities only,
 and each later operation reauthenticates its proposal
-and status. Sequential callbacks yield between proposals, keeping the pass
+and status. Supported local automatic transactions start after one second of
+editor idleness, checking pending input before each proposal and again on return
+from recovery. Activity returns the identity to the queue after fencing and
+releasing that operation; no live claim or accepted/target proof waits on idle,
+and no deadline is extended. Undecided disk proposals remain discoverable after
+cancellation or exit. Explicit application and unsupported/remote fallback are
+unchanged. Fresh citation rereads batch at most eight paths per original root
+without crossing capture, inventory or final editor-check boundaries. Sequential
+callbacks yield between proposals, keeping the pass
 registered through application completion rather than reporting the queue entry
 as completion. Scheduled recovery also discovers marked or unavailable write
 identities in the child, sharing the write reader's pass grouping. Only identities
@@ -478,6 +486,20 @@ longer than ordinary recall when evidence or recovery still needs it; the recall
 limit is not an erasure guarantee.
 
 ## Decision history
+
+### 2026-10-30: schedule local automatic application around editor activity
+
+After the history split, a single checked transaction still blocked for about
+0.6 seconds. A pinned-program composition probe saved about 25 ms by batching
+twelve citation rereads into two programs; launch amortization alone could not
+approach 50 ms. Rather than introduce a resumable transaction with many new
+validation boundaries, the user chose idle admission and pending-input checks
+between proposals, plus cheap phase-local batching. Transactions remain
+synchronous, so one may delay input; the batch no longer monopolizes active
+editing. A recovery reply received during activity settles its existing fixed
+claim before requeuing the identity, rather than holding or renewing ownership
+through an unbounded idle wait. Original-target ownership and all write, rollback,
+buffer, publication and recovery rules remain unchanged.
 
 ### 2026-10-30: split application history bookkeeping from target mutation
 

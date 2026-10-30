@@ -282,11 +282,38 @@ components. Never sample a newly proposed target to manufacture before-state."
           (list :path path :exists nil))
         (error "File was not admitted to this review"))))
 
-(defun mevedel-memory-scope-check (scope id files)
+(defun mevedel-memory-scope--check-reads (scope id files)
+  "Freshly reread FILES in SCOPE root ID for one verification phase.
+Return path/result pairs for `mevedel-memory-scope-check'; never retain them
+between phases.  Each program has at most eight reads, each bounded to its
+captured body length plus one, as in an individual freshness check.  Captured
+bodies are at most 32 KiB, bounding each program to 256 KiB plus eight bytes.
+Process the entire roster, including expected-absent files."
+  (let ((root (mevedel-memory-scope--root scope id)) operations results)
+    (when (eq (plist-get root :kind) 'notes)
+      (error "Shared notes require their hash-based freshness check"))
+    (dolist (file files)
+      (let ((before (mevedel-memory-scope-before scope id file)))
+        (push (list :op 'read :optional t :coding 'no-conversion
+                    :path (file-name-concat (plist-get root :dir) file)
+                    :max-bytes (1+ (length (plist-get before :bytes))))
+              operations)))
+    (dolist (batch (seq-partition (nreverse operations) 8))
+      (let ((reads (mevedel-session-control-fs-run-program batch)))
+        (unless (= (length reads) (length batch))
+          (error "Incomplete memory freshness observations"))
+        (setq results
+              (nconc results (cl-mapcar (lambda (op read) (cons (plist-get op :path) read))
+                                       batch reads)))))
+    results))
+
+(defun mevedel-memory-scope-check (scope id files &optional observations)
   "Return freshness status for FILES in captured root ID of SCOPE.
 The result has :status `fresh', `stale', or `unavailable', and a :reason for
 non-fresh states. This is a read-only check, not write coordination: callers
-must hold current ownership and target coordination across check and commit."
+must hold current ownership and target coordination across check and commit.
+OBSERVATIONS may supply fresh path/result pairs from this verification phase;
+every checked path must be present.  Never reuse them across phases."
   (condition-case err
       (let ((root (mevedel-memory-scope--root scope id)) stale)
         (dolist (file files)
@@ -297,7 +324,12 @@ must hold current ownership and target coordination across check and commit."
                   (unless (eq (plist-get root :kind) 'notes)
                     (condition-case nil
                         (list :exists t :bytes
-                              (mevedel-session-control-fs-read-file path 'no-conversion (1+ (length bytes))))
+                              (if observations
+                                  (let ((result (cdr (assoc path observations))))
+                                    (unless (and result (equal path (plist-get result :path)))
+                                      (error "Missing or mismatched memory freshness observation"))
+                                    (mevedel-session-control-fs-program-value result))
+                                (mevedel-session-control-fs-read-file path 'no-conversion (1+ (length bytes)))))
                       (mevedel-session-control-fs-absent (list :exists nil))))))
             (unless (and (equal path (plist-get before :path))
                          (or (not (plist-get before :exists)) (plist-get before :directory)

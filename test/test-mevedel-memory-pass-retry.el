@@ -69,7 +69,11 @@ DIAGNOSTICS returns bounded details when the expected callback never arrives."
           (schedule (symbol-function 'run-with-timer))
           retry-timer result warnings)
      (unwind-protect
-         (cl-letf (((symbol-function 'run-with-timer)
+         (cl-letf (((symbol-function 'current-idle-time) (lambda () (seconds-to-time 2)))
+                   ((symbol-function 'run-with-idle-timer)
+                    (lambda (_delay _repeat function &rest args)
+                      (apply #'run-at-time .01 nil function args)))
+                   ((symbol-function 'run-with-timer)
                     (lambda (seconds repeat function &rest args)
                       (let ((timer (apply schedule seconds repeat function args)))
                         (when (eq function #'mevedel-memory-pass--retry-notes)
@@ -199,6 +203,10 @@ DIAGNOSTICS returns bounded details when the expected callback never arrives."
                    (lambda (&rest args)
                      (let ((child (apply start args)))
                        (cl-incf launches)
+                       (if (= launches 1)
+                           (should (plist-get (nth 4 args) :pending-selection))
+                         (should (plist-get (nth 4 args) :application))
+                         (should (equal (plist-get proposal :id) (plist-get (nth 4 args) :proposal-id))))
                        (when (= stage 1)
                          (setq operation (gethash key mevedel-memory-decision--operations))
                          (with-current-buffer origin (setq mevedel-memory-consolidation-mode 'propose)))
@@ -207,9 +215,9 @@ DIAGNOSTICS returns bounded details when the expected callback never arrives."
                    (lambda (job reply)
                      (cl-incf continuations)
                      (when (and (= stage 2) (= continuations 2))
-                       ;; Item execution can follow the adjacent-claim fast
-                       ;; path without a second child.  Invalidate its actor
-                       ;; at the actual continuation boundary, before admission.
+                       ;; The adjacent claim skips redundant recovery, but still
+                       ;; needs selected-decision discovery in a second child.
+                       ;; Invalidate its actor before editor admission.
                        (should (plist-get job :recovered))
                        (should-not (plist-get job :recovery-started-at))
                        (setq operation job)
@@ -219,7 +227,7 @@ DIAGNOSTICS returns bounded details when the expected callback never arrives."
             (apply (timer--function retry-timer) (timer--args retry-timer)))
           (mevedel-test-retry-wait (lambda () (not (gethash key mevedel-memory-pass--running)))))
         (should operation)
-        (should (= 1 launches))
+        (should (= stage launches))
         (should (= continuations stage))
         (should (mevedel-journal-claim-outcome (plist-get operation :claim)))
         (should-not (process-live-p (plist-get operation :worker)))

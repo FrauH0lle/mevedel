@@ -777,9 +777,19 @@ pass settlement/pin release, without repeating full recovery or target mutation.
 The operation remains registered until this reply; neither acceptance alone nor
 an interrupted publication produces a clean recovery predecessor. Failure or
 cancellation preserves the accepted decision for recovery and any confirmed
-newly written-file accounting. It yields between proposals and refreshes status
-after every attempt; the pass stays registered until application finishes and
-its final callback runs once. Manual and unsupported remote application retain
+newly written-file accounting. Supported local automatic application waits for
+one second of editor idleness and checks pending input before each proposal and
+again after child recovery. Activity defers the proposal identity without
+counting it as held or unapplied: the completed recovery operation is fenced and
+released before the idle wait, and a fresh operation reacquires ownership later.
+No claim deadline is extended or authority retained while waiting. Undecided
+proposals remain durable for normal pending selection after cancellation or exit.
+Each transaction remains synchronous (roughly half a second in the measured
+fixture), but a proposal batch cannot continuously delay input. Citation body
+rereads use fresh per-root batches of at most eight, with unchanged byte bounds,
+capture/reread/inventory ordering and final live-editor checks. The pass stays
+registered until application finishes and its final callback runs once.
+Explicit user application remains immediate; manual and unsupported remote application retain
 the synchronous API. Deferred automatic retries retain their original buffer,
 session, workspace and identity context, rather than adopting the timer's current
 buffer. They freshly check that context and its live auto policy before admission

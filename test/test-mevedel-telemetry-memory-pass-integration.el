@@ -188,6 +188,9 @@
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-journal-worker-supported-p) #'ignore)
                   ((symbol-function 'mevedel-memory-pass--async-application-p) #'always)
+                  ;; Batch fixtures never become idle on their own.
+                  ((symbol-function 'current-idle-time) (lambda () (seconds-to-time 2)))
+                  ((symbol-function 'input-pending-p) #'ignore)
                   ((symbol-function 'mevedel-memory-review-request)
                    (lambda (_scope _entries callback &rest _)
                      (setq review-callback callback)

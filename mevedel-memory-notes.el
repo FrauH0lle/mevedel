@@ -340,9 +340,10 @@ snapshot rereads and unsaved visiting buffers all participate in the proof."
         ;; Verify bodies after the whole read, then inventories after those
         ;; rereads.  An arrival cannot hide behind an earlier name observation.
         (dolist (row observed)
-          (unless (eq (plist-get (mevedel-memory-scope-check
-                                  scope (car row) (mapcar #'car (plist-get (cdr row) :before))) :status) 'fresh)
-            (error "Memory or instructions changed during the citation check")))
+          (let* ((files (mapcar #'car (plist-get (cdr row) :before)))
+                 (reads (mevedel-memory-scope--check-reads scope (car row) files)))
+            (unless (eq (plist-get (mevedel-memory-scope-check scope (car row) files reads) :status) 'fresh)
+              (error "Memory or instructions changed during the citation check"))))
         (dolist (row observed)
           (when (eq (plist-get (cdr row) :kind) 'memory)
             (let ((inventory (mevedel-memory-scope--inventory (plist-get (cdr row) :dir))))

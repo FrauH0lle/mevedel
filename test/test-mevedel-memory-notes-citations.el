@@ -82,6 +82,49 @@
     (should (string-search "still reference" (mevedel-memory-notes-citation-hold workspace "lab/note.md")))
     (write-region "No working-note dependency.\n" nil index nil 'silent)
     (should-not (mevedel-memory-notes-citation-hold workspace "lab/note.md")))
+  :doc "fresh bounded multi-path rereads preserve absence and reject a late body edit"
+  (let ((run (symbol-function 'mevedel-session-control-fs-run-program))
+        (paths (list index topic)) verifying programs)
+    (write-region "No citation.\n" nil topic nil 'silent)
+    (dotimes (i 12)
+      (let ((path (file-name-concat memory (format "extra-%02d.md" i))))
+        (write-region "No citation.\n" nil path nil 'silent)
+        (push path paths)))
+    (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+               (lambda (operations &optional lock)
+                 (when verifying (push operations programs))
+                 (funcall run operations lock))))
+      (should-not
+       (mevedel-memory-notes-citation-hold
+        workspace "lab/note.md" nil (lambda (_) (setq verifying t) nil)))
+      (should
+       (seq-some
+        (lambda (operations)
+          (and (> (length operations) 1)
+               (<= (length operations) 8)
+               (cl-every (lambda (op)
+                           (and (eq (plist-get op :op) 'read)
+                                (eq (plist-get op :coding) 'no-conversion)
+                                (<= (plist-get op :max-bytes) (1+ (* 32 1024)))))
+                         operations)
+               (member index (mapcar (lambda (op) (plist-get op :path)) operations))))
+        programs))
+      (dolist (operations programs)
+        (should (<= (length operations) 8))
+        (should (<= (apply #'+ (mapcar (lambda (op) (plist-get op :max-bytes)) operations))
+                    (+ (* 256 1024) 8))))
+      (dolist (path paths)
+        (should (seq-some (lambda (operations)
+                            (seq-some (lambda (op) (equal path (plist-get op :path))) operations))
+                          programs)))
+      (should
+       (string-search
+        "changed during"
+        (mevedel-memory-notes-citation-hold
+         workspace "lab/note.md" nil
+         (lambda (_)
+           (write-region "work://shared/lab/note.md\n" nil topic nil 'silent)
+           nil))))))
   :doc "a generic retained-root working-material policy is not a dangling note citation"
   (progn
     (write-region "Put temporary notes in work://shared/ (.mevedel/shared/).\n" nil

@@ -782,7 +782,8 @@ An intervening workspace claimant or a changed actor requires full recovery."
                        (mevedel-memory-decision-terminal-status-p status))))
         ;; Carry only an exact completed predecessor, never accepted bundles,
         ;; public observations or target proofs.  The next distinct claim must
-        ;; freshly prove adjacency and these immutable bytes before skipping IO.
+        ;; freshly prove adjacency and these immutable bytes before omitting
+        ;; historical recovery.  Application items still need a selection child.
         (plist-put result :recovery
                    (append (list :claim (copy-tree (plist-get job :claim)) :outcome (copy-tree fenced))
                            (cl-loop for key in '(:workspace :root :origin :workspace-id :origin-session :origin-workspace :origin-root)
