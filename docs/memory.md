@@ -587,7 +587,11 @@ of notes. A nonempty focus excludes notes and does not join the note cycle.
 
 The **shared-note cycle** uses the target clock and becomes due inclusively
 24 hours after the preceding cycle's admission, independently of the journal
-settings above. Under the existing workspace claim, it freezes a bounded finite
+settings above. This automatic limit is fixed: one cycle services every eligible
+note in its frozen cohort through successive bounded batches, rather than one
+batch per day. Use an explicit general `/remember` or `/remember drain` to review
+sooner; explicit review bypasses timing, not safety checks.
+Under the existing workspace claim, it freezes a bounded finite
 cohort of eligible path/version metadata before starting bounded batches. The
 private `.mevedel/state/shared-notes/cycle.el` record binds the workspace identity,
 physical shared root and execution target. It contains cycle identity, admission
@@ -1150,6 +1154,9 @@ gain no mutation tools. `$learn` considers available notes and digests as
 additional evidence, verifies relevant claims, and acknowledges omissions.
 
 Shared files (`.mevedel/shared/`) are untracked, machine-local and temporary.
+Only files below `work://shared/` participate in this working-file expiry;
+maintained source, documentation, trackers and curated memory do not. Journal
+retention has its own separate policy.
 `mevedel-memory-notes.el` owns their lifecycle: general consolidation reviews
 extract lasting knowledge from age-ready files into memory and then dispose of
 them. Focused reviews do not include notes. Accepted reviews and decisions are
@@ -1158,7 +1165,11 @@ the only processing record.
 **Readiness.** Use the target clock and actual last modification time, not the
 authored creation timestamp. One defcustom, `mevedel-working-note-max-age-days`,
 sets a flat **14 elapsed days** by default for every note and attachment, and
-empty-folder housekeeping. Set it to nil to disable automatic disposal.
+empty-folder housekeeping. Fourteen days is the chosen safety margin for use
+that the editor cannot observe, not a guarantee of recovery. Users may lower
+this value for themselves; the default remains 14 days. Set it to nil to disable
+automatic disposal. Note size never triggers deletion: size limits bound review
+requests, and oversized files that cannot be reviewed remain blocked.
 Boundaries are inclusive multiples of 86,400 seconds; future mtimes wait.
 A note version is its path and content hash; modification age uses actual mtime,
 including a same-byte touch. Note deletion freshly rechecks that age after
@@ -1177,6 +1188,13 @@ paths, such as a shell command, is not observed. Capture reads the folder
 inventory first and authenticates prior disposition status only for paths
 present in it: a deleted path cannot be admitted, and a recreated one is
 checked like any other.
+
+Shell access, use before an editor restart and use from another client are
+accepted tracking limits for these temporary shared files, not gaps requiring a
+cross-client use registry. To keep a note temporarily, edit it to renew its
+modification age; merely reading it does not. For lasting value, promote its
+content to curated memory or maintained documentation, and put actionable work
+in the tracker/backlog. Do not rely on a temporary note's survival.
 
 Shared-directory Read exposes generated bounded modification-age and age-readiness
 rows with the first Markdown heading (empty when absent), not a model-generated

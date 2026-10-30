@@ -76,6 +76,13 @@ Every note and attachment uses one defcustom,
 disposal. Empty-folder housekeeping uses the same age setting. Fourteen days
 means elapsed multiples of 86,400 seconds, inclusive at the boundary. Reading,
 listing and review time do not reset this clock; an actual modification does.
+The default remains fourteen days as the chosen margin for unobserved use;
+users may lower the setting for themselves. Size never triggers deletion:
+review bounds can block an oversized note, not make it disposable. This expiry
+applies only below `work://shared/`, not to maintained files or curated memory;
+journal retention remains separate. Edit a note to keep it temporarily, or
+promote its content to memory, maintained documentation or the tracker as
+appropriate rather than depending on the note's survival.
 Future mtimes wait rather than implying negative-age eligibility.
 Source words such as TODO, pending,
 remaining or handoff have no effect on eligibility or deletion.
@@ -100,7 +107,9 @@ when conducting a live inventory; filenames are not permanent runtime exemptions
 At idle maintenance, admit at most one automatic daily review cycle per workspace
 per elapsed 24 hours on the target clock, under existing workspace ownership.
 That cycle processes **all eligible notes**, in bounded successor batches, not
-one sixteen-note request per day. Freeze a finite cohort of path/version identities
+one sixteen-note request per day. This is why the automatic 24-hour limit stays
+fixed; explicit review can process notes sooner without changing that limit.
+Freeze a finite cohort of path/version identities
 at cycle admission. Each identity is attempted at most once in that cycle;
 changed, newly eligible and newly arrived versions wait for the next daily cycle.
 Recheck current eligibility before every batch and mutation. The cycle records
