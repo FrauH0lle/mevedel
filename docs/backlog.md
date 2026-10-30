@@ -53,48 +53,14 @@ in-use note protection, cancellation, recovery, undo, and idempotence. Measure e
 responsiveness alongside CPU, memory, and backlog throughput on representative
 workloads. Distinguish moving work off the main thread from reducing total cost.
 
-### P1: Sustainable shared-note throughput and preservation
+### Shared-note lifecycle follow-up
 
-User concern (2026-10-28): processing is "terribly slow" and should not take
-hours and hours; a session can easily produce 20 or more notes, so ordinary
-creation could outpace processing indefinitely. Treat this as an operational
-viability requirement, not merely an optimization for a one-time backlog.
-
-Measure sustained safe dispositions against note arrivals in representative
-multi-session workloads, including sessions producing at least 20 notes. The
-backlog and oldest eligible-note age must decline while unrelated sessions stay
-active. Review alone is not completion: measure actual applied dispositions and
-retained reasons. Separate admission waiting, preparation, provider, application,
-publication, recovery and manual audit time; explain batch-size limits. One
-2026-10-28 batch reviewed and deleted one note in 172 seconds from queuing; this
-is an end-to-end sample, not a provider benchmark or a steady-state rate.
-
-Throughput must not depend on dropping uncertain findings. Repeated content
-audits found deletion rationales dismissing historical unverified leads and
-acceptance limits without establishing resolution or preserving them elsewhere.
-Add those cases to preservation verification and measure the need for manual
-repairs alongside throughput. Retain mutation safety, recoverability and
-lifecycle-managed protection of in-use handoffs; do not obtain speed by removing
-those boundaries or by leaving destructive applications indefinitely deferred.
-
-Landed 2026-10-28 (see ADR 0117's dated sections): tool-access leases replace
-the workspace-wide turn gate; deletes quote read evidence per open item; compact
-reference checks admit more notes per request; inventory-first capture, batched
-decision authentication and operation-local proof reuse cut storage programs.
-Remaining:
-- Measure a sustained multi-session workload with a specified arrival cadence;
-  only component timings and single real reviews exist. Adjacent application
-  claims now skip repeated full recovery (a copied ten-decision job took 63 s
-  instead of 272 s, one sample each); production confirmation is pending.
-- Over-retention: in real-model evaluation the reviewer kept or condensed an old
-  failed review whose findings ADR 0126 had resolved, because it did not quote
-  matching evidence for each item. Condensed notes are re-reviewed after the
-  suppression period; check whether they ever reach deletion.
-- Reply format: unambiguous reply shapes are now accepted (0 of 8 rejected
-  against 3 of 8 before on matched real reviews). Prose between blocks and
-  unterminated condensed bodies still reject a whole review; rejected replies
-  are retained under `.mevedel/state/diagnostics/rejected-replies/` to check
-  whether that recurs.
+ADR 0128 replaced completion-proof note review with 14-day expiry and
+extraction-only review (merged 2026-10-30). A one-run real-provider replay
+deleted 40 of 40 curated notes in 191 seconds, and an eight-note check
+extracted 4 of 4 planted lessons without promoting routine notes. Remaining:
+- Observe a real daily cycle at 50-100 arrivals per day, including live
+  editor responsiveness.
 - Leases do not observe shell access by ordinary path, accesses before an editor
   restart, or sessions on another client.
 
