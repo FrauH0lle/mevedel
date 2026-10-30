@@ -775,6 +775,52 @@ additive child permissions are available only to batch Eval"
       (mevedel-tool-exec-permission-effective-sandbox-request
        '(:command "make build") "Bash" "make build" nil
        `(:session ,session :buckets ((:session ,@rules)))))))
+  :doc "a compound command receives profiles only when rules allow every segment"
+  (let* ((npm "/tmp/mevedel-profile-npm")
+         (git "/tmp/mevedel-profile-git")
+         (rules
+          `(("Bash" :pattern "npx @emacs-eask/cli *" :network t
+             :file-system ((:path ,npm :access write)) :action allow)
+            ("Bash" :pattern "git add:*"
+             :file-system ((:path ,git :access write)) :action allow)))
+         (context `(:buckets ((:persistent ,@rules)))))
+    (pcase-dolist (`(,command ,network ,paths)
+                   `(("npx @emacs-eask/cli test" t (,npm))
+                     ("cd sub && npx @emacs-eask/cli clean elc && npx @emacs-eask/cli test"
+                      t (,npm))
+                     ("npx @emacs-eask/cli test && git add foo" t (,git ,npm))
+                     ("npx @emacs-eask/cli test && rm -rf build" nil nil)
+                     ("cat a > b && npx @emacs-eask/cli test" nil nil)
+                     ("npx @emacs-eask/cli test | tee log" nil nil)
+                     ("rm -rf build; npx @emacs-eask/cli test" nil nil)
+                     ("npx @emacs-eask/cli test $(rm -rf build)" nil nil)
+                     ("npx @emacs-eask/cli test & rm -rf build" nil nil)))
+      (let ((profile
+             (plist-get (mevedel-tool-exec-permission-effective-sandbox-request
+                         `(:command ,command) "Bash" command nil context)
+                        :additional-permissions)))
+        (should (eq network (plist-get profile :network)))
+        (should (equal paths
+                       (sort (mapcar (lambda (grant) (plist-get grant :path))
+                                     (plist-get profile :file-system))
+                             #'string<))))))
+  :doc "a listed safe assignment does not hide a command from its profile"
+  (let ((context '(:buckets ((:persistent
+                              ("Bash" :pattern "npx @emacs-eask/cli *"
+                               :network t :action allow)))
+                   :safe-env-vars ("CHECK_BASE"))))
+    (pcase-dolist (`(,command ,network)
+                   '(("CHECK_BASE=abc npx @emacs-eask/cli run script check" t)
+                     ("cd sub && CHECK_BASE=abc npx @emacs-eask/cli test" t)
+                     ("OTHER=abc npx @emacs-eask/cli test" nil)
+                     ("CHECK_BASE=$(rm -rf x) npx @emacs-eask/cli test" nil)))
+      (should
+       (eq network
+           (plist-get
+            (plist-get (mevedel-tool-exec-permission-effective-sandbox-request
+                        `(:command ,command) "Bash" command nil context)
+                       :additional-permissions)
+            :network)))))
   :doc "delegated profiles and full escalation never become sticky additions"
   (let ((delegated
          '(("Bash" :pattern "make:*" :network t :action allow))))

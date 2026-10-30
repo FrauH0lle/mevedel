@@ -960,6 +960,10 @@ The shared browser renderer owns disclosure continuity when rebuilding a record.
 Main transcript updates, reconnect snapshots, and polled agent transcripts pass
 the previous record element to it, so explicit expansion and collapse survive
 while new nested disclosures use the host's defaults.
+Agent polls reconcile record identities within the guest's selected agent and
+segment, so growing thinking retains its disclosure without borrowing choices
+from another transcript. The host retains only that selection's record IDs and
+kinds for this reconciliation, not a second copy of the transcript.
 Shared questions use this same renderer in the room and editor sidebar: the
 question stays visible above a closed **Shared context** disclosure containing
 the sent snapshot and attachment links. Its summary identifies the item, scope,

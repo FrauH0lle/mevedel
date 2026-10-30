@@ -492,13 +492,15 @@ matching information, not a diagnosis inferred from untrusted child output."
              (mapconcat
               (lambda (miss)
                 (format (concat "segment %s matches %s rule %s (path %s), "
-                                "but that rule does not match the complete compound command")
+                                "but another command in the line is neither read-only "
+                                "nor allowed by a direct rule")
                         (excerpt (plist-get miss :segment) 120)
                         (substring (symbol-name (plist-get miss :bucket)) 1)
                         (excerpt (plist-get miss :pattern) 100)
                         (excerpt (file-local-name (plist-get miss :path)) 160)))
               (nreverse selected) "; ")
-             ". Segment profiles are not inherited. This does not establish the failure cause. "
+             ". Segment profiles attach only when the rest of the line is read-only or "
+             "allowed. This does not establish the failure cause. "
              "Use separate Bash calls or a fresh invocation with explicit, justified authority; "
              "inspect prior effects first. No grant or retry is automatic.")))))))
 

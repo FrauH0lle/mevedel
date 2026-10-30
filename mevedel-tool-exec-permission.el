@@ -57,8 +57,12 @@
 (declare-function mevedel-bash-policy-missing-resource-paths
                   "mevedel-bash-policy"
                   (command permission-context request))
+(declare-function mevedel-bash-policy-profile-segments
+                  "mevedel-bash-policy" (command direct-buckets))
 (declare-function mevedel-bash-policy-reusable-operation-p
                   "mevedel-bash-policy" (command))
+(declare-function mevedel-bash-policy-rule-command
+                  "mevedel-bash-policy" (command &optional permission-context))
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
@@ -588,26 +592,40 @@ PERMISSION-CONTEXT supplies the session execution target."
 
 (defun mevedel-tool-exec-permission--remembered-additional-profile
     (tool-name operation permission-context)
-  "Return direct remembered authority for TOOL-NAME and OPERATION."
+  "Return direct remembered authority for TOOL-NAME and OPERATION.
+A compound Bash command also receives its segments' direct profiles when
+`mevedel-bash-policy-profile-segments' allows that."
   (let* ((buckets (mevedel-bash-policy-buckets permission-context))
          (direct-buckets
           (seq-filter
            (lambda (entry)
              (memq (car entry) '(:session :persistent :defcustom)))
            buckets))
+         (operations
+          (if (equal tool-name "Bash")
+              (let ((command (mevedel-bash-policy-rule-command
+                              operation permission-context)))
+                (cons command (mevedel-bash-policy-profile-segments
+                               command direct-buckets)))
+            (list operation)))
+         (network-decisions
+          (mapcar (lambda (item)
+                    (mevedel-permission-rules-network-decision
+                     buckets tool-name item))
+                  operations))
          (network
-          (eq 'allow
-              (mevedel-permission-rules-network-decision
-               buckets tool-name operation)))
+          (and (memq 'allow network-decisions)
+               (not (memq 'deny network-decisions))))
          candidates)
-    (dolist (entry direct-buckets)
-      (dolist (rule
-               (mevedel-permission-rules-find
-                (cdr entry) tool-name :pattern operation))
-        (when (eq 'allow (plist-get (cdr rule) :action))
-          (setq candidates
-                (append candidates
-                        (plist-get (cdr rule) :file-system))))))
+    (dolist (item operations)
+      (dolist (entry direct-buckets)
+        (dolist (rule
+                 (mevedel-permission-rules-find
+                  (cdr entry) tool-name :pattern item))
+          (when (eq 'allow (plist-get (cdr rule) :action))
+            (setq candidates
+                  (append candidates
+                          (plist-get (cdr rule) :file-system)))))))
     (mevedel-tool-exec-permission--merge-additional-profiles
      (mevedel-tool-exec-permission--additional-profile
       network (mevedel-permission-origin-usable-grants candidates)))))

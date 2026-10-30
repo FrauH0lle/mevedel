@@ -4,13 +4,16 @@
 
 ;; Tabulated cockpit surface for remembered permission authority.  Session,
 ;; workspace, and target-global rules and resource grants appear as selectable
-;; rows.  Each row can be revoked without touching the other scopes.
+;; rows, as do the safe environment variables whose leading assignments Bash
+;; rule matching ignores.  Each stored row can be revoked without touching the
+;; other scopes; the built-in safe variables share one read-only row.
 
 ;;; Code:
 
 (require 'mevedel-report)
 
 (require 'mevedel-cockpit)
+(require 'mevedel-permission-rules)
 
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-call-in-data
@@ -46,6 +49,8 @@
                   (workspace scope path access &optional recursive origin))
 (declare-function mevedel-permission-remove-persistent-rule
                   "mevedel-permission-persistence" (workspace scope rule))
+(declare-function mevedel-permission-remove-persistent-safe-env-var
+                  "mevedel-permission-persistence" (workspace scope name))
 (declare-function mevedel-permission-validate-persistent-stores
                   "mevedel-permission-persistence" (workspace))
 (autoload 'mevedel-permission-persistence-file "mevedel-permission-persistence")
@@ -54,6 +59,8 @@
 (autoload 'mevedel-permission-remove-persistent-resource-grant
   "mevedel-permission-persistence")
 (autoload 'mevedel-permission-remove-persistent-rule
+  "mevedel-permission-persistence")
+(autoload 'mevedel-permission-remove-persistent-safe-env-var
   "mevedel-permission-persistence")
 (autoload 'mevedel-permission-validate-persistent-stores
   "mevedel-permission-persistence")
@@ -131,6 +138,16 @@ An execution profile's remembered child grants follow the pattern."
         :spec (mevedel-permissions-list--grant-spec grant)
         :value grant))
 
+(defun mevedel-permissions-list--safe-env-item (scope name)
+  "Return the cockpit item for SCOPE's safe environment variable NAME.
+SCOPE `built-in' lists every built-in variable in NAME as one row."
+  (list :scope scope
+        :kind 'safe-env
+        :access 'ignored
+        :subject "variable"
+        :spec name
+        :value name))
+
 (defun mevedel-permissions-list--collect (context)
   "Return remembered authority items for CONTEXT."
   (let* ((session (mevedel-cockpit-context-session context))
@@ -154,7 +171,13 @@ An execution profile's remembered child grants follow the pattern."
           (dolist (rule (plist-get persistent :rules))
             (push (mevedel-permissions-list--rule-item scope rule) items))
           (dolist (grant (plist-get persistent :resource-grants))
-            (push (mevedel-permissions-list--resource-item scope grant) items)))))
+            (push (mevedel-permissions-list--resource-item scope grant) items))
+          (dolist (name (plist-get persistent :safe-env-vars))
+            (push (mevedel-permissions-list--safe-env-item scope name) items)))))
+    (push (mevedel-permissions-list--safe-env-item
+           'built-in
+           (string-join mevedel-permission-rules-builtin-safe-env-vars " "))
+          items)
     (nreverse items)))
 
 (defun mevedel-permissions-list--label (item)
@@ -182,6 +205,8 @@ An execution profile's remembered child grants follow the pattern."
 (defun mevedel-permissions-list--header (items context)
   "Return the cockpit header line for authority ITEMS and CONTEXT."
   (let ((session (mevedel-cockpit-context-session context))
+        (items (seq-remove (lambda (item) (eq (plist-get item :scope) 'built-in))
+                           items))
         (scoped (lambda (scope)
                   (seq-count (lambda (item)
                                (eq (plist-get item :scope) scope))
@@ -207,12 +232,14 @@ An execution profile's remembered child grants follow the pattern."
                :body (mevedel-report-fields
                       (list "Scope" (plist-get item :scope))
                       (list "Store"
-                            (if (eq (plist-get item :scope) 'session)
-                                "Session sidecar"
-                              (mevedel-cockpit-call-in-data
-                               context #'mevedel-permission-persistence-file
-                               (mevedel-cockpit-context-workspace context)
-                               (plist-get item :scope))))
+                            (pcase (plist-get item :scope)
+                              ('session "Session sidecar")
+                              ('built-in "Built into mevedel")
+                              (scope
+                               (mevedel-cockpit-call-in-data
+                                context #'mevedel-permission-persistence-file
+                                (mevedel-cockpit-context-workspace context)
+                                scope))))
                       (list "Kind" (plist-get item :kind))
                       (list "Access" (plist-get item :access))
                       (list "Subject" (plist-get item :subject))
@@ -234,7 +261,12 @@ An execution profile's remembered child grants follow the pattern."
          (value (plist-get item :value))
          (label (mevedel-permissions-list--label item)))
     (pcase (cons (plist-get item :scope)
-                 (if (eq (plist-get item :kind) 'resource) 'resource 'rule))
+                 (pcase (plist-get item :kind)
+                   ('resource 'resource)
+                   ('safe-env 'safe-env)
+                   (_ 'rule)))
+      (`(built-in . ,_)
+       (user-error "Built-in safe variables cannot be removed"))
       (`(session . rule)
        (mevedel-permission-remove-session-rule session value))
       (`(session . resource)
@@ -248,7 +280,11 @@ An execution profile's remembered child grants follow the pattern."
        (mevedel-cockpit-call-in-data
         context #'mevedel-permission-remove-persistent-resource-grant
         workspace scope (plist-get value :path) (plist-get value :access)
-        (plist-get value :recursive) (plist-get value :workspace-origin))))
+        (plist-get value :recursive) (plist-get value :workspace-origin)))
+      (`(,(and scope (or 'workspace 'global)) . safe-env)
+       (mevedel-cockpit-call-in-data
+        context #'mevedel-permission-remove-persistent-safe-env-var
+        workspace scope value)))
     (mevedel-cockpit-surface-refresh)
     (message "mevedel: revoked %s" label)))
 
@@ -288,7 +324,7 @@ An execution profile's remembered child grants follow the pattern."
   (list :title "Permissions help"
         :sections (list (list :id 'keys :title "Keys"
                               :body (mevedel-cockpit-surface-key-help-text mevedel-permissions-list--surface))
-			(list :id 'rows :title "Rows" :body "operation  Tool authority remembered for a matching operation\nnetwork    Operation authority that also carries network access\nresource   Exact or recursive path grant remembered for one access mode\nsession    Held by this session only, and saved with it\nworkspace  Shared by every session in this workspace\nglobal     Authored in the execution target user's permissions file\n\nPrompt approvals remember session or workspace authority.\nGlobal entries are authored explicitly. Revoking a global entry affects\nall projects on that target. Other entries may still grant the same access."))))
+			(list :id 'rows :title "Rows" :body "operation  Tool authority remembered for a matching operation\nnetwork    Operation authority that also carries network access\nresource   Exact or recursive path grant remembered for one access mode\nsafe-env   Variable whose leading assignment Bash rule matching ignores\nsession    Held by this session only, and saved with it\nworkspace  Shared by every session in this workspace\nglobal     Authored in the execution target user's permissions file\nbuilt-in   Shipped with mevedel; shown for reference and not removable\n\nPrompt approvals remember session or workspace authority.\nGlobal entries and safe variables are authored explicitly. Revoking a\nglobal entry affects all projects on that target. Other entries may\nstill grant the same access."))))
 
 (define-derived-mode mevedel-permissions-list-mode tabulated-list-mode
   "mevedel-permissions"
