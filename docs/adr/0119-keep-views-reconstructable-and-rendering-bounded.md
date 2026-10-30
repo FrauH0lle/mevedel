@@ -994,6 +994,13 @@ create a card or partition tools. This replaces reasoning's earlier membership
 in grouped activity; tool and delivery grouping and bounded live-tail rendering
 remain unchanged.
 
+The browser projection follows the same rule. It emits bounded `thinking`
+records using the native reasoning cleaner, including gptel's unfinished
+streaming bodies. The shared browser renderer opens them independently of tool
+activity and retains explicit disclosure choices across updates and reconnects.
+Previously the browser projector omitted reasoning segments entirely, so no
+browser control could reveal them.
+
 ### September 2026: streaming groups and managed boundaries
 
 An event-by-event replay of session `2026-09-15T07-24-a65f4ae874d0` and

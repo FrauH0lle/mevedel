@@ -76,6 +76,10 @@
 (declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
 
 ;; `mevedel-view-render'
+(declare-function mevedel-view--blank-segment-p
+                  "mevedel-view-render" (data-buf seg-start seg-end))
+(declare-function mevedel-view--clean-reasoning-text
+                  "mevedel-view-render" (text))
 (declare-function mevedel-view--failed-label
                   "mevedel-view-render" (count names))
 (declare-function mevedel-view--generic-tool-rendering
@@ -175,6 +179,39 @@ response span must never reach the wire as visible text."
     (unless (stringp visible)
       (error "Canonical user projection failed"))
     (string-trim visible)))
+
+(defun mevedel-collaboration--reasoning-context-p (segment &optional live)
+  "Return non-nil if SEGMENT is inside completed or live native thinking.
+The parser recognizes closed reasoning blocks.  While a block is open,
+gptel leaves its opener unpropertized and marks its body as ignored or as
+a response, depending on `gptel-include-reasoning'.  Require that producer
+property and an adjacent opener, not a marker quoted inside hidden data.
+LIVE means an earlier segment established an unfinished reasoning block.
+A native tool result can establish that context after an empty opener;
+it interrupts thinking without closing it and is still projected as a tool."
+  (or (eq (car segment) 'reasoning)
+      (and (memq (car segment) '(ignored response tool))
+           (or live
+               (save-excursion
+                 (goto-char (cadr segment))
+                 (skip-chars-forward " \t\r\n" (caddr segment))
+                 (or (and (bolp) (looking-at "#\\+begin_reasoning\\b")
+                          (<= (match-end 0) (caddr segment)))
+                     (progn
+                       (goto-char (cadr segment))
+                       (skip-chars-backward " \t\r\n")
+                       (beginning-of-line)
+                       (looking-at "[ \t]*#\\+begin_reasoning\\b[^\n]*$")))))
+           (if (eq (car segment) 'tool)
+               ;; Tool opener lines are unpropertized; its body carries
+               ;; gptel's producer identity.  Search property runs only.
+               (let ((position (cadr segment)) found)
+                 (while (and (< position (caddr segment)) (not found))
+                   (setq found (eq (car-safe (get-text-property position 'gptel)) 'tool)
+                         position (next-single-property-change
+                                   position 'gptel nil (caddr segment))))
+                 found)
+             (memq (get-text-property (cadr segment) 'gptel) '(ignore response))))))
 
 (defun mevedel-collaboration--record (id kind &rest fields)
   "Build a projection record with ID, KIND, and FIELDS."
@@ -1183,7 +1220,8 @@ owner; omitted means the root transcript."
              (prior-executions (and completions
                                     (gethash :prior-executions completions)))
              (prior-ready (and completions t))
-             records user-starts (occurrences (make-hash-table :test #'equal)))
+             records user-starts live-reasoning
+             (occurrences (make-hash-table :test #'equal)))
         (cl-labels
             ((add-execution (completion scope)
                (when-let* ((owner (plist-get completion :owner))
@@ -1274,23 +1312,46 @@ owner; omitted means the root transcript."
               (add-execution record
                              (mevedel-collaboration--scope-at
                               ranges items (plist-get span :start)))))
-          (let ((scope (mevedel-collaboration--scope-at
-                        ranges items (cadr segment)))
-                (start (cadr segment))
-                (end (caddr segment)))
+          (let* ((scope (mevedel-collaboration--scope-at
+                         ranges items (cadr segment)))
+                 (start (cadr segment))
+                 (end (caddr segment))
+                 (in-reasoning (mevedel-collaboration--reasoning-context-p
+                                segment live-reasoning))
+                 (type (if (and in-reasoning (not (eq (car segment) 'tool)))
+                           'reasoning
+                         (car segment))))
             (cond
-             ((memq (car segment) '(user response))
-              (let* ((userp (eq (car segment) 'user))
-                     (kind (if userp "user" "assistant")))
+             ((eq (car segment) 'reasoning)
+              ;; Structural reasoning is already closed and classified by
+              ;; the parser, including spans on both sides of nested tools.
+              (setq live-reasoning nil))
+             (in-reasoning (setq live-reasoning t))
+             ((and live-reasoning (eq type 'user)
+                   (not (mevedel-view--blank-segment-p data-buffer start end)))
+              (setq live-reasoning nil)))
+            (cond
+             ((memq type '(user response reasoning))
+              (let* ((userp (eq type 'user))
+                     (kind (pcase type
+                             ('user "user")
+                             ('reasoning "thinking")
+                             (_ "assistant"))))
                 (dolist (record
                          (cdr (project-segment
-                               segment nil
+                               (list type start end) nil
                                (lambda ()
-                                 (cons (if userp
-                                           (mevedel-collaboration--clean-user
-                                            segment data-buffer)
-                                         (mevedel-collaboration--clean-response
-                                          (buffer-substring start end)))
+                                 (cons (pcase type
+                                         ('user
+                                          (mevedel-collaboration--clean-user
+                                           segment data-buffer))
+                                         ('reasoning
+                                          (string-trim
+                                           (mevedel-view--clean-reasoning-text
+                                            (buffer-substring start end))))
+                                         (_
+                                          (mevedel-collaboration--clean-response
+                                           (buffer-substring start end))))
                                        (cons start end)))
                                (lambda (text)
                                  (unless (string-empty-p text) (list kind text)))

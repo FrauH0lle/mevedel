@@ -359,6 +359,16 @@ code, pre { font-family: var(--font-mono); }
 }
 .tool > summary .st.completed { color: var(--ok); }
 .execution-breadcrumb { display: flex; align-items: baseline; flex-wrap: wrap; gap: .3rem; font-size: .9rem; color: var(--muted); }
+/* Reasoning stays separate from tool activity, with a quiet collapsed label. */
+.thinking > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: .8125rem;
+  font-weight: 500;
+}
+.thinking:not([open]) > summary { font-weight: 400; }
+.thinking[open] > summary { margin-bottom: .35rem; }
+.thinking > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* A request's closing rule: the host label, then a line to the edge. */
 .turn.summary > .content { grid-column: 2; }
 .request-summary { font-size: .8125rem; color: var(--muted); }

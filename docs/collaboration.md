@@ -932,6 +932,14 @@ brings its heading back into view and returns keyboard focus there.
 Archived and agent transcripts use the live conversation's compact grouping:
 consecutive assistant text and tool calls share one visible speaker label.
 
+Substantive native thinking appears as a separate **Thinking** disclosure,
+open by default, with a muted header. It splits tool activity runs and never
+hides inside their folds. Explicit expansion or collapse survives streaming
+updates and reconnect snapshots, including agent and archived transcripts.
+Empty thinking produces no card. The host removes reasoning scaffolding and
+hidden audit data and applies the same text-size bound as other transcript
+records; it also projects native thinking while its block is still streaming.
+
 Completed turns close with the same quiet summary as the native view, such as
 `── Worked for 2m 37s · Thu 29 Oct 14:32 ─────`. The host projects a scoped
 `request-summary` record containing only its stable identity, formatted label,

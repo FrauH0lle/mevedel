@@ -623,6 +623,17 @@
       }
       return turn;
     };
+    if (record.kind === 'thinking') {
+      // Reasoning is its own disclosure, never part of folded tool activity.
+      const content = el('div', 'content');
+      const details = el('details', 'thinking');
+      details.open = true;
+      turn.disclosures.set('thinking', details);
+      details.append(el('summary', '', 'Thinking'), renderMarkdown(record.text || ''));
+      content.append(details);
+      turn.append(el('div', 'rail'), content);
+      return restore();
+    }
     if (record.kind === 'request-summary') {
       // Quiet and ungrouped: no rail glyph, speaker, scope chip or activity.
       const content = el('div', 'content');

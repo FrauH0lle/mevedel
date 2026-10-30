@@ -142,6 +142,76 @@ test('activity summaries preserve failures, children and disclosure at phone and
   } finally { await browser.close(); }
 });
 
+test('thinking disclosure keeps native toggles, draft and fit at phone and desktop widths', async () => {
+  const browser = await chromium.launch();
+  try {
+    for (const width of [375, 1280]) {
+      const page = await browser.newPage({viewport: {width, height: 812}, hasTouch: width === 375, isMobile: width === 375});
+      await page.setContent('<meta name="viewport" content="width=device-width, initial-scale=1"><main id="transcript" class="ledger"></main><form class="composer"><textarea id="draft" rows="3"></textarea></form>');
+      assert.equal(await page.evaluate(() => innerWidth), width, 'use the actual device layout width');
+      for (const file of ['viewer-theme.css', 'viewer.css']) {
+        await page.addStyleTag({content: await readFile(resolve(root, 'relay/viewer', file), 'utf8')});
+      }
+      for (const file of ['markdown.js', 'renderer.js']) {
+        await page.addScriptTag({content: await readFile(resolve(root, 'relay/viewer', file), 'utf8')});
+      }
+      await page.locator('#draft').fill('> exact\nmultiline draft');
+      await page.evaluate(() => {
+        window.rebuildThinking = () => {
+          const target = document.getElementById('transcript'), renderer = window.mevedelTranscriptRenderer;
+          const previous = new Map([...target.querySelectorAll('[data-record-id]')].map(node => [node.dataset.recordId, node]));
+          target.replaceChildren(...[
+            {id: 'before', kind: 'tool', name: 'Read', activity: {id: 'before', summary: 'Read 2 files'}},
+            {id: 'reason', kind: 'thinking', text: '**Compare** the options.\n\nKeep reasoning separate from tool activity.'},
+            {id: 'after', kind: 'tool', name: 'Grep', activity: {id: 'after', summary: 'Search 2 patterns'}},
+          ].map(record => renderer.renderRecord(record, null, null, previous.get(record.id))));
+          renderer.groupActivity(target);
+          renderer.markContinuations(target);
+        };
+        window.rebuildThinking();
+      });
+      const fold = page.locator('details.thinking'), summary = fold.locator('summary');
+      const isOpen = () => fold.evaluate(node => node.open);
+      const checkFit = async () => assert.equal(await page.evaluate(() =>
+        document.documentElement.scrollWidth <= innerWidth &&
+        [...document.querySelectorAll('.thinking, .activity-group, #draft')].every(node => {
+          const rect = node.getBoundingClientRect();
+          return rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight && node.scrollWidth <= node.clientWidth;
+        })), true, `thinking and draft fit at ${width}px`);
+      assert.equal(await isOpen(), true, 'thinking starts expanded');
+      assert.equal(await summary.innerText(), 'Thinking');
+      assert.equal(await fold.locator('strong').innerText(), 'Compare');
+      assert.equal(await page.locator('.activity-group').count(), 2);
+      assert.equal(await page.locator('.activity-group .thinking').count(), 0);
+      await checkFit();
+      await capture(page, `thinking-open-${width}`);
+      await summary.click();
+      assert.equal(await isOpen(), false, 'real click collapses thinking');
+      await page.locator('#draft').focus();
+      await page.evaluate(() => window.rebuildThinking());
+      assert.equal(await isOpen(), false, 'rebuild preserves collapse');
+      assert.equal(await page.locator('#draft').evaluate(node => node === document.activeElement), true);
+      assert.equal(await page.locator('#draft').inputValue(), '> exact\nmultiline draft');
+      assert.equal(await summary.evaluate(node => {
+        const style = getComputedStyle(node), probe = document.createElement('span');
+        node.append(probe); probe.style.color = 'var(--muted)';
+        const muted = getComputedStyle(probe).color; probe.remove();
+        return style.color === muted && style.color !== getComputedStyle(document.body).color && style.fontWeight === '400';
+      }), true, 'collapsed header uses muted color and regular weight');
+      await checkFit();
+      await capture(page, `thinking-closed-${width}`);
+      await summary.focus();
+      await page.keyboard.press('Space');
+      assert.equal(await isOpen(), true, 'Space expands the native disclosure');
+      await page.keyboard.press('Enter');
+      assert.equal(await isOpen(), false, 'Enter collapses the native disclosure');
+      await page.evaluate(() => window.rebuildThinking());
+      assert.equal(await isOpen(), false, 'keyboard collapse survives rebuild');
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
 test('source navigation loads exactly the host-located archive', async () => {
   const browser = await chromium.launch();
   try {

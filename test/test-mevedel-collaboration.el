@@ -328,7 +328,7 @@
       (let ((response-start (point)))
         (insert visible-answer)
         (put-text-property response-start (point) 'gptel 'response))
-      (dolist (block '("#+begin_reasoning\nreason secret\n#+end_reasoning\n"
+      (dolist (block '("#+begin_reasoning\nVisible thinking\n#+end_reasoning\n"
                        "<system-reminder>\nreminder secret\n</system-reminder>\n"
                        "<hook-context>\nhook secret\n</hook-context>\n"
                        "<!-- mevedel-render-data -->\n(:kind media :path \"/secret.png\")\n<!-- /mevedel-render-data -->\n"
@@ -347,15 +347,18 @@
         (put-text-property tool-start (point) 'gptel '(tool . "visible-tool")))
       (let* ((records (mevedel-collaboration--canonical-records (current-buffer)))
              (payload (mapcar #'mevedel-collaboration--json-record records)))
-        (should (= 3 (length records)))
+        (should (equal '("user" "assistant" "thinking" "tool")
+                       (mapcar (lambda (record) (plist-get record :kind)) records)))
         (should (equal (string-trim visible-user)
                        (cdr (assoc "text" (car payload)))))
         (should (equal (string-trim visible-answer)
                        (cdr (assoc "text" (cadr payload)))))
+        (should (equal "Visible thinking"
+                       (cdr (assoc "text" (nth 2 payload)))))
         (should (equal "Visible tool result"
-                       (cdr (assoc "result" (nth 2 payload)))))
+                       (cdr (assoc "result" (nth 3 payload)))))
         (let ((json (json-encode payload)))
-          (dolist (hidden '("reason secret" "reminder secret" "hook secret"
+          (dolist (hidden '("reminder secret" "hook secret"
                             "/secret.png" "unknown secret"
                             "Unknown kind payload"))
             (should-not (string-match-p (regexp-quote hidden) json))))))))

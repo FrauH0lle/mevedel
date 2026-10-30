@@ -880,6 +880,85 @@ function testRequestSummaryRendering() {
                    ['turn ai', 'turn summary', 'turn ai']);
 }
 
+function testThinkingRendering() {
+  const nodes = Object.fromEntries(['history', 'agent-panel', 'agent-transcript'].map(
+    id => [id, new Element('div')]));
+  const window = {getSelection: () => null};
+  const document = {createElement: tag => new Element(tag), getElementById: id => nodes[id]};
+  const context = {window, document, setInterval() {}, clearInterval() {}};
+  installMarkdown(context, Element);
+  for (const file of ['renderer', 'viewer-agent', 'viewer-history']) {
+    vm.runInNewContext(fs.readFileSync(`relay/viewer/${file}.js`, 'utf8'), context);
+  }
+  const renderer = window.mevedelTranscriptRenderer;
+  const record = {id: 'thinking-1', kind: 'thinking', revision: 1, text: '**Consider** the options.',
+    activity: {id: 'tools', summary: 'Read 2 files', status: 'completed'}};
+  let turn = renderer.renderRecord(record);
+  let fold = turn.disclosures.get('thinking');
+  assert.ok(fold, 'thinking renders a registered disclosure, not a tool');
+  assert.equal(fold.tagName, 'details');
+  assert.equal(fold.open, true, 'thinking starts expanded');
+  assert.equal(textOf(fold.children[0]), 'Thinking');
+  assert.match(textOf(findByClass(fold, 'prose')), /Consider the options\./);
+  assert.equal(findByClass(turn, 'tool'), null);
+  assert.equal(findByClass(turn, 'who'), null);
+  assert.equal(turn.activity, undefined, 'thinking never joins tool activity');
+  for (const open of [false, true]) {
+    fold.open = open;
+    turn = renderer.renderRecord({...record, revision: 2, text: 'Updated reasoning.'}, null, null, turn);
+    fold = turn.disclosures.get('thinking');
+    assert.equal(fold.open, open, 'both explicit disclosure choices survive rebuilds');
+    assert.match(textOf(fold), /Updated reasoning\./);
+  }
+  const ledger = new Element('div');
+  const tool = id => renderer.renderRecord({id, kind: 'tool', name: 'Read',
+    activity: {...record.activity, id}});
+  ledger.append(tool('t1'), turn, tool('t2'));
+  renderer.groupActivity(ledger);
+  assert.equal(ledger.children.length, 3);
+  assert.equal(ledger.children[1], turn, 'thinking stays between, not inside, tool groups');
+
+  // The shared agent renderer preserves choices when a fresh poll rebuilds records.
+  const sent = [];
+  const el = (tag, cls, text) => {
+    const node = new Element(tag); node.className = cls || ''; node.textContent = text || ''; return node;
+  };
+  const send = frame => { sent.push(frame); return true; };
+  const agent = window.mevedelAgentView.create({send, el});
+  agent.open({path: '/root/worker'});
+  const reply = () => agent.handle({reqId: sent.at(-1).reqId, final: true, records: [record]});
+  reply();
+  assert.equal(nodes['agent-transcript'].children[0].disclosures.get('thinking').open, true);
+  for (const open of [false, true]) {
+    nodes['agent-transcript'].children[0].disclosures.get('thinking').open = open;
+    agent.show([{path: '/root/worker', status: 'running'}]);
+    reply();
+    assert.equal(nodes['agent-transcript'].children[0].disclosures.get('thinking').open, open);
+  }
+
+  // Loaded archives retain their record nodes across index refreshes and reconnects.
+  const history = window.mevedelHistoryView.create({send, el, renderRecord: renderer.renderRecord,
+    onArtifacts() {}});
+  const index = {t: 'history-index', currentSegment: 2, final: true, records: [
+    {kind: 'chat', number: 1, title: 'Chat', firstSegment: 1, lastSegment: 2}]};
+  history.connection(true);
+  history.handle(index);
+  const segment = findByClass(nodes.history, 'history-segment');
+  segment.open = true;
+  segment.dispatch('toggle');
+  history.handle({t: 'history', reqId: sent.at(-1).reqId, segment: 1, final: true, records: [record]});
+  const archived = findByClass(nodes.history, 'thinking');
+  assert.equal(archived.open, true);
+  for (const open of [false, true]) {
+    archived.open = open;
+    history.connection(false);
+    history.connection(true);
+    history.handle(index);
+    assert.equal(findByClass(nodes.history, 'thinking'), archived);
+    assert.equal(archived.open, open);
+  }
+}
+
 function testComposerShortcut() {
   for (const [platform, hint] of [['Linux', 'Ctrl+Enter'], ['MacIntel', '⌘+Enter']]) {
     const window = {};
@@ -925,6 +1004,7 @@ async function main() {
   await testWaitFor();
   testCompletionRendering();
   testRequestSummaryRendering();
+  testThinkingRendering();
   await runNotificationTests();
   await testItemConversations();
   await testEditingAvailability();
@@ -2706,12 +2786,22 @@ async function main() {
   let skillTurn = findByRecordId(nodes.transcript, 'parity-call');
   skillTurn.disclosures.get('root').open = true;
   skillTurn.disclosures.get('root/attachment:base').open = true;
+  const thinkingRecord = {id: 'live-thinking', kind: 'thinking', revision: 1, text: 'Checking options.'};
+  await deliverTo(sockets[1], {t: 'record', record: thinkingRecord});
+  const thinkingFold = () => findByRecordId(nodes.transcript, thinkingRecord.id).disclosures.get('thinking');
+  assert.equal(thinkingFold().open, true);
+  for (const open of [false, true]) {
+    thinkingFold().open = open;
+    await deliverTo(sockets[1], {t: 'record', record: {...thinkingRecord, revision: open ? 3 : 2}});
+    assert.equal(thinkingFold().open, open, 'live updates preserve thinking disclosure choices');
+  }
+  thinkingFold().open = false;
   await deliverTo(sockets[1], {t: 'record', record: {...skillRecord, revision: 2}});
   skillTurn = findByRecordId(nodes.transcript, 'parity-call');
   assert.equal(skillTurn.disclosures.get('root/attachment:base').open, true);
   assert.equal(nodes.transcript.children.filter(turn => turn.dataset.recordId === 'parity-call').length, 1);
   const reconnectSent = sockets[1].sent.length;
-  await deliverTo(sockets[1], {t: 'welcome', proto: 3, readOnly: false, recordCount: 1});
+  await deliverTo(sockets[1], {t: 'welcome', proto: 3, readOnly: false, recordCount: 2});
   await waitFor(() => sockets[1].sent.length > reconnectSent, 'reconnected shared item catalog');
   const reconnectedCatalog = await unseal(key, sockets[1].sent[reconnectSent]);
   assert.equal(reconnectedCatalog.t, 'editing');
@@ -2723,11 +2813,13 @@ async function main() {
   const reconnectedStatus = await unseal(key, sockets[1].sent[reconnectSent + 1]);
   await deliverTo(sockets[1], {t: 'editing', reqId: reconnectedStatus.reqId, offset: 0,
                              total: statusReply.length, data: statusReply});
-  await deliverTo(sockets[1], {t: 'snapshot-chunk', final: true, records: [skillRecord]});
+  await deliverTo(sockets[1], {t: 'snapshot-chunk', final: true, records: [skillRecord, thinkingRecord]});
+  assert.equal(thinkingFold().open, false, 'reconnect snapshots preserve collapsed thinking');
   skillTurn = findByRecordId(nodes.transcript, 'parity-call');
   assert.equal(skillTurn.disclosures.get('root').open, true);
   assert.equal(skillTurn.disclosures.get('root/attachment:base').open, true);
   assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
+  await deliverTo(sockets[1], {t: 'remove', ids: [thinkingRecord.id]});
 
   // Approval is a row-local fact, independent of lifecycle status. It survives
   // settlement and redraw without changing disclosure choices or the draft.
