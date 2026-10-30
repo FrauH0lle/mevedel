@@ -253,7 +253,7 @@ record under :prepared and the authenticated accepted bytes' hash under :hash."
                        (equal (plist-get review :workspace) (plist-get (plist-get prepared :scope) :workspace))
                        (equal (plist-get review :proposals)
                               (mapcar (lambda (proposal) (plist-get proposal :id)) (plist-get data :proposals))))
-            (error "Invalid accepted memory bundle"))
+            (error "Invalid accepted memory bundle for pass %s" id))
           (mevedel-journal-store--validate-metadata review 'consolidation)
           (append data (list :prepared prepared :hash (plist-get outcome :payload))))))))
 

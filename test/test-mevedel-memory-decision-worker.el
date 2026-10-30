@@ -219,7 +219,42 @@
             (should (eq (unless changed observation) (mevedel-workspace-memory-observation workspace)))
             (should (eq (unless changed observation) (mevedel-workspace-journal-observation workspace))))
         (mevedel-memory-decision-stop-recovery)
-        (delete-directory root t)))))
+        (delete-directory root t))))
+  :doc "a persistent failure warns once per turn-end retry until recovery succeeds"
+  (let* ((root (make-temp-file "mevedel-recovery-repeat-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (mevedel--warn-once-table (make-hash-table :test #'equal))
+         (failure "Invalid accepted memory bundle for pass abc")
+         warnings completed)
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-warning) (lambda (_ text &rest _) (push text warnings)))
+                  ((symbol-function 'mevedel-journal-worker-supported-p) #'ignore)
+                  ((symbol-function 'mevedel-memory-decision-recover) #'ignore)
+                  ((symbol-function 'mevedel-memory-store-recover)
+                   (lambda (_) (when failure (error "%s" failure)))))
+          (cl-flet ((run ()
+                      (setq completed nil)
+                      (let ((inhibit-message t))
+                        (mevedel-memory-decision--start-recovery
+                         workspace (lambda () (setq completed t)) (current-buffer) #'always
+                         (mevedel-memory-store--claim-directory workspace)))
+                      (with-timeout (10 (ert-fail "Recovery did not settle"))
+                        (while (gethash (mevedel-memory-store--claim-directory workspace)
+                                        mevedel-memory-decision--recovery-workers)
+                          (accept-process-output nil .01)))))
+            (run) (run)
+            (should-not completed)
+            (should (equal (list (format "Memory recovery failed: %s.  Memory review waits until recovery succeeds"
+                                         failure))
+                           warnings))
+            (setq failure nil)
+            (run)
+            (should completed)
+            (setq failure "Invalid accepted memory bundle for pass abc")
+            (run)
+            (should (= 2 (length warnings)))))
+      (mevedel-memory-decision-stop-recovery)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-memory-decision-recovering-p ()
   ,test

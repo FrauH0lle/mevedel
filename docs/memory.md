@@ -926,6 +926,10 @@ recovery, fences this client's active claims and stops its children. A 180-secon
 deadline bounds scheduled recovery, and late replies cannot continue it. Remote
 workspaces and explicit synchronous recovery retain the target-native path.
 Recovery neither requests a model nor repeats or rolls back memory writes.
+Because root turns retry recovery, a failure warns once per distinct reason and
+later repeats go to `*Messages*`; it states that review waits for recovery, and
+an invalid accepted bundle names its pass. Successful recovery forgets reported
+failures. Each unavailable write record likewise warns once per session.
 
 ## Memory cockpit
 

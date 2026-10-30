@@ -14,6 +14,7 @@
 (require 'mevedel-memory-store)
 (require 'mevedel-memory-write)
 (require 'mevedel-transport)
+(require 'mevedel-utilities)
 (require 'mevedel-workspace-identity)
 
 ;; `mevedel-journal-cleanup'
@@ -1006,6 +1007,14 @@ Live buffers and original target authority participate in reconciliation."
       (mevedel-journal-claim-settle claim 'cancelled ""))
     (mevedel-memory-decision--recover-writes workspace)))
 
+(defun mevedel-memory-decision--recovery-failed (key reason)
+  "Report failed recovery at claim directory KEY because of REASON.
+Recovery runs after every root turn, so each distinct failure warns once and
+later repeats go to *Messages*.  Successful recovery forgets reported failures."
+  (mevedel--warn-once (list 'memory-recovery key reason)
+                      "Memory recovery failed: %s.  Memory review waits until recovery succeeds"
+                      reason))
+
 (defun mevedel-memory-decision--recover-next-write (workspace job)
   "Inspect one retained write for WORKSPACE JOB, then return to the editor.
 Each record is read afresh and reconciliation checks current root authority
@@ -1028,7 +1037,8 @@ and unsaved buffers.  JOB remains registered until all inspections finish."
                                    (eq job (gethash key mevedel-memory-decision--recovery-workers)))
                         (signal 'mevedel-memory-decision-held '("Recovery context changed")))
                       (when-let* ((failure (plist-get row :error)))
-                        (display-warning 'mevedel (format "Memory write %s is unavailable: %s" (car ids) failure) :warning))
+                        (mevedel--warn-once (list 'memory-write-unavailable (car ids) failure)
+                                            "Memory write %s is unavailable: %s" (car ids) failure))
                       ;; This is selection, never authority.  Only marked work
                       ;; needs a new owned recovery operation, which rereads it.
                       (if (not (plist-get row :marked))
@@ -1048,7 +1058,7 @@ and unsaved buffers.  JOB remains registered until all inspections finish."
                                           (cond
                                            ((plist-get reply :error)
                                             (remhash key mevedel-memory-decision--recovery-workers)
-                                            (display-warning 'mevedel (plist-get reply :error) :warning))
+                                            (mevedel-memory-decision--recovery-failed key (plist-get reply :error)))
                                            ((or (plist-get reply :held) (plist-get reply :cancelled))
                                             (remhash key mevedel-memory-decision--recovery-workers))
                                            (t (plist-put job :timer
@@ -1062,12 +1072,13 @@ and unsaved buffers.  JOB remains registered until all inspections finish."
                                (eq job (gethash key mevedel-memory-decision--recovery-workers)))
                     (signal 'mevedel-memory-decision-held '("Recovery context changed")))
                   (remhash key mevedel-memory-decision--recovery-workers)
+                  (mevedel--warn-once-reset-site 'memory-recovery)
                   (when-let* ((callback (plist-get job :callback))
                               (origin (plist-get job :origin))
                               ((buffer-live-p origin)))
                     (with-current-buffer origin (funcall callback)))))
             (mevedel-memory-decision-held nil)
-            ((error quit) (display-warning 'mevedel (format "Memory recovery failed: %s" (error-message-string err)) :warning)))
+            ((error quit) (mevedel-memory-decision--recovery-failed key (error-message-string err))))
         (when (and (not continued) (eq job (gethash key mevedel-memory-decision--recovery-workers)))
           (remhash key mevedel-memory-decision--recovery-workers))))))
 
@@ -1137,9 +1148,7 @@ An unproved fence leaves the original deadline and tracked child intact."
                                (run-at-time .01 nil #'mevedel-memory-decision--recover-next-write workspace job))
                     (setq continued t)))
               (mevedel-memory-decision-held nil)
-              ((error quit) (display-warning 'mevedel
-                                      (format "Memory recovery failed: %s" (error-message-string err))
-                                      :warning))))
+              ((error quit) (mevedel-memory-decision--recovery-failed key (error-message-string err)))))
         (when (and (not continued) (eq job (gethash key mevedel-memory-decision--recovery-workers)))
           (remhash key mevedel-memory-decision--recovery-workers))
         (unless (plist-get job :released)
@@ -1282,8 +1291,7 @@ review admission to follow recovery instead of racing its workspace claim."
                                (t
                                 (plist-put token :admitted t)
                                 (setq admitted (mevedel-memory-decision--start-recovery workspace callback origin #'current key))))))
-                        (error (display-warning 'mevedel
-                                                (format "Memory recovery failed: %s" (error-message-string err)) :warning)))
+                        (error (mevedel-memory-decision--recovery-failed key (error-message-string err))))
                     (when (eq token (gethash key mevedel-memory-decision--recovery-dispatching))
                       (remhash key mevedel-memory-decision--recovery-dispatching)
                       ;; Re-arm the SAME opportunity and captured callback.
