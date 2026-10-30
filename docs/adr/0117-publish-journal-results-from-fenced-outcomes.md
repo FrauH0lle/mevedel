@@ -58,8 +58,13 @@ undecided extractions and their waiting dependencies. It returns identities only
 and each later operation reauthenticates its proposal
 and status. Sequential callbacks yield between proposals, keeping the pass
 registered through application completion rather than reporting the queue entry
-as completion. Scheduled marked-write reconciliation uses the same owned
-recovery prelude, but its live state classification remains in the editor.
+as completion. Scheduled recovery also discovers marked or unavailable write
+identities in the child, sharing the write reader's pass grouping. Only identities
+cross back, bounded to 65,536 within an 8 MiB reply; overflow and child failure
+fail visibly rather than becoming empty or truncated selection. The discovery
+listing is the cutoff; later arrivals wait for another recovery. Scheduled
+marked-write reconciliation uses the same owned recovery prelude, but its fresh
+authority, marker and live state classification remain in the editor.
 Original-target ownership never crosses the child in this design. Automatic
 local decisions are accepted durably in the editor, and resolved write markers
 retire under its still-owned target claim. A targeted child reauthenticates only
@@ -328,12 +333,14 @@ that marker alone. The immutable unmarked intent remains, with no accepted publi
 decision. This immutable outcome is invocation-local evidence, not a cached proof
 or permission to run paths on another host. After, mixed or uncertain states
 retain normal accounted recovery; incomplete retirement failures stay visible.
-Scheduled and synchronous recovery fully inspect only records whose marker
-exists, plus any record this client has not yet read successfully; markers are
-observed afresh in one program per target. A record's marker path and pass
-retirement are immutable facts remembered per workspace object, never whether
-the marker exists.
-Read-only candidate inspection yields between records. Only a marked candidate
+Local scheduled discovery reads retained writes in the child, not through
+editor-side cold singleton authentication or a warm bulk-marker probe.
+Synchronous/native recovery fully inspects only records whose marker exists,
+plus any record this client has not yet read successfully; marker observations
+are bounded to eight per program. A record's marker path and pass retirement
+are immutable facts remembered per workspace object, never whether the marker
+exists. Editor inspection of selected candidates yields between records. Only a
+marked candidate
 starts another owned recovery operation, which rereads its evidence; unmarked
 records do not repeat full publication recovery. Unreadable records report their
 diagnostic and remain inspectable without blocking independent work.
@@ -491,6 +498,16 @@ publication both finish, so interruption cannot skip required recovery.
 The child does not repeat full recovery and never owns target mutation. The
 remaining editor intent/check/write/acceptance sequence is still synchronous;
 this change does not establish the approximately 50 ms responsiveness budget.
+
+### 2026-10-30: Move scheduled write discovery into the recovery child
+
+The earlier editor-side singleton scan repeated authentication 320 times on an
+80-pass retained history, sampling about 15,450 ms of blocked editor time.
+Its warm marker cache instead produced one roughly 234 ms block. Read-only
+discovery now shares pass proofs in the existing child and returns identities
+only; fresh editor-owned reconciliation, target claims and live-buffer protection
+remain unchanged. Native fallback bounds marker programs instead of retaining
+the unbounded cache probe. Discovery is an observation, not mutation authority.
 
 ### 2026-10-29: Freeze one daily note cohort independently of journal cadence
 

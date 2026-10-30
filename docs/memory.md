@@ -916,18 +916,21 @@ external edit happens to match their proposed bytes. Unreadable or unavailable
 records stay inspectable. Completed, durably saved root turns schedule this
 recovery independently of journaling being enabled. Repeated opportunities
 coalesce and wait for idle transport. On local Linux workspaces, accepted
-publication recovery runs in a batch child under the workspace claim. The editor
-then inspects one retained write per event-loop callback and reconciles marked
-attempts against current target authority and live buffers; unsaved edits cannot
-be classified by the child. Read-only inspection of an unmarked record does not
-launch another owned recovery operation. Only a currently marked candidate
-enters that operation, passing identities rather than inspection proofs;
-the owned operation freshly rereads evidence before reconciliation. Unreadable
-records report their diagnostic while independent inspections continue.
-Only records whose target marker exists, or that
-this client has not yet read, are inspected: one batched program per target
-observes the markers of records already read, whose marker paths never change.
-Each inspected record is read afresh. Cancellation stops the
+publication recovery and read-only write-candidate discovery run in a batch child
+under the workspace claim. Discovery authenticates writes grouped by pass,
+discarding bodies between passes, and returns only marked or unavailable
+identities. Its directory listing is the cutoff: later arrivals wait for another
+recovery. The reply is bounded to 8 MiB and 65,536 identities; overflow or child
+failure is an error, never a truncated or successful empty selection.
+The editor validates the reply's operation identity and inspects one selected
+write per event-loop callback. A currently marked candidate enters a new owned
+operation that freshly rereads evidence, current target authority and live
+buffers before reconciliation; child observations never authorize mutation.
+Changed markers, retired records and unsaved edits are checked after yielding.
+Unreadable records report their diagnostic while independent inspections continue.
+Native fallback remembers immutable marker paths for successfully read records,
+but observes their existence afresh in batches of at most eight, never one
+unbounded warm-cache marker program. Cancellation stops the
 remaining checks, and the original deadline also bounds this inspection phase.
 Root-turn automatic consolidation is offered after recovery finishes, so it does
 not race that recovery claim. A queued offer refused by a busy claim does not
