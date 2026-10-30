@@ -48,6 +48,9 @@
 (declare-function mevedel-memory-store--assert-owned "mevedel-memory-store" (claim))
 (declare-function mevedel-memory-store-recover "mevedel-memory-store" (workspace))
 
+;; `mevedel-memory-write'
+(declare-function mevedel-memory-write-recovery-selection "mevedel-memory-write" (workspace))
+
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication--cached-generation "mevedel-session-publication" (session-dir head))
 (declare-function mevedel-session-publication--cached-sidecar-facts "mevedel-session-publication" (session-dir head generation))
@@ -148,7 +151,9 @@ Deleting the process cancels work; durable claims fence interrupted attempts."
 						 (file-exists-p reply)
 						 (<= (file-attribute-size (file-attributes reply))
                                                      (if (or (memq operation '(capture-prepare memory-prepare memory-publish generation-observations))
-                                                             (and (eq operation 'memory-recover) (plist-get payload :pending-selection)))
+                                                             (and (eq operation 'memory-recover)
+                                                                  (or (plist-get payload :pending-selection)
+                                                                      (plist-get payload :write-selection))))
 							 (* 8 1024 1024) 4096)))
                                       (error "Journal worker exited with status %s" (process-exit-status child)))
                                     (mevedel-journal-worker--read reply))
@@ -247,8 +252,10 @@ Deleting the process cancels work; durable claims fence interrupted attempts."
                                (list :ok t :operation-id (plist-get payload :operation-id)
                                      :changed changed :items
                                      (mevedel-memory-pass--pending-items workspace (plist-get payload :skip))))
-                           (list :ok t :operation-id (plist-get payload :operation-id)
-                                 :changed changed))))))
+                           (append (list :ok t :operation-id (plist-get payload :operation-id)
+                                         :changed changed)
+                                   (when (plist-get payload :write-selection)
+                                     (list :writes (mevedel-memory-write-recovery-selection workspace)))))))))
                   ((or 'memory-prepare 'memory-publish)
                    (require 'mevedel-memory-pass)
                    (if (eq (plist-get options :operation) 'memory-prepare)

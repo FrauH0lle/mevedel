@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-memory-write)
+(require 'mevedel-session-control-fs)
 (require 'mevedel-tool-patch)
 
 (mevedel-deftest mevedel-memory-write-control-directory
@@ -159,6 +160,23 @@
     (delete-file (file-name-concat directory (concat (nth 2 ids) ".el")))
     (mevedel-memory-write-recovery-candidates workspace)
     (should-not (gethash (nth 2 ids) inspected)))
+  :doc "native fallback bounds every marker program instead of probing all warm markers together"
+  (let ((program (symbol-function 'mevedel-session-control-fs-run-program)) sizes)
+    (dotimes (n 20)
+      (let ((id (secure-hash 'sha256 (number-to-string n))))
+        (push id ids)
+        (write-region "(record)" nil (file-name-concat directory (concat id ".el")) nil 'silent)))
+    (dolist (id ids)
+      (let ((pin (file-name-concat pending (concat id ".pin"))))
+        (puthash id pin inspected)
+        (write-region "hash" nil pin nil 'silent)))
+    (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+               (lambda (operations &rest args)
+                 (push (length operations) sizes)
+                 (apply program operations args))))
+      (should (equal (sort (copy-sequence ids) #'string<)
+                     (sort (mevedel-memory-write-recovery-candidates workspace) #'string<))))
+    (should (cl-every (lambda (size) (<= size 8)) sizes)))
   :doc "leaves writes on an unobservable target to the full inspection"
   (progn
     (dolist (id ids)
