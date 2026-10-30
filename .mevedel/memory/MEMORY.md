@@ -25,6 +25,7 @@
 - [Preserve controls and conditions when attributing test outcomes](controlled-test-attribution.md) - Equivalent context, delivered test inputs, assertion conditions, and negative controls establish different parts of a coverage claim
 - [Trace unreadable addresses back to discovery](resource-discovery-consumption-verification.md) - Check discovery-to-consumption at root and descendant scopes without weakening valid access refusals
 - [Correctness and simplicity without losing features or performance](development-priorities-user-preference.md) - Prioritize correctness and maintainability, avoid overengineering, and confirm feature removal with the user
+- [Scale verification to consequence](proportionate-verification-feedback.md) - Rigor rules apply to consequential claims; temporary or low-stakes work gets proportionate checks
 - [Keep named-agent guidance uniform](uniform-agent-role-guidance-feedback.md) - Make general-purpose delegation discoverable without singling out verifier for special contrasting guidance
 - [Show recurring advisories only once](one-time-recurring-advisories.md) - Repeated informational warnings become tedious; avoid repeatedly showing the same advisory
 - [Review observational Eval by its visible effects](observational-eval-review-feedback.md) - Unconfined execution alone is not a reason to defer task-relevant observational Eval; preserve safety boundaries and bounded explanations

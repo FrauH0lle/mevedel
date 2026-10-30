@@ -34,6 +34,12 @@ reviewing older notes containing project progress. No action is a successful
 review. Avoid duplicates; update or remove outdated memories when supported.
 Do not create or rewrite memories merely to produce proposals.
 
+Also curate the captured memory itself, even when no new evidence arrives.
+Merge topics that state overlapping rules or facts into one, Update a topic
+whose guidance is one-sided by adding when it applies and when it does not,
+and Remove topics that are redundant with another topic, maintained
+documentation, or instructions. Prefer fewer, sharper topics.
+
 Shared working notes in `notes` are temporary working material from
 `work://shared/`. They are cleaned up after this review, so extract every
 qualifying memory from them now: cite the note's ID in a proposal's `evidence`.

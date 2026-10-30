@@ -71,6 +71,37 @@ extracted 4 of 4 planted lessons without promoting routine notes. Remaining:
 Managed Bash commands run until they exit or are stopped. `145c66a` removed
 `mevedel-bash-timeout` (120 s default) and the model-facing `timeout_seconds`,
 so only a native `timeout` the model writes itself bounds a command. A
+### Memory and docs upkeep (retro 2026-10-30)
+
+- Split `docs/memory.md` (about 1,700 lines) by subsystem: journal, review
+  contract, note lifecycle, recovery; reach each from the documentation map.
+- Mark ADR 0117 sections superseded by ADR 0128 with one pointer instead of
+  keeping their full text inline.
+
+## Agents
+
+- After compaction, a retained agent can resume its original assignment
+  instead of its latest one (seen twice on 2026-10-29, once writing into a
+  frozen run). Agent compaction should carry the parent's latest assignment
+  message verbatim.
+- Grandchild agents mail `/root` directly (about 15 times on 2026-10-29).
+  Default a child's `SendMessage` target to its parent, or reject messages that
+  skip a level unless explicitly flagged.
+- After the MCP idle timeout (1,800 s) interrupts `WaitAgent`, later calls
+  answer "Agent is already waiting" until the stuck wait clears.
+
+## Checks
+
+- `scripts/check-standards.py` should reject duplicate ERT test names across
+  files; today only full-suite discovery catches them.
+- It should also reject committed tests that reference untracked
+  `test/fixtures/` files (`present-wayland-sync.c` broke clean checkouts until
+  7eefdf5f; `test-mevedel-journal-cleanup-memory.el` was never committed until
+  762589f6).
+- Review tests for absolute deadlines under about one second that are not
+  shown to measure the code under test; two such tests failed only under
+  8-worker load on 2026-10-29.
+
 forgotten command keeps running and holds the
 [system sleep inhibitor](sessions.md#system-sleep). When Bash completion wake-ups
 and the [Monitor tool](tools.md#monitor) were added (2026-10), the user decided

@@ -3,6 +3,9 @@
 Work directly by default. Delegate bounded work for useful parallel progress or
 fresh-context investigation that returns compact results. Supply context and
 ownership, avoid duplicate work, and check consequential delegated evidence.
+Start a delegated implementation brief with the problem in one sentence and a
+size estimate (files, rough lines); ask the agent to stop and report when the
+work grows well beyond it. Ask for short reports in plain sentences.
 When delegating or reporting measurements, use labeled lists: one measurement
 per item with scenario/configuration, metric, value, unit, and statistic or
 sample count. Do not concatenate unlabeled numbers or slash-separated metrics.
