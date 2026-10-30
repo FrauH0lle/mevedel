@@ -926,14 +926,17 @@ function testThinkingRendering() {
   const send = frame => { sent.push(frame); return true; };
   const agent = window.mevedelAgentView.create({send, el});
   agent.open({path: '/root/worker'});
-  const reply = () => agent.handle({reqId: sent.at(-1).reqId, final: true, records: [record]});
+  let streamed = record;
+  const reply = () => agent.handle({reqId: sent.at(-1).reqId, final: true, records: [streamed]});
   reply();
   assert.equal(nodes['agent-transcript'].children[0].disclosures.get('thinking').open, true);
   for (const open of [false, true]) {
     nodes['agent-transcript'].children[0].disclosures.get('thinking').open = open;
+    streamed = {...streamed, text: `${streamed.text} Next chunk.`, revision: streamed.revision + 1};
     agent.show([{path: '/root/worker', status: 'running'}]);
     reply();
     assert.equal(nodes['agent-transcript'].children[0].disclosures.get('thinking').open, open);
+    assert.match(textOf(nodes['agent-transcript']), /Next chunk\./);
   }
 
   // Loaded archives retain their record nodes across index refreshes and reconnects.

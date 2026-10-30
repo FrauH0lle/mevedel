@@ -271,6 +271,48 @@
       (when (buffer-live-p loaded) (kill-buffer loaded))
       (kill-buffer data))))
 
+(mevedel-deftest mevedel-collaboration--reply-agent-records/streaming
+  (:doc "native thinking keeps its wire identity across agent polls and closure")
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (insert "Question\n")
+    (let* ((room (list :transport 'transport :session nil))
+           (guest (list :name "viewer"))
+           (info (list :position (copy-marker (point)) :include-reasoning 'ignore))
+           (gptel-post-stream-hook nil)
+           sent first-id)
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                 (lambda (_transport _peer frame)
+                   (push (mevedel-test--frame frame) sent) t)))
+        (dolist (chunk '("First" " next" t))
+          (gptel-curl--stream-insert-response
+           (cons 'reasoning (if (stringp chunk) (copy-sequence chunk) chunk)) info)
+          (setq sent nil)
+          (mevedel-collaboration--reply-agent-records
+           room 1 guest '(:reqId 1 :path "/root/worker")
+           (mevedel-collaboration--agent-fetch-records
+            room (current-buffer) "/root/worker" nil))
+          (let* ((records (append (plist-get (car sent) :records) nil))
+                 (thinking (cl-find "thinking" records
+                                    :key (lambda (record) (plist-get record :kind))
+                                    :test #'equal)))
+            (should (equal (if (equal chunk "First") "First" "First next")
+                           (plist-get thinking :text)))
+            (if first-id
+                (should (equal first-id (plist-get thinking :id)))
+              (setq first-id (plist-get thinking :id)))))
+        ;; A different child must not borrow the prior child's disclosure ID.
+        (setq sent nil)
+        (mevedel-collaboration--reply-agent-records
+         room 1 guest '(:reqId 2 :path "/root/other")
+         (mevedel-collaboration--agent-fetch-records
+          room (current-buffer) "/root/other" nil))
+        (let* ((records (append (plist-get (car sent) :records) nil))
+               (thinking (cl-find "thinking" records
+                                  :key (lambda (record) (plist-get record :kind))
+                                  :test #'equal)))
+          (should-not (equal first-id (plist-get thinking :id))))))))
+
 (mevedel-deftest mevedel-collaboration--handle-fetch-agent
   (:doc "answers chunked projected records with an unchanged latch and a throttle")
   (let* ((save-path (make-temp-file "mevedel-agent-artifact-" t))
