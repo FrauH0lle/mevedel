@@ -425,9 +425,10 @@ Resolve the `.git' pointer and its `commondir' file on PATH's target."
 
 (defconst mevedel-sandbox--root-anchored-names '(".mevedel")
   "Directories that exist only at a workspace root.
-A protected `**/NAME/...' pattern below one protects, at each discovery
-root, the whole directory its literal part names, without walking the
-root; native checks still match the pattern itself at any depth.")
+A protected `**/NAME/...' pattern below one protects the whole directory
+its literal part names, without walking the root.  Missing state is
+created only at the primary root; existing secondary state is protected
+too.  Native checks still match at any depth.")
 
 (defun mevedel-sandbox--find-protected-directory (root name executable)
   "Find literal protected NAME below local ROOT with GNU find EXECUTABLE.
@@ -457,6 +458,8 @@ the execution target's temporary directory, defaults to
 scratch the child already owns, a repository placed there is not protected,
 and walking all of it on every launch cost more than the protection was
 worth while surfacing transient trees that vanished before launch.
+The first writable root is the primary confinement root; only it receives
+default missing mount targets, never the memory or additional roots.
 SCAN-FUNCTION, when non-nil, receives ROOT, NAME, EXECUTABLE and MODE for
 each native directory scan and returns (PATH . BLOCKED) pairs.
 Literal state roots carry `:create-parents' so preparation protects their
@@ -607,10 +610,11 @@ across launches, since another active sandbox may still mount them."
                              mode directory-p))
              (literal-directory
               (dolist (root (delete-dups (copy-sequence discovery-roots)))
-                (search-literal-directory root literal-directory mode)
+                (search-literal-directory root literal-directory mode))
+              (when (member (car writable-roots) discovery-roots)
                 (add-candidate
-                 (file-name-concat root literal-directory) mode t)))
-             ;; mevedel's own state sits at each workspace root.  A
+                 (file-name-concat (car writable-roots) literal-directory) mode t)))
+             ;; mevedel's own state sits at workspace roots.  A
              ;; pattern globbing below it protects the whole directory its
              ;; literal part names: one required mount, without a walk,
              ;; that also covers entries created later.  A literal file
@@ -626,8 +630,10 @@ across launches, since another active sandbox may still mount them."
                 ;; parents, so authored siblings stay writable and a confined
                 ;; shell cannot plant state before mevedel creates it.
                 (dolist (root (delete-dups (copy-sequence discovery-roots)))
-                  (add-candidate (file-name-concat root (string-join literal "/"))
-                                 mode directory-p directory-p))))
+                  (let ((path (file-name-concat root (string-join literal "/"))))
+                    (when (or (equal root (car writable-roots))
+                              (file-exists-p path))
+                      (add-candidate path mode directory-p directory-p))))))
              (t
               (let ((search-roots (copy-sequence discovery-roots)))
                 (when absolute-pattern
@@ -1140,6 +1146,10 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
 Return a plist with :state, :command, and :facts.  Confined preparations also
 carry :marker.  A required but unavailable backend
 returns :state `refused' and :error without a command.
+WRITABLE-ROOTS starts with the primary confinement root (the workspace for
+managed commands, private scratch for helpers), followed by memory, temporary
+and additional roots.  Default missing protected directories are created only
+at the primary root, independently of WORKDIR's working subdirectory.
 ADDITIONAL-PERMISSIONS is a validated additive execution profile.
 SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval.
 MODE defaults to the global sandbox mode.  TEMPORARY-ROOT names the

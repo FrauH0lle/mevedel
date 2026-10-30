@@ -260,7 +260,8 @@ never broaden the child sandbox.
 and validation. These directory boundaries cover future artifact ids and missing
 bookkeeping files too. Authored files under `.mevedel/artifacts/ID/` stay writable,
 including file creation and atomic replacement. Before a confined launch, missing
-protected state directories and their parents are created; only the protected
+protected state directories and their parents are created only in the primary
+workspace root, never in writable memory or additional roots; only the protected
 leaf is mounted read-only. Missing-directory creation and mode changes run
 through pinned target-side parents using the writable roots' captured canonical
 spellings, so an ancestor replacement during preparation cannot redirect them.
@@ -299,13 +300,19 @@ can finish after request cancellation so an aborted turn still has a review
 patch. They retain request identity, owner liveness, target and policy checks;
 replacement requests or changed authority still refuse their pending launch.
 A failed or truncated native scan refuses preparation; it does not discard missing protection.
-A pattern below `**/.mevedel/`, mevedel's own state directory, which exists
-only at a workspace root, protects in the Bash sandbox the whole directory its
-literal part names, at each discovery root and without a walk:
+A pattern below `**/.mevedel/`, mevedel's own state directory, protects in the
+Bash sandbox the whole directory its literal part names, without a walk:
 `**/.mevedel/artifacts/.state/**` is one mount however many artifacts there
 are. A literal file pattern protects the file. Native
 tool checks match the pattern itself, at any depth; a `.mevedel` nested deeper
 in a root is covered by native tool checks only.
+Existing Git directories are still discovered under every writable discovery
+root, but a missing root-level `.git` mount target is created only at the primary
+workspace root, independently of the command's working subdirectory. Existing
+protected state in secondary workspace roots remains read-only too, but missing
+state is not planted there. The primary confinement root is the first writable
+root: the workspace for managed commands, private scratch for helpers.
+Preparing the default sandbox leaves memory roots unchanged.
 Other patterns and targets retain the Lisp walker. Canonical target checks and
 final confinement validation remain unchanged.
 
