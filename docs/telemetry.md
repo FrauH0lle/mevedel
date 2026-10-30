@@ -76,6 +76,24 @@ scope key is hashed for the same reason; Eask test paths are extracted only when
 `test/*.el` names. Cache identity is a hash of the relevant parent environment,
 not the environment values.
 
+Memory-consolidation terminal events have one narrow target/query exception:
+`:investigation` contains at most 32 call rows within 32 KiB of serialized
+UTF-8, with an explicit omitted-row count. Dedicated `:investigation-root`,
+`:investigation-path`, `:investigation-pattern` and `:investigation-command`
+fields retain the scoped root, normalized relative target and search query
+(or Git subcommand), each capped at 256 UTF-8 bytes. `:target-truncated` marks
+shortened target fields. Rows retain admission-order call identity, tool name,
+Read range, status, delivered byte count, result SHA-256, and partial/truncated
+flags, never delivered content or error messages. `:investigation-notes` lists
+at most 32 admitted note addresses of at most 256 UTF-8 bytes each, with
+`:investigation-notes-omitted` counting oversized or excess addresses. The pass ID joins
+these observations to accepted proposals; it does not attribute a call to any
+particular note or establish what the model understood. This exception does not
+allow arbitrary tool arguments, absolute source paths, shell commands, or
+results in ordinary telemetry. It follows the normal enable switch, nil-field
+omission and workspace rotation lifetime; accepted bundle and public review
+schemas remain unchanged.
+
 The ordinary hook, permission, execution, and repair logs remain available for
 their subsystem-specific details. Telemetry connects their lifetimes through
 shared session, request, tool-use, execution, interaction, agent, Goal, and
@@ -160,7 +178,23 @@ cancellation releases the fence and leaves the machine retryable.
 - `event-loop-lag` whenever the editor's event loop ran more than
   `mevedel-telemetry-lag-threshold` (0.5 s) late. Watching runs while a
   request runs and for two minutes after it settles, since journal,
-  collection and publication work follows settlement. Every timer delivered
+  collection and publication work follows settlement. Admitted sessionless
+  memory passes also watch from registration before preparation through terminal
+  completion (including publication and automatic application), followed by the
+  same two-minute tail. They reuse the process heartbeat, native worker or PGTK
+  fallback timer, never a separate sampler. Their lag events and summary go to
+  workspace diagnostics with `:pass-id` and `:workload memory`; no session is
+  manufactured. One heartbeat batches workspace rows into one locked target
+  program per workspace; quiet samples do not write. Diagnostic append time is
+  excluded from native lag attribution so recording a stall cannot renew itself.
+  Nested remote attribution checks a bounded set of supported wait/send dispatch
+  frames; missing or truncated stacks conservatively retain diagnostic ownership.
+  This remains synchronous I/O: independent responsiveness and CPU measurements
+  must include that observer cost, rather than treating exclusion as a speedup.
+  Overlapping session/pass windows can report the same process
+  stall, so deduplicate before counting editor stalls. Waiting before admission
+  is not watched by the pass. Disabled telemetry and noninteractive Emacs do not
+  start pass watching. Every timer delivered
   meanwhile reports how late it ran, since a stall delays every timer due
   during it. A 100 ms heartbeat samples the rest and reports the worst delay
   since the previous heartbeat, once. Busy Lisp, redisplay or collection makes
@@ -231,16 +265,53 @@ cancellation releases the fence and leaves the machine retryable.
   can report publication without provider usage when those counts were not
   retained. Retries and failed publication remain diagnostic events; logs are
   not used as completion or review-coverage authority;
+- `memory-note-cycle-observed` in workspace diagnostics after a preparation
+  response, including an empty or skipped metadata-only opportunity. Its scalar
+  fields describe the last observed durable scheduling snapshot:
+  - `:note-cycle-id`: opaque cycle identity;
+  - `:note-cycle-count`: total frozen cohort members;
+  - `:note-cycle-attempted`: members authenticated as attempted by accepted passes;
+  - `:note-cycle-deferred`: members deferred without an admitted attempt;
+  - `:note-cycle-remaining`: frozen members not yet attempted or deferred;
+  - `:note-cycle-status`: `active`, `complete`, or `paused`.
+  The same fields accompany pass terminal events and results as the last
+  observed durable snapshot, not increments to sum across passes. A successful
+  pass can finish before its own admission receipt has been reconciled: only
+  fresh owned reconciliation can credit that accepted pass. A following
+  metadata-only admission can therefore report the final complete snapshot
+  without another provider request. An observation event alone proves neither
+  inference, an accepted review, nor any deletion. No cohort paths, member
+  bodies or parser diagnostic text enter these fields;
 - `memory-consolidation-fired`, `memory-consolidation-completed`,
   `memory-consolidation-failed`, and `memory-consolidation-killed` in workspace
   diagnostics. Each pass carries its identity, ownership generation, frozen
   mode, general/focused scope, and `memory` workload. Terminal events add duration,
   available provider usage, published proposal/review counts, consumed coverage,
   and the frozen eligible backlog remaining. Focused passes consume no general
-  coverage; failed or cancelled passes leave the selected batch in the backlog.
+  coverage; failed or cancelled passes do not fabricate reviewed notes or
+  consumed digest coverage.
   Auto completion also records `updated-file-count`, the distinct paths newly
   confirmed written by that run, without exposing those paths or claiming that
   the resulting memory is better.
+  There is no model-facing note acknowledgement or note-format counter. After
+  successful review the store generates disposal from exact admitted IDs;
+  malformed memory/instruction output rejects the whole review before disposal.
+  Confirmed writes, held extraction dependencies and review failures remain
+  distinct. Retention-guard, model-keep and preserved-condensation counters are
+  not emitted; accepted review alone is not proof of application or useful service.
+  The daily shared-note cycle and a pass are different units. One finite cycle
+  can use several ordinary passes; the private cycle record tracks the frozen
+  cohort, accepted-pass-authenticated attempts, deferred versions and scheduling
+  status. Its scheduling metadata contains no note bodies and grants no write
+  authority. An admitted note in an accepted pass can count as attempted even
+  when its acknowledgement is missing or invalid, while that pass still reports
+  a format failure and no reviewed/deleted credit for the note. Deferral is not
+  an attempt, and an attempt is not extraction or confirmed deletion. A cycle
+  continuing after a zero-delete batch is not evidence of applied progress.
+  The former catch-up-progress observation and rolling batch-cap fields are
+  removed, not emitted with zero values. Provider usage, request timing, format
+  failures and confirmed application counts remain per-pass observations;
+  cycle scheduling does not establish provider cost or throughput.
   Phase durations accumulate in memory and join only that existing terminal
   event; phase transitions append no additional workspace events.
   `:duration-ms` starts after claim acquisition. `:queue-duration-ms`, when
@@ -255,6 +326,18 @@ cancellation releases the fence and leaves the machine retryable.
   - `:review-request-duration-ms`: review request invocation through settlement,
     including input preparation, investigation tools and chunk summaries. This
     is **not provider time**.
+  - `:provider-duration-ms` and `:provider-call-count`: sum of observed native
+    gptel provider-call finish durations and number of observed dispatch starts for this
+    pass, including sequential note chunk summaries and the final review.
+    Tool execution, prompt packing before dispatch, application and publication
+    are excluded. Failed and aborted dispatches count, with their observed
+    elapsed time retained; duplicate completion/late callbacks cannot add another
+    finish. Cancellation during the start-event append can abort that span before
+    transport registration; a start is not proof of a provider HTTP request.
+    Totals are absent when no native call was observed, including
+    telemetry-disabled runs and external ACP engines whose transport boundaries
+    are not observed. They are wall time, not provider CPU or billing. The same
+    totals are available in the pass result and review usage snapshot.
   - `:publication-duration-ms`: asynchronous publication dispatch through reply,
     or synchronous acceptance and publication.
   - `:application-duration-ms`: automatic application invocation through actual
@@ -460,6 +543,11 @@ path (when applicable), backend name and concrete `:backend-type`, model,
 and workload (`root`, `agent`, `naming`, or `context-summary`). Context
 summaries also retain their categorical purpose. Helpers write into the owning
 session; sessionless journal/memory work keeps its separate workspace stream.
+Native memory review and its chunk-summary calls emit `provider-call` start/finish
+events there with `:pass-id` and `:workload memory`, using the same dispatch,
+parser, completion and abort boundaries and normalized usage fields. Chunk
+summaries additionally retain their summary `:purpose`. Correlation is internal
+request context, not model input, and never emits the workspace object or payload.
 Transient `/btw` conversational calls do not create per-call events.
 Only gptel dispatch is observed. Claude Code requests run through ACP and emit
 no `provider-call` events: root and child turns, and isolated text and workload

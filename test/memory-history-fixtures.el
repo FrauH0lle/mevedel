@@ -34,8 +34,8 @@ PENDING leaves their proposals undecided."
       (dotimes (item items)
         (let ((path (file-name-concat shared (format "note-%d-%d.md" batch item))))
           (write-region (make-string bytes ?x) nil path nil 'silent)
-          (set-file-times path (seconds-to-time (- (float-time) 3600)))))
-      (let* ((capture (mevedel-memory-notes-capture workspace nil :mode 'auto :quiet-hours 0))
+          (set-file-times path (seconds-to-time (- (float-time) (* 15 86400))))))
+      (let* ((capture (mevedel-memory-notes-capture workspace nil :mode 'auto))
              (scope (mevedel-memory-scope-capture workspace))
              (claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180)))
         (unwind-protect
@@ -44,11 +44,7 @@ PENDING leaves their proposals undecided."
                    (notes (mapcar (lambda (document) (plist-get document :id))
                                   (mevedel-memory-notes-documents scope)))
                    (reply (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n"
-                                  "## Remove\n- none\n## Instructions\n- none\n## Notes\n"
-                                  (mapconcat (lambda (note)
-                                               (format "```proposal\nnote: %S\ndisposition: \"delete\"\nreason: \"Reviewed\"\nopen-items: []\nresolved-by: []\n---\n```\n" note))
-                                             notes "")
-                                  "## No action\n- none"))
+                                  "## Remove\n- none\n## Instructions\n- none\n## No action\n- none"))
                    (accepted (mevedel-memory-store-accept workspace prepared reply nil "test:model" nil notes)))
               (mevedel-memory-store-publish workspace (plist-get prepared :id))
               (unless pending

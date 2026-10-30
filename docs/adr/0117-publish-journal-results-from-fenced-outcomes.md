@@ -243,18 +243,54 @@ processing; display responsiveness does not establish nonblocking manual actions
 Explicit backlog drain coordinates successive bounded general reviews through
 the same claim and settlement owner; it yields between batches and waits while
 local consolidation, application or cleanup runs; other sessions' turns do not
-stop it, and notes they use wait. Auto mode offers a remaining ready backlog at the
-next idle opportunity instead of waiting another day, subject to a rolling
-24-hour cap (eight successful general reviews by default, including explicit
-ones). Published and retired timestamps enforce admission under ownership;
-explicit drain bypasses the automatic cap. A returned application error or
-recovery requirement stops successor
-drain batches even when review acceptance succeeded; the accepted outcome,
-confirmed application counts and original diagnostic remain distinct and intact.
-This replaces one-batch-per-interval catch-up: a roughly 250-note ready backlog
-otherwise took weeks at sixteen
-notes per daily review. Request bounds stay unchanged rather than making one
-oversized request. The cap limits admissions, not provider billing.
+stop it, and notes they use wait. Automatic shared-note review has one
+target-clock daily cycle, due inclusively 24 hours after the preceding cycle's
+admission. It freezes a bounded eligible path/version cohort under existing
+ownership and services that finite cohort through ordinary bounded passes in
+propose or auto mode. Manual mode requires a request. Empty cohorts start no
+note inference; independent journal reviews and explicit allow-empty memory
+reviews retain their ordinary behavior. New arrivals and changed versions wait
+for the next cohort. General `/remember` participates for one bounded pass,
+including when its allow-empty option is set; a focused review excludes notes.
+
+`mevedel-memory-cycle.el` owns the private metadata-only
+`.mevedel/state/shared-notes/cycle.el` record per actual workspace journal, bound
+to the workspace identity, physical shared root and target. It is not a
+directory/target-tuple store or a cross-alias mapping. A directory or target
+identity change while the cycle is active or unreconciled fails visibly closed;
+finishing or resolving it needs the original namespace and authority. A
+completed, reconciled cycle may freeze the current namespace at its next due
+admission. Local-to-TRAMP takeover and alias equivalence are not proven by this
+design. The record includes admission, cohort/hash, attempts,
+deferred members, an original pass/claim reservation and active/complete/paused
+state. Admission persists the reservation before yielding capture, so failure
+before immutable preparation still leaves a fenced predecessor for recovery.
+Cleanup retains that predecessor even without a prepared record; its strict
+claim observation grants retention only, never write authority. Preparation
+failure without a returned bundle can adopt only its exact original reserved
+claim before fresh-owned reconciliation and pause. Attempt completion is
+authenticated against accepted passes and exact admitted notes; the cycle record
+is neither a second review ledger nor mutation authority. An admitted attempt
+is not proof of a checked deletion. A successful
+batch with no deletions cannot starve later cohort members. Recovery resumes
+without repeating completed attempts; failure, cancellation and application
+recovery requirements pause the current cycle. An explicit review or drain can
+resume it immediately. Automatic offers do not resume that paused cycle before
+admission plus 24 hours, but at the inclusive daily boundary can admit a new
+cohort that includes its still-eligible remaining versions. An active cycle
+retains its original cohort when resumed. Pausing grants no permanent exemption.
+Pre-admission contention preserves
+the opportunity, with nonzero busy retries and fresh owned admission.
+
+Applied-progress catch-up, capture-history ranking and the rolling successful-
+batch cap are removed. Explicit drain can bypass cycle time and journal
+timing/count thresholds, never age, current-use, unsaved-buffer, pending/recovery
+or mutation checks. The independent journal-only minimum-hours, minimum-digests
+and sparse-digest policy remain. Only journal-bearing general reviews advance
+that review clock, including through retirement metadata; a note-only cycle
+does not postpone journal work. Accepted outcomes, confirmed application counts
+and diagnostics remain distinct. Request bounds do not grow, and finite
+batching makes no provider-cost, throughput or capacity claim.
 
 Application holds both workspace and original target-root claims. It persists
 complete private intent and a hash-only target marker before mutations. Curated
@@ -263,6 +299,7 @@ writes, rollback, claim settlement, and marker retirement share a target-side
 marker. Reconciliation compares exact before/after states; it does not infer a
 successful write from an unmarked intent. Reversal is a separate accepted intent
 and decision, preserving the original application as evidence.
+Settlement reports observed unchanged targets without inferring an interruption.
 A known admission hold or cancellation may abandon an exact prepared intent
 without deciding the proposal only after checked rollback and freshly proven
 complete before-state. Original authority, tokens and live buffers are checked
@@ -289,7 +326,10 @@ edits and changes from other reviews are preserved without replaying write
 history. Application retains the complete current index snapshot as its expected
 before-state; exact file checks protect preparation through commit. Topics and
 instructions still require their original state, and reversal still requires
-the exact recorded after-state.
+the exact recorded after-state. An Instructions body is the complete desired
+file content, preserving unrelated guidance, rather than an appended fragment.
+Empty content clears an existing file or creates an admitted known-absent file
+with zero bytes. The exact captured applicable target set is unchanged.
 
 Private journal records live at `.mevedel/state/journal/`, alongside other
 generated workspace state; public journal entries stay at `.mevedel/journal/`.
@@ -332,19 +372,56 @@ groups. Later mutations finish accepted expiry before pinning new evidence.
 Curated memory is outside journal expiry. Public retrieval uses `memory://journal/`.
 
 Shared working files are not journal input. They are untracked, machine-local
-and temporary; general consolidation reviews quiet versions directly. Each
-admitted note receives one disposition (delete, keep, or condense) beside
-ordinary extraction proposals citing it, and a disposal applies only after
-those extractions are applied. Quiet attachments no surviving note references
-and quiet empty folders receive structured decisions without inference. Files
-that memory or instructions cite are not removed silently. Accepted reviews
+and temporary. Only Markdown notes (`.md`, case-insensitive) enter model review;
+other files are attachments even when readable text. Every note and attachment
+uses one modification-age threshold, fourteen days by default, controlled by
+`mevedel-working-note-max-age-days`. There is no note header or label policy.
+The target clock and actual mtime determine age, inclusively at the boundary;
+future mtimes wait. Reads do not reset age. Exact-version
+pending/recovery holds remain; prior retention/rejection/reversal outcomes do
+not start an additional seven-day reconsideration clock. Local observed use
+retains its independent 24-hour access window. Shared-directory Read generates
+bounded age and first-heading rows, explicitly reporting only
+age-readiness with capture/application safety checks pending. The model emits
+ordinary qualifying extraction proposals citing the note ID in evidence, with no
+Notes section or per-note acknowledgement. After successful validation the store
+generates a deletion proposal for every admitted note. Every citing extraction is a disposal
+dependency and must be applied first. Notes are disposable working material,
+not an open-work tracker: deletion needs no inventory of unfinished tasks,
+resolution quotes, source markers, anchors or numeric-retention transformations.
+There is no keep or condense path. Qualifying memory may be empty; task owners
+record actionable open work in the tracker or backlog.
+
+Permanent memory or instruction citations must be repaired through checked
+updates/removals. Complete current configured memory and applicable instruction
+scope is freshly scanned before note deletion, including indexes, new files and
+roots, captured instruction targets and their absent companions. Any remaining
+citation, unknown scope, unsaved draft, active use or renewed modification age
+holds the note without deciding it. These checks repeat after preparatory IO
+at the mutation boundary; a same-byte touch after capture resets age too.
+Reversing an extraction never restores deleted temporary notes.
+Fourteen-day-old attachments no surviving text, memory or instructions reference
+and age-ready empty folders receive structured decisions without inference.
+Attachment capture preserves complete permanent-scope evidence and omissions;
+application freshly scans all surviving shared text, including readable scripts
+and JSON, rather than trusting mtimes to identify changed referrers. Named
+containing-folder references hold; generic root navigation does not. Unknown
+scope, active use and unsaved drafts hold without a terminal decision. Target,
+scope and use checks repeat at final write admission. This housekeeping
+authority remains separate from model output.
+
+Failed/rejected reviews create no deletion proposals or writes. Invalid memory
+or instruction output and ambiguous reply structure reject the whole review;
+there is no note-output parser or note-format counter. A successful accepted pass
+proves an attempt for each admitted version in the frozen daily cohort, not that
+every generated disposal was applied. This finite
+attempt set replaces capture-history ranking and progress-based catch-up.
+Accepted reviews
 and decisions are the processing record. Note decisions reuse checked intents
-and reversal through a shared-notes target whose coordination stays outside
-the cleaned folder; the previous bytes are retained as content-addressed
-blobs for the ordinary history window, within a quota. Over-quota attachments
-instead retain a verified copy in local system trash before the locked original
-removal; trash unavailable on the original target means no removal. Undo from
-trash remains checked and depends on those bytes still existing. Oversized
+through a shared-notes target whose coordination stays outside the cleaned
+folder. Deletion is permanent for notes and attachments, without undo copies,
+quota accounting, system trash or restoration. Fresh references, active use,
+unsaved buffers and changed reviewed bytes still hold deletion. Oversized
 UTF-8 notes within a configured upper bound are reviewed alone in sequential
 chunks with a compact running summary, retaining whole-file before-state and
 invalidating that summary if the file changes. Attachment reference scanning
@@ -377,6 +454,166 @@ limit is not an erasure guarantee.
 
 ## Decision history
 
+### 2026-10-29: Freeze one daily note cohort independently of journal cadence
+
+The earlier progress/cap policy below tried to distinguish useful cleanup from
+repeated unchanged reviews and to catch up a roughly 250-note backlog that could
+otherwise take weeks at sixteen notes per daily review. It still coupled service
+to successful deletion: an invalid acknowledgement or a held first batch could
+stop later useful work, while fresh arrivals could keep extending a productive
+chain. A larger cap bounded successful admissions, not the finite work offered
+for that day, and could not establish cost or capacity.
+
+The replacement freezes a metadata-only eligible cohort once per target-clock
+day and authenticates completed attempts through accepted pass identities.
+Zero deletions and per-note format failures do not repeat the same version or
+prevent later members being attempted; later arrivals and changed versions wait
+for the next cohort. A durable cycle record supports checked resumption, not
+write authority. Cancellation, failed requests, recovery and local-use safety
+remain real stops. Explicit drain can bypass timing and digest-count thresholds,
+not safety. Automatic journal-only admission and its journal-bearing successful-
+review clock remain independent.
+The previous rolling ceiling, progress qualification and fresh-arrival chain
+are historical choices, not alternate runtime modes.
+
+### 2026-10-29: Extract knowledge and acknowledge deletion, not task resolution
+
+The conservative open-item, authenticated-quote and measurement guards below
+responded to real loss observations, but turned temporary notes into a task
+tracker: a replay retained nearly all reviewed notes instead of extracting the
+few qualifying durable lessons and disposing of working material. The accepted
+direction in [ADR 0128](0128-extract-memory-and-expire-working-notes.md) separates
+those responsibilities. Notes now have delete-only acknowledgements; keep,
+condense, semantic resolution inventories, quote accumulators and preservation
+counters are removed. The earlier rationale remains in this history.
+
+This does not weaken mutation authority or permit dangling permanent citations.
+All citing extractions must apply; current complete memory/instruction scope is
+rechecked after approval and preparation, with nonterminal holds on citations
+or incomplete observations. Instructions now replaces the complete exact
+captured file, including known absence, because append-only updates could not
+repair an old citation. Checked before-state, ownership, rollback, buffers and
+dependent reversal remain the disposal boundary, not semantic task completion.
+
+### 2026-10-29: Plain temporary files replace headers and undo
+
+Later the same day, the split seven/fourteen-day age policy and the header
+codec were removed. One fourteen-day mtime setting covers every note and
+attachment; editing resets age, so activity needs no labels models may omit.
+Discovery shows age and first heading only. No header migration is needed.
+Undo, blob capture, quota and note restoration were removed as disproportionate
+for ephemeral files. Extraction dependencies and unchanged-file, active-use and
+unsaved-buffer checks remain. Reversing memory extraction never restores notes.
+
+### 2026-10-29: Metadata and modification age replace quiet-hour readiness
+
+The next lifecycle direction is recorded in
+[ADR 0128](0128-extract-memory-and-expire-working-notes.md). Its first slices
+replace arbitrary UTF-8 admission and 24-hour quiet readiness with Markdown-only
+notes and seven/fourteen-day modification ages, and remove retention-specific
+seven-day reconsideration branches. Metadata is supplied in the visible tool
+transaction, defaulting to scratch/open; real handoffs are explicitly labelled.
+External unmanaged Markdown keeps the longer fourteen-day margin. Discovery
+shares the age calculation but does not pretend to certify application safety.
+The former quiet setting also controlled local resource-use protection; that
+protection remains as a separate 24-hour observation window. The longer
+modification margins make disposable scratch distinct from genuine open handoffs
+without turning missing metadata or prior retention decisions into immortality.
+Explicit drains exclude exact versions already attempted by their authenticated
+accepted passes, including malformed note acknowledgements and housekeeping;
+otherwise removing retention timers would repeatedly select unchanged keeps
+forever. This local attempt set grants no service credit or write authority.
+Delete-only acknowledgements and finite-cohort scheduling subsequently replaced
+the earlier disposition and catch-up contracts below. Private payload retention
+remains a separate boundary; this history does not promise a new purge deadline.
+
+### 2026-10-29: Catch-up follows fresh arrivals; identical condensation is retention
+
+The catch-up policy in this entry was superseded by the daily frozen cohort
+above; no-op condensation was removed with delete-only acknowledgements. The
+failure observations and unchanged-state diagnostic rationale remain historical
+evidence.
+
+The acceptance rerun on source `42a3f1e9` exposed two gaps after the progress
+guard from `d6e43b3a`. The continuation check still required the last capture's
+remaining count to be positive before authenticating progress. A note arriving
+after capture is absent from that count, so a productive final batch could
+strand steady new arrivals behind the ordinary 24-hour gate. A progress-qualified
+completion then offered fresh owned admission regardless of the frozen remainder.
+That admission enforced the rolling-day ceiling and then-current quiet-period,
+suppression, in-use and capture checks. Empty opportunities retained the offer
+without inference, and pre-admission cleanup or claim contention did not erase
+it; a failed or zero-progress batch ended it. This extended the
+bounded opportunities introduced in `2d2b0991`, not the size or write authority
+of any request, and avoided another folder scan inside completion.
+
+The same rerun accepted a condensation whose canonical final-newline bytes
+equalled the original. It created a mutation with identical before/after states;
+the native classifier correctly observed before-state, but settlement called it
+unavailable and incorrectly inferred an interruption. The redundant write also
+advanced mtime, delaying readiness. Acceptance then classified this as an unchanged
+keep, with normal suppression and no note filesystem write. Genuine byte changes
+retained ordinary checked application and undo. The diagnostic for observed
+unchanged targets no longer claims an interruption that may never have occurred.
+
+### 2026-10-29: Preserve numeric paragraphs structurally instead of keeping whole notes
+
+The generic numeric detector closed a vocabulary gap for cold-result counts and
+ratios, but matched replays of the structural reply contract still applied only
+unchanged keeps. Protecting measurements by blocking disposal retained completed
+background alongside the evidence. Numeric-only losses now produce condenses
+that retain the missing whole paragraphs verbatim, rather than keeps. The model
+can discard unrelated completed prose without having to reproduce every measured
+paragraph in its output. Other delete guards still retain their keep behavior.
+This changes retention mechanics, not semantic resolution proof or undo authority.
+Generated preservation can exceed the model body limit; the private record bound
+accounts for duplicated escaped before/after bytes of a large captured note.
+Useful cleanup and semantic preservation require independent applied-outcome
+grading; a preservation flag alone is not service evidence.
+
+Integration with canonical no-op normalization exposed a regenerated preservation
+body identical to the captured note and accepted-only or held proposals counted
+as preservation applications. Unchanged keeps now drop `:guard-preserved` before
+identity generation. The preserved-condense metric uses existing confirmed-write
+notifications with nonempty changed paths, not accepted flags or terminal-status
+returns. Synchronous and asynchronous jobs include their earlier pending writes;
+propose-only, held, stale, unavailable, rolled-back and already decided proposals
+do not earn credit. Confirmed writes keep their count if cancellation follows.
+Classification metadata does not authorize application or add target reads, and
+later deferred retries do not rewrite a completed pass's telemetry.
+The synchronous pending boundary catches quit so confirmed accounting reaches
+completion while later writes, retry scheduling and catch-up stay stopped. Its
+interrupted fallback reports confirmed writes and one unapplied sweep; it does
+not reconstruct every terminal or failed outcome observed before interruption.
+
+### 2026-10-28: Progress guards automatic catch-up; the cap is a ceiling
+
+This progress/cap policy was superseded by the daily finite-cohort scheduler
+above. Its original spending concern and distinction between accepted proposals
+and actual effects remain relevant; neither the old cap nor progress observation
+is retained as a second scheduling path.
+
+The 2026-10-24 catch-up change in `2d2b0991` used an eight-batch rolling-day
+cap to bound unattended spend while draining large ready backlogs. Successful
+publication alone could rearm catch-up even when every disposition was
+rejected, deferred or left unchanged without suppression. Repeated successful
+reviews could therefore spend the entire allowance without reducing ready work.
+
+Catch-up then required authenticated applied note dispositions from that batch,
+including keep only when it actually suppressed the reviewed version. This
+distinguished useful retention from a no-op without trusting proposal or
+application totals. Zero progress ended the chain and restored ordinary clock
+admission. The default ceiling rose from eight to 48 to allow productive
+backlogs to drain, while remaining a rolling-day spend backstop; zero disabled
+automatic review. It bounded successful batches, not provider calls or billing.
+Explicit general reviews needed progress to seed unattended catch-up, but a failed
+progress observation only recorded its class in telemetry and prevented catch-up;
+it did not change the review result. Explicit drain skipped this scheduling-only
+observation and retained its continuation behavior. Empty-directory pruning
+removed no note content and did not qualify as progress. Claims, freshness,
+recovery, cancellation and idempotent application were unchanged; the
+observation granted only a later scheduling opportunity, never write authority.
+
 - **Display collection and retry admission gained separate ownership.** On
   2026-10-27, an authentic four-pass, 32-note fixture spent seconds opening and
   switching every Memory view because each repeated full history collection,
@@ -407,8 +644,13 @@ limit is not an erasure guarantee.
   limits. Scanning now streams with filename overlap. Useful oversized notes
   can receive bounded chunk review while very large copies remain explicitly
   blocked for manual splitting or relocation. Attachments above the undo quota
-  use verified system trash instead of permanent deletion or an unbounded blob
-  exception. Remote and unknown platform trash remains fail-closed.
+  initially used verified system trash instead of permanent deletion or an
+  unbounded blob exception; remote and unknown platform trash remained
+  fail-closed. On 2026-10-29 this alternative was removed to keep one private undo
+  path for all shared files. Quota pressure or unavailable accounting then held
+  the original rather than creating an external retained copy. Later that day,
+  undo itself was dropped because temporary files do not justify recovery
+  machinery. Streaming and bounded oversized-note review remain useful.
 
 - **Shared files left the journal for a consolidation-owned lifecycle.**
   Capture read shared files before session files within one 32-KiB bound in
@@ -1137,6 +1379,15 @@ intervals remain distinct from child-local preparation recovery and nested
 application recovery round trips. Review-request time includes prompt packing,
 tools and chunk summaries, so it is not labelled provider time. Missing intervals
 remain unknown rather than zero; cancellation closes only started intervals.
+
+The acceptance instrumentation also reuses native provider-call transport
+observations for sessionless reviews and their chunk summaries, correlated by
+pass identity in workspace diagnostics. Terminal passes retain observed provider
+wall-time totals separately from review-request time. The existing shared lag
+heartbeat watches admitted memory passes through completion and its ordinary
+tail, without creating a session or another sampling timer. This closes timing
+and watching gaps, not a claim of sustained throughput, lower CPU, or graphical
+input latency; external engines still lack native provider-call boundaries.
 
 ### 2026-10-28: accept unambiguous reply shapes instead of discarding reviews
 

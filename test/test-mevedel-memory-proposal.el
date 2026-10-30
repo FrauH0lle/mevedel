@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; The consolidation reply must be wholly valid before it becomes proposals.
+;; Validate memory and instruction proposals against captured scope and evidence.
 
 ;;; Code:
 
@@ -12,7 +12,6 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-memory-proposal)
-(require 'mevedel-memory-store)
 
 (mevedel-deftest mevedel-memory-proposal/cold-compile-runtime-owner ()
   ,test
@@ -126,6 +125,20 @@ Use a monotonic deadline for elapsed-time retries.
   (should-error
    (mevedel-memory-proposal-parse mevedel-test-memory-proposal--reply
                                  mevedel-test-memory-proposal--roots nil))
+
+  :doc "admitted note IDs are evidence but never authorize model note actions"
+  (let* ((note "work://shared/finding.md")
+         (reply (string-replace (make-string 64 ?a) note mevedel-test-memory-proposal--reply))
+         (result (mevedel-memory-proposal-parse reply mevedel-test-memory-proposal--roots (list note))))
+    (should (equal '(promote) (mapcar (lambda (item) (plist-get item :action))
+                                    (plist-get result :proposals))))
+    (should (equal (list note) (plist-get (car (plist-get result :proposals)) :evidence)))
+    (should-error (mevedel-memory-proposal-parse reply mevedel-test-memory-proposal--roots nil))
+    (dolist (invalid (list (string-replace "## No action" "## Notes\n- none\n## No action" reply)
+                          (string-replace "root: \"local-agents\""
+                                          (concat "note: " (json-serialize note) "\nroot: \"local-agents\"")
+                                          reply)))
+      (should-error (mevedel-memory-proposal-parse invalid mevedel-test-memory-proposal--roots (list note)))))
 
   :doc "scope diagnostics distinguish root, path, and evidence failures"
   (let* ((id (make-string 64 ?a))
@@ -257,197 +270,42 @@ Use a monotonic deadline for elapsed-time retries.
     (dolist (path '("" "/etc/passwd" "~/x" "a:b" "a\nb" "../x" "a/../b" nil))
       (should-not (mevedel-memory-proposal-relative-path-p path)))))
 
-(mevedel-deftest mevedel-memory-proposal-parse/notes ()
+(mevedel-deftest mevedel-memory-proposal-note-action-p
+  (:doc "recognizes internal disposal actions separately from model proposal actions")
+  (progn
+    (should (mevedel-memory-proposal-note-action-p 'note-delete))
+    (should (mevedel-memory-proposal-note-action-p 'note-prune))
+    (should-not (mevedel-memory-proposal-note-action-p 'promote))
+    (should-not (mevedel-memory-proposal-note-action-p 'instructions))))
+
+(mevedel-deftest mevedel-memory-proposal-parse/instructions ()
   ,test
   (test)
-  :doc "admitted notes need exactly one disposition and may be cited as evidence"
-  (let* ((notes '(("work://shared/a.md" "notes-root" . "a.md")
-                  ("work://shared/b.md" "notes-root" . "b.md")))
-         (reply (lambda (dispositions)
-                  (concat (string-replace
-                           "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]"
-                           "[\"work://shared/a.md\"]"
-                           (string-remove-suffix "## No action\n- none" mevedel-test-memory-proposal--reply))
-                          "## Notes\n" dispositions "## No action\n- none")))
-         (block (lambda (note disposition &optional body)
-                  (format "````proposal\nnote: %S\ndisposition: %S\nreason: \"Reviewed\"\n%s---\n%s````\n"
-                          note disposition
-                          (if (equal disposition "delete") "open-items: []\nresolved-by: []\n" "")
-                          (if body (concat body "\n") ""))))
-         (result (mevedel-memory-proposal-parse
-                  (funcall reply (concat (funcall block "work://shared/a.md" "delete")
-                                         (funcall block "work://shared/b.md" "condense" "Open: verify.")))
-                  mevedel-test-memory-proposal--roots nil notes))
-         (proposals (plist-get result :proposals)))
-    (should (equal '(promote note-delete note-condense) (mapcar (lambda (item) (plist-get item :action)) proposals)))
-    (should (equal '("work://shared/a.md") (plist-get (car proposals) :evidence)))
-    (should (equal '("notes-root" . "b.md")
-                   (cons (plist-get (nth 2 proposals) :root) (plist-get (nth 2 proposals) :file))))
-    (should (equal "Open: verify." (plist-get (nth 2 proposals) :body)))
-    (dolist (invalid (list (funcall block "work://shared/a.md" "delete")
-                           (concat (funcall block "work://shared/a.md" "delete")
-                                   (funcall block "work://shared/a.md" "keep")
-                                   (funcall block "work://shared/b.md" "keep"))
-                           (concat (funcall block "work://shared/a.md" "archive")
-                                   (funcall block "work://shared/b.md" "keep"))
-                           (concat (funcall block "work://shared/a.md" "delete" "Unexpected body")
-                                   (funcall block "work://shared/b.md" "keep"))
-                           (concat (funcall block "work://shared/a.md" "delete")
-                                   (funcall block "work://shared/b.md" "condense"))
-                           (concat (funcall block "work://shared/c.md" "delete")
-                                   (funcall block "work://shared/b.md" "keep"))
-                           "- none\n"))
-      (should-error (mevedel-memory-proposal-parse (funcall reply invalid)
-                                                   mevedel-test-memory-proposal--roots nil notes))))
-  :doc "a delete accounts for its open items with distinct quotes from safe normalized workspace paths"
-  (let* ((notes '(("work://shared/a.md" "notes-root" . "a.md")))
-         (parse (lambda (disposition fields)
-                  (mevedel-memory-proposal-parse
-                   (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n"
-                           "## Instructions\n- none\n## Notes\n````proposal\nnote: \"work://shared/a.md\"\n"
-                           (format "disposition: %S\nreason: \"Reviewed\"\n%s---\n````\n" disposition fields)
-                           "## No action\n- none")
-                   mevedel-test-memory-proposal--roots nil notes)))
-         (item (car (plist-get (funcall parse "delete"
-                                        (concat "open-items: [\"Finding 2\"]\nresolved-by: "
-                                                "[\"./docs/adr/x.md: Restoration keeps one anchor\", "
-                                                "\"a/./c.el: (defun keep-the-row: here)\"]\n"))
-                               :proposals))))
-    (should (equal '("Finding 2") (plist-get item :open-items)))
-    ;; Comparison with the review's reads uses one canonical path spelling;
-    ;; the first colon separates, so quotes may contain colons.
-    (should (equal '(("docs/adr/x.md" . "Restoration keeps one anchor")
-                     ("a/c.el" . "(defun keep-the-row: here)"))
-                   (plist-get item :resolved-by)))
-    (should-not (plist-member (car (plist-get (funcall parse "keep" "") :proposals)) :open-items))
-    ;; Missing resolution evidence is none, so this delete can only be kept.
-    (should-not (plist-get (car (plist-get (funcall parse "delete" "open-items: [\"A\"]\n") :proposals))
-                           :resolved-by))
-    (dolist (invalid '(("delete" "")
-                       ("delete" "resolved-by: []\n")
-                       ("delete" "open-items: \"Finding 2\"\nresolved-by: []\n")
-                       ("delete" "open-items: [\"\"]\nresolved-by: []\n")
-                       ("delete" "open-items: [\"A\", \"A\"]\nresolved-by: []\n")
-                       ("delete" "open-items: [\"A\"]\nresolved-by: \"docs/backlog.md: not an array\"\n")))
-      (should-error (funcall parse (car invalid) (cadr invalid))))
-    ;; Entries that cannot be evidence (a bare path, a short or placeholder
-    ;; quote, an address, an unsafe path) are dropped, never trusted: the
-    ;; delete keeps its open item without support, so acceptance keeps it.
-    (dolist (entry '("docs/backlog.md" "docs/backlog.md: too short" "GIT-HISTORY: none"
-                     "work://shared/a.md: quoting the note itself here"
-                     "/etc/passwd: root entry for the system" "../outside.md: escaping quote text"
-                     "a/b/../c.el: escaping quote text" "~/notes.md: home quote text here"))
-      (let ((item (car (plist-get (funcall parse "delete" (format "open-items: [\"A\"]\nresolved-by: [%S]\n" entry))
-                                  :proposals))))
-        (should (equal '("A") (plist-get item :open-items)))
-        (should-not (plist-get item :resolved-by))
-        (should (mevedel-memory-store--unsupported-delete-p item nil)))))
-  :doc "real reply shapes rejected in production parse without loosening dispositions"
-  ;; Shapes from real Codex gpt-6-luna replies, 2026-10-28: keep and condense
-  ;; carrying open items, a header-only delete without separator, and a reply
-  ;; that ends after its last proposal fence.
-  (let* ((notes '(("work://shared/a.md" "notes-root" . "a.md")
-                  ("work://shared/b.md" "notes-root" . "b.md")
-                  ("work://shared/c.md" "notes-root" . "c.md")))
-         (head "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## Notes\n")
-         (blocks (concat "````proposal\nnote: \"work://shared/a.md\"\ndisposition: \"keep\"\nreason: \"Open handoff\"\n"
-                         "open-items: [\"Duration undecided\"]\n---\n````\n"
-                         "````proposal\nnote: \"work://shared/b.md\"\ndisposition: \"condense\"\nreason: \"Partly open\"\n"
-                         "open-items: [\"Port the fix\"]\nresolved-by: [\"docs/backlog.md\"]\n---\nOpen: port the fix.\n````\n"
-                         "````proposal\nnote: \"work://shared/c.md\"\ndisposition: \"delete\"\nreason: \"Completed\"\n"
-                         "open-items: []\nresolved-by: []\n````\n"))
-         (parse (lambda (text) (mevedel-memory-proposal-parse text mevedel-test-memory-proposal--roots nil notes)))
-         (result (funcall parse (concat head blocks))))
-    (should (equal "- none" (plist-get result :no-action)))
-    (should (equal '(note-keep note-condense note-delete)
-                   (mapcar (lambda (item) (plist-get item :action)) (plist-get result :proposals))))
-    (should (equal '("Duration undecided") (plist-get (car (plist-get result :proposals)) :open-items)))
-    (should (equal "" (plist-get (nth 2 (plist-get result :proposals)) :body)))
-    (should (funcall parse (concat head blocks "## No action\n- Nothing further.\n")))
-    ;; Real 2026-10-28 shapes: Instructions after Notes, and an exactly
-    ;; repeated header line.  Proposals come back in canonical order.
-    (let ((moved (concat (string-replace "## Instructions\n- none\n" "" head) blocks "## Instructions\n- none\n")))
-      (should (equal '(note-keep note-condense note-delete)
-                     (mapcar (lambda (item) (plist-get item :action))
-                             (plist-get (funcall parse moved) :proposals)))))
-    ;; An omitted action section is indistinguishable from truncation.
-    (should-error (funcall parse (concat (string-replace "## Instructions\n- none\n" "" head) blocks)))
-    (should-error (mevedel-memory-proposal-parse "## Promote\n- none\n" mevedel-test-memory-proposal--roots nil))
-    (should (funcall parse (concat head (string-replace "open-items: [\"Duration undecided\"]\n"
-                                                        "open-items: [\"Duration undecided\"]\nopen-items: [\"Duration undecided\"]\n"
-                                                        blocks))))
-    ;; Fence spellings from real replies: a four-dash separator, a shorter
-    ;; closing fence, and a missing close before the next empty-body block.
-    (dolist (variant (list (string-replace "Open handoff\"\nopen-items: [\"Duration undecided\"]\n---\n````"
-                                           "Open handoff\"\nopen-items: [\"Duration undecided\"]\n----\n```" blocks)
-                           (string-replace "Open handoff\"\nopen-items: [\"Duration undecided\"]\n---\n````\n"
-                                           "Open handoff\"\nopen-items: [\"Duration undecided\"]\n---\n" blocks)))
-      (should (equal '(note-keep note-condense note-delete)
-                     (mapcar (lambda (item) (plist-get item :action))
-                             (plist-get (funcall parse (concat head variant)) :proposals)))))
-    ;; A Markdown code block inside a condensed body survives intact.
-    (let ((coded (funcall parse (concat head (string-replace "Open: port the fix.\n" "Open:\n```\n(fix)\n```\n" blocks)))))
-      (should (equal "Open:\n```\n(fix)\n```" (plist-get (nth 1 (plist-get coded :proposals)) :body))))
-    ;; A condensed body may start with a Markdown heading (real 2026-10-28
-    ;; replies were rejected when it was taken for the next section).
-    (let ((headed (funcall parse (concat head (string-replace "Open: port the fix.\n" "## Open items\n- Port the fix.\n" blocks)))))
-      (should (equal "## Open items\n- Port the fix." (plist-get (nth 1 (plist-get headed :proposals)) :body))))
-    ;; A real slip: an open-items array spread over several lines.
-    (should (equal '("Duration undecided" "Second")
-                   (plist-get (car (plist-get (funcall parse (concat head (string-replace "open-items: [\"Duration undecided\"]\n"
-                                                                                         "open-items: [\n  \"Duration undecided\",\n  \"Second\"\n]\n" blocks)))
-                                              :proposals))
-                              :open-items)))
-    (dolist (invalid
-             (list
-              ;; A repeated header line with a different value is ambiguous.
-              (concat head (string-replace "open-items: [\"Duration undecided\"]\n"
-                                           "open-items: [\"Duration undecided\"]\nopen-items: [\"Other\"]\n" blocks))
-              ;; Repeated, missing and unknown sections.
-              (concat head "## Promote\n- none\n" blocks)
-              (concat head blocks "## Unknown\n- none\n")
-              ;; An unterminated non-empty body is ambiguous.
-              (concat head (string-replace "Open: port the fix.\n````\n" "Open: port the fix.\n" blocks))
-              ;; A multi-line value that never parses stays invalid.
-              (concat head (string-replace "open-items: [\"Duration undecided\"]\n" "open-items: [\n  \"unterminated\n" blocks))
-              ;; Analysis between blocks remains invalid.
-              (concat head "- Note a.md open items:\n  - Duration undecided\n" blocks)
-              ;; Without its separator a condense has no body.
-              (concat head (string-replace "---\nOpen: port the fix.\n" "" blocks))
-              ;; A delete still needs its open-item accounting.
-              (concat head (string-replace "open-items: []\nresolved-by: []\n" "" blocks))
-              ;; Truncation before every note is disposed of.
-              (concat head (substring blocks 0 (string-search "````proposal\nnote: \"work://shared/c.md\"" blocks)))
-              ;; Malformed open items on keep are still rejected.
-              (concat head (string-replace "[\"Duration undecided\"]" "\"Duration undecided\"" blocks))))
-      (should-error (funcall parse invalid))))
-  :doc "resolution quotes match delivered Read text across line numbers and wrapping only"
-  (let ((read "  352\t- **One viewport anchor per window (2026-10-18).** Logical window-start\n  353\t  restoration previously overrode\n"))
-    (should (mevedel-memory-proposal-quoted-p "window (2026-10-18).** Logical window-start restoration previously" read))
-    (should (mevedel-memory-proposal-quoted-p "One viewport anchor per window (2026-10-18). Logical" read))
-    ;; Citation decoration around quoted words is ignored; each quoted part counts.
-    (should (mevedel-memory-proposal-quoted-p "\"Logical window-start restoration\" (ADR 0126, lines 352-353)" read))
-    (should-not (mevedel-memory-proposal-quoted-p "\"Logical window-start\" and \"was later removed\" (ADR 0126)" read))
-    (should-not (mevedel-memory-proposal-quoted-p "\"window\" (ADR 0126, lines 352-353)" read))
-    (should-not (mevedel-memory-proposal-quoted-p "window start restoration was removed" read))
-    (should-not (mevedel-memory-proposal-quoted-p "353 restoration previously" read)))
-  :doc "without admitted notes the section is optional and may only be empty"
-  (progn
-    (should (mevedel-memory-proposal-parse
-             (concat (string-remove-suffix "## No action\n- none" mevedel-test-memory-proposal--reply)
-                     "## Notes\n- none\n## No action\n- none")
-             mevedel-test-memory-proposal--roots (list (make-string 64 ?a))))
+  :doc "complete instruction bodies preserve whitespace for existing and known-absent targets"
+  (let* ((roots '(("instructions" :kind instructions :files ("AGENTS.md" "AGENTS.local.md")
+                                :before (("AGENTS.md" :exists t :bytes "Old guidance.\n")
+                                         ("AGENTS.local.md" :exists nil)))))
+         (head "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n"))
+    (dolist (file '("AGENTS.md" "AGENTS.local.md"))
+      (dolist (body '("" "  \t" "\n" "  Rule.  \n\n" "## Policy\n```elisp\n(ignore)\n```\n"))
+        (let* ((reply (concat head
+                              (format "````proposal\nroot: \"instructions\"\nfile: %S\ntype: \"project\"\ntitle: \"Policy\"\nhook: \"Contributor guidance\"\nreason: \"Repair source citation\"\nevidence: []\n---\n" file)
+                              body "\n````\n## No action\n- none"))
+               (item (car (plist-get (mevedel-memory-proposal-parse reply roots nil) :proposals))))
+          (should (eq 'instructions (plist-get item :action)))
+          ;; One newline is fence structure, not part of the desired file.
+          (should (equal body (plist-get item :body)))))))
+  :doc "empty instruction bodies do not widen target admission or memory-body rules"
+  (let* ((roots '(("instructions" :kind instructions :files ("AGENTS.md"))))
+         (block "root: \"instructions\"\nfile: \"AGENTS.md\"\ntype: \"project\"\ntitle: \"Policy\"\nhook: \"Policy\"\nreason: \"Repair\"\nevidence: []\n---\n")
+         (reply (concat "## Promote\n- none\n## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n````proposal\n"
+                        block "````\n## No action\n- none")))
+    (should-error (mevedel-memory-proposal-parse (string-replace "AGENTS.md" "outside.md" reply) roots nil))
+    (should-error (mevedel-memory-proposal-parse (string-replace "\"instructions\"" "\"unknown\"" reply) roots nil))
     (should-error (mevedel-memory-proposal-parse
-                   (concat (string-remove-suffix "## No action\n- none" mevedel-test-memory-proposal--reply)
-                           "## Notes\n````proposal\nnote: \"work://shared/a.md\"\ndisposition: \"delete\"\n"
-                           "reason: \"Reviewed\"\n---\n````\n## No action\n- none")
+                   (string-replace "Use a monotonic deadline for elapsed-time retries." ""
+                                   mevedel-test-memory-proposal--reply)
                    mevedel-test-memory-proposal--roots (list (make-string 64 ?a))))))
-
-(mevedel-deftest mevedel-memory-proposal-condensed-bytes
-  (:doc "condensed notes end in exactly one newline and encode as UTF-8")
-  (progn
-    (should (equal "Open.\n" (mevedel-memory-proposal-condensed-bytes "Open.\n\n\n")))
-    (should (equal (encode-coding-string "界\n" 'utf-8) (mevedel-memory-proposal-condensed-bytes "界")))))
 
 (provide 'test-mevedel-memory-proposal)
 ;;; test-mevedel-memory-proposal.el ends here

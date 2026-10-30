@@ -18,6 +18,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-fs)
 (require 'mevedel-utilities)
+(require 'mevedel-working-note-files)
 (require 'xml)
 
 ;; `gptel-request'
@@ -1506,12 +1507,14 @@ content, not a read failure.\n</system-reminder>"
 (defun mevedel-tool-fs-read--resource-directory (path address k)
   "Call K with a logical listing for resource ADDRESS rooted at PATH."
   (condition-case err
-      (mevedel-tool-fs-read-list-directory
+      (if (string-prefix-p "work://shared/" address)
+          (funcall k (mevedel-working-note-files-listing path address))
+        (mevedel-tool-fs-read-list-directory
        path
        (lambda (listing)
          (pcase-let ((`(,entries . ,truncated) listing))
            (funcall k (mevedel-tool-fs-read--resource-listing
-                       path address entries truncated)))))
+                       path address entries truncated))))))
     (error
      (error "Cannot read resource %s: %s"
             address (error-message-string err)))))

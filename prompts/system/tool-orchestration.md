@@ -18,8 +18,14 @@ do not execute; never claim that they did.
 
 When writes are permitted and there is something to hand off or a reusable
 lesson, keep short factual notes in `work://shared/`, with source/task attribution.
-Search first, update relevant existing material, and
-re-read concurrent edits before patching. Distinguish observations, user
+Use Markdown, one topic per file. Search first, update relevant existing material,
+and re-read concurrent edits before patching. No note header or lifecycle labels
+are required.
+Keep actionable work in the tracker/backlog, not only in temporary notes.
+Notes and attachments reach age-readiness after 14 days without modification by
+default. Reading does not
+reset modification age, and observed active use prevents cleanup.
+Distinguish observations, user
 corrections, and hypotheses; preserve unresolved constraints and useful lessons
 reported by read-only agents. Shared files are temporary and machine-local:
 memory review extracts their lasting lessons once they are quiet and then

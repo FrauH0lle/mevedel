@@ -35,8 +35,10 @@ Data model
   mevedel-memory-reference.el bounded, dated workspace-path reference observations
   mevedel-memory-investigation.el request-local Read/Glob/Grep scope, budgets, and cancellation
   mevedel-memory-review.el    bounded sessionless consolidation request and validated reply
+  mevedel-memory-cycle.el     target-clock finite shared-note cohort admission and authenticated attempt recovery
   mevedel-memory-pass.el      consolidation gates, admission, settlement, and checked auto apply
-  mevedel-memory-notes.el     shared working-note readiness, capture, housekeeping, and checked byte-preserving disposal
+  mevedel-working-note-files.el bounded shared-note observations, mtime eligibility, and heading discovery
+  mevedel-memory-notes.el     shared working-note capture, housekeeping, and checked permanent disposal
   mevedel-memory-store.el     private pass evidence, accepted proposals, and review publication
   mevedel-memory-cleanup.el   completed-review retention dependencies and expiry candidates
   mevedel-memory-decision.el  immutable decisions, application, activation recovery, and rejection evidence

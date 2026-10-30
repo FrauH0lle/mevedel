@@ -107,13 +107,35 @@
     (mevedel-tool-patch-commit (mevedel-memory-apply-changes scope (proposal 'remove "a.md" "")))
     (should-not (file-exists-p (file-name-concat memory "a.md")))
     (should (equal "# Memory\n- [Beta](b.md) - second\n" (read-file "MEMORY.md"))))
-  :doc "appends instructions to their captured file without changing the memory index"
+  :doc "replaces complete instructions without appending or changing the memory index"
   (progn
     (setq root-id (car (seq-find (lambda (row) (eq (plist-get (cdr row) :kind) 'instructions)) (plist-get scope :roots))))
     (mevedel-tool-patch-commit (mevedel-memory-apply-changes scope (proposal 'instructions "AGENTS.md" "Additional instruction.")))
-    (should (equal "Existing instructions.\n\nAdditional instruction.\n"
+    (should (equal "Additional instruction."
                    (mevedel-session-control-fs-read-file (file-name-concat root "AGENTS.md"))))
     (should (equal "# Memory\n- [Alpha](a.md) - first\n- [Beta](b.md) - second\n" (read-file "MEMORY.md"))))
+  :doc "empty instructions clear an existing file rather than deleting it"
+  (progn
+    (setq root-id (car (seq-find (lambda (row) (eq (plist-get (cdr row) :kind) 'instructions)) (plist-get scope :roots))))
+    (let ((path (file-name-concat root "AGENTS.md")))
+      (mevedel-tool-patch-commit (mevedel-memory-apply-changes scope (proposal 'instructions "AGENTS.md" "")))
+      (should (file-exists-p path))
+      (should (equal "" (mevedel-session-control-fs-read-file path)))))
+  :doc "empty instructions create an admitted absent file with zero bytes"
+  (progn
+    (setq root-id (car (seq-find (lambda (row) (eq (plist-get (cdr row) :kind) 'instructions)) (plist-get scope :roots))))
+    (let ((path (file-name-concat root "AGENTS.local.md")))
+      (should-not (file-exists-p path))
+      (mevedel-tool-patch-commit (mevedel-memory-apply-changes scope (proposal 'instructions "AGENTS.local.md" "")))
+      (should (file-exists-p path))
+      (should (= 0 (file-attribute-size (file-attributes path))))))
+  :doc "instruction whitespace is exact and an unchanged complete body emits no write"
+  (progn
+    (setq root-id (car (seq-find (lambda (row) (eq (plist-get (cdr row) :kind) 'instructions)) (plist-get scope :roots))))
+    (should-not (mevedel-memory-apply-changes scope (proposal 'instructions "AGENTS.md" "Existing instructions.\n")))
+    (let ((body "  Indented instruction.\n\n "))
+      (mevedel-tool-patch-commit (mevedel-memory-apply-changes scope (proposal 'instructions "AGENTS.md" body)))
+      (should (equal body (mevedel-session-control-fs-read-file (file-name-concat root "AGENTS.md"))))))
   :doc "a changed index prevents all prepared topic writes"
   (let ((changes (mevedel-memory-apply-changes scope (proposal 'update "a.md" "Updated lesson."))))
     (write-region "External index edit.\n" nil (file-name-concat memory "MEMORY.md") nil 'silent)

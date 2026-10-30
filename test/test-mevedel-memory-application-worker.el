@@ -173,7 +173,8 @@ while constructing retained history.  Recovery still owns final pin release."
 
   :doc "a visiting buffer modified during child work is preserved and never applied"
   (mevedel-test-application-fixture
-    (let ((start (symbol-function 'mevedel-journal-worker-start)) buffer)
+    (let ((start (symbol-function 'mevedel-journal-worker-start))
+          (create-lockfiles nil) buffer)
       (cl-letf (((symbol-function 'mevedel-journal-worker-start)
 		 (lambda (ws operation callback &rest args)
 		   (apply start ws operation
@@ -185,7 +186,13 @@ while constructing retained history.  Recovery still owns final pin release."
         (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
         (mevedel-test-application-wait (lambda () result)))
       (should (= 0 (plist-get result :applied-count)))
-      (should (= 1 (plist-get result :unapplied-count)))
+      (should (= 1 (plist-get result :held-count)))
+      (should (= 0 (plist-get result :unapplied-count)))
+      (should-not (plist-get result :error))
+      (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))
+      (let ((input (mevedel-memory-decision--application-input accepted proposal workspace)))
+        (should (eq 'waiting (plist-get input :status)))
+        (should (string-match-p "unsaved" (plist-get input :reason))))
       (should (equal (make-string 100 ?x) (mevedel-session-control-fs-read-file path)))
       (with-current-buffer buffer
         (should (buffer-modified-p))
@@ -196,23 +203,23 @@ while constructing retained history.  Recovery still owns final pin release."
   (dolist (case '((use . async) (edit . async) (use . sync) (edit . sync)))
     (mevedel-test-application-fixture
       (let ((late (car case))
-            (mkdir (symbol-function 'mevedel-session-control-fs-make-directory)) injected
+            (commit (symbol-function 'mevedel-memory-notes-commit)) injected
 	    (conversation (generate-new-buffer " *application-late-turn*")))
         (unwind-protect
 	    (progn
 	      (with-current-buffer conversation
 	        (setq-local mevedel--session (mevedel-session--create :workspace workspace)))
-	      (cl-letf (((symbol-function 'mevedel-session-control-fs-make-directory)
-			 (lambda (directory &rest args)
-			   (prog1 (apply mkdir directory args)
-			     (when (and (not injected) (string-suffix-p "/blobs" (directory-file-name directory)))
-			       (setq injected t)
-		       (if (eq late 'use)
-			   (with-current-buffer conversation
-			     (mevedel-resource-prepare
-			      'read (mevedel-memory-notes-address (plist-get proposal :file))
-			      (list :session mevedel--session)))
-				 (with-current-buffer (find-file-noselect path) (goto-char (point-max)) (insert "unsaved"))))))))
+                      (cl-letf (((symbol-function 'mevedel-memory-notes-commit)
+                                 (lambda (&rest args)
+                                   (unless injected
+                                     (setq injected t)
+                                     (if (eq late 'use)
+                                         (with-current-buffer conversation
+                                           (mevedel-resource-prepare
+                                            'read (mevedel-memory-notes-address (plist-get proposal :file))
+                                            (list :session mevedel--session)))
+                                       (with-current-buffer (find-file-noselect path) (goto-char (point-max)) (insert "unsaved"))))
+                                   (apply commit args))))
 	        (if (eq (cdr case) 'sync)
 		    (setq result (mevedel-memory-pass--apply state accepted))
 		  (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
@@ -341,8 +348,8 @@ while constructing retained history.  Recovery still owns final pin release."
            (address (mevedel-memory-notes-address "dependency.md")))
       (make-directory memory t)
       (write-region "A durable extraction must precede note disposal." nil note nil 'silent)
-      (set-file-times note (seconds-to-time (- (float-time) 3600)))
-      (let* ((capture (mevedel-memory-notes-capture workspace nil :mode 'auto :quiet-hours 0))
+      (set-file-times note (seconds-to-time (- (float-time) (* 15 86400))))
+      (let* ((capture (mevedel-memory-notes-capture workspace nil :mode 'auto))
              (scope (mevedel-memory-scope-capture workspace))
              (scope (plist-put scope :roots (append (plist-get scope :roots) (list (plist-get capture :root)))))
              (memory-id (car (seq-find (lambda (row) (eq 'memory (plist-get (cdr row) :kind))) (plist-get scope :roots))))
@@ -352,9 +359,8 @@ while constructing retained history.  Recovery still owns final pin release."
                    (text (format (concat "## Promote\n```proposal\nroot: %S\nfile: \"lesson.md\"\ntype: \"project\"\n"
                                          "title: \"Lesson\"\nhook: \"Lesson\"\nreason: \"Supported\"\nevidence: [%S]\n---\n"
                                          "Preserve extraction dependencies.\n```\n## Update\n- none\n## Merge\n- none\n"
-                                         "## Remove\n- none\n## Instructions\n- none\n## Notes\n```proposal\nnote: %S\n"
-                                         "disposition: \"delete\"\nreason: \"Reviewed\"\nopen-items: []\nresolved-by: []\n---\n```\n## No action\n- none")
-                                 memory-id address address))
+                                         "## Remove\n- none\n## Instructions\n- none\n## No action\n- none")
+                                 memory-id address))
                    (pending (mevedel-memory-store-accept workspace prepared text nil "test:model" nil (list address)))
                    (items (plist-get pending :proposals))
                    (extraction (seq-find (lambda (item) (eq 'promote (plist-get item :action))) items))
@@ -556,21 +562,18 @@ while constructing retained history.  Recovery still owns final pin release."
   (mevedel-test-application-fixture
     (let ((origin (generate-new-buffer " *late-policy-origin*"))
           (other (generate-new-buffer " *late-policy-incidental*"))
-          (mkdir (symbol-function 'mevedel-session-control-fs-make-directory))
           (commit (symbol-function 'mevedel-memory-notes-commit)) injected)
       (unwind-protect
           (progn
             (plist-put state :origin-buffer origin)
             (with-current-buffer origin (setq-local mevedel-memory-consolidation-mode 'auto))
             (with-current-buffer other (setq-local mevedel-memory-consolidation-mode 'auto))
-            (cl-letf (((symbol-function 'mevedel-session-control-fs-make-directory)
-                       (lambda (directory &rest args)
-                         (prog1 (apply mkdir directory args)
-                           (when (and (not injected) (string-suffix-p "/blobs" (directory-file-name directory)))
-                             (setq injected t)
-                             (with-current-buffer origin (setq-local mevedel-memory-consolidation-mode 'propose))))))
-                      ((symbol-function 'mevedel-memory-notes-commit)
-                       (lambda (&rest args) (with-current-buffer other (apply commit args)))))
+            (cl-letf (((symbol-function 'mevedel-memory-notes-commit)
+                       (lambda (&rest args)
+                         (unless injected
+                           (setq injected t)
+                           (with-current-buffer origin (setq-local mevedel-memory-consolidation-mode 'propose)))
+                         (with-current-buffer other (apply commit args)))))
               (with-current-buffer origin
                 (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value))))
               (with-current-buffer other (mevedel-test-application-wait (lambda () result))))
@@ -1795,6 +1798,7 @@ while constructing retained history.  Recovery still owns final pin release."
     (let ((mevedel-test-application-items 2))
       (mevedel-test-application-fixture
         (let* ((next (symbol-function 'mevedel-memory-pass--application-next))
+               (create-lockfiles nil)
                (second (cadr (plist-get accepted :proposals)))
                (second-path (plist-get (cdr (car (plist-get second :before))) :path))
                (conversation (generate-new-buffer " *chain-note-user*")) buffer injected)
@@ -1821,12 +1825,19 @@ while constructing retained history.  Recovery still owns final pin release."
                 (should (= 1 (plist-get result :applied-count)))
                 (should (file-exists-p second-path))
                 (should-not (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get second :id)) :status)))
-                (if (eq late 'access)
-                    (should (= 1 (plist-get result :held-count)))
-                  (should (= 1 (plist-get result :unapplied-count)))
-                  (if (eq late 'disk)
-                      (should (equal "Intervening disk change" (mevedel-session-control-fs-read-file second-path)))
-                    (with-current-buffer buffer (should (buffer-modified-p))))))
+                (if (eq late 'disk)
+                    (progn
+                      (should (= 1 (plist-get result :unapplied-count)))
+                      (should (eq 'stale (plist-get (mevedel-memory-decision-status workspace (plist-get second :id)) :status)))
+                      (should (equal "Intervening disk change" (mevedel-session-control-fs-read-file second-path))))
+                  (should (= 1 (plist-get result :held-count)))
+                  (should (= 0 (plist-get result :unapplied-count)))
+                  (should-not (mevedel-memory-decision-status workspace (plist-get second :id)))
+                  (when (eq late 'edit)
+                    (with-current-buffer buffer (should (buffer-modified-p)))
+                    (let ((input (mevedel-memory-decision--application-input accepted second workspace)))
+                      (should (eq 'waiting (plist-get input :status)))
+                      (should (string-match-p "unsaved" (plist-get input :reason)))))))
             (when (buffer-live-p buffer) (with-current-buffer buffer (set-buffer-modified-p nil)) (kill-buffer buffer))
             (kill-buffer conversation)))))))
 

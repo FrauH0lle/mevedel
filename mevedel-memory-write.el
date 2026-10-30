@@ -127,8 +127,8 @@ A change carrying an exact :after snapshot supplies it directly."
 
 (defun mevedel-memory-write--commit (workspace target intent changes currentp &optional before-write)
   "Commit CHANGES for INTENT in WORKSPACE under TARGET, rechecking CURRENTP.
-Memory roots use the shared patch transaction; shared notes use their own
-byte-preserving checked mutation.  BEFORE-WRITE guards forward writes only;
+Memory roots use the shared patch transaction; shared notes use checked
+permanent deletion.  BEFORE-WRITE guards forward writes only;
 checked rollback retains CURRENTP's ownership without a cancelled forward gate."
   (if-let* ((root (mevedel-memory-write--notes-root intent)))
       (mevedel-memory-notes-commit workspace root target changes currentp before-write)
@@ -194,7 +194,8 @@ Neither proof authorizes a later mutation or survives this read observation."
                      (equal (plist-get data :pass) (plist-get (plist-get accepted :prepared) :id))
                      proposal
                      (if-let* ((source (plist-get data :reverse-of)))
-			 (and (proper-list-p source) (= (length source) 2) (not (equal id (car source)))
+			 (and (not (mevedel-memory-proposal-note-action-p (plist-get proposal :action)))
+                              (proper-list-p source) (= (length source) 2) (not (equal id (car source)))
                               (let ((original (mevedel-memory-write-read workspace (car source) (cadr source) accepted)))
 				(and (not (plist-get original :reverse-of))
                                      (equal (plist-get data :pass) (plist-get original :pass))
@@ -303,10 +304,9 @@ supplied by the decision owner. No curated file is written."
    workspace claim target accepted proposal (plist-get proposal :before)
    (mevedel-memory-apply-changes (or scope (plist-get (plist-get accepted :prepared) :scope)) proposal) nil))
 
-(defun mevedel-memory-write--changes (before after &optional snapshots-only)
+(defun mevedel-memory-write--changes (before after)
   "Prepare exact changes between retained BEFORE and AFTER snapshots.
-SNAPSHOTS-ONLY omits duplicate patch payloads for shared-note mutations,
-which read their content directly from the exact :after snapshot."
+Only durable memory and instruction writes can be reversed."
   (let (changes)
     (dolist (row before (nreverse changes))
       (let* ((old (cdr row)) (new (cdr (assoc (car row) after))) (path (plist-get old :path)))
@@ -316,20 +316,21 @@ which read their content directly from the exact :after snapshot."
                      (equal (plist-get old :directory) (plist-get new :directory)))
           (push (append (list :path path :before old :action (if (plist-get new :exists) 'write 'delete)
                               :after new)
-                        (when (and (not snapshots-only) (plist-get new :exists) (plist-get new :bytes))
+                        (when (and (plist-get new :exists) (plist-get new :bytes))
                           (list :bytes (plist-get new :bytes) :mode (plist-get new :mode)
                                 :content (decode-coding-string (plist-get new :bytes) 'utf-8-unix)))) changes))))))
 
 (defun mevedel-memory-write-prepare-reverse (workspace claim target intent)
   "Retain a checked reverse of applied INTENT under WORKSPACE CLAIM and TARGET.
 The decision owner must verify an accepted application before calling this."
+  (when (mevedel-memory-write--notes-root intent)
+    (user-error "Shared-note deletion is permanent and cannot be reversed"))
   (unless (and (equal intent (mevedel-memory-write-read workspace (plist-get intent :id) (plist-get intent :hash)))
                (not (plist-get intent :reverse-of)))
     (error "Expected an original memory application intent"))
   (mevedel-memory-write--prepare
    workspace claim target (plist-get intent :accepted) (plist-get intent :item)
-   (plist-get intent :after) (mevedel-memory-write--changes (plist-get intent :after) (plist-get intent :before)
-                                                        (mevedel-memory-write--notes-root intent))
+   (plist-get intent :after) (mevedel-memory-write--changes (plist-get intent :after) (plist-get intent :before))
    (list (plist-get intent :id) (plist-get intent :hash))))
 
 (defun mevedel-memory-write--mutate (target before after &optional before-write)
@@ -401,6 +402,8 @@ BEFORE-WRITE guards each forward mutation, but never disables checked rollback."
 Every dependency must match retained before or after bytes. An intervening
 edit prevents the entire rollback. Commit reverse changes through ApplyPatch;
 interruption leaves the original intent sufficient for another checked recovery."
+  (when (mevedel-memory-write--notes-root intent)
+    (user-error "Shared-note deletion is permanent and cannot be rolled back"))
   (unless (equal intent (mevedel-memory-write-read workspace (plist-get intent :id) (plist-get intent :hash)))
     (error "Memory write intent changed"))
   (let* ((scope (mevedel-memory-write-scope intent))
@@ -430,8 +433,7 @@ interruption leaves the original intent sufficient for another checked recovery.
             (push (cons (car row) after) reached))))
       (mevedel-memory-write--commit
        workspace target intent
-       (mevedel-memory-write--changes (nreverse reached) (plist-get intent :before)
-                                     (mevedel-memory-write--notes-root intent)) currentp))))
+       (mevedel-memory-write--changes (nreverse reached) (plist-get intent :before)) currentp))))
 
 (defun mevedel-memory-write-retire (target intent)
   "Retire INTENT's marker under TARGET after a durable resolved decision.

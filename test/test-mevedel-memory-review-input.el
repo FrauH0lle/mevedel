@@ -62,7 +62,18 @@
     (should (= 1 (length groups)))
     (should (= 2 (length (plist-get (car groups) :checks))))
     (should (equal "unknown" (plist-get (cadr (plist-get (car groups) :checks)) :result)))
-    (should (equal '("Reference count limit reached") (plist-get input :reference_omissions)))))
+    (should (equal '("Reference count limit reached") (plist-get input :reference_omissions))))
+  :doc "chunk summaries are ordinary note evidence without a model-policy flag"
+  (let* ((body "Dated candidate lesson; remaining uncertainty is not a task tracker.")
+         (note (list :id "work://shared/large.md" :path "large.md" :chunked t
+                     :modified "2026-10-29T00:00:00Z" :cited t :body body))
+         (input (json-parse-string
+                 (mevedel-memory-review--input nil nil nil nil nil nil 0 (list note))
+                 :object-type 'plist :array-type 'list))
+         (admitted (car (plist-get input :notes))))
+    (should (equal body (plist-get admitted :body)))
+    (should (eq t (plist-get admitted :cited_by_memory)))
+    (should-not (plist-member admitted :sequential_summary))))
 
 (provide 'test-mevedel-memory-review-input)
 ;;; test-mevedel-memory-review-input.el ends here

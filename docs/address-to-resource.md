@@ -193,6 +193,17 @@ session scope is empty. A missing session or workspace owner is still an error.
 An explicit missing descendant, including an arbitrary directory descendant,
 is an error rather than an empty discovery root.
 
+Shared-directory Read (root or descendant) generates a bounded listing with
+canonical address, modification age, age-readiness reason and first Markdown
+heading. Bare `work://` includes these same shared rows. Headings are not
+model-generated. Incomplete inventory/reads are explicit; no maintained
+index is written. Age-readiness uses the target clock and actual mtime: all notes
+and attachments need 14 days by default, inclusive at the
+boundary. It does not certify dependency/reference absence or authorize mutation:
+capture/application safety checks remain pending. Directory discovery does not
+mark all returned files used or refresh their modification age. Glob/Grep and
+direct-file Read retain their existing output and access contracts.
+
 - `work://shared/...` maps to `WORKSPACE-ROOT/.mevedel/shared/`. All agents and
   sessions in that workspace see the same files. The directory is created only
   by a permitted write and has no prescribed children. Working notes, drafts,
@@ -221,9 +232,21 @@ Shared note contents are not automatically added to every conversation. Models
 discover and read them with Read, Glob, and Grep; an agent handing off work
 provides the note's address to the receiving agent.
 
-Memory consolidation reviews quiet shared files automatically, extracts their
-lasting knowledge and then deletes, keeps or condenses each one, preferring
-deletion; quiet unreferenced attachments and empty folders are removed too.
+Shared Markdown notes (`.md`, case-insensitive) are ordinary authored files.
+ApplyPatch neither adds nor validates note headers. One setting,
+`mevedel-working-note-max-age-days` (default 14, nil disables disposal), controls
+modification-age readiness for every note and attachment.
+See the [note-authoring contract](memory.md#shared-working-note-lifecycle).
+
+Memory consolidation reviews a finite daily cohort of age-ready shared notes,
+extracts qualifying lasting knowledge and proposes deletion through ID-only
+acknowledgements. Attachments expire without inference after fourteen days,
+only when complete fresh reference, local-use and unsaved-buffer checks permit
+permanent deletion. Unknown scope holds the original; no undo copy or system
+trash is used. Reversing an extraction does not restore deleted notes.
+Age-ready empty folders can be pruned,
+but the shared root remains. These safety outcomes appear in capture/application
+observations, not as current guarantees from an age-readiness listing.
 See [Shared working-note lifecycle](memory.md#shared-working-note-lifecycle).
 `/clean-work [focus]` remains an explicit, interactive cleanup through normal
 ApplyPatch permissions and review; `/learn` handles requested promotion.

@@ -215,12 +215,11 @@ storage contract and the workflows below for the user surface.
 The consolidation output contract is implemented in
 `mevedel-memory-proposal-parse`. It validates the complete reply against captured
 root IDs, admitted files, complete filename observations for creation, and
-admitted digest IDs before returning any proposals. The fixed ordered sections
-are Promote, Update, Merge, Remove, Instructions, Notes, and No action; Notes is
-required exactly when shared notes were admitted, with one disposition per
-admitted note, and may otherwise be omitted or `- none`. The request's notes-root
-filename roster lists only admitted notes; references and investigation reads do
-not admit additional notes for disposition. Proposal fences
+admitted digest and note IDs before returning any proposals. The sections are
+Promote, Update, Merge, Remove, Instructions, and No action. There is no Notes
+section or per-note acknowledgement. The request's notes-root filename roster
+lists only admitted notes; references and investigation reads do not admit more
+notes. Proposal fences
 contain JSON-valued header lines, a `---` separator, and Markdown replacement
 content. The header is a sequence of `key: value` lines, not a JSON object;
 only the values use JSON syntax. Merge sources must be admitted files; overlapping file operations
@@ -230,21 +229,25 @@ owns index consistency. This parser performs no reads or writes and does not
 establish current authority, freshness, or factual correctness. The request uses
 this parser at terminal settlement before accepting proposals into the durable
 review and decision lifecycle exposed by the memory cockpit.
-A note `delete` additionally requires `open-items` and `resolved-by` arrays;
-`keep` and `condense` may carry them, validated as string arrays, and their
-open items are recorded. A `resolved-by` entry that is not `PATH: QUOTE`
-(an address, a placeholder) is no evidence rather than an invalid reply. A
-block with an empty body may omit the `---` separator, a note disposition may
-repeat a header line with an identical value, sections may appear in any order
+The model extracts qualifying knowledge with ordinary proposals citing the
+admitted note ID in evidence; nothing else is needed for notes. The accepting
+store generates an internal deletion proposal for every admitted note only after
+a successful review. Instructions proposals supply the complete
+desired content of an exact captured applicable file, preserving unrelated
+guidance, rather than appended text. Captured known-absent instruction targets
+remain creatable. Empty Instructions bodies mean zero bytes, not path deletion;
+other decoded body bytes, including a final newline, are preserved exactly.
+One newline immediately before the closing fence is structural, so retaining
+a final newline in the desired body requires an extra newline before the fence.
+A block with an empty body may omit the `---` separator. Repeated header fields
+are invalid. Sections may appear in any order
 (each once; every action section required, so a truncated reply still fails),
 and a reply may end without `## No action`; text between proposal blocks still
 invalidates the reply. These accept shapes real replies
 produced, which previously discarded whole reviews. A rejected reply is retained,
 newest eight, under `.mevedel/state/diagnostics/rejected-replies/` for
-diagnosis; it never becomes proposals. Each resolution entry is a plain
-workspace-relative path, `: `, and a quote of at least 12 characters; the path
-is normalized before acceptance compares the quote with the review's reads (see
-[Shared working-note lifecycle](#shared-working-note-lifecycle)).
+diagnosis; it never becomes proposals. Failed or rejected reviews create no
+disposals (see [Shared working-note lifecycle](#shared-working-note-lifecycle)).
 
 `mevedel-memory-scope-capture` supplies the parser's root and file allowlist.
 It reads complete topic, index, and root instruction files without changing
@@ -293,23 +296,30 @@ family. Memory and journal reads use captured evidence; source Read uses the
 ordinary text reader over a pinned UTF-8 snapshot capped at 512 KiB, including
 range support within that snapshot. Oversized files are refused before the
 reader can scan a long line or a large offset. No tool definitions are added to gptel's global tool registry.
-The investigation records the text each workspace Read delivered, per file;
-the review result reports it as `:inspected`, the evidence a note delete's
-`resolved-by` quotes must match. Searches and memory or journal reads do not
-count. A truncated Read names the line offset to continue from, because a
+The investigation delivers source text to the reviewer without accumulating
+another full-text evidence map in its state or callback. A truncated Read
+names the line offset to continue from, because a
 whole large document otherwise shows only its first 8 KiB.
 A fourth tool, Git, reads the workspace's history without a shell, pager,
 hook or optional lock: `log` searches commit messages (at most 30 commits,
 optionally limited to a path; a commit hash is shown instead), and `show`
 prints one commit's message and changed files plus whether the current HEAD
 contains it, naming the commit. Its output is bounded like the other tools,
-counts against the same budgets, is unavailable on remote workspaces, and is
-recorded as `GIT-HISTORY` evidence, which a delete may quote. Handoffs to
-integrate or commit are usually completed only in history.
+counts against the same budgets and is unavailable on remote workspaces.
+Git remains useful for a material claim about source history; note deletion
+does not require Git completion searches or registered resolution quotes.
+Commit containment establishes inclusion only, not activation or deployment.
 
 Searches reuse ordinary Glob/Grep over private admitted copies. Source search
 examines at most 256 entries, copies at most 2 MiB, and omits files larger than
-512 KiB. Omitted, unavailable, and excluded source paths produce a partial-search
+512 KiB. Directory batches rotate one entry at a time, so pending root siblings
+do not consume all descendant visits. Each directory listing is bounded by the
+remaining visit allowance; this is a partial snapshot, not an exhaustive search.
+Traversal and copy writes yield between short timer slices (at most eight steps
+or 20 ms before the next step). A single pinned read or filesystem operation can
+still take longer. Each source admission rechecks authority; yielding does not
+cache a path's permission or make the whole search an atomic snapshot.
+Omitted, unavailable, and excluded source paths produce a partial-search
 notice. Narrowing the subtree or reading a named source file supports further
 investigation. Results use relative filenames and omit private copy paths.
 Each result is capped at 8 KiB of UTF-8; a request may return at most 64 KiB
@@ -322,6 +332,22 @@ the overall deadline and generation check.
 Search completion restores the caller's working directory before delivering
 the result, including synchronous empty results. A provider follow-up never
 inherits a deleted investigation snapshot as its working directory.
+
+Review results and live usage snapshots also carry a metadata-only investigation
+summary. The terminal pass telemetry event retains it under the pass identity,
+not in the accepted bundle, public review or model prompt. Each admitted call records its tool,
+root, normalized relative path, pattern or Git command and Read range when
+present, delivery status, delivered UTF-8 byte count and SHA-256, and partial
+snapshot and truncation flags. No result text or error message is retained in
+this summary. Target/query fields are capped at 256 UTF-8 bytes each and marked
+when shortened. At most 32 call rows fit within 32 KiB of serialized UTF-8;
+an explicit omitted-row count distinguishes summary omissions from unused
+tools. A bounded roster of admitted note addresses supports joining the pass to
+its proposals, without attributing any call to a particular note. This follows
+the telemetry enable switch and rotation lifetime, not immutable acceptance.
+Cancelled calls and results refused by the aggregate output budget have
+zero delivered bytes. These observations establish delivery, not whether the
+model understood evidence or used it for any particular note.
 
 ### Request limits and settlement
 
@@ -512,8 +538,9 @@ buffer; the pass remains registered while its result is being published.
 that buffer, retires only this client's attempt. Failure and expired callbacks
 cannot publish fresh results or change a successor's claim or pins. Success
 returns the immutable public review, usage, and remaining frozen backlog count;
-arrivals after selection remain eligible. A single pass never recursively drains
-the backlog; explicit drain coordinates successive separately owned passes.
+arrivals after selection do not widen an admitted daily note cohort. A single
+pass never recursively drains the backlog; the cycle coordinator and explicit
+drain coordinate successive separately owned passes.
 Explicit callers may allow an empty batch for current-memory review. The proposal
 cockpit and `/remember [focus]` command are available. Workspace telemetry records
 pass starts and terminal outcomes, usage received so far, published proposal and
@@ -530,50 +557,107 @@ memory and instruction proposals, including changes to `AGENTS.md`, through the
 ordinary checked decision path without prior review, followed by shared-note
 decisions. The mode is frozen at pass admission.
 
-The automatic gate checks mode, then elapsed time since the last successful
-general review, then the eligible unreviewed digest count. The settings
+Automatic admission has two independent clocks: a daily shared-note cycle and
+the ordinary journal-only review gate. Ready shared notes do not need journal
+digests or journaling to be enabled, and note-only reviews do not postpone a
+later journal review.
+
+The **journal-only** gate checks mode, then elapsed time since the last successful
+journal-bearing general review, then the eligible unreviewed digest count. The settings
 `mevedel-memory-consolidation-min-hours` and
 `mevedel-memory-consolidation-min-digests` default to 24 hours and five digests.
-Both automatic and general on-demand completion move the clock; focused reviews
-do not. Retired review metadata preserves that clock after history expiry.
+Automatic and general on-demand reviews that admit journal digests move this
+clock; focused and note-only reviews do not. Retirement records preserve the
+journal-bearing distinction and clock after ordinary review-history expiry.
 A smaller backlog becomes eligible one day before its oldest digest reaches the
 configured ordinary-recall age limit (13 days under the default). Disabled expiry
 keeps the count threshold; the elapsed-time gate still applies in either case.
 This creates review opportunities for sparse workspaces and completed work from
-long-running sessions. Ready shared-folder work (a quiet note, attachment or
-empty folder; see [Shared working-note lifecycle](#shared-working-note-lifecycle))
-satisfies the count by itself, so a workspace without digests or with
-journaling disabled is still cleaned up; a shared folder alone makes the
-workspace a candidate. The admitted review then also carries any eligible
-digests, unless an oversized note owns the batch alone. `/remember` bypasses
-timing and count thresholds.
+long-running sessions. A note-cycle batch can also carry digests when their
+independent journal gate is due, under the ordinary admission bounds, unless an
+oversized note owns that batch alone. Ready notes do not bypass the journal
+time or count gate.
+General `/remember` bypasses timing and digest-count thresholds, not capture or
+mutation safety. It participates in or resumes the note cycle for one bounded
+pass; its existing allow-empty/current-memory-review option is not an exclusion
+of notes. A nonempty focus excludes notes and does not join the note cycle.
+
+The **shared-note cycle** uses the target clock and becomes due inclusively
+24 hours after the preceding cycle's admission, independently of the journal
+settings above. Under the existing workspace claim, it freezes a bounded finite
+cohort of eligible path/version metadata before starting bounded batches. The
+private `.mevedel/state/shared-notes/cycle.el` record binds the workspace identity,
+physical shared root and execution target. It contains cycle identity, admission
+time, frozen cohort and hash, attempted members with accepted pass identities,
+deferred members and reasons, an in-flight original pass/claim reservation, and
+active, complete or paused status with a bounded error class, not note bodies.
+It is scheduling state, never authority to read, review or delete a file.
+Accepted passes and decisions remain the evidence for review and application.
+
+There is one cycle record per actual workspace journal, not one per
+directory/target tuple or a registry mapping aliases to shared physical state.
+Changing the shared directory or execution-target identity while a cycle is
+active or unreconciled fails visibly closed. Finishing or resolving that cycle
+requires its original namespace and authority; operators must restore them
+rather than treating a new path or target as a continuation. A completed,
+reconciled cycle can freeze the current namespace at the next due admission.
+Local-to-TRAMP takeover and alias equivalence have not been established for this
+cycle protocol; physical identity fields are checks, not a cross-access mapping
+or proof of remote portability.
+
+Admission atomically persists that reservation before yielding note capture,
+not only before immutable preparation. A failed preparation that returns no
+bundle can be adopted for metadata recovery only when its exact original claim
+still owns the slot; fresh ownership then reconciles and pauses it. Cleanup pins
+the reserved predecessor even when no prepared record exists. The strict
+`mevedel-memory-cycle-inflight-claim` observation supplies that retention pin,
+never admission or mutation authority.
+
+Each frozen version is attempted at most once in that cycle. Attempts are
+authenticated against the accepted pass and its exact admitted note IDs, not
+the number of files deleted. Failed reviews pause the cycle without disposal;
+successful reviews generate disposals even when no memory qualifies. Held
+extractions or use can still prevent actual deletion. A batch with no deletions does not
+stop an otherwise successful cycle. Capture-history ranking, applied-progress
+catch-up and the rolling successful-batch ceiling are removed.
+
+Later arrivals and versions changed after the cohort was frozen wait for the
+next cycle rather than extending the current run. A captured member that can no
+longer be safely admitted is deferred, not silently rebound to its new content;
+deferral is not an attempt. An empty cohort is recorded as complete and starts
+no note-review inference. An independently due journal review or an explicitly
+requested allow-empty current-memory review can still run. Ordinary note,
+digest, request, chunk-summary and output bounds
+still apply to each batch; the coordinator does not create one oversized
+request. Both propose and auto can service the finite cohort; propose leaves
+decisions for approval, while auto uses checked application. Manual mode needs
+an explicit request.
 
 Turn completion checks cached timing and settings without target I/O. Queued
 turns coalesce, and filesystem work waits for idle transport. A failed count
-check is cached for ten minutes; a recent successful general review postpones
-the next check until its interval ends. The coordinator acquires target
+check is cached for ten minutes; timing observations respect the separate
+journal and note-cycle clocks. The coordinator acquires target
 ownership and recovers accepted publications before rechecking the gate, so
 another client's completion cannot be missed merely because the initial
 observation was stale. Journaling can be disabled while existing digests remain
 eligible for consolidation. Exit cancels queued and active review work.
 
-In **auto** mode, a successful general review with ready notes or digests
-remaining makes the next idle/maintenance opportunity a catch-up batch, bypassing
-the ordinary time and digest-count thresholds. It does not start another review
-inside the completion callback. `mevedel-memory-consolidation-max-batches-per-day`
-defaults to **8** successful general batches per rolling 24 hours. Admission
-counts published and retired general reviews on the target clock, including
-explicit reviews, under the existing workspace claim. Focused reviews do not
-count. Zero disables automatic review in auto mode. Propose retains the ordinary
-interval. A failed catch-up review ends the catch-up chain; later offers must
-pass the ordinary successful-review clock again. The cap bounds successful
-batch admissions, not tokens or billing: catch-up can
-cost up to eight successful review batches per day rather than one. Ordinary
-batches keep the same note/digest/request bounds; an oversized note is a
-single batch with bounded additional sequential summary calls, followed by
-its final review, all sharing the review's deadline and output limits.
-The cap counts batches, not provider calls. Failed attempts
-still may incur provider charges. Explicit review and drain bypass the cap.
+Cycle continuation preserves fresh ownership, pending/recovery holds, age and
+current-use checks, and unsaved-buffer protection. Cleanup or claim contention
+before admission preserves the offered opportunity; busy work waits with a
+nonzero retry rather than spinning. Failure, cancellation or an application
+recovery requirement pauses successor batches without rewriting accepted
+outcomes or confirmed-write counts. Automatic opportunities do not resume the
+same paused cycle before its daily boundary; an explicit review or drain can
+resume it immediately. At or after admission plus 24 hours, an automatic offer
+can freeze a new cohort, including still-eligible versions left by the paused
+cycle; pausing is not permanent suppression. An active cycle instead retains
+its original cohort across later opportunities. Active-cycle recovery uses the
+private record and accepted pass evidence without duplicating completed attempts
+or reapplying the journal-only gates.
+There is no completion-time scan that expands the cohort to newly ready files.
+An attempted version is not necessarily reviewed, extracted or deleted. Finite
+batching establishes no provider-cost, throughput or capacity guarantee.
 
 Auto applies proposals sequentially with fresh workspace and original-root
 ownership for each application. Unrelated index edits are preserved across
@@ -627,7 +711,10 @@ changes from accepted before-state without writing them. Topic frontmatter is
 generated from the validated name, description, and type. Index updates escape
 labels and filenames, retain unrelated lines, and reject duplicate or invalid
 destinations, including two encoded names for the same file. Instructions
-append to their captured file. Every emitted change retains expected original
+replace their exact captured applicable file with the complete decoded body,
+including zero bytes for an empty body. Existing and captured known-absent
+targets use the same checked write path; this action never deletes a path.
+Every emitted change retains expected original
 bytes or absence and exact proposed bytes for the shared patch transaction.
 Generated files must fit the memory reader's 32-KiB per-file bound, including
 index growth, so a change cannot exclude its root from the next review.
@@ -962,10 +1049,15 @@ start the same operation. The header shows batch number, status and the last
 observed notes-remaining count; completion messages report each batch's notes
 and digest backlog. Drain runs successive general reviews, with ordinary-note
 batches bounded to 16 notes / 96 KiB and oversized notes reviewed alone in
-bounded chunks; digest/request limits remain unchanged. It stops when a fresh
-selection finds no ready shared notes, housekeeping or uncovered digests. It
-does not request an empty current-memory review. Pending, kept and blocked
-notes are not ready; propose/manual drain leaves decisions for approval rather
+bounded chunks; digest/request limits remain unchanged. Its first offer can explicitly
+bypass the daily note-cycle time gate and journal timing/count thresholds, but
+not claim ownership, cohort/version checks, pending recovery, age, current use,
+unsaved buffers or mutation checks. It services a finite frozen note cohort;
+new arrivals and changed versions do not extend that cohort. Completed attempts
+are authenticated against accepted pass identities and exact admitted notes.
+Attempted is not confirmed
+deleted. An empty selection requests no empty current-memory review.
+Pending/recovery-required and blocked notes remain held; propose/manual drain leaves decisions for approval rather
 than deleting their files. Other sessions' turns do not stop the drain; notes
 they use wait (see Readiness). Running local consolidation, application or
 cleanup and a busy transport wait with a 60-second retry, so drain neither
@@ -974,9 +1066,13 @@ originating buffer or exiting stops it; a failed review stops without retry.
 An accepted review also stops the drain if application reports an error or a
 recovery requirement. Acceptance, actual application counts and the diagnostic
 remain unchanged; a published review is not proof that every proposal applied.
-A changed chunked note reports `restart-required`, not a failed review; drain
-continues to the next ready batch and automatic catch-up remains armed.
-The explicit command is not subject to the automatic daily cap.
+A changed chunked note reports `restart-required`, not a failed review; its
+changed version waits for a later cohort rather than being retried in the
+current one. The persistent cycle record allows a later resume without
+repeating already accepted attempts. Successor batches retain the cycle identity
+rather than refreezing another note cohort. Once the note cohort is complete,
+drain can service remaining eligible ordinary digests without admitting new
+notes. There is no rolling successful-batch cap.
 
 `m` runs another consolidation; a prefix argument asks for focus. The first-class
 `/remember [focus]` command and `M-x mevedel-remember` use the same bounded
@@ -1028,26 +1124,39 @@ bodies and complete terminal decision/write history.
 
 Main and worker guidance asks for attributed factual lessons in
 `work://shared/` when the request permits workspace writes. Agents search before
-creating and update relevant existing files; no filename or structure is required. Read-only agents
+creating and update relevant existing files, using Markdown with one topic per
+note and freely chosen filenames, a descriptive first heading and source/task
+attribution in prose. There is no note header, lifecycle label, kind/status or
+managed/unmanaged distinction. ApplyPatch treats shared files as ordinary authored
+content: it neither inserts nor validates frontmatter. Existing header-shaped
+text has no lifecycle meaning and needs no migration. Keep actionable work in the
+tracker/backlog, not only in temporary notes. Normal edit permissions and
+review/transaction protections still apply. Read-only agents
 report lessons through their existing results or available SendMessage; they
 gain no mutation tools. `$learn` considers available notes and digests as
 additional evidence, verifies relevant claims, and acknowledges omissions.
 
 Shared files (`.mevedel/shared/`) are untracked, machine-local and temporary.
 `mevedel-memory-notes.el` owns their lifecycle: general consolidation reviews
-extract lasting knowledge from quiet files into memory and then dispose of
+extract lasting knowledge from age-ready files into memory and then dispose of
 them. Focused reviews do not include notes. Accepted reviews and decisions are
 the only processing record.
 
-**Readiness.** A file is ready once unchanged for
-`mevedel-memory-notes-quiet-hours` (default 24) on the target clock. A note
-version is its path and content hash; an edit creates a new version. A pending
-decision suppresses a version. Kept or condensed versions, and versions a user
-rejected or restored, are reconsidered after `mevedel-memory-notes-review-days`
-(default 7). Stale, unavailable and deleted outcomes impose no wait. A review
-leaves notes that open sessions are using for later. A note is in use while a
+**Readiness.** Use the target clock and actual last modification time, not the
+authored creation timestamp. One defcustom, `mevedel-working-note-max-age-days`,
+sets a flat **14 elapsed days** by default for every note and attachment, and
+empty-folder housekeeping. Set it to nil to disable automatic disposal.
+Boundaries are inclusive multiples of 86,400 seconds; future mtimes wait.
+A note version is its path and content hash; modification age uses actual mtime,
+including a same-byte touch. Note deletion freshly rechecks that age after
+approval and preparatory IO; renewed age is a nonterminal hold, not authorization
+from an older capture. A pending/recovery-required decision suppresses its exact version.
+Prior completed review, rejection or reversal outcomes do not start an additional
+seven-day reconsideration timer; rejection evidence remains available to later
+reviews. A review leaves notes that open sessions are using for later. A note is in use while a
 session whose buffer is live, or one of its sub-agents, named that file in a
-`work://shared/` Read, Glob, Grep or ApplyPatch within the quiet period. Folder
+`work://shared/` Read, Glob, Grep or ApplyPatch within a separate 24-hour access
+window. Folder
 listings and searches do not count, and neither does another session merely
 running a turn. This evidence lives in the editor that ran the tool and is not
 retained across restarts or shared between clients; access through ordinary
@@ -1056,17 +1165,27 @@ inventory first and authenticates prior disposition status only for paths
 present in it: a deleted path cannot be admitted, and a recreated one is
 checked like any other.
 
+Shared-directory Read exposes generated bounded modification-age and age-readiness
+rows with the first Markdown heading (empty when absent), not a model-generated
+summary or a maintained index. It says capture/application safety checks remain pending;
+these rows do not certify current dependency/reference absence. Incomplete
+observations stay visible. Listing never writes an index or marks all entries
+in use, and direct Read/Glob/Grep keep their existing contracts.
+
 **Capture.** Each general review walks the folder without following links
-(at most 4,096 entries). Text is complete UTF-8 without NUL bytes; anything
-else is an attachment. At most 16 ordinary text notes and 96 KiB are captured,
+(at most 4,096 entries). Only Markdown (`.md`, case-insensitive) enters model
+review; complete UTF-8 without NUL bytes is required. All non-Markdown files are
+attachments, including readable scripts, JSON and plain text. At most 16 ordinary text notes and 96 KiB are captured,
 oldest first, each at most 32 KiB; the review request admits them beside
 digests (one of each when both fit, then oldest first). A larger text note is
 captured alone, leaving eligible digests unpinned for the next batch, up to
 `mevedel-memory-notes-max-review-bytes` (default 512 KiB, about sixteen chunks).
 It is reviewed sequentially in UTF-8 chunks of at most 32 KiB, carrying a
-running summary capped at 16 KiB. The final review uses that summary to
-extract knowledge and decide keep, condense or delete through the normal
-decision path. Whole-file bytes and hash remain the before-state, never a
+running summary capped at 16 KiB. The summary carries candidate durable lessons,
+source attribution and uncertainty across chunks, not an open-work resolution
+audit. The final review uses that evidence to extract qualifying knowledge;
+successful acceptance generates the disposal through the normal decision path.
+Whole-file bytes and hash remain the before-state, never a
 truncated prefix. Each chunk and final settlement recheck that whole-file
 state. A change discards the summary and reports `restart-required`; the
 next review starts from the beginning once the new version is quiet. The
@@ -1082,93 +1201,93 @@ shows it, and review completion messages report the counts.
 
 **Citations.** Memory topics and instruction files are captured first. A file
 they cite, by `work://shared/` address or `.mevedel/shared/` path, including
-through a cited folder, is never removed as housekeeping. A cited note is
-flagged `cited_by_memory`; a delete without an extraction citing the note is
-accepted as keep, so the citation cannot silently break.
+through a named folder below the shared root, is never removed as housekeeping.
+The generic shared-root address in policy or navigation is not a dependency on
+every child; the shared root itself is retained. A cited note is
+flagged `cited_by_memory`. The reviewer can repair its captured citing memory
+with Update or Remove, or replace a citing instruction file with Instructions,
+preserving unrelated guidance and citing the note as evidence. Remaining
+citations hold deletion as an unresolved dependency, not an automatic keep.
+The applicable memory and instruction citation scope is freshly rechecked at
+the actual deletion boundary, including after approval waits. New citations or
+an unavailable or incomplete scope hold deletion; capture cannot prove their
+later absence.
 
-**Decisions.** The reply's Notes section gives every admitted note exactly one
-disposition: delete (the normal outcome for completed material, including when
-the only question is whether finished history might help someday), keep
-(concrete continuing use such as an open handoff or a prepared diagnostic
-needed for an unresolved follow-up) or condense (rewrite to the part still in
-use). The reviewer first lists the note's open items: unresolved findings,
-failed or unfinished checks, unverified hypotheses or leads, acceptance limits
-and work left to others, even when the note's main task is complete. Age or a
-missing record is not resolution. Work assigned to another owner and observations retained without an established
-cause count as open items, wherever they appear in the note; decision records
-are searched for them as well as the backlog. A condensed body keeps each open
-item's concrete operations, values with baselines and conditions, not a phrase
-that merely refers to it. An open item ends continuing use only when
-the reviewer establishes, with the workspace tools, that it was resolved,
-superseded or recorded elsewhere with its caveats and next step; otherwise the
-note is condensed to that item's dated evidence, caveats and next step, or kept.
-A delete therefore carries `open-items` and `resolved-by` header fields:
-the items, and at least one `path: exact words` entry per item quoting the
-workspace file, read in this review, that establishes its resolution or
-record. Acceptance records both. A delete whose open items lack enough quotes,
-or whose quotes do not occur in the text the review received from that file,
-is accepted as keep with that explanation, as a cited note is; a search match
-alone is not a read. Quote matching ignores Read line numbers, Markdown
-emphasis and code marks, whitespace and citation text outside quotation marks.
-These checks are deterministic; whether a reviewer lists every open item, or
-quotes text that really resolves it rather than merely discussing the topic,
-is model quality. Real held and applied deletions of 2026-10-28 that dismissed
-unresolved findings without any tool call motivated this rule; a later
-evaluation in which a reviewer cited a file it had read that did not record the
-items motivated the quotes. Extraction is ordinary memory and
+**Decisions.** After a successful review the host creates a deletion proposal
+for every admitted note. The reply has no Notes section, acknowledgement or
+note-specific output. Failed/rejected reviews delete nothing. Extraction is selective:
+a note may yield no qualifying memory. Tasks,
+unresolved findings, measurements and possible future usefulness do not require
+a completion audit or automatically retain a note. Open work belongs in its
+tracker or maintained documentation, not in permanent memory merely to permit
+cleanup. The old keep/condense, open-item resolution, quote/anchor and numeric
+preservation rules are removed; their rationale remains in ADR history.
+
+Extraction uses ordinary memory and
 instruction proposals citing the note's ID as evidence. Acceptance records
-those extractions as the disposition's `:requires`. Delete or condense applies
+all those extractions as the disposition's `:requires`. Deletion applies
 only after every required extraction is applied; an undecided requirement
 waits without a decision, and any other requirement outcome makes the
 disposition stale, leaving the note for a later review.
 
-**Housekeeping.** Quiet attachments that no surviving text file references
-(conservatively by root-relative, note-relative, URL-encoded or address
-spelling) and quiet empty folders receive delete and prune decisions without
-inference, at most 128 per review. Reference scans stream large texts in
+Malformed memory/instruction proposals or ambiguous reply structure reject the
+whole review before acceptance. There is no acknowledgement parser, skipped-note
+diagnostic or note-format counter. Accepted passes prove attempts for their exact
+admitted versions, while checked write outcomes prove actual deletion. A captured
+but unadmitted note gets no disposal proposal. The finite attempt set replaces
+capture-history ranking and the applied-progress catch-up guard; new versions and
+later arrivals wait for the next cohort.
+
+Confirmed deletions, held work and review failures remain distinct outcomes.
+Extraction dependencies, target ownership, current-use and unsaved-buffer
+checks, exact before-state, checked writes and interrupted-write reconciliation
+still apply. Deletion is permanent; reversing an extraction never restores its
+deleted source notes. A write confirmed before cancellation retains its count; a prepared
+proposal or a deferred retry does not establish that a deletion occurred.
+
+**Housekeeping.** Attachments at least the configured untouched age (default
+fourteen elapsed days) that no
+surviving text file, memory topic or instruction references receive delete
+decisions without inference; age-ready empty folders receive prune decisions,
+at most 128 housekeeping items per review. Matching is conservative across
+root-relative, note-relative, URL-encoded and address spellings, including named
+containing folders below the shared root. Generic root navigation does not
+protect every child. All other surviving Markdown and readable attachments,
+including scripts, JSON and plain text, participate, even if they have pending
+deletion proposals; only the target itself is excluded. Reference scans stream large texts in
 1 MiB chunks with overlapping filename spellings, so transcript copies above
 1 MiB do not make the scan incomplete; references split across chunk
 boundaries still protect attachments. Read failures, changing files and
-incomplete inventories block attachment cleanup, not text review.
-Application rechecks text written since
-capture, so a newly referenced attachment becomes stale. A review with only
-housekeeping starts no model request.
+incomplete inventories block attachment cleanup, not text review. Captured
+permanent scope retains omissions and completeness, not merely flattened text;
+unknown scope cannot prove reference absence. Before actual deletion, complete
+fresh shared and applicable permanent scopes are checked again, including
+backdated edits and unsaved drafts. Inventories, file versions and configuration
+are revalidated after I/O. New references, renewed age, active use or unavailable
+evidence hold the original without a terminal decision. These checks repeat
+at final write admission for both synchronous and yielding application.
+A review with only housekeeping starts no model request. The dated capture and
+application observation explains holds in the cockpit; generated resource
+discovery remains age-readiness-only with safety checks explicitly pending.
 
-**Application and undo.** Note decisions use the checked decision, write
-intent, recovery and reversal paths with a shared-notes target whose
+**Permanent application.** Note decisions use checked decisions, write
+intents and interrupted-write reconciliation with a shared-notes target whose
 coordination lives in `.mevedel/state/shared-notes/`, outside the folder it
-cleans. Each change runs as one locked target program: ownership guard, exact
-hash and mode proof, capture of the previous bytes as a private
-content-addressed blob, mutation, then removal of ancestors left empty. The
-shared root is preserved. Undo restores exact bytes, mode and parent folders
-from the blob. Reversing an extraction first restores every applied note
-disposal that required it; if that fails, the extraction stays applied.
-Blobs are retained while any write intent references them, so they follow the
-ordinary resolution-based history window. `mevedel-memory-notes-undo-quota`
-(default 1 GiB) bounds them: collection of unreferenced blobs runs before each
-review and before refusing a capture, and a change that would exceed the quota
-is refused with the note left in place. Unsaved visiting buffers and changed
-content refuse mutation.
-
-An attachment larger than the undo quota instead uses verified **system
-trash**, recorded as ordinary housekeeping. On GNU/Linux with Emacs's
-standard trash implementation, a private staging copy is moved with
-`move-file-to-trash` and `delete-by-moving-to-trash` enabled; its retained
-trash bytes must match the whole-file hash before the locked program can
-remove the original. Failure (including an implementation that deletes
-instead of trashing) leaves the original in place. The intent retains the
-exact content-addressed trash location for checked undo without consuming
-the undo-blob quota. With the default freedesktop trash Emacs also writes
-`.trashinfo`; an explicitly configured local `trash-directory` uses Emacs's
-configured trash semantics. Emptying or editing trash can make later undo
-unavailable, and never authorizes an unchecked restoration. TRAMP attachments,
-unknown/native platform trash implementations, and linked or unwritable
-trash locations remain blocked with an explicit reason; there is no permanent
-deletion fallback.
+cleans. Final use, unsaved-buffer, age, extraction and reference checks guard
+actual forward mutation. A locked target program repeats ownership and the
+reviewed hash/mode (or empty-directory state), then deletes plainly and removes
+ancestors left empty, preserving the shared root. Notes and attachments have
+**no undo**, blob capture, quota accounting, system-trash staging or restoration
+path. Reversing a memory extraction does not restore deleted notes; durable
+memory/instruction reversal retains its separate existing contract.
+Prepared, accepted and write evidence may retain reviewed text under ordinary
+history retention. This is not a per-note purge deadline or secure-erasure
+guarantee, and it does not introduce payload receipts, audit caches or a second
+undo store. No live conversion or header migration is required.
 
 **Modes.** `manual` processes notes only through `/remember`; `propose` leaves
-their decisions in the cockpit; `auto` applies extraction, deletion,
-condensation and housekeeping without prompts. In `auto`, note decisions wait
+their decisions in the cockpit; `auto` applies extraction, deletion and
+housekeeping without prompts. In `auto`, note decisions wait
 while an open session uses their file (see Readiness), rechecked at the
 mutation boundary; other notes and undecided decisions of earlier automatic
 note reviews proceed. A one-minute retry applies the held ones once any of

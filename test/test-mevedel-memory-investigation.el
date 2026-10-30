@@ -59,12 +59,10 @@
 			     (should (string-prefix-p "Error:" (mevedel-test-investigation--call state 'read args))))
 			   (should (string-match-p "Current source" (mevedel-test-investigation--call
 								     state 'read '(:root "workspace" :path "./source.el"))))
-			   ;; Only delivered workspace reads can support a note delete's
-			   ;; resolution; their text accumulates per normalized path.
-			   (let ((inspected (mevedel-memory-investigation-inspected state)))
-			     (should (equal '("source.el") (mapcar #'car inspected)))
-			     (should (= 2 (cl-count-if (lambda (start) (string-match-p "Current source" start))
-						      (split-string (cdar inspected) "\n" t)))))))
+				   ;; Delivery remains observable without retaining source bodies.
+				   (let ((summary (mevedel-memory-investigation-summary state)))
+				     (should (= 8 (length (plist-get summary :calls))))
+				     (should-not (string-search "Current source" (prin1-to-string state))))))
 		     (when state (mevedel-memory-investigation-stop state))
 		     (delete-directory directory t)))
 		 :doc "Glob and Grep reuse ordinary search over admitted nested snapshots without leaking private paths"
@@ -223,7 +221,7 @@
 (mevedel-deftest mevedel-memory-investigation--git ()
   ,test
   (test)
-  :doc "Git history is read-only, bounded and recorded as quotable evidence"
+  :doc "Git history stays read-only and bounded without a retained body accumulator"
   (let* ((directory (file-name-as-directory (file-truename (make-temp-file "mevedel-investigation-git-" t))))
          (workspace (mevedel-workspace--create :root directory))
          (mevedel-memory-dirs nil)
@@ -275,11 +273,8 @@
                             (:command "diff" :pattern "x")
                             (:command "log" :pattern "x" :path "../outside")))
               (should (string-prefix-p "Error:" (mevedel-test-investigation--call state 'git args))))
-            ;; Delivered history is quotable resolution evidence; nothing changed.
-            (should (mevedel-memory-proposal-quoted-p
-                     "\"Resolves findings 1B and 2\""
-                     (cdr (assoc mevedel-memory-investigation-git-evidence
-                                 (mevedel-memory-investigation-inspected state)))))
+            ;; Git results reach the caller without a retained full-text copy.
+            (should-not (string-search "Resolves findings 1B and 2" (prin1-to-string state)))
             (should (equal before (with-temp-buffer
                                     (call-process "git" nil t nil "-C" directory "status" "--porcelain")
                                     (buffer-string))))))

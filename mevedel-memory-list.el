@@ -675,7 +675,7 @@ Check original root authority before disclosing private topic contents."
        (list :id 'decision :title "Decision"
              :body (mevedel-report-fields
                     (list "Status" status)
-                    (list "Reason" (plist-get proposal :reason))
+                    (when-let* ((reason (plist-get proposal :reason))) (list "Reason" reason))
                     (list "Decision" (or (plist-get decision :reason) "Pending"))
                     (when input (list "Current check" (or (plist-get input :reason) "Ready to apply")))
                     (list "History" (mevedel-memory-list--retention workspace accepted))))

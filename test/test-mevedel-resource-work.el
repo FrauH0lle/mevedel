@@ -118,7 +118,8 @@
                           (mevedel-resource-execute
                            (mevedel-resource-prepare 'read "work://" context))
                           :result)))
-            (should (member address (split-string listing "\n")))
+            (should (member address (mapcar (lambda (line) (car (split-string line "\t")))
+                                           (split-string listing "\n"))))
             (should
              (equal "Shared lesson\n"
                     (mevedel-resource-execute

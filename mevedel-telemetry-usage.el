@@ -74,8 +74,12 @@ cache writes are an optional subset, not another input category to add."
 
 (defun mevedel-telemetry-usage--emit (call stage &rest props)
   "Emit frozen CALL at STAGE with PROPS, without affecting request execution."
+  (when-let* ((observer (plist-get call :observer)))
+    (funcall observer stage props))
   (let ((mevedel-telemetry--event-turn (plist-get call :turn)))
-    (apply #'mevedel-telemetry-record (plist-get call :session) 'provider-call
+    (apply (if (plist-get call :workspace)
+               #'mevedel-telemetry-record-workspace #'mevedel-telemetry-record)
+           (or (plist-get call :workspace) (plist-get call :session)) 'provider-call
            :stage stage
            (append (plist-get call :identity) props))))
 
@@ -185,13 +189,15 @@ cancelling transport.  Ordinary abort callbacks may already have settled it."
   "Observe one actual dispatch by ORIGINAL using FSM.
 This seam is downstream of mevedel's compaction/admission gates."
   (let* ((info (gptel-fsm-info fsm))
+         (context (let ((value (plist-get info :context)))
+                    (and (proper-list-p value) value)))
+         (workspace (and mevedel-telemetry-enabled
+                         (plist-get context :mevedel-telemetry-workspace)))
          (session (and mevedel-telemetry-enabled
                        (mevedel-telemetry-usage--owner info))))
-    (if (not session)
+    (if (not (or workspace session))
         (funcall original fsm)
-      (let* ((context (let ((value (plist-get info :context)))
-                        (and (proper-list-p value) value)))
-             (invocation (or (plist-get info :mevedel-agent-invocation)
+      (let* ((invocation (or (plist-get info :mevedel-agent-invocation)
                              ;; Agent request transforms may dispatch before
                              ;; gptel-request returns to install top-level keys.
                              (let ((buffer (plist-get info :buffer)))
@@ -212,13 +218,16 @@ This seam is downstream of mevedel's compaction/admission gates."
                            (if stream #'gptel-curl--stream-insert-response
                              #'gptel--insert-response)))
              (call
-              (list :session session
-                    :turn (if request (mevedel-request-turn request)
-                            (mevedel-session-turn-count session))
+              (list :session session :workspace workspace
+                    :observer (plist-get context :mevedel-telemetry-observer)
+                    :turn (when session
+                            (if request (mevedel-request-turn request)
+                              (mevedel-session-turn-count session)))
                     :started-at (mevedel-telemetry--monotonic-now)
                     :finished nil
                     :identity
                     (list :call-id (mevedel-telemetry--span-id 'provider-call)
+                          :pass-id (plist-get context :mevedel-telemetry-pass-id)
                           :request-id (plist-get info :mevedel-request-id)
                           :agent-path (when invocation
                                         (mevedel-agent-invocation-path invocation))
@@ -237,7 +246,14 @@ This seam is downstream of mevedel's compaction/admission gates."
         (setf (gptel-fsm-info fsm) (plist-put info :callback wrapper))
         (mevedel-telemetry-usage--emit call 'start)
         (condition-case err
-            (funcall original fsm)
+            (progn
+              ;; Workspace appends can yield before transport registration.
+              ;; Refuse a cancelled pass without launching an orphan request.
+              (when-let* ((currentp (plist-get context :mevedel-telemetry-currentp)))
+                (unless (funcall currentp)
+                  (mevedel-telemetry-usage--finish call nil 'aborted)
+                  (error "Memory provider dispatch cancelled")))
+              (funcall original fsm))
           ((error quit)
            ;; handle-wait runs post-request hooks after registering transport.
            ;; A hook failure must propagate, but that active call can still

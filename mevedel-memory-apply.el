@@ -114,10 +114,7 @@ ownership. The patch transaction rechecks each change's expected snapshot."
                                                 :mode (or (plist-get original :mode) (logand #o666 (default-file-modes))))))
                      changes)))))
       (if (eq action 'instructions)
-          (let ((original (decode-coding-string (or (plist-get (snapshot file) :bytes) "") 'utf-8-unix)))
-            (emit file (concat original (unless (string-empty-p original)
-                                         (if (string-suffix-p "\n" original) "\n" "\n\n"))
-                               (string-trim-right body "\n") "\n") t))
+          (emit file body t)
         (let* ((index-before (snapshot "MEMORY.md"))
                (index (mevedel-memory-apply--index
                        (decode-coding-string (or (plist-get index-before :bytes) "") 'utf-8-unix) proposal)))

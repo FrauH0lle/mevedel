@@ -371,8 +371,11 @@
            :workdir root :writable-roots (list root)
            :artifact-directory (file-name-concat root "artifacts-two")
            :yield-time-ms nil)
-          (test-mevedel-execution-scheduler--wait (lambda () second) 0.3)
+          ;; The unreleased first process proves lane independence; callback
+          ;; latency under parallel test load is not the contract.
+          (test-mevedel-execution-scheduler--wait (lambda () second))
           (should (file-exists-p second-path))
+          (should-not (file-exists-p release))
           (should-not first))
       (with-temp-file release)
       (test-mevedel-execution-scheduler--wait (lambda () first))

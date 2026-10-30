@@ -239,7 +239,7 @@ Copy the data because gptel merges shared model and backend parameter lists."
 
 (cl-defun mevedel-context-summary-generate
     (source purpose callback
-            &key session previous-summary focus guidance policy output-guard)
+            &key session previous-summary focus guidance policy output-guard telemetry-context)
   "Generate one context summary from frozen SOURCE for PURPOSE.
 
 PURPOSE is `continuation', `handoff', or `digest'.
@@ -255,6 +255,7 @@ zero-argument cancellation thunk.  SESSION is used only for model policy and
 telemetry ownership.  PREVIOUS-SUMMARY is valid only for continuation.  FOCUS
 and bounded GUIDANCE influence relevance without changing the output contract.
 POLICY, when non-nil, is a previously resolved model policy.
+TELEMETRY-CONTEXT carries internal workspace provider-call ownership, if any.
 OUTPUT-GUARD, when non-nil, receives incremental client output counters on
 each reasoning or reply fragment.  Signalling from it cancels and settles
 the request as an error with the incurred usage retained.
@@ -304,6 +305,12 @@ continuation and handoff summaries."
           (lambda (result &optional info)
             (unless settled
               (setq settled t chunks nil)
+              ;; A local output guard can settle before transport completion.
+              ;; Close its provider span before consumers snapshot pass totals.
+              (when (and telemetry-context request-started
+                         (not (eq (plist-get result :outcome) 'success))
+                         (buffer-live-p request-buffer))
+                (ignore-errors (gptel-abort request-buffer)))
               (when (mevedel-session-p session)
                 (if (eq (plist-get result :outcome) 'success)
                     (mevedel-recovery-clear session "context-summary")
@@ -492,9 +499,10 @@ continuation and handoff summaries."
 			  :stream stream
 			  :transforms nil
 			  :context
-			  (list :mevedel-context-summary t :purpose purpose
+			  (append telemetry-context
+                                  (list :mevedel-context-summary t :purpose purpose
 				:mevedel-telemetry-session session
-				:mevedel-telemetry-workload 'context-summary)
+				:mevedel-telemetry-workload 'context-summary))
 			  :fsm
 			  (if (and (eq purpose 'digest) (plist-get policy :max-tokens))
 			      (gptel-make-fsm

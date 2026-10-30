@@ -9,6 +9,7 @@
 (require 'helpers
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
+(require 'mevedel-session-control-fs)
 (require 'mevedel-memory-pass)
 (require 'mevedel-journal-capture)
 (require 'mevedel)
@@ -37,6 +38,7 @@
                                       (delete-directory root t)))
                  (cl-letf (((symbol-value 'mevedel-journal-worker--child-p) t)
                            ((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) now))
+            ((symbol-function 'mevedel-session-control-fs-observation-time) (lambda (_) now))
                            ((symbol-function 'mevedel-memory-review-request)
                             (lambda (_scope entries cb &rest _)
                               (cl-incf calls)
@@ -74,7 +76,7 @@
                                                                         memory-id (concat name ".md") name)) '("one" "two") "")
                                                    "## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n"
                                                    (format (concat "```proposal\nroot: %S\nfile: \"AGENTS.md\"\ntype: \"project\"\ntitle: \"Guidance\"\n"
-                                                                   "hook: \"Guidance\"\nreason: \"Evidence\"\nevidence: []\n---\nUse the checked workflow.\n```\n") instruction-id)
+                                                                   "hook: \"Guidance\"\nreason: \"Evidence\"\nevidence: []\n---\nExisting guidance.\nUse the checked workflow.\n```\n") instruction-id)
                                                    "## No action\n- none")))
                                           memory))
                                       (drain ()
@@ -141,27 +143,34 @@
                    (should (= 5 (length selected)))
                    (finish)
                    (should (= 3 calls)))
-                 :doc "retired general completion still postpones review without retaining private bodies"
+                 :doc "retired journal-bearing completion postpones review without retaining private bodies"
                  (progn
-                   (start :memory-only t)
+                   (dotimes (n 5) (digest (1+ n)))
+                   (start)
                    (finish)
                    (let ((mevedel-memory-history-max-age-days 0))
                      (cl-incf now 1)
-                     (should (= 1 (mevedel-journal-cleanup-expired workspace))))
-                   (should-not (mevedel-journal-store-entries root))
-                   (dotimes (n 5) (digest (1+ n)))
+                     (mevedel-journal-cleanup-expired workspace)
+                     ;; A general review retains its consumed digests until
+                     ;; their expiry group commits; the next observation can
+                     ;; then retire the now-unreferenced review itself.
+                     (mevedel-journal-cleanup-expired workspace t)
+                     (should (mevedel-journal-cleanup-pass-retired-p
+                              root (plist-get (plist-get state :claim) :owner))))
+                   (dotimes (n 5) (digest (+ 6 n)))
                    (should-not (start :automatic t))
                    (cl-incf now 86400)
                    (should (start :automatic t))
                    (finish))
-                 :doc "a recovered general publication advances the gate before a successor selects evidence"
+                 :doc "recovered note-only publication leaves journal admission available"
                  (let* ((claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
                         (prepared (mevedel-memory-store-prepare workspace claim (mevedel-memory-scope-capture workspace) nil "")))
                    (mevedel-memory-store-accept workspace prepared none nil "test:model" nil)
                    (dotimes (n 5) (digest (1+ n)))
-                   (should-not (start :automatic t))
-                   (should (= 0 calls))
-                   (should (= 6 (length (mevedel-journal-store-entries root)))))
+                   (should (start :automatic t))
+                   (should (= 1 calls))
+                   (finish)
+                   (should (= 7 (length (mevedel-journal-store-entries root)))))
                  :doc "another client's live claim postpones automatic admission without settling it"
                  (let ((claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180)))
                    (unwind-protect
@@ -352,7 +361,7 @@
                        (note (file-name-concat root ".mevedel" "shared" "handoff.md")))
                    (make-directory (file-name-directory note) t)
                    (write-region "Finding to review.\n" nil note nil 'silent)
-                   (set-file-times note (seconds-to-time (- now (* 2 86400))))
+                   (set-file-times note (seconds-to-time (- now (* 15 86400))))
                    (mevedel-memory-pass-schedule workspace)
                    (drain)
                    (should (= 1 calls))

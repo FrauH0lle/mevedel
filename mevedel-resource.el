@@ -155,6 +155,10 @@
 (autoload 'mevedel--transcript-org-mode "mevedel-utilities")
 (autoload 'mevedel-library-source-directory "mevedel-utilities")
 
+;; `mevedel-working-note-files'
+(declare-function mevedel-working-note-files-listing "mevedel-working-note-files" (directory address))
+(autoload 'mevedel-working-note-files-listing "mevedel-working-note-files")
+
 (defconst mevedel-resource-supported-schemes
   '(work artifact skill agent history memory mcp shared mevedel)
   "Closed set of resource address schemes understood by mevedel.")
@@ -1502,13 +1506,13 @@ the union index read, which already tolerates missing roots."
              (let ((files
                     (cl-loop for entry in roots
                              append
-                             (mapcar
-                              (lambda (file)
-                                (mevedel-resource--logical-address
-                                 'work (append (when (plist-get entry :address-prefix)
-                                                 '("shared"))
-                                               (split-string file "/" t))))
-                              (mevedel-resource--file-list (plist-get entry :path))))))
+                             (if (plist-get entry :address-prefix)
+                                 (list (mevedel-working-note-files-listing
+                                        (plist-get entry :path) mevedel-resource-shared-work-address))
+                               (mapcar
+                                (lambda (file)
+                                  (mevedel-resource--logical-address 'work (split-string file "/" t)))
+                                (mevedel-resource--file-list (plist-get entry :path)))))))
                (if files (string-join files "\n") empty))
            (list :resource-search-roots roots :empty-result empty))))
       ('artifact
