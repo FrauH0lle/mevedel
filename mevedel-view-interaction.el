@@ -728,7 +728,9 @@ VISITS preserves explicit visitors captured before a full view reset."
             (when-let* ((after (plist-get (cdr pair) :after-render)))
               (funcall after)))
           (mevedel-view--interaction-sync-focus pairs visits)))
-      (mevedel-view--render-request-progress))))
+      ;; Request progress exists only once the stream module has loaded.
+      (when (fboundp 'mevedel-view--render-request-progress)
+        (mevedel-view--render-request-progress)))))
 
 ;; Rebuilds, prompt settlement, and queue settlement all close interactions
 ;; here, so this is the one place that sees the last blocker go.  The offered
