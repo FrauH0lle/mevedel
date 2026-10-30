@@ -956,6 +956,16 @@ Edits and changes only network isolation for that invocation. Full Access alread
 has unrestricted network and filesystem access. The namespace and mount boundary
 is inherited by descendants.
 
+An explicitly approved write grant for a character or block device mounts
+only that device node with device access enabled. Its source is opened and
+identity-checked before mounting; the mounted node is checked again and its
+source descriptor closed before the command starts. Ordinary file and directory
+mounts keep `nodev`; a recursive directory grant does not enable its devices. Device
+authority includes writes and ioctls, whose effects are not confined to a
+filesystem mount. Read-only device grants are refused: a read-only mount
+cannot enforce read-only device operations. No device is exposed automatically
+when a graphical child needs a render node.
+
 Native tools pass already-authorized input and search paths to the launcher as
 read-only mounts and pass only their generated-artifact directories as writable
 roots. Each invocation also gets a private writable scratch directory, which is

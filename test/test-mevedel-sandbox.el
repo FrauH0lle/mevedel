@@ -1690,6 +1690,49 @@ exact read and write mounts follow protected masks without broadening siblings"
           (should (= 0 (plist-get facts :additional-filesystem))))
       (mevedel-sandbox-cleanup prepared)
       (delete-directory root t)))
+  :doc "real device grant:
+an approved device can be opened without making ordinary mounts device-capable"
+  (skip-unless (eq system-type 'gnu/linux))
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache nil))
+    (skip-unless (plist-get (mevedel-sandbox-probe) :available))
+    (let ((root (make-temp-file "mevedel-sandbox-device-" t))
+          (output (generate-new-buffer " *mevedel-device-grant-test*"))
+          prepared)
+      (unwind-protect
+          (dolist (mixed '(nil t))
+            (let ((mevedel-protected-paths
+                   (when mixed '(("/dev/**" . inaccessible))))
+                  (grants (append '((:path "/dev/zero" :access write))
+                                  (when mixed '((:path "/dev" :access read :recursive t))))))
+              (with-temp-buffer
+                (should (zerop (call-process "head" nil t nil "-c1" "/dev/full")))
+                (should (= 1 (buffer-size))))
+              (with-current-buffer output (erase-buffer))
+              (setq prepared
+                    (mevedel-sandbox-prepare
+                     (list "sh" "-c"
+                           (concat "set -e; test ! -e /proc/self/fd/10; test ! -e /proc/self/fd/11; "
+                                   "dd if=/dev/zero of=/dev/zero bs=1 count=1 status=none; "
+                                   (when mixed
+                                     "test -c /dev/full; if head -c1 /dev/full >denied-read 2>denied-error; then exit 91; fi")))
+                     root (list root) (list :file-system grants)))
+              (unwind-protect
+                  (progn
+                    (should (eq 'confined (plist-get prepared :state)))
+                    (when mixed
+                      (should (member "--remount-ro" (plist-get prepared :command))))
+                    (let ((status (apply #'call-process
+                                         (car (plist-get prepared :command)) nil output nil
+                                         (cdr (plist-get prepared :command)))))
+                      (ert-info ((format "Mixed grants: %S; output: %s" mixed
+                                         (with-current-buffer output (buffer-string))))
+                        (should (zerop status)))))
+                (mevedel-sandbox-cleanup prepared)
+                (setq prepared nil))))
+        (kill-buffer output)
+        (mevedel-sandbox-cleanup prepared)
+        (delete-directory root t))))
   :doc "required backend:
 `mevedel-sandbox-prepare' refuses execution when confinement is unavailable"
   (let ((mevedel-sandbox-mode 'required)

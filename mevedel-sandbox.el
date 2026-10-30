@@ -38,6 +38,8 @@
 (autoload 'mevedel-permission-rules-path-protected-p "mevedel-permission-rules")
 
 ;; `mevedel-sandbox-grants'
+(declare-function mevedel-sandbox--device-grant-command
+                  "mevedel-sandbox-grants" (command grants workdir))
 (declare-function mevedel-sandbox--fd-backed-command
                   "mevedel-sandbox-grants"
                   (command grants &optional mask-fds workdir))
@@ -46,6 +48,7 @@
 (declare-function mevedel-sandbox--resolve-filesystem-permissions
                   "mevedel-sandbox-grants"
                   (permissions &optional inaccessible-paths restrictions))
+(autoload 'mevedel-sandbox--device-grant-command "mevedel-sandbox-grants")
 (autoload 'mevedel-sandbox--fd-backed-command "mevedel-sandbox-grants")
 (autoload 'mevedel-sandbox--mount-plan "mevedel-sandbox-grants")
 (autoload 'mevedel-sandbox--resolve-filesystem-permissions
@@ -1109,11 +1112,12 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                      (list "--unshare-net"))
                    (when mount-proc-p
                      (list "--proc" "/proc"))
-                   (list "--chdir" canonical-workdir
-                         "--"
-                         "sh" "-c" mevedel-sandbox--marker-script
-                         "mevedel-sandbox" marker)
-                   command)))
+                   (list "--chdir" canonical-workdir "--")
+                   (mevedel-sandbox--device-grant-command
+                    (append (list "sh" "-c" mevedel-sandbox--marker-script
+                                  "mevedel-sandbox" marker)
+                            command)
+                    (plist-get plan :grants) canonical-workdir))))
             (list :state 'confined
                   :command
                   (mevedel-sandbox--fd-backed-command
