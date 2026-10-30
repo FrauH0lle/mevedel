@@ -2268,5 +2268,20 @@ streams over stdin."
       (when (file-directory-p path) (set-file-modes path #o755))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-session-control-fs-observation-time-locale ()
+  ,test
+  (test)
+  :doc "the native observation clock reports a decimal point under a comma-decimal locale"
+  (skip-unless (member "de_DE.utf8" (process-lines "locale" "-a")))
+  (let ((root (make-temp-file "mevedel-observation-locale-" t))
+        (process-environment (append '("LC_ALL=de_DE.UTF-8" "LANG=de_DE.UTF-8")
+                                     process-environment)))
+    (unwind-protect
+        (let ((before (float-time))
+              (observed (mevedel-session-control-fs-observation-time root)))
+          (should (floatp observed))
+          (should (<= before observed (ceiling (float-time)))))
+      (delete-directory root t))))
+
 (provide 'test-mevedel-session-control-fs)
 ;;; test-mevedel-session-control-fs.el ends here
