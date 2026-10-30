@@ -651,10 +651,33 @@ COORDINATORS may map write IDs to this scan's authenticated decision claims."
        groups))
     (delq nil (mapcar (lambda (id) (gethash id rows)) ids))))
 
+(defun mevedel-memory-write-recovery-selection (workspace)
+  "Discover marked or unavailable WORKSPACE writes, returning identities only.
+The directory listing is the discovery cutoff; later arrivals wait for another
+recovery.  Inspect one pass at a time using the reader's proof sharing, dropping
+all bodies before the next pass.  This read-only observation grants no authority
+to reconcile a target after yielding.  Fail rather than truncate a large reply."
+  (let* ((ids (mapcar (lambda (path) (file-name-sans-extension (file-name-nondirectory path)))
+                      (mevedel-session-control-fs-list-directory
+                       (mevedel-memory-write--directory workspace) mevedel-memory-write-intent-file-regexp)))
+         (groups (mevedel-memory-write--groups workspace ids))
+         (selected (make-hash-table :test #'equal)))
+    (dolist (row (gethash nil groups)) (puthash (plist-get row :id) t selected))
+    (remhash nil groups)
+    (maphash
+     (lambda (_pass pending)
+       (dolist (row (mevedel-memory-write-list workspace pending))
+         (when (or (plist-get row :marked) (plist-get row :error))
+           (puthash (plist-get row :id) t selected)))) groups)
+    (when (> (hash-table-count selected) 65536)
+      (error "Too many memory recovery candidates"))
+    (seq-filter (lambda (id) (gethash id selected)) ids)))
+
 (defun mevedel-memory-write-recovery-candidates (workspace)
   "Return WORKSPACE write identities whose recovery needs a full inspection.
 An identity `mevedel-memory-write-list' already read is a candidate only while
-its marker exists, observed in one program per target; a retired one never is.
+its marker exists, observed in batches of eight per target.
+A retired identity is never a candidate.
 Every identity not yet read successfully remains a candidate, so unreadable
 records keep reporting their error.  Order follows the directory listing."
   (let* ((ids (mapcar (lambda (path) (file-name-sans-extension (file-name-nondirectory path)))
@@ -678,14 +701,17 @@ records keep reporting their error.  Order follows the directory listing."
               ((stringp pin)
                (push (cons id pin) (alist-get (file-remote-p pin) groups nil nil #'equal))))))
     (dolist (group groups)
-      (let ((entries (cdr group)))
-        (condition-case nil
-            (let ((exists (mevedel-session-control-fs-paths-exist (mapcar #'cdr entries))))
-              (dolist (entry entries)
-                (when (pop exists) (puthash (car entry) t marked))))
-          ;; An unobservable target leaves its writes to the full inspection,
-          ;; which reports why it is unavailable.
-          (error (dolist (entry entries) (puthash (car entry) t marked))))))
+      (let ((pending (cdr group)))
+        (while pending
+          (let ((entries (seq-take pending 8)))
+            (setq pending (nthcdr (length entries) pending))
+            (condition-case nil
+                (let ((exists (mevedel-session-control-fs-paths-exist (mapcar #'cdr entries))))
+                  (dolist (entry entries)
+                    (when (pop exists) (puthash (car entry) t marked))))
+              ;; An unobservable target leaves its writes to the full inspection,
+              ;; which reports why it is unavailable.
+              (error (dolist (entry entries) (puthash (car entry) t marked))))))))
     (seq-filter (lambda (id) (gethash id marked)) ids)))
 
 (defun mevedel-memory-write-pending (workspace proposal)

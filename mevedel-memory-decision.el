@@ -1132,6 +1132,14 @@ An unproved fence leaves the original deadline and tracked child intact."
             (condition-case err
                 (progn
                   (when (plist-get result :error) (error "%s" (plist-get result :error)))
+                  (unless (and (plist-get result :ok)
+                               (equal (plist-get result :operation-id) (plist-get claim :owner))
+                               (or (plist-get result :synchronous)
+                                   (and (plist-member result :writes)
+                                        (proper-list-p (plist-get result :writes))
+                                        (<= (length (plist-get result :writes)) 65536)
+                                        (cl-every #'mevedel-journal-store-id-p (plist-get result :writes)))))
+                    (error "Invalid memory recovery selection reply"))
                   (unless (funcall (plist-get job :currentp))
                     (signal 'mevedel-memory-decision-held '("Recovery context changed")))
                   (unless (eq job (gethash key mevedel-memory-decision--recovery-workers))
@@ -1154,7 +1162,9 @@ An unproved fence leaves the original deadline and tracked child intact."
                   ;; A no-op recovery leaves committed state and its displays current.
                   (when changed (mevedel-memory-decision--recovery-changed workspace))
                   (plist-put job :writes
-                             (mevedel-memory-write-recovery-candidates workspace))
+                             (if (plist-get result :synchronous)
+                                 (mevedel-memory-write-recovery-candidates workspace)
+                               (plist-get result :writes)))
                   (when (eq job (gethash key mevedel-memory-decision--recovery-workers))
                     (plist-put job :timer
                                (run-at-time .01 nil #'mevedel-memory-decision--recover-next-write workspace job))
@@ -1200,8 +1210,9 @@ use synchronous publication recovery under the same claim and deadline."
                           (mevedel-journal-worker-start
 			   workspace 'memory-recover
 			   (lambda (result) (mevedel-memory-decision--recovered workspace job result))
-			   nil (list :claim claim) job)
-			(mevedel-memory-decision--recovered workspace job '(:ok t :synchronous t)))
+			   nil (list :claim claim :operation-id (plist-get claim :owner) :write-selection t) job)
+			(mevedel-memory-decision--recovered
+                         workspace job (list :ok t :operation-id (plist-get claim :owner) :synchronous t)))
                       ;; Request-file IO may cancel before the child exists.
                       ;; The generic launcher still hands that child to JOB;
                       ;; retire it here under the owner's already-proved fence.
