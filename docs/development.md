@@ -486,6 +486,70 @@ baseline commit. These are compiled batch mutation/hook timings, not interactive
 redisplay latency. Run timing comparisons without concurrent test/compile work;
 small differences between passing runs do not establish a reliable speedup.
 
+### Memory housekeeping blocking benchmark
+
+After worktree bootstrap, run:
+
+```sh
+python3 scripts/bench-memory-housekeeping.py --self-test
+python3 scripts/bench-memory-housekeeping.py --workspace /path/to/workspace --output /tmp/current-housekeeping.json
+python3 scripts/bench-memory-housekeeping.py --workspace /path/to/workspace --synthetic --output /tmp/large-housekeeping.json
+python3 scripts/bench-memory-housekeeping.py --workspace /path/to/workspace --backup /path/to/backup --output /tmp/backup-housekeeping.json
+```
+
+The Linux runner requires Bubblewrap and a terminal-capable Emacs. It strictly
+compiles a private source snapshot, freezes installed dependencies, and starts a
+separate **non-batch terminal Emacs** on a private PTY for every sample. HOME,
+XDG roots, native cache, state, and bytecode are temporary. It never contacts the
+running editor. Bubblewrap makes the host filesystem read-only, disables network
+access, and aliases workspace-local captured paths to temporary copies. External
+captured targets remain read-only. Symlinked input state is rejected. Inside the
+copy, live unsettled claims in every journal scope are fenced with cancelled
+outcomes through the normal settlement API. Settled claim/outcome evidence,
+including consolidation claims, is retained unchanged. Source claims are never
+removed or settled.
+
+Recovery uses its production scheduled callback; automatic application uses its
+yielding coordinator; publication uses the production `memory-publish` child;
+cleanup uses its idle scheduler and waits until all queued batches finish.
+Application adds one fresh pending shared-note disposal outside measurement, so
+it performs a real write rather than timing an already-terminal proposal.
+Publication accepts a fresh no-action review, not a large proposal-output reply.
+Cleanup bypasses the hourly throttle, retaining the normal 14-day retention
+settings. The synthetic scenario builds 80 current-format passes with four
+16 KiB notes, applied proposals, decisions, and write intents each, through the
+existing test fixture helper. Setup stages pass/decision/write data separately
+to avoid quadratic fixture-generation recovery, preserving shared claim
+directories so generations stay unique, then combines unchanged evidence. Its review
+history is fresh, so it does not represent an aged-history expiry workload.
+
+Each step reports median longest block, sampled total blocked time, wall time,
+and run count across three independent restored copies. The existing fallback
+heartbeat runs every 100 ms, with its reporting threshold lowered to 1 ms.
+Callback timing can detect blocks shorter than the heartbeat interval. The sum
+of worst-delay samples is a **sampled lower bound**, not exact total blocking:
+multiple stalls within one interval can coalesce. The production heartbeat
+excludes its own diagnostic append time from lag attribution; wall time includes
+observer work performed before the completion callback. These are not graphical
+rendering timings.
+The copies contain journal evidence and private journal state, not full saved
+sessions or media stores; no live sessions, unsaved buffers, or typing are replayed.
+The self-test rejects a symlinked claim scope without deleting its host claim,
+and checks that a deliberately busy 120 ms callback is detected.
+Run without concurrent tests or compilation; a 50 ms continuous block is the
+follow-up budget, not a gate that fails an otherwise valid measurement.
+
+The JSON file retains raw samples, completion results, source/dependency hashes,
+and configuration. Existing output files are refused. Incompatible backups fail
+validation rather than silently changing runtime behavior. An explicitly supplied
+external `--legacy-shim /path/to/diagnostic-shim.el` may replay a legacy backup;
+it is loaded only in isolated benchmark processes and the report labels that
+scenario **legacy replay (validation shim)**. Its timings do not establish
+current-format correctness. The shim is neither bundled nor added to runtime
+validation. Failed completions are labeled unmeasured, retain their raw results,
+and return a nonzero exit status. Measurements are maintainer diagnostics, not
+part of the ERT suite.
+
 ### View allocation gate
 
 ```bash
