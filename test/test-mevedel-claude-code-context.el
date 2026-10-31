@@ -16,6 +16,7 @@
 (mevedel-deftest mevedel--send-request/claude-child-roster (:quiet t)
   (dolist (receipt '(t nil compact))
     (mevedel-engine-test--with-claude-session
+      :file-workspace (not (eq receipt t))
       (let ((file (file-name-concat root "evidence.txt"))
             record root-turn)
         (write-region "Evidence" nil file nil 'silent)
@@ -70,6 +71,7 @@
 (mevedel-deftest mevedel--send-request/claude-reminders (:quiet t)
   (dolist (receipt '(t nil late silent compact))
     (mevedel-engine-test--with-claude-session
+      :file-workspace (not (eq receipt t))
       (let* ((file (file-name-concat root "evidence.txt"))
              (reminder (mevedel-reminders-make-user-revised-patch
                         (concat "REVISED-PATCH-7194 " (make-string 11000 ?x))))
