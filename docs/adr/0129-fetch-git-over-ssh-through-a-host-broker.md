@@ -46,14 +46,15 @@ SSH configuration.
   - A `.git` pointer file counts only for a genuine linked worktree: its
     administrative directory's `gitdir` file must point back at it.
   - The resolved Git and common directories must lie outside every writable
-    root, or be the root's own `.git` directory. That directory is refused
-    when the root sits inside another Git work tree, where it may itself be a
-    plant.
+    root, or be within the root's own non-symlink `.git` directory. That
+    directory is refused when the root sits inside another Git work tree,
+    where it may itself be a plant.
   - Remotes are then read from that Git directory explicitly, never by
     discovery.
 
   The residual assumption: the broker trusts the session root's repository
-  as found on disk when the session starts.
+  as found on disk. Destinations are re-read at every command preparation,
+  so trust is not a frozen snapshot from when the session starts.
 - **The agent stays hidden.** Local confinement masks the socket named by
   `SSH_AUTH_SOCK` and unsets the variable.
 - **Authority.** Fetch needs no network grant: the connection is the host's.
