@@ -77,24 +77,38 @@
 
 (mevedel-deftest mevedel-graphical-check--wait
   (:doc "preserves success, failure and a bounded timeout from real subprocesses")
-  (dolist (case '(("(kill-emacs 0)" nil)
-                  ("(kill-emacs 7)" "Graphical Emacs failed (7)")
-                  ("(sleep-for 10)" "timed out")))
-    (let ((process (make-process
-                    :name "graphical-wait-test" :noquery t
-                    :buffer nil :connection-type 'pipe
-                    :sentinel #'ignore
-                    :command (list (expand-file-name invocation-name invocation-directory)
-                                   "-Q" "--batch" "--eval" (car case)))))
-      (unwind-protect
-          (if (cadr case)
-              (should (string-match-p
-                       (regexp-quote (cadr case))
-                       (error-message-string
-                        (should-error (mevedel-graphical-check--wait process 2)))))
-            (should-not (mevedel-graphical-check--wait process 2)))
-        (when (process-live-p process) (delete-process process)))
-      (should-not (process-live-p process)))))
+  (dolist (case '(((kill-emacs 0) nil 10)
+                  ((kill-emacs 7) "Graphical Emacs failed (7)" 10)
+                  ((sleep-for 10) "timed out" 0.05)))
+    (with-temp-buffer
+      (let ((process (make-process
+                      :name "graphical-wait-test" :noquery t
+                      :buffer (current-buffer) :connection-type 'pipe
+                      :sentinel #'ignore
+                      :command (list (expand-file-name invocation-name invocation-directory)
+                                     "-Q" "--batch" "--eval"
+                                     (prin1-to-string
+                                      `(progn
+                                         (princ "ready\n" #'external-debugging-output)
+                                         ,(car case)))))))
+        (unwind-protect
+            (progn
+              ;; Startup is not the timeout under test.  Only use the short
+              ;; deadline after the child has entered its scenario.
+              (mevedel-test--await 10 "wait fixture readiness"
+                (string-search "ready\n" (buffer-string)))
+              (let ((start (float-time)))
+                (if (cadr case)
+                    (should (string-match-p
+                             (regexp-quote (cadr case))
+                             (error-message-string
+                              (should-error
+                               (mevedel-graphical-check--wait process (nth 2 case))))))
+                  (should-not (mevedel-graphical-check--wait process (nth 2 case))))
+                (when (equal (cadr case) "timed out")
+                  (should (>= (- (float-time) start) (nth 2 case)))))
+              (should-not (process-live-p process)))
+          (when (process-live-p process) (delete-process process)))))))
 
 (mevedel-deftest mevedel-graphical-check--preflight
   (:doc "does not let a batch frame masquerade as graphical coverage")
