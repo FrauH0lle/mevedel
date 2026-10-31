@@ -391,8 +391,8 @@
     :description "Send a message to a retained agent, starting its turn if idle."
     :prompt-file "prompts/tools/sendmessage.md"
     :handler #'mevedel-tool-ui--send-message
-    :args ((target string :required
-                   "Canonical path or relative descendant path.")
+    :args ((target string :optional
+                   "Omit to message your immediate parent. Root must supply a target. Explicit canonical or relative descendant paths can address any retained agent.")
            (message string :required
                     "Message body to deliver."))
     :read-only-p t

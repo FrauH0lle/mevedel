@@ -459,8 +459,9 @@ PATH` from the canonical event.
 
 ## Inter-agent messaging (SendMessage)
 
-`SendMessage(target, message)` resolves canonical or relative retained paths
-tree-wide. An idle non-root recipient starts a turn with the message as its
+`SendMessage(message, target?)` defaults to the caller's immediate spawn parent;
+root has no parent and must supply a target. Explicit targets resolve canonical
+or relative retained paths tree-wide. An idle non-root recipient starts a turn with the message as its
 task. For an active recipient, or at capacity, it queues one canonical `MAIL`
 record containing type, sender path, recipient path, and payload. Agent mail to
 `/root` can wake the idle root; self-mail never starts a turn.
