@@ -1199,17 +1199,18 @@ empty; absence is a state.  Links and other entries signal."
       (setq directory (file-name-directory (directory-file-name directory))))
     (nreverse ancestors)))
 
-(defun mevedel-memory-notes-commit (_workspace root target changes currentp &optional before-write)
-  "Permanently delete shared-note CHANGES below ROOT in a workspace.
+(defun mevedel-memory-notes-commit (workspace root target changes currentp &optional before-write)
+  "Permanently delete shared-note CHANGES below ROOT in WORKSPACE.
 TARGET and CURRENTP guard the existing write operation.  BEFORE-WRITE rechecks
-forward admission, including active local use; unsaved buffers still prevent
-deletion.
+forward admission; a final local-use check follows the yielding ownership
+checks.  Active use and unsaved buffers still prevent deletion.
 The native deletion checks the reviewed bytes and mode.  No undo or trash copy
 is created, and this entry point cannot restore a deleted file."
   (let ((lock (plist-get target :directory)))
     (dolist (change changes)
       (let* ((before (plist-get change :before))
              (path (plist-get before :path))
+             (relative (file-relative-name path (plist-get root :dir)))
              (fence (list (list :op 'verify :path (mevedel-journal-claim--path target nil)
                                 :content (json-serialize (mevedel-journal-claim--record target)))
                           (list :op 'absent :path (mevedel-journal-claim--path target t))
@@ -1228,6 +1229,10 @@ is created, and this entry point cannot restore a deleted file."
         (unless (funcall currentp) (error "Shared-note ownership is unavailable"))
         (when-let* ((buffer (find-buffer-visiting path)) ((buffer-modified-p buffer)))
           (error "Shared note has unsaved buffer changes: %s" path))
+        ;; CURRENTP can yield during ownership/root IO after BEFORE-WRITE.
+        ;; Consult only local access state here, immediately before deletion.
+        (when (mevedel-memory-notes-in-use-p workspace relative)
+          (signal 'mevedel-memory-decision--held '("Shared file is in active local use")))
         (dolist (result
                  (mevedel-session-control-fs-run-program
                   (append

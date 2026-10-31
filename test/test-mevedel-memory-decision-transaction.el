@@ -16,6 +16,7 @@
 (require 'mevedel-memory-store)
 (require 'mevedel-memory-write)
 (require 'mevedel-journal-store)
+(require 'mevedel-resource)
 (require 'mevedel-session-control-fs)
 
 (defmacro mevedel-test-decision-transaction (&rest body)
@@ -100,7 +101,48 @@
                                           (error "Caller callback failed")))))))
             (should (= 3 callbacks))
             (should (mevedel-journal-claim-owned-p claim)))
-        (mevedel-journal-claim-settle claim 'cancelled "")))))
+        (mevedel-journal-claim-settle claim 'cancelled ""))))
+  :doc "resource access during the final ownership check holds deletion and abandons its prepared write"
+  (dolist (automatic-p '(nil t))
+    (mevedel-test-decision-transaction
+      (let* ((first (mevedel-memory-decision-apply workspace pass (plist-get (car proposals) :id)))
+             (proposal (cadr proposals))
+             (path (plist-get (cdr (car (plist-get proposal :before))) :path))
+             (conversation (generate-new-buffer " *decision-late-note-use*"))
+             (commit (symbol-function 'mevedel-memory-notes-commit))
+             entered result)
+        (unwind-protect
+            (progn
+              (with-current-buffer conversation
+                (setq-local mevedel--session (mevedel-session--create :workspace workspace)))
+              (cl-letf (((symbol-function 'mevedel-memory-notes-commit)
+                         (lambda (ws root target changes currentp &optional before-write)
+                           (funcall commit ws root target changes
+                                    (lambda ()
+                                      (prog1 (funcall currentp)
+                                        ;; Ownership/root IO may dispatch a read
+                                        ;; after the earlier admission check.
+                                        (unless entered
+                                          (setq entered t)
+                                          (with-current-buffer conversation
+                                            (mevedel-resource-prepare
+                                             'read (mevedel-memory-notes-address (plist-get proposal :file))
+                                             (list :session mevedel--session))))))
+                                    before-write))))
+                (setq result (mevedel-memory-decision-apply
+                              workspace pass (plist-get proposal :id)
+                              :automatic (and automatic-p automatic)
+                              :continuation (plist-get first :continuation))))
+              (should entered)
+              (should (mevedel-memory-notes-in-use-p workspace (plist-get proposal :file)))
+              (should (eq 'held (plist-get result :status)))
+              (should-not (plist-get result :continuation))
+              (should (file-exists-p path))
+              (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))
+              ;; Checked abandonment retires the marker, not the source note.
+              (should-not (plist-get (mevedel-memory-decision-inspect
+                                     workspace :pass pass :proposal (plist-get proposal :id)) :writes)))
+          (kill-buffer conversation))))))
 
 (mevedel-deftest mevedel-memory-decision-apply/persistence ()
   ,test

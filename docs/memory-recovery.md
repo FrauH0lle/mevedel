@@ -217,7 +217,10 @@ already in use; this applies to the synchronous fallback for worker-ineligible
 targets as well as the yielding path. All affected visiting buffers, including
 unchanged before-state dependencies, must still be unmodified. Cancellation or
 a newly started use prevents new forward writes without disabling safely
-owned checked rollback. A refusal after durable intent preparation follows the
+owned checked rollback. Note deletion checks local use again after the final
+ownership/root IO and buffer checks: those checks can yield and admit a new
+reader after the earlier admission check. This last check does no IO and a hold
+still follows checked abandonment. A refusal after durable intent preparation follows the
 checked abandonment path only for a known admission hold or cancellation whose
 complete before-state is freshly proved after any checked rollback. It
 authenticates the exact intent and original tokens, checks visiting buffers

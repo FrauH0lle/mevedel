@@ -104,7 +104,9 @@ authority for a later action.
 
 Automatic note forward writes recheck that no open session uses the note, cancellation
 and unsaved buffers at their mutation boundary; checked rollback keeps its
-separate ownership proof.
+separate ownership proof. The final note-use check is local and follows all
+yielding ownership/root and buffer checks. An earlier admission check cannot
+protect a reader admitted during that IO; a late hold uses checked abandonment.
 Reentrant replies cannot enter an executing continuation. Reply identity, origin
 binding and freshly read workspace identity fence delayed continuations.
 Cancellation fences the child before stopping it; an executing editor transaction
