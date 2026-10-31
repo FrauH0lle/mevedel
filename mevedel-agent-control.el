@@ -958,6 +958,7 @@ transcript payload and hook audits."
 (cl-defun mevedel-agent-control-send-message
     (session target message &key parent-tool-use-id)
   "Deliver MESSAGE to TARGET in SESSION and report how.
+When TARGET is nil, use the caller's immediate parent; root must name a target.
 An idle agent starts its turn with MESSAGE as the prompt when the tree has
 capacity.  Otherwise MESSAGE is queued as canonical MAIL: an active agent
 reads it at its next boundary, the root may wake for it, and an idle agent
@@ -967,6 +968,11 @@ being `started', `queued', or `waiting' for a slot."
   (unless (and (stringp message) (not (string-empty-p message)))
     (user-error "SendMessage message must be non-empty plain text"))
   (let* ((sender (mevedel-agent-control-current-path session))
+         (target (or target
+                     (if (equal sender "/root")
+                         (user-error "Root SendMessage requires a target")
+                       (mevedel-agent-record-parent-path
+                        (mevedel-agent-control--record-at-path session sender)))))
          (recipient
           (mevedel-agent-control-resolve-path session sender target))
          (record (cdr (assoc recipient (mevedel-session-agent-registry session))))

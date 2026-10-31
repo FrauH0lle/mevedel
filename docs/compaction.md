@@ -309,6 +309,14 @@ and `"auto"` as `:trigger`.  Model-visible `PreCompact` additions retain their
 ignored audit record beside the summary.
 
 For a persisted agent, the original `* Agent Task:` block remains verbatim.
+The latest direct follow-up task or delivered MAIL from its immediate parent
+also survives verbatim outside the generated summary. The harness selects it
+from canonical transcript spans after the agent's own task marker, not from
+inherited context, peer mail, quoted control text, or a queued-mail wake prompt.
+If the preserved tail or pending text already contains it, no extra copy is
+inserted. This survives repeated compaction and transcript restoration without
+another persisted state field. Native child compaction uses the same local
+transcript preservation; Claude still owns its external history and summary.
 Only older agent-owned history is summarized; parent goal state, session-wide
 skill history, and touched-file reminders are excluded.  Before rewriting,
 mevedel synchronously saves the full live transcript and copies it to the next

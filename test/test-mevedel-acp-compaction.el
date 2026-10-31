@@ -193,6 +193,19 @@
               (should (string-search "CHILD RETAINED SUMMARY" (buffer-string)))
               (should-not (string-search "CHILD OLD RESPONSE" (buffer-string)))
               (should (string-search "Remember the child task" (buffer-string))))
+            ;; The next native compaction must not leave only the spawn task.
+            (mevedel-agent-control-send-message
+             session "/root/compact_child" "Freeze the old task. Inspect only the new checkout.")
+            (setq invocation (mevedel-agent-record-invocation record))
+            (mevedel-test--await 5 "Follow-up compaction did not settle"
+              (mevedel-agent-invocation-runtime-settled-p invocation))
+            (should (eq 'completed (mevedel-agent-record-settled-outcome record)))
+            (with-current-buffer (mevedel-agent-record-conversation-buffer record)
+              (goto-char (point-min))
+              ;; A fixture response echo is not a retained assignment.
+              (should (re-search-forward
+                       "^Freeze the old task\\. Inspect only the new checkout\\.$"
+                       nil t)))
             (should (= 1 (mevedel-session-current-segment session)))
             (should-not (string-search "CHILD RETAINED SUMMARY" (buffer-string))))
         (when (and record (buffer-live-p (mevedel-agent-record-conversation-buffer record)))

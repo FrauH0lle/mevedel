@@ -11,8 +11,9 @@ Send a message to a retained agent, starting its turn if idle.
 
 ### How to use `SendMessage`
 
-- `target` accepts a canonical path, including `/root`, or a relative descendant
-  path. Success returns an empty result, or a short notice when the target must
+- Omit `target` to message your immediate parent. Root has no parent and must
+  supply a target. Explicit targets accept a canonical path, including `/root`,
+  or a relative descendant path. Success returns an empty result, or a short notice when the target must
   wait for an active-turn slot.
 - An active recipient reads mail before its next model sample in FIFO order.
   Delivery does not interrupt an in-flight response, tool call, or prompt.
@@ -24,7 +25,7 @@ Send a message to a retained agent, starting its turn if idle.
 ### Examples of good usage
 
 <example>
-SendMessage(target="/root", message="Interim finding: the codec writes the lease twice; checking the second caller.")
+SendMessage(message="Interim finding: the codec writes the lease twice; checking the second caller.")
 </example>
 
 <example>

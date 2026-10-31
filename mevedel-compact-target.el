@@ -19,6 +19,10 @@
 ;; `gptel'
 (declare-function gptel--update-status "ext:gptel" (msg &optional face))
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-record-parent-path "mevedel-agent-control" (cl-x) t)
+(defvar mevedel-agent-control--wake-prompt)
+
 ;; `mevedel-agent-conversation'
 (declare-function mevedel-agent-conversation-record-activity
                   "mevedel-agent-conversation"
@@ -131,6 +135,7 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-file-interaction-read-turn
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-agent-registry "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-current-segment
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-enqueue-pending-reminder
@@ -155,6 +160,8 @@
 (autoload 'mevedel--strip-hook-audit-blocks "mevedel-transcript-audit")
 
 ;; `mevedel-transcript'
+(declare-function mevedel-transcript--mailbox-any-block-at-point
+                  "mevedel-transcript" (limit))
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
 (autoload 'mevedel-transcript-segments "mevedel-transcript")
@@ -276,6 +283,51 @@ the in-flight turn."
     summary))
 
 
+(defun mevedel-compact-target--latest-assignment (invocation start)
+  "Return INVOCATION's latest assignment after START, verbatim.
+Direct idle follow-ups are task prompts; queued or in-flight steering is
+parent MAIL.  Inspect canonical segments, never quoted control text or
+inherited history.  A queued-mail wake prompt is not an assignment."
+  (let* ((session (mevedel-agent-invocation-parent-session invocation))
+         (path (mevedel-agent-invocation-require-path invocation))
+         (record (cdr (assoc path (mevedel-session-agent-registry session))))
+         (parent (and record (mevedel-agent-record-parent-path record)))
+         latest)
+    (save-restriction
+      ;; The canonical scanner expands to complete property runs.  Clamp its
+      ;; source so a restored user run cannot include the old task or summary.
+      (narrow-to-region start (point-max))
+      (save-excursion
+        (dolist (segment (mevedel-transcript-segments (point-min) (point-max)))
+          (pcase-let ((`(,type ,begin ,end) segment))
+            (pcase type
+              ('user
+               (let ((text (buffer-substring-no-properties begin end)))
+                 (when (and (string-match
+                             "\\`[ \t\n]*\\* Agent Task: [^\n]*\n" text)
+                            (not (equal
+                                  (string-trim (substring text (match-end 0)))
+                                  mevedel-agent-control--wake-prompt)))
+                   (setq latest text))))
+              ('mailbox
+               (goto-char begin)
+               (while (< (point) end)
+                 (skip-chars-forward " \t\n" end)
+                 (if-let* ((block (mevedel-transcript--mailbox-any-block-at-point end)))
+                     (progn
+                       (when (and (eq 'agent-message (plist-get block :kind))
+                                  (equal parent (plist-get block :id))
+                                  (string-match-p
+                                   "\\btype=\"MAIL\""
+                                   (buffer-substring-no-properties
+                                    (point) (plist-get block :open-end))))
+                         (setq latest
+                               (buffer-substring-no-properties
+                                (point) (plist-get block :close-end))))
+                       (goto-char (plist-get block :close-end)))
+                   (goto-char end)))))))))
+    latest))
+
 (defun mevedel-compact-target-agent-target (invocation)
   "Return the private compaction target for persisted INVOCATION, or nil."
   (when-let* (((mevedel-agent-invocation-p invocation))
@@ -328,6 +380,9 @@ the in-flight turn."
                 (and (< (point-min) task-heading)
                      (list (cons (point-min) task-heading)))
                 :anchor-text (buffer-substring task-heading anchor-end)
+                :assignment-text
+                (mevedel-compact-target--latest-assignment
+                 invocation (or (plist-get summary-bounds :end) anchor-end))
                 :body-start (or (plist-get summary-bounds :end) anchor-end)
                 :previous-summary previous-summary
                 :prompt-session session
@@ -401,6 +456,18 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
       (insert (plist-get target :anchor-text))
       (unless (bolp) (insert "\n"))
       (insert (mevedel-session-artifacts-summary-block summary))
+      ;; Do not entrust the current assignment to a lossy model summary.
+      ;; Keep its original transcript form so the next compaction can find it
+      ;; again, including after save/resume.  Tail/pending copies already do so.
+      (when-let* ((assignment (plist-get target :assignment-text))
+                  ((not (equal
+                         assignment
+                         (with-temp-buffer
+                           (insert (or tail-text "") (or pending-text ""))
+                           (mevedel-compact-target--latest-assignment
+                            invocation (point-min)))))))
+        (insert assignment)
+        (unless (bolp) (insert "\n")))
       (when tail-text (insert tail-text))
       (when execution-archive-text (insert execution-archive-text))
       (when pending-text (insert pending-text))

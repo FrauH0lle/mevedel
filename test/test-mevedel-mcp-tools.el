@@ -67,6 +67,40 @@
       (should (eq t (plist-get (car delivered) :isError)))
       (should (eq 'obsolete-request (plist-get (cadr delivered) :reason)))))
 
+  :doc "cancelling an MCP WaitAgent releases its registration, not the turn"
+  (mevedel-engine-test--with-session
+    (let* (outcomes
+           (cancel
+            (mevedel-mcp-tools-call
+             request buffer (mevedel-tool-ensure "WaitAgent")
+             '(:timeout_ms 3600000) "wait-cancelled"
+             (lambda (_result outcome) (push outcome outcomes)))))
+      (should (mevedel-agent-control-root-waiting-p session))
+      (let* ((waiter (mevedel-session-agent-root-waiter session))
+             (timer (mevedel-agent-waiter-timer waiter)))
+        ;; This is the canceller the MCP transport calls on notification or
+        ;; disconnect.  The surrounding provider turn remains admitted.
+        (funcall cancel)
+        (should-not (mevedel-agent-control-root-waiting-p session))
+        (should-not (memq timer timer-list))
+        (should-not (mevedel-request-cancelled-p request))
+        (should (= 1 (length outcomes)))
+        (should (eq 'cancelled (plist-get (car outcomes) :reason))))
+      (let ((successor
+             (mevedel-mcp-tools-call
+              request buffer (mevedel-tool-ensure "WaitAgent")
+              '(:timeout_ms 3600000) "wait-successor"
+              (lambda (_result outcome) (push outcome outcomes)))))
+        (should (mevedel-agent-control-root-waiting-p session))
+        (funcall cancel)
+        (should (mevedel-agent-control-root-waiting-p session))
+        (mevedel-agent-control-wake-root-user session)
+        (should-not (mevedel-agent-control-root-waiting-p session))
+        (should (= 2 (length outcomes)))
+        (should (eq 'success (plist-get (car outcomes) :status)))
+        (funcall successor)
+        (should (= 2 (length outcomes))))))
+
   :doc "permission denial is an MCP error and never reaches the handler"
   (mevedel-engine-test--with-session
     (let ((calls 0) delivered)
@@ -83,6 +117,67 @@
       (should (= calls 0))
       (should (eq t (plist-get (car delivered) :isError)))
       (should (eq 'permission-denied (plist-get (cadr delivered) :reason)))))
+
+  :doc "child wait cancellation clears waiting activity without cancelling siblings"
+  (mevedel-engine-test--with-session
+    (let* ((child (generate-new-buffer " *waiting-child*"))
+           (invocation (mevedel-agent-invocation--create
+                        :path "/root/worker" :buffer child
+                        :parent-session session :transcript-status 'running))
+           (record (mevedel-agent-record--create
+                    :path "/root/worker" :parent-path "/root"
+                    :activity 'running :invocation invocation))
+           (root-cancel
+            (mevedel-mcp-tools-call
+             request buffer (mevedel-tool-ensure "WaitAgent")
+             nil "wait-root" #'ignore)))
+      (unwind-protect
+          (progn
+            ;; This transient identity needs no persisted configuration.
+            (setf (mevedel-session-save-path session) nil
+                  (mevedel-session-agent-registry session)
+                  (list (cons "/root/worker" record)))
+            (with-current-buffer child
+              (setq-local mevedel--session session mevedel--workspace workspace
+                          mevedel--agent-invocation invocation
+                          default-directory (file-name-as-directory root)))
+            (let ((cancel
+                   (mevedel-mcp-tools-call
+                    invocation child (mevedel-tool-ensure "WaitAgent")
+                    nil "wait-child" #'ignore)))
+              (should (mevedel-agent-record-waiter record))
+              (should (eq 'waiting (mevedel-agent-record-activity record)))
+              (funcall cancel)
+              (should-not (mevedel-agent-record-waiter record))
+              (should (eq 'running (mevedel-agent-record-activity record)))
+              (should (mevedel-agent-control-root-waiting-p session))))
+        (funcall root-cancel)
+        (setf (mevedel-session-agent-registry session) nil)
+        (kill-buffer child))))
+
+  :doc "call cleanup handles cancellation during startup and synchronous completion"
+  (mevedel-engine-test--with-session
+    (dolist (complete-first '(nil t))
+      (let ((cleanups 0) outcomes)
+        (let ((cancel
+               (mevedel-mcp-tools-call
+                request buffer
+                (mevedel-tool--create
+                 :name "CleanupRace" :read-only-p t :async-p t
+                 :handler
+                 (lambda (callback _args)
+                   (if complete-first
+                       (funcall callback '(:result "completed"))
+                     (mevedel-request-cancel request))
+                   (list :cancel (lambda () (cl-incf cleanups)))))
+                nil "cleanup-race"
+                (lambda (_result outcome) (push outcome outcomes)))))
+          (should (= cleanups (if complete-first 0 1)))
+          (funcall cancel)
+          (should (= cleanups (if complete-first 0 1)))
+          (should (= 1 (length outcomes))))
+        (mevedel-request-end)
+        (setq request (mevedel-request-begin session)))))
 
   :doc "a retained child owns MCP calls independently of the root request"
   (mevedel-engine-test--with-session

@@ -116,6 +116,13 @@ pipeline sequences the standard cross-cutting steps; handlers contain no
 boilerplate for validation, hooks, permissions, snapshots, or
 persistence.
 
+An asynchronous handler may return `(:cancel FUNCTION)` to register call-local
+cleanup. Cancellation invokes that zero-argument function before settling the
+pipeline, even if cancellation arrives during handler startup. A completed
+handler owns its own cleanup; late cancellation cannot retire a successor call.
+This is distinct from cancelling the surrounding provider request: MCP can
+cancel a single pending call while that request continues.
+
 Interactive pipelines yield between steps for pending input, their elapsed-time
 budget, or after eight nested runner frames. The stack bound also applies across
 nested tool pipelines, leaving room for result rendering and gptel transitions.

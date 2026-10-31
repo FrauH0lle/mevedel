@@ -22,6 +22,7 @@
 (require 'mevedel-tool-ui)
 (require 'mevedel-tools)
 (require 'mevedel-view)
+(require 'mevedel-view-render)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 (require 'helpers
@@ -670,7 +671,9 @@
                                             (buffer-string)))
                     (should (string-match-p "Follow-up work compacted"
                                             (buffer-string)))
-                    (should-not (string-match-p "Follow-up child task"
+                    (should (string-match-p "Follow-up child task"
+                                            (buffer-string)))
+                    (should-not (string-match-p "Follow-up child result"
                                                 (buffer-string)))))))))
       (setq mevedel-agent--registry
             (assoc-delete-all "freeze_test" mevedel-agent--registry))
@@ -1424,6 +1427,49 @@
           (should (eq delivery
                       (plist-get (plist-get result :render-data)
                                  :delivery))))))))
+
+(mevedel-deftest mevedel-tool-ui--send-message-parent-default
+  (:doc "omitted targets route through the schema to the caller's immediate parent")
+  (let* ((session (mevedel-tool-ui-test--session))
+         (parent (mevedel-agent-record--create
+                  :path "/root/parent" :parent-path "/root" :activity 'running))
+         (child (mevedel-agent-record--create
+                 :path "/root/parent/child" :parent-path "/root/parent"
+                 :activity 'running)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/parent" parent)
+                (cons "/root/parent/child" child)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (dolist (scenario '(("/root/parent/child" nil "/root/parent")
+                              ("/root/parent" nil "/root")
+                              ("/root/parent/child" "/root" "/root")
+                              ("/root" nil nil)))
+            (pcase-let ((`(,sender ,target ,expected) scenario))
+              (setq-local mevedel--agent-invocation
+                          (unless (equal sender "/root")
+                            (mevedel-agent-invocation--create :path sender)))
+              (let (outcome)
+                (mevedel-pipeline-run-tool-outcome
+                 (mevedel-tool-ensure "SendMessage")
+                 (lambda (value) (setq outcome value))
+                 (append (list :message "progress")
+                         (when target (list :target target))))
+                (if expected
+                    (progn
+                      (should (eq 'success (plist-get outcome :status)))
+                      (should (equal expected
+                                     (plist-get (plist-get outcome :render-data)
+                                                :path)))
+                      (let ((mail (car (last (mevedel-agent-control--mailbox
+                                             session expected)))))
+                        (should (equal sender (plist-get mail :sender)))
+                        (should (equal "progress" (plist-get mail :payload)))))
+                  (should (eq 'error (plist-get outcome :status)))
+                  (should (string-match-p "Root.*target"
+                                          (plist-get outcome :result))))))))
+      (mevedel-agent-control-teardown-session session))))
 
 (mevedel-deftest mevedel-tool-ui--wait-agent ()
   ,test

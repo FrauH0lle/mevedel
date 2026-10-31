@@ -175,13 +175,15 @@
                                :event 'finished-waiting
                                :reason reason))))
                 (plist-get args :timeout_ms))))
-    (when (and (equal path "/root")
-               (boundp 'mevedel--current-request)
-               mevedel--current-request)
-      (mevedel-request-push-canceller
-       mevedel--current-request
-       (apply-partially
-        #'mevedel-agent-control-cancel-wait mevedel--session path)))))
+    (let* ((session mevedel--session)
+           (waiter (mevedel-agent-control--waiter session path))
+           (cancel (lambda ()
+                     (when (eq waiter
+                               (mevedel-agent-control--waiter session path))
+                       (mevedel-agent-control-cancel-wait session path)))))
+      (when mevedel--current-request
+        (mevedel-request-push-canceller mevedel--current-request cancel))
+      (list :cancel cancel))))
 
 
 ;;
@@ -389,8 +391,8 @@
     :description "Send a message to a retained agent, starting its turn if idle."
     :prompt-file "prompts/tools/sendmessage.md"
     :handler #'mevedel-tool-ui--send-message
-    :args ((target string :required
-                   "Canonical path or relative descendant path.")
+    :args ((target string :optional
+                   "Omit to message your immediate parent. Root must supply a target. Explicit canonical or relative descendant paths can address any retained agent.")
            (message string :required
                     "Message body to deliver."))
     :read-only-p t
