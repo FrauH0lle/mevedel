@@ -166,7 +166,9 @@
   (let* ((done nil)
          result
          (started (float-time))
-         (deadline (+ started 5))
+         ;; A completion watchdog, not a search latency assertion.  Let the
+         ;; tool's own timeout settle and report its result before failing here.
+         (deadline (+ started mevedel-tool-fs-search-timeout 10))
          (gc-count gcs-done)
          (gc-seconds gc-elapsed)
          handler-returned)
@@ -200,8 +202,9 @@
 (mevedel-deftest test-mevedel-tool-fs-search--await-callback ()
   ,test
   (test)
-  :doc "times out at five seconds with bounded failure-only diagnostics and safe late delivery"
+  :doc "outwaits the tool timeout with bounded failure-only diagnostics and safe late delivery"
   (let ((clock 100.0)
+        (mevedel-tool-fs-search-timeout 20)
         (gcs-done 10)
         (gc-elapsed 2.0)
         (waits 0)
@@ -213,7 +216,7 @@
                  (should-not process)
                  (should (= seconds 0.01))
                  (cl-incf waits)
-                 (setq clock 105.0 gcs-done 12 gc-elapsed 2.75)))
+                 (setq clock 130.0 gcs-done 12 gc-elapsed 2.75)))
               ((symbol-function 'process-list)
                (lambda () (cl-incf process-inspections) (number-sequence 0 12)))
               ((symbol-function 'process-live-p) (lambda (process) (> process 0)))
@@ -232,7 +235,7 @@
          (equal
           (cadr failure)
           (format
-           (concat "Timed out waiting for tool callback: elapsed-seconds=5.000"
+           (concat "Timed out waiting for tool callback: elapsed-seconds=30.000"
                    " handler-return-seconds=1.250 gc-count-delta=2 gc-seconds-delta=0.750"
                    " processes(max=10,name-max=80)=%S")
            (mapcar (lambda (process)
@@ -274,7 +277,18 @@
   (should-error
    (test-mevedel-tool-fs-search--await-callback
     (lambda (callback _) (funcall callback '(:wrong "shape"))) nil)
-   :type 'ert-test-failed))
+   :type 'ert-test-failed)
+  :doc "allows a loaded helper to settle after the old five-second watchdog"
+  (let ((clock 100.0) pending)
+    (cl-letf (((symbol-function 'float-time) (lambda (&rest _) clock))
+              ((symbol-function 'accept-process-output)
+               (lambda (&rest _)
+                 (setq clock 106.0)
+                 (funcall pending '(:result "No files found matching pattern")))))
+      (should
+       (equal "No files found matching pattern"
+              (test-mevedel-tool-fs-search--await-callback
+               (lambda (callback _) (setq pending callback clock 105.5)) nil))))))
 
 (defun test-mevedel-tool-fs-search--target-rg-wrapper (root)
   "Create a target-only `rg' wrapper under ROOT.

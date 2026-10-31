@@ -196,6 +196,76 @@ class StandardsTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             standards.run(self.root, 'does-not-exist')
 
+    def test_duplicate_ert_names(self):
+        def source(name, body):
+            return library(name).replace(f"(provide '{name})", body + f"\n(provide '{name})")
+        self.write('test/test-one.el', source('test-one',
+                   '(ert-deftest shared () (should t))'))
+        self.write('test/test-two.el', source('test-two',
+                   '; (ert-deftest comment () nil)\n'
+                   '"(ert-deftest text () nil)"\n'
+                   "'(ert-deftest quoted () nil)\n"
+                   '(ert-deftest shared () (should t))'))
+        _, errors = self.check(1)
+        self.assertIn('duplicate ERT test name shared', errors)
+        self.assertIn('first defined at test/test-one.el:', errors)
+        self.write('test/test-two.el', source('test-two',
+                   '(ert-deftest distinct () (should t))'))
+        self.check(0)
+
+    def test_generated_test_names_collide_with_literal_names(self):
+        self.write('test/test-one.el', library('test-one').replace(
+            "(provide 'test-one)",
+            '(mevedel-deftest example () ,test (test) :doc "One" (should t) '
+            ':doc "Two" (should t))'))
+        self.write('test/test-two.el', library('test-two').replace(
+            "(provide 'test-two)", '(ert-deftest example/test@2 () (should t))'))
+        errors = standards.test_integrity_errors(self.root, standards.inventory(self.root))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('duplicate ERT test name example/test@2', errors[0])
+        self.write('test/test-two.el', library('test-two').replace(
+            "(provide 'test-two)", '(mevedel-deftest example () ,test (test) (should t))'))
+        self.assertEqual(standards.test_integrity_errors(
+            self.root, standards.inventory(self.root)), [])
+
+    def test_tracked_tests_require_tracked_fixtures(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '(defconst test-fixture-path (file-name-concat "test" "fixtures" "helper.c"))'))
+        self.commit()
+        self.write('test/fixtures/helper.c', 'int main(void) { return 0; }\n')
+        _, errors = self.check(1)
+        self.assertIn('untracked test fixture test/fixtures/helper.c', errors)
+        self.git('add', 'test/fixtures/helper.c')
+        self.check(0)
+        (self.root / 'test/fixtures/helper.c').unlink()
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)", '(defconst test-fixture-path "test/fixtures/helper.c")'))
+        _, errors = self.check(1)
+        self.assertIn('missing test fixture test/fixtures/helper.c', errors)
+
+    def test_ignored_fixture_and_directory_variable(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '(defconst test-fixture-root "fixtures")\n'
+            '(defconst test-fixture-path (file-name-concat test-fixture-root "helper.py"))'))
+        self.write('.gitignore', 'test/fixtures/\n')
+        self.commit()
+        self.write('test/fixtures/helper.py', 'print("fixture")\n')
+        errors = standards.test_integrity_errors(self.root, standards.inventory(self.root))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('untracked test fixture test/fixtures/helper.py', errors[0])
+
+    def test_inventory_never_evaluates_sources(self):
+        sentinel = self.root / 'must-not-exist'
+        data = standards.test_inventory(self.root, [('test/test-demo.el',
+                f'(write-region "bad" nil "{sentinel}")\n'
+                '(mevedel-deftest single () (should t))\n'
+                '(mevedel-deftest many () (should ,value) (value) t :doc "Two" nil)')])
+        self.assertFalse(sentinel.exists())
+        self.assertEqual([test['name'] for test in data['test/test-demo.el']['tests']],
+                         ['single/test', 'many/test@1', 'many/test@2'])
+
     def stub_source(self, body, requires=''):
         return library('test-demo').replace(
             '(defun test-demo-value (value)\n  "Return VALUE."\n  value)',

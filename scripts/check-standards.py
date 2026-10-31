@@ -17,6 +17,7 @@ from urllib.parse import unquote, urlsplit
 ROOT = Path(__file__).resolve().parent.parent
 COLLECTOR = Path(__file__).with_name('checkdoc-collect.el')
 STUB_COLLECTOR = Path(__file__).with_name('test-stubs-collect.el')
+TEST_COLLECTOR = Path(__file__).with_name('test-inventory-collect.el')
 
 
 def git(root, *args):
@@ -221,6 +222,67 @@ def stub_library(name):
             path.parent.as_posix() in ('.', 'test', 'scripts', 'benchmark'))
 
 
+def test_inventory(root, sources):
+    """Read literal ERT names and fixture strings without evaluating test code."""
+    with tempfile.TemporaryDirectory(prefix='mevedel-test-inventory-') as tmp:
+        directory = Path(tmp)
+        request, response = directory / 'input.json', directory / 'output.json'
+        request.write_text(json.dumps([{'name': name, 'text': text}
+                                       for name, text in sources]))
+        env = {**os.environ, 'HOME': tmp, 'XDG_CONFIG_HOME': tmp,
+               'XDG_CACHE_HOME': tmp, 'XDG_DATA_HOME': tmp}
+        subprocess.run([os.environ.get('EMACS', 'emacs'), '--batch', '-Q',
+                        '--load', str(TEST_COLLECTOR), '--', str(request), str(response)],
+                       cwd=root, env=env, check=True, capture_output=True, text=True)
+        return json.loads(response.read_text()) or {}
+
+
+def test_integrity_errors(root, names):
+    """Reject duplicate literal names and tracked tests using untracked fixtures.
+
+    Fixture references include explicit test/fixtures paths and literal fixture
+    suffixes, so split file-name-concat arguments and fixture-directory variables
+    work too.  This checks source literals, not dynamically computed filenames.
+    """
+    sources = [(name, (root / name).read_text()) for name in names
+               if name.startswith('test/') and name.endswith('.el')]
+    tracked = set(git(root, 'ls-files', '-z', '--cached').decode().split('\0'))
+    # Include ignored files: a local executable fixture can work locally yet be
+    # absent from a clean checkout.  Deleted indexed fixtures are absent too.
+    fixtures = {path.relative_to(root).as_posix()
+                for path in (root / 'test/fixtures').rglob('*') if path.is_file()}
+    suffixes = {}
+    for fixture in fixtures:
+        relative = fixture.removeprefix('test/fixtures/')
+        for suffix in (fixture, 'fixtures/' + relative, relative):
+            suffixes.setdefault(suffix, set()).add(fixture)
+    errors, owners = [], {}
+    for name, data in test_inventory(root, sources).items():
+        for test in data['tests']:
+            symbol, line = test['name'], test['line']
+            if symbol in owners:
+                errors.append(f'{name}:{line}: duplicate ERT test name {symbol}; '
+                              f'first defined at {owners[symbol]}')
+            else:
+                owners[symbol] = f'{name}:{line}'
+        if name not in tracked:
+            continue
+        reported = set()
+        for item in data['strings']:
+            literal = item['value']
+            targets = set(suffixes.get(literal, ()))
+            # Also diagnose references to fixtures missing from disk entirely.
+            targets.update(re.findall(r'(?<![\w/])test/fixtures/[^\s"\'()]+', literal))
+            for target in sorted(targets):
+                if target in reported:
+                    continue
+                if target not in tracked or target not in fixtures:
+                    reason = 'untracked' if target not in tracked else 'missing'
+                    errors.append(f'{name}:{item["line"]}: {reason} test fixture {target}')
+                    reported.add(target)
+    return errors
+
+
 def changed_lisp(root, revision):
     """Map changed Lisp paths to their base paths, preserving Git-detected renames."""
     fields = iter(git(root, 'diff', '--name-status', '-z', '--find-renames',
@@ -243,7 +305,7 @@ def run(root, base):
     names = inventory(root)
     base_names = set(git(root, 'ls-tree', '-r', '--name-only', revision).decode().splitlines())
     origins = changed_lisp(root, revision)
-    errors = []
+    errors = test_integrity_errors(root, names)
     changed, before, after = [], [], []
     for name in names:
         if not name.endswith(('.el', '.md')):
