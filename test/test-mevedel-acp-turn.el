@@ -571,6 +571,7 @@ BODY delivers the receipt and a Read call through `connection', `content' and
     (mevedel-engine-test--with-session
       (let ((tool (copy-mevedel-tool (mevedel-tool-ensure "Read")))
             (mevedel-telemetry-enabled t)
+            (barrier (file-name-concat root "reply"))
             (path (file-name-concat root "source.txt")))
         (write-region "evidence" nil path nil 'silent)
         (setf (mevedel-tool-async-p tool) t
@@ -578,15 +579,18 @@ BODY delivers the receipt and a Read call through `connection', `content' and
               (lambda (callback _args)
                 ;; The bridge dies while the tool works, and the result
                 ;; arrives before Emacs reads that it closed.
-                (mevedel-acp-turn-test--hold 1)
-                (run-at-time 0 nil callback '(:result "LOCAL-RESULT-5120"))
+                (run-at-time
+                 0 nil (lambda ()
+                         (mevedel-test-release-reply-peer (concat barrier "-tool"))
+                         (funcall callback '(:result "LOCAL-RESULT-5120"))))
                 #'ignore))
         (mevedel-acp-turn-start
          request
          (lambda (mcp _hook)
            (list :command (executable-find "python3") :args (list mevedel-test--acp-peer)
                  :cwd root :mcp mcp :tool-id-field :claudecode/toolUseId
-                 :meta `((dropBridge . t) (responseText . "AGENT-OUTCOME-2291")
+                 :meta `((dropBridge . t) (replyBarrier . ,barrier)
+                         (responseText . "AGENT-OUTCOME-2291")
                          (toolBatches . [[((name . "Read") (id . "lost-1")
                                            (args . ((file_path . ,path))))]]))))
          [((type . "text") (text . "batch"))] (list tool))
@@ -621,6 +625,7 @@ BODY delivers the receipt and a Read call through `connection', `content' and
               (mevedel-agent-invocation--create
                :buffer buffer :path "/root/lost-hook" :description "Lost hook child"
                :runtime-context (list :buffer buffer :mevedel-request request)))
+             (barrier (file-name-concat root "reply"))
              (controls 0) terminal-status)
         (write-region "evidence" nil path nil 'silent)
         (setq-local mevedel--agent-invocation invocation)
@@ -632,9 +637,10 @@ BODY delivers the receipt and a Read call through `connection', `content' and
                  :control (lambda (_owner _event)
                             (cl-incf controls)
                             ;; The native hook gives up while this answers.
-                            (mevedel-acp-turn-test--hold 1)
+                            (mevedel-test-release-reply-peer
+                             (format "%s-hook-%d" barrier controls))
                             '(:continue t))
-                 :meta `((hookCommand . ,hook) (hookTimeout . 0.2)
+                 :meta `((hookCommand . ,hook) (replyBarrier . ,barrier)
                          (responseText . "CHILD-OUTCOME-6620")
                          (toolBatches . [[((name . "Read") (id . "child-read")
                                            (args . ((file_path . ,path))))]]))))
@@ -655,9 +661,13 @@ BODY delivers the receipt and a Read call through `connection', `content' and
     (mevedel-engine-test--with-claude-session
       (let* ((directory (file-name-concat root "lib"))
              (file (file-name-concat directory "evidence.txt"))
+             (barrier (file-name-concat root "reply"))
+             (hooks 0)
              (hold (lambda (prepare &rest args)
                      (prog1 (apply prepare args)
-                       (mevedel-acp-turn-test--hold 1)))))
+                       (unless (nth 1 args)
+                         (mevedel-test-release-reply-peer
+                          (format "%s-hook-%d" barrier (cl-incf hooks))))))))
         (make-directory directory)
         (write-region "Evidence" nil file nil 'silent)
         (write-region "PATH-GUIDANCE-4319" nil (file-name-concat directory "AGENTS.md") nil 'silent)
@@ -669,7 +679,7 @@ BODY delivers the receipt and a Read call through `connection', `content' and
                        (mevedel-engine-test--claude-launch
                         (lambda (_system _mcp _model _effort &optional _id hook)
                           (list :observe #'mevedel-claude-code-context-observe
-                                :meta `((hookCommand . ,hook) (hookTimeout . 0.2)
+                                :meta `((hookCommand . ,hook) (replyBarrier . ,barrier)
                                         (responseText . "Done")
                                         (toolBatches . [[((name . "Read") (id . "first-read")
                                                           (args . ((file_path . ,file))))]

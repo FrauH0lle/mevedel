@@ -40,6 +40,21 @@ def compact():
             "sessionId": session_id, "update": update}}), flush=True)
 
 
+def reply_marker(prefix, stage):
+    with open(prefix + "-" + stage, "w", encoding="utf-8") as marker:
+        marker.write(stage)
+
+
+def await_reply_release(prefix, timeout=10):
+    """Let Emacs enter the pending reply before closing its real peer."""
+    reply_marker(prefix, "entered")
+    deadline = time.monotonic() + timeout
+    while not os.path.exists(prefix + "-release"):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Reply release marker unavailable")
+        time.sleep(0.001)
+
+
 session_id = "fixture-session"
 pending = None
 mcp_servers = []
@@ -58,6 +73,7 @@ compact_before_batch = None
 compact_acknowledgement = True
 crash_after_tool = False
 drop_bridge = False
+reply_barrier = None
 late_announcement = False
 hook_timeout = None
 suppress_response_on_stop = False
@@ -120,6 +136,7 @@ for line in sys.stdin:
                 # The CLI loses only its MCP server after sending a call; the
                 # prompt still ends with the CLI's own outcome.
                 drop_bridge = params.get("_meta", {}).get("dropBridge", False)
+                reply_barrier = params.get("_meta", {}).get("replyBarrier")
                 # A native hook killed at its timeout: no reply, no receipt.
                 hook_timeout = params.get("_meta", {}).get("hookTimeout")
                 suppress_response_on_stop = params.get("_meta", {}).get("suppressResponseOnStop", False)
@@ -317,9 +334,14 @@ for line in sys.stdin:
                             if drop_bridge:
                                 bridge.stdin.write(json.dumps(request) + "\n")
                                 bridge.stdin.flush()
-                                time.sleep(0.2)
+                                if reply_barrier:
+                                    await_reply_release(reply_barrier + "-tool")
+                                else:
+                                    time.sleep(0.2)
                                 bridge.kill()
                                 bridge.wait(timeout=5)
+                                if reply_barrier:
+                                    reply_marker(reply_barrier + "-tool", "closed")
                                 stopped = True
                                 break
                             if late_announcement:
@@ -341,16 +363,28 @@ for line in sys.stdin:
                             break
                         sdk_messages(sdk_after_batches, batch_index)
                         if hook_command and batch:
-                            if hook_timeout:
+                            if hook_timeout or reply_barrier:
                                 hook = subprocess.Popen(hook_command, shell=True, text=True,
                                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                                         stderr=subprocess.PIPE, start_new_session=True)
                                 try:
-                                    hook.communicate(json.dumps({"hook_event_name": "PostToolBatch"}),
-                                                     timeout=hook_timeout)
+                                    if reply_barrier:
+                                        hook.stdin.write(json.dumps({"hook_event_name": "PostToolBatch"}))
+                                        hook.stdin.close()
+                                        hook.stdin = None
+                                        prefix = reply_barrier + "-hook-" + str(batch_index + 1)
+                                        await_reply_release(prefix)
+                                    else:
+                                        hook.communicate(json.dumps({"hook_event_name": "PostToolBatch"}),
+                                                         timeout=hook_timeout)
                                 except subprocess.TimeoutExpired:
-                                    os.killpg(hook.pid, signal.SIGKILL)
+                                    pass
+                                finally:
+                                    if hook.poll() is None:
+                                        os.killpg(hook.pid, signal.SIGKILL)
                                     hook.communicate()
+                                if reply_barrier:
+                                    reply_marker(prefix, "closed")
                                 # The CLI treats a failed hook as advisory and continues.
                                 continue
                             output = subprocess.run(hook_command, shell=True, check=True,

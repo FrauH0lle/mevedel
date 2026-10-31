@@ -22,6 +22,38 @@
   (let ((end (+ (float-time) seconds)))
     (while (< (float-time) end))))
 
+(mevedel-deftest mevedel-test-await-file-unread
+  (:doc "an absent close marker hits the bound; an existing marker returns without socket IO")
+  (let ((file (expand-file-name "missing-marker" default-directory)))
+    (should (string-match-p
+             "Peer marker unavailable:"
+             (error-message-string
+              (should-error (mevedel-test-await-file-unread file 0.01)))))
+    (write-region "closed" nil file nil 'silent)
+    (mevedel-test-await-file-unread file 0)))
+
+(mevedel-deftest mevedel-test-release-reply-peer
+  (:doc "the real peer's release watchdog fails without release and accepts a released marker")
+  (let ((prefix (expand-file-name "reply" default-directory)))
+    (dolist (released '(nil t))
+      (when released
+        (write-region "release" nil (concat prefix "-release") nil 'silent))
+      (with-temp-buffer
+        (let ((status
+               (call-process
+                "python3" "/dev/null" t nil "-c"
+                (concat "import runpy, sys; "
+                        "peer = runpy.run_path(sys.argv[1]); "
+                        "peer['await_reply_release'](sys.argv[2], timeout=0.01)")
+                mevedel-test--acp-peer prefix)))
+          (if released
+              (should (eql status 0))
+            (should (eql status 1))
+            (should (string-search "TimeoutError: Reply release marker unavailable"
+                                   (buffer-string))))))
+      (should (file-exists-p (concat prefix "-entered")))
+      (should-not (file-exists-p (concat prefix "-closed"))))))
+
 (defun mevedel-acp-workload-test--run (meta tool &optional control)
   "Run a workload scripted by META with TOOL and optional hook CONTROL.
 Return its events, oldest first, once it has completed."
@@ -50,14 +82,16 @@ Return its events, oldest first, once it has completed."
     (test)
 
     :doc "a tool result lost with its bridge stays local and the agent completes the workload"
-    (let* ((tool (gptel--make-tool-internal
+    (let* ((barrier (expand-file-name "reply" default-directory))
+           (tool (gptel--make-tool-internal
                   :name "Hold" :description "Hold" :args nil
                   :function (lambda ()
                               ;; The bridge dies while the tool works.
-                              (mevedel-acp-workload-test--hold 1)
+                              (mevedel-test-release-reply-peer (concat barrier "-tool"))
                               "LOCAL-WORKLOAD-RESULT")))
            (events (mevedel-acp-workload-test--run
-                    '((dropBridge . t) (responseText . "WORKLOAD-OUTCOME-4417")
+                    `((dropBridge . t) (replyBarrier . ,barrier)
+                      (responseText . "WORKLOAD-OUTCOME-4417")
                       (toolBatches . [[((name . "Hold") (id . "lost-1") (args . ()))]]))
                     tool))
            (terminal (car (last events))))

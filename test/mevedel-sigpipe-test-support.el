@@ -20,6 +20,22 @@
   "Return non-nil in a child batch Emacs that ignores SIGPIPE."
   (equal (getenv mevedel-test--sigpipe-variable) "1"))
 
+(defun mevedel-test-await-file-unread (file &optional timeout)
+  "Wait at most TIMEOUT seconds for FILE without reading process output.
+TIMEOUT defaults to ten seconds.  This preserves a closed peer's unread EOF."
+  (let ((deadline (+ (float-time) (or timeout 10))))
+    (while (not (file-exists-p file))
+      (when (>= (float-time) deadline)
+        (error "Peer marker unavailable: %s" file)))))
+
+(defun mevedel-test-release-reply-peer (prefix)
+  "Release the pending reply peer at PREFIX and await its actual close.
+Never pump Emacs's sockets: the reply must discover the unread disconnect."
+  (mevedel-test-await-file-unread (concat prefix "-entered"))
+  (should-not (file-exists-p (concat prefix "-closed")))
+  (write-region "release" nil (concat prefix "-release") nil 'silent)
+  (mevedel-test-await-file-unread (concat prefix "-closed")))
+
 (defun mevedel-test-run-sigpipe-tests (file selector)
   "Run FILE's tests matching SELECTOR where SIGPIPE is ignored, or fail.
 The child inherits this Emacs's load path and isolated environment."
