@@ -194,7 +194,8 @@
                      (should-not delivered)
                      'finished)))
               (should-not (timer--repeat-delay timer))
-              (mevedel-test--await 1 "Emulated idle callback did not run" delivered)
+              ;; Delivery is progress, not the idle fixture's timing contract.
+              (mevedel-test--await 5 "Emulated idle callback did not run" delivered)
               (should (equal '(payload 42) delivered))
               (when fail
                 (should-error
