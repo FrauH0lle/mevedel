@@ -16,6 +16,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-telemetry)
 (require 'mevedel-transport)
+(require 'mevedel-utilities)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -240,28 +241,52 @@
       (should-not (plist-get result :error))
       (should (equal "immediate" (plist-get result :output)))))
   :doc "settles an exited child even when Emacs does not deliver its sentinel"
-  (let ((original-make-process (symbol-function 'make-process))
-        (mevedel-sandbox-mode 'off)
-        done result)
-    (cl-letf (((symbol-function 'make-process)
-               (lambda (&rest args)
-                 (apply original-make-process
-                        (plist-put args :sentinel #'ignore)))))
-      (should
-       (functionp
-        (mevedel-execution-start-one-shot
-         (lambda (child-result)
-           (setq result child-result
-                 done t))
-         :name "mevedel-test-missed-sentinel"
-         :command '("sh" "-c" "printf recovered; exit 7")
-         :workdir temporary-file-directory
-         :writable-roots (list temporary-file-directory))))
-      (with-timeout (2 (error "Missed sentinel was not recovered"))
-        (while (not done)
-          (accept-process-output nil 0.05)))
-      (should (= 7 (plist-get result :exit-code)))
-      (should (equal "recovered" (plist-get result :output)))))
+  (let* ((root (make-temp-file "mevedel-missed-sentinel-" t))
+         (gate (file-name-concat root "finish"))
+         (original-make-process (symbol-function 'make-process))
+         (schedule (symbol-function 'mevedel--run-periodic-timer))
+         (mevedel-sandbox-mode 'off)
+         process watch watch-timer done result)
+    (unwind-protect
+        (cl-letf (((symbol-function 'make-process)
+                   (lambda (&rest args)
+                     (setq process
+                           (apply original-make-process
+                                  (plist-put args :sentinel #'ignore)))))
+                  ((symbol-function 'mevedel--run-periodic-timer)
+                   (lambda (period function &rest args)
+                     (should (= 1.0 period))
+                     (should-not watch)
+                     (setq watch (lambda () (apply function args)))
+                     (setq watch-timer (apply schedule 3600 function args)))))
+          (should
+           (functionp
+            (mevedel-execution-start-one-shot
+             (lambda (child-result)
+               (setq result child-result
+                     done t))
+             :name "mevedel-test-missed-sentinel"
+             :command (list "sh" "-c"
+                            "printf recovered; while test ! -e \"$1\"; do sleep .01; done; exit 7"
+                            "missed-sentinel" gate)
+             :workdir root :writable-roots (list root))))
+          (should watch)
+          ;; The watch must not settle a live child; suppressing the sentinel
+          ;; must leave an exited child unsettled until the captured check runs.
+          (should (process-live-p process))
+          (funcall watch)
+          (should-not done)
+          (with-temp-file gate)
+          (test-mevedel-execution--wait
+           (lambda () (memq (process-status process) '(exit signal))))
+          (should-not done)
+          (funcall watch)
+          (test-mevedel-execution--wait (lambda () done))
+          (should (= 7 (plist-get result :exit-code)))
+          (should (equal "recovered" (plist-get result :output))))
+      (when watch-timer (mevedel--ui-timer-cancel watch-timer))
+      (when (and process (process-live-p process)) (delete-process process))
+      (delete-directory root t)))
   :doc "passes the session sandbox policy to the child boundary"
   ;; A private directory: protected-path discovery walks the workdir, and
   ;; parallel test workers churn the shared temporary directory under it.
@@ -748,6 +773,7 @@
   (test)
   :doc "request abort detaches a waiting poll without consuming its output"
   (let* ((root (make-temp-file "mevedel-managed-poll-abort-" t))
+         (gate (file-name-concat root "finish"))
          (session (test-mevedel-execution--session root))
          (request (mevedel-request--create :session session))
          (mevedel-sandbox-mode 'off)
@@ -758,16 +784,30 @@
           (setq initial
                 (test-mevedel-execution--start-managed
                  session root
-                 '("sh" "-c" "printf one; sleep 1; printf two")
-                 :yield-time-ms 250))
+                 (list "sh" "-c"
+                       "printf one; while test ! -e \"$1\"; do sleep .01; done; printf two"
+                       "poll-abort" gate)
+                 :yield-time-ms 10))
           (setq id (plist-get (plist-get initial :facts) :execution-id))
+          (test-mevedel-execution--wait
+           (lambda ()
+             (unless (equal "one" (plist-get initial :output))
+               (setf (plist-get initial :output)
+                     (concat (plist-get initial :output)
+                             (plist-get (test-mevedel-execution--observe
+                                         session id :wait-ms 0) :output))))
+             (equal "one" (plist-get initial :output))))
+          (should (equal "one" (plist-get initial :output)))
           (mevedel-execution-observe
            session "main" id (lambda (value) (setq abandoned value))
            :wait-ms 5000 :request request)
           (mevedel-request-drain-cancellers request)
           (should-not abandoned)
+          (with-temp-file gate)
           (setq final (test-mevedel-execution--observe session id))
-          (should (equal "two" (plist-get final :output))))
+          (should (equal "two" (plist-get final :output)))
+          (should-not abandoned))
+      (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution-list ()
