@@ -1519,7 +1519,8 @@ A daemon running longer than TIMEOUT seconds, 90 by default, fails the test.
 Return (OBSERVED EXIT-STATUS . TRACE), TRACE being the daemon's
 WAYLAND_DEBUG client log."
   (let* ((directory (make-temp-file "mevedel-wayland-" t))
-         (socket (format "mevedel-test-%d" (emacs-pid)))
+         ;; A terminated compositor may not have released its socket yet.
+         (socket (file-name-nondirectory directory))
          (result (file-name-concat directory "result.eld"))
          (trace (generate-new-buffer " *mevedel-test-wayland-trace*"))
          (kwin-log (generate-new-buffer " *mevedel-test-kwin*"))

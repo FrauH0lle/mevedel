@@ -142,7 +142,9 @@ Each line is capped at 220 characters to keep failure diagnostics bounded."
   (let* ((module-directory (make-temp-file "mevedel-wayland-sync-" t))
          (module-path (file-name-concat
                        module-directory
-                       (concat "present-wayland-sync" module-file-suffix))))
+                       (concat "present-wayland-sync" module-file-suffix)))
+         (make-process-function (symbol-function 'make-process))
+         sockets)
     (unwind-protect
         (progn
           (mevedel-present-wayland--build-sync-module module-path)
@@ -155,9 +157,23 @@ Each line is capped at 220 characters to keep failure diagnostics bounded."
                            process-environment)))
               (ert-info ((format "Renderer: %s" renderer))
                 (pcase-let* ((`(,observed ,status . ,trace)
-                             (mevedel-test--run-wayland-fixture "present-wayland.el"))
+                             (cl-letf (((symbol-function 'make-process)
+                                        (lambda (&rest arguments)
+                                          (when (equal (plist-get arguments :name)
+                                                       "mevedel-test-kwin")
+                                            (push (cadr (member "--socket"
+                                                                (plist-get arguments :command)))
+                                                  sockets))
+                                          (apply make-process-function arguments))))
+                               (mevedel-test--run-wayland-fixture "present-wayland.el")))
                             (phases (mevedel-present-wayland--phases trace))
                             (stats (plist-get observed :stats)))
+                  ;; Both sequential invocations must launch their own socket,
+                  ;; not mistake a terminated predecessor's socket for readiness.
+                  (should (= (length sockets) (if (eq renderer 'default) 1 2)))
+                  (should (stringp (car sockets)))
+                  (should (= (length sockets)
+                             (length (delete-dups (copy-sequence sockets)))))
                   (ert-info ((format "Observed: %S" observed))
                     (should-not (plist-get observed :error))
                     (should (= 0 status))
