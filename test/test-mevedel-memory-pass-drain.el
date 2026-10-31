@@ -935,7 +935,37 @@
     (should (eq 'aborted (plist-get (car results) :outcome)))
     (should (eq 'paused (plist-get (car (mevedel-memory-cycle--read workspace)) :status)))
     (offer)
-    (should (= 0 calls))))
+    (should (= 0 calls)))
+  :doc "synchronous multi-note drain has bounded per-decision cost instead of rescanning growing history"
+  (let ((mevedel-memory-consolidation-mode 'auto)
+        (apply-decision (symbol-function 'mevedel-memory-decision-apply))
+        (program (symbol-function 'mevedel-session-control-fs--run-program))
+        counts)
+    (notes 8)
+    (cl-letf (((symbol-function 'mevedel-memory-decision-apply)
+               (lambda (&rest args)
+                 (let ((count 0))
+                   (prog1
+                       (cl-letf (((symbol-function 'mevedel-session-control-fs--run-program)
+                                  (lambda (&rest operations)
+                                    (cl-incf count)
+                                    (apply program operations))))
+                         (apply apply-decision args))
+                     (push count counts))))))
+      (start)
+      (finish)
+      (wait-for (lambda () (not (mevedel-memory-pass-drain-status workspace)))))
+    (should (= 1 calls))
+    (should (= 8 (length counts)))
+    (should (= 8 (plist-get (seq-find (lambda (result) (eq 'success (plist-get result :outcome))) results)
+                            :applied-count)))
+    (should-not (directory-files shared nil "\\.md\\'"))
+    (setq counts (nreverse counts))
+    ;; The first decision pays recovery once. Seven successors must have a
+    ;; flat marginal cost (eight programs of slack), not a history-length
+    ;; term on every application. Dropping continuations breaks this bound.
+    (let ((sequenced (cdr counts)))
+      (should (<= (apply #'max sequenced) (+ 8 (apply #'min sequenced)))))))
 
 (provide 'test-mevedel-memory-pass-drain)
 ;;; test-mevedel-memory-pass-drain.el ends here
