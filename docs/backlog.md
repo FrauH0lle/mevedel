@@ -79,6 +79,23 @@ so only a native `timeout` the model writes itself bounds a command. A
 - After the MCP idle timeout (1,800 s) interrupts `WaitAgent`, later calls
   answer "Agent is already waiting" until the stuck wait clears.
 
+## View
+
+### Pinned prompt on the remaining surfaces
+
+The main view and agent transcript views pin the governing prompt on its own
+header row below the status strip
+([view contract](view.md#status-strip-and-cockpit-routing)). Two surfaces still
+lose the prompt once it scrolls away:
+
+- Directive frames set a window-level `header-line-format` to their condensed
+  directive header (`mevedel-directive-frame--ensure`), which hides the
+  buffer's prompt row. Decide whether the narrow frame should spend a second
+  row on it, or show the prompt only while its header is off screen.
+- The browser viewer (`relay/viewer/`) has no pinned prompt. A sticky element
+  above the transcript, fed from the rendered prompt headers, is the analogue;
+  check it on the narrow-phone viewer.
+
 ## Checks
 
 - `scripts/check-standards.py` should reject duplicate ERT test names across
