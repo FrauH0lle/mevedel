@@ -1546,6 +1546,48 @@ a disabled transport cleans immediately instead of dropping work"
                   (mevedel-sandbox-cleanup prepared)))))
         (delete-directory root t)))))
 
+(mevedel-deftest mevedel-sandbox--check-runtime-grants-spelling ()
+  ,test
+  (test)
+  :doc "doubled-slash and symlinked runtime grants are refused for read and write"
+  (let* ((mevedel-sandbox--probe-cache nil)
+         (availability (mevedel-sandbox-probe))
+         (runtime (format "/run/user/%d" (user-uid)))
+         (bus (concat runtime "/bus")))
+    (unless (plist-get availability :available)
+      (ert-skip (plist-get availability :reason)))
+    (unless (file-exists-p bus)
+      (ert-skip "No host session bus to protect"))
+    (let ((root (file-truename (make-temp-file "mevedel-sandbox-runtime-spelling-" t)))
+          (process-environment (cons "WAYLAND_DISPLAY" process-environment)))
+      (unwind-protect
+          (cl-flet ((prepare (path access)
+                      (mevedel-sandbox--confined-preparation
+                       (list "sh" "-c" "test -S \"$1\"" "probe" bus)
+                       root (list root) (plist-get availability :executable)
+                       (plist-get availability :mount-proc)
+                       (list :file-system
+                             (list (list :path path :access access :recursive t))))))
+            ;; Emacs keeps a leading `//'; the kernel reads it as `/'.
+            (make-symbolic-link (concat "/" runtime) (file-name-concat root "rt"))
+            (dolist (access '(read write))
+              (dolist (path (list (concat "/" runtime)
+                                  (concat "/" runtime "/gnupg/")
+                                  (file-name-concat root "rt")))
+                (when (file-directory-p path)
+                  (should-error (prepare path access)
+                                :type 'mevedel-sandbox-policy-error))))
+            ;; Negative control: admitted, the doubled-slash grant reopens the bus.
+            (cl-letf (((symbol-function 'mevedel-sandbox--check-runtime-grants)
+                       #'ignore))
+              (dolist (access '(read write))
+                (let ((prepared (prepare (concat "/" runtime) access)))
+                  (unwind-protect
+                      (should (zerop (car (test-mevedel-sandbox--run-confined
+                                           (plist-get prepared :command)))))
+                    (mevedel-sandbox-cleanup prepared))))))
+        (delete-directory root t)))))
+
 (mevedel-deftest mevedel-sandbox--socket-arguments ()
   ,test
   (test)

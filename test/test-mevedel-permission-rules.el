@@ -304,7 +304,12 @@
   (should (mevedel-permission-rules--path-contained-p
            "/srv/tree/sub/file" "/srv/tree"))
   (should-not (mevedel-permission-rules--path-contained-p
-               "/srv/tree-old/file" "/srv/tree")))
+               "/srv/tree-old/file" "/srv/tree"))
+  :doc "a doubled leading slash names the same tree on either side"
+  (should (mevedel-permission-rules--path-contained-p "//srv/tree/file" "/srv/tree"))
+  (should (mevedel-permission-rules--path-contained-p "/srv/tree/file" "//srv/tree"))
+  (should (mevedel-permission-rules-path-in-allowed-roots-p
+           "//srv/tree/file" '("/srv/tree/"))))
 
 (mevedel-deftest mevedel-permission-rules-path-protected-p ()
   ,test
@@ -317,6 +322,12 @@
   (let ((mevedel-protected-paths '(("~/.ssh/**" . inaccessible))))
     (should (mevedel-permission-rules-path-protected-p
              (expand-file-name "~/.ssh"))))
+  :doc "a doubled leading slash cannot escape an inaccessible home rule"
+  (let ((mevedel-protected-paths '(("~/.ssh/**" . inaccessible)
+                                   ("/srv/secret/**" . inaccessible))))
+    (should (mevedel-permission-rules-path-protected-p
+             (concat "/" (expand-file-name "~/.ssh/id_ed25519")) nil 'read))
+    (should (mevedel-permission-rules-path-protected-p "//srv/secret/key" nil 'read)))
   :doc "read access respects the protection level"
   (let ((mevedel-protected-paths '(("**/.git/**" . read-only)
                                    ("**/.ssh/**" . inaccessible))))

@@ -455,6 +455,9 @@ cover, so the permission step's warning about it is captured here."
 		   (should (equal "/tmp/probe/x"
 				  (mevedel-pipeline--normalize-path-value
 				   "$MEVEDEL_TEST_ROOT/x"))))
+		 :doc "collapses a doubled leading slash that Emacs would keep"
+		 (should (equal "/home/user/.ssh/id"
+				(mevedel-pipeline--normalize-path-value "//home/user/.ssh/id")))
 		 :doc "expands a relative path against `default-directory'"
 		 (let ((default-directory "/tmp/root/"))
 		   (should (equal "/tmp/root/a/b"
@@ -508,7 +511,18 @@ cover, so the permission step's warning about it is captured here."
 			  (equal expected
 				 (mevedel-pipeline--canonicalize-path-value path))))
 		     (delete-directory root t)
-		     (delete-directory outside t))))
+		     (delete-directory outside t)))
+		 :doc "a symlink to a doubled-slash target canonicalizes to one leading slash"
+		 (let* ((root (file-name-as-directory
+			       (file-truename (make-temp-file "mevedel-canonical-slash-" t))))
+			(link (file-name-concat root "linked")))
+		   (unwind-protect
+		       (progn
+			 (make-symbolic-link (concat "/" root) link)
+			 (should (equal (concat root "file.txt")
+					(mevedel-pipeline--canonicalize-path-value
+					 (file-name-concat link "file.txt")))))
+		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-pipeline-canonical-path ()
 		 ,test
