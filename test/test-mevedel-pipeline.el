@@ -24,6 +24,7 @@
 (require 'mevedel-transport)
 (require 'mevedel-tool-patch)
 (require 'mevedel-plan-mode)
+(require 'mevedel-reminders)
 (require 'mevedel-patch-review)
 (require 'mevedel-tools)
 (require 'mevedel-view)
