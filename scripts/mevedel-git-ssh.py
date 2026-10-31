@@ -32,7 +32,10 @@ can replace the client entirely.
 - Ambiguous text: every string is strict UTF-8 without C0 or C1 controls;
   refusal messages escape what they echo.
 Out of scope: a remote that is itself hostile, and a writable development
-checkout of this script.
+checkout of this script.  The same holds for the other scripts mevedel runs
+from its source directory: the execution spool worker and the Landlock
+launcher, whose `abi` probe runs on the host.  When the workspace is a
+writable mevedel checkout, a confined edit to any of them runs as host code.
 """
 
 import json

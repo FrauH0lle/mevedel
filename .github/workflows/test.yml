@@ -110,6 +110,9 @@ jobs:
     - name: Check fetch-only Git SSH broker
       run: python3 -m unittest test/test_git_ssh.py
 
+    - name: Check Landlock socket launcher
+      run: python3 -m unittest test/test_landlock.py
+
     - name: Check compilation and tests
       if: matrix.test-lane == 'partitioned'
       run: eask run script check

@@ -76,6 +76,8 @@ Key features:
   directory listings
 - [Bubblewrap](https://github.com/containers/bubblewrap) on Linux for Bash and
   batch Eval child confinement
+- Optional: Python 3 and a kernel with Landlock ABI 9 or newer, to keep
+  confined commands away from host Unix sockets outside the workspace
 - Optional: [mcp.el](https://github.com/lizqwerscott/mcp.el) for `@mcp` mentions
 - Optional: Poppler (`pdftoppm`) for rendering selected PDF pages with `Read`
 - Optional: Node 22.4 or newer on the Emacs host for
@@ -1109,7 +1111,10 @@ host rejects only a fresh `/proc` mount, Mevedel retains filesystem, process,
 and network confinement while using the host `/proc` view and discloses that
 fact as `proc: host`. The confined profile exposes the host read-only, reopens
 allowed roots writable, uses the session working directory, and gives
-descendants fresh process and network namespaces. `best-effort` selects direct
+descendants fresh process and network namespaces. On kernels with Landlock ABI
+9, local commands also cannot connect to host Unix sockets outside writable
+roots and explicit write grants; elsewhere results disclose `host sockets:
+reachable`. `best-effort` selects direct
 execution when the initial confinement probe is unavailable and reports
 unrestricted filesystem and network access; `required` refuses instead; `off`
 runs directly with the same unrestricted disclosure. Once confined preparation

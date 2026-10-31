@@ -394,6 +394,11 @@ push is refused before ssh starts; the agent is unreachable; teardown stops the 
                     result (test-mevedel-sandbox-git-ssh--run prepared))
               (should (eq 'confined (plist-get prepared :state)))
               (should (eq 'isolated (plist-get (plist-get prepared :facts) :network)))
+              ;; With Landlock, the broker socket is reachable only because it
+              ;; is allow-listed.
+              (when (plist-get (plist-get (mevedel-sandbox-probe) :landlock) :python)
+                (should (eq 'allow-listed
+                            (plist-get (plist-get prepared :facts) :host-sockets))))
               (ert-info ((cdr result)) (should (eql 0 (car result))))
               (should (string-match-p "refs/heads/main" (cdr result)))
               (should (equal (test-mevedel-sandbox-git-ssh--git remote "rev-parse" "main")

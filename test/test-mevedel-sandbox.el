@@ -1318,12 +1318,23 @@ a disabled transport cleans immediately instead of dropping work"
   (let ((mevedel-sandbox-mode 'best-effort))
     (cl-letf (((symbol-function 'mevedel-sandbox-probe)
                (lambda () '(:available t :executable "/test/bwrap"
-                            :mount-proc t))))
+                            :mount-proc t
+                            :landlock (:python "/test/python3" :abi 9)))))
       (should
        (equal
         '(:sandbox bubblewrap :filesystem workspace-write :proc fresh
-          :network isolated)
+          :network isolated :host-sockets allow-listed)
         (mevedel-sandbox-pending-facts)))))
+  :doc "previews reachable host sockets with the Landlock fallback's reason"
+  (let ((mevedel-sandbox-mode 'best-effort))
+    (cl-letf (((symbol-function 'mevedel-sandbox-probe)
+               (lambda () '(:available t :executable "/test/bwrap"
+                            :mount-proc t
+                            :landlock (:reason "Landlock is not enabled")))))
+      (let ((facts (mevedel-sandbox-pending-facts)))
+        (should (eq 'reachable (plist-get facts :host-sockets)))
+        (should (equal "Landlock is not enabled"
+                       (plist-get facts :host-sockets-reason))))))
   :doc "reflects requested additive network authority"
   (let ((mevedel-sandbox-mode 'required))
     (cl-letf (((symbol-function 'mevedel-sandbox-probe)
@@ -2858,6 +2869,21 @@ the real grant refusal does not claim that the requested command started"
        :additional-filesystem-read 2 :additional-filesystem-write 1))
     (concat "sandbox: bubblewrap; filesystem: workspace-write; network: isolated"
             "; additional filesystem: 2 read, 1 write")))
+  :doc "host socket status:
+`mevedel-sandbox-status-text' names the Landlock fallback, not the restriction"
+  (should
+   (equal
+    (mevedel-sandbox-status-text
+     '(:sandbox bubblewrap :filesystem workspace-write :network isolated
+       :host-sockets allow-listed))
+    "sandbox: bubblewrap; filesystem: workspace-write; network: isolated"))
+  (should
+   (equal
+    (mevedel-sandbox-status-text
+     '(:sandbox bubblewrap :filesystem workspace-write :network isolated
+       :host-sockets reachable :host-sockets-reason "Landlock is not enabled"))
+    (concat "sandbox: bubblewrap; filesystem: workspace-write; network: isolated"
+            "; host sockets: reachable (Landlock is not enabled)")))
   :doc "unrestricted status:
 `mevedel-sandbox-status-text' includes the persistent fallback reason"
   (should

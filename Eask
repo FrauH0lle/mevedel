@@ -12,7 +12,7 @@
        '("native" "native/*.c" "native/*.eld")
        '("scripts" "scripts/mevedel-mcp-stdio.py"
          "scripts/mevedel-execution-spool.py" "scripts/mevedel-git-ssh.py"
-         "scripts/mevedel-pin.py")
+         "scripts/mevedel-landlock.py" "scripts/mevedel-pin.py")
        '("agents" "agents/*.md")
        '("prompts/context-summary" "prompts/context-summary/*.md")
        '("prompts/goals" "prompts/goals/*.md")
