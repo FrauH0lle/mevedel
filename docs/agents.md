@@ -219,6 +219,9 @@ or erroring callback cannot leave the recipient stuck waiting or remove a new
 wait started by the callback. The triggering mail remains queued until ordinary
 conversation delivery acknowledges it; another WaitAgent observes that mail
 immediately even when the previous callback failed.
+Cancelling an individual tool call (including MCP timeout or disconnect) also
+releases that call's wait, timer and waiting activity, without cancelling the
+surrounding turn or a later wait.
 `InterruptAgent` aborts one retained non-root agent's current turn by canonical
 path, returns its previous activity, and leaves its identity, conversation,
 mailbox, descendants, and future follow-up capability intact.

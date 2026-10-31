@@ -22,6 +22,7 @@
 (require 'mevedel-tool-ui)
 (require 'mevedel-tools)
 (require 'mevedel-view)
+(require 'mevedel-view-render)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 (require 'helpers

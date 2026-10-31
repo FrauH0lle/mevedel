@@ -175,13 +175,15 @@
                                :event 'finished-waiting
                                :reason reason))))
                 (plist-get args :timeout_ms))))
-    (when (and (equal path "/root")
-               (boundp 'mevedel--current-request)
-               mevedel--current-request)
-      (mevedel-request-push-canceller
-       mevedel--current-request
-       (apply-partially
-        #'mevedel-agent-control-cancel-wait mevedel--session path)))))
+    (let* ((session mevedel--session)
+           (waiter (mevedel-agent-control--waiter session path))
+           (cancel (lambda ()
+                     (when (eq waiter
+                               (mevedel-agent-control--waiter session path))
+                       (mevedel-agent-control-cancel-wait session path)))))
+      (when mevedel--current-request
+        (mevedel-request-push-canceller mevedel--current-request cancel))
+      (list :cancel cancel))))
 
 
 ;;

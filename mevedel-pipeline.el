@@ -1278,7 +1278,8 @@ explicit `:status' must be `success' or `error'."
   "Run the tool handler.
 
 For async tools (async-p is non-nil), the handler receives a callback as
-its first argument followed by the args plist.  For sync tools, the
+its first argument followed by the args plist.  It may return (:cancel FN)
+to release pending work when this call is cancelled.  For sync tools, the
 handler receives just the args plist and returns the result directly.
 
 A handler must return a plist of the form
@@ -1298,6 +1299,7 @@ buffer."
          (handler (mevedel-tool-handler tool))
          (args (plist-get context :args))
          (repair-entry (plist-get context :repair-entry))
+         (completed nil)
          (store (lambda (raw)
                   (let ((result
                          (mevedel-pipeline--normalize-tool-string
@@ -1335,6 +1337,7 @@ buffer."
                     (plist-put updated :media (plist-get raw :media)))))
          (finish
           (lambda (raw)
+            (setq completed t)
             (funcall
              next
              (funcall
@@ -1390,7 +1393,22 @@ buffer."
               (mevedel-tool-repair-mark-executed repair-entry)
               (condition-case err
                   (if (mevedel-tool-async-p tool)
-                      (funcall handler finish args)
+                      (let* ((registration (funcall handler finish args))
+                             (cleanup (and (listp registration)
+                                           (plist-get registration :cancel))))
+                        (when (functionp cleanup)
+                          (if (and cell (eq active (car cell)))
+                              (let ((cancel-step active))
+                                (setq active
+                                      (lambda ()
+                                        (when (eq active (car cell))
+                                          (setcar cell cancel-step)
+                                          (unwind-protect (funcall cleanup)
+                                            (funcall cancel-step)))))
+                                (setcar cell active))
+                            ;; Cancellation can arrive while the handler starts.
+                            ;; A synchronous result, however, already owns cleanup.
+                            (unless completed (funcall cleanup)))))
                     (funcall finish (funcall handler args)))
                 (error
                  (funcall
