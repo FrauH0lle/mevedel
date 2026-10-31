@@ -35,12 +35,14 @@
       (should (eq 'absent (plist-get (cadr reads) :status))))))
 
 (mevedel-deftest mevedel-memory-write-list/batches
-    (:vars* ((root (make-temp-file "mevedel-memory-batches-" t))
+    (:vars* ((root (mevedel-test-memory-history-root 'write-list/batches))
              (workspace (mevedel-workspace--create :root root))
              (mevedel-memory-dirs nil)
              (mevedel-journal-cleanup--inhibit-scheduling t)
              (identity (mevedel-workspace-identity-ensure root))
-             (bundles (mevedel-test-memory-history-create workspace 2 5 100))
+             (bundles (mevedel-test-memory-history-build
+                       'write-list/batches root
+                       (lambda () (mevedel-test-memory-history-create workspace 2 5 100))))
              (rows (mevedel-memory-write-list workspace))
              (ids (mapcar (lambda (row) (plist-get row :id)) rows)))
             :after-each ((remhash workspace mevedel-memory-write--inspected)
@@ -117,12 +119,14 @@
                 (should (plist-get row :intent))))))))))
 
 (mevedel-deftest mevedel-memory-decision--read/reuse
-    (:vars* ((root (make-temp-file "mevedel-memory-reuse-" t))
+    (:vars* ((root (mevedel-test-memory-history-root 'decision--read/reuse))
              (workspace (mevedel-workspace--create :root root))
              (mevedel-memory-dirs nil)
              (mevedel-journal-cleanup--inhibit-scheduling t)
              (identity (mevedel-workspace-identity-ensure root))
-             (bundle (car (mevedel-test-memory-history-create workspace 1 1 100)))
+             (bundle (car (mevedel-test-memory-history-build
+                           'decision--read/reuse root
+                           (lambda () (mevedel-test-memory-history-create workspace 1 1 100)))))
              (intent (plist-get (car (mevedel-memory-write-list workspace)) :intent))
              (entry (mevedel-memory-decision-status workspace (plist-get intent :proposal)))
              (path (file-name-concat (mevedel-memory-decision--directory workspace) (concat (plist-get entry :decision-id) ".el"))))

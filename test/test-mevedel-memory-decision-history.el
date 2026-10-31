@@ -25,12 +25,14 @@
          (file-name-concat (file-name-directory (or buffer-file-name load-file-name)) "memory-history-fixtures"))
 
 (mevedel-deftest mevedel-memory-write-list/history
-    (:vars* ((root (make-temp-file "mevedel-memory-write-history-" t))
+    (:vars* ((root (mevedel-test-memory-history-root 'write-list/history))
              (workspace (mevedel-workspace--create :root root))
              (mevedel-memory-dirs nil)
              (mevedel-journal-cleanup--inhibit-scheduling t)
              (identity (mevedel-workspace-identity-ensure root))
-             (bundles (mevedel-test-memory-history-create workspace 2 3 100)))
+             (bundles (mevedel-test-memory-history-build
+                       'write-list/history root
+                       (lambda () (mevedel-test-memory-history-create workspace 2 3 100)))))
             :after-each ((remhash workspace mevedel-memory-write--inspected)
                          (delete-directory root t)))
   ,test
@@ -75,12 +77,14 @@
           (write-region text nil path nil 'silent))))))
 
 (mevedel-deftest mevedel-memory-decision--record-batch
-    (:vars* ((root (make-temp-file "mevedel-memory-record-batch-" t))
+    (:vars* ((root (mevedel-test-memory-history-root 'decision--record-batch))
              (workspace (mevedel-workspace--create :root root))
              (mevedel-memory-dirs nil)
              (mevedel-journal-cleanup--inhibit-scheduling t)
              (identity (mevedel-workspace-identity-ensure root))
-             (bundles (mevedel-test-memory-history-create workspace 1 2 100))
+             (bundles (mevedel-test-memory-history-build
+                       'decision--record-batch root
+                       (lambda () (mevedel-test-memory-history-create workspace 1 2 100))))
              (paths (mevedel-session-control-fs-list-directory
                      (mevedel-memory-decision--directory workspace) mevedel-memory-write-intent-file-regexp)))
      :after-each ((delete-directory root t)))
@@ -148,13 +152,18 @@
     (should-error (mevedel-memory-decision--record-batch workspace (make-list 9 (car paths))))))
 
 (mevedel-deftest mevedel-memory-decision-recover/history
-    (:vars* ((root (make-temp-file "mevedel-memory-history-" t))
+    (:vars* ((root (mevedel-test-memory-history-root 'decision-recover/history))
              (workspace (mevedel-workspace--create :root root))
              (mevedel-memory-dirs nil)
              (mevedel-memory-consolidation-mode 'auto)
              (mevedel-journal-cleanup--inhibit-scheduling t)
              (identity (mevedel-workspace-identity-ensure root))
-             (bundles (mevedel-test-memory-history-create workspace 3 4 6000)))
+             ;; Nine interleaved decisions cross both recovery bounds: one
+             ;; 8-record batch, and a pass group spanning two batches.  A
+             ;; single-slot bundle cache would read nine bundles, not three.
+             (bundles (mevedel-test-memory-history-build
+                       'decision-recover/history root
+                       (lambda () (mevedel-test-memory-history-create workspace 3 3 6000)))))
             :after-each ((delete-directory root t)))
   ,test
   (test)
