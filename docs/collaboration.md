@@ -1268,7 +1268,8 @@ resolving to the command first, and
 `mevedel-collaboration-unsafe-guest-commands` wins over any admission: it
 holds the commands that escalate, mutate durable state, manage the share, or
 only report to the host's display (`tokens`, `ps`, `tools`, `worktree`
-included), none of which can do anything useful for a guest. The guest may
+included), none of which can do anything useful for a guest, and `buddy`, which
+would switch on Buddy across the host's Emacs. The guest may
 queue a command through the typed `invoke` field or combine selected skills
 through the `skills` name array on one prompt frame. These fields are mutually
 exclusive. Free text remains skill-inert; only selected names are planned.

@@ -833,6 +833,7 @@ the patch before applying it.
 - `mevedel-toggle-tasks`
 - `mevedel-buddy-mode` / `mevedel-buddy-global-mode` /
   `mevedel-buddy-review` / `mevedel-buddy-guide`
+- `/buddy` / `/buddy BRIEF` / `/buddy off`
 - `mevedel-buddy-dismiss-note` / `mevedel-buddy-dismiss-notes` /
   `mevedel-buddy-abort`
 - `mevedel-retry-plan-implementation`
@@ -1383,8 +1384,8 @@ User skill invocations may block chat input while asynchronous preparation or an
 awaited fork completes.
 
 Built-in local slash commands include `/help`, `/clear`, `/tokens`, `/usage`, `/model`,
-`/compact`, `/btw`, `/mode`, `/edits`, `/goal`, `/init`, `/prompt`, `/review`,
-and `/verify`.
+`/compact`, `/btw`, `/buddy`, `/mode`, `/edits`, `/goal`, `/init`, `/prompt`,
+`/review`, and `/verify`.
 `/usage` (or `U Usage` in the session cockpit) opens account-wide
 subscription quotas for the session's Codex OAuth or Claude Code backend.
 The read-only report fetches on opening and on `g`; `q` cancels any pending
@@ -1437,6 +1438,7 @@ from gptel's API-reported token usage when available.
 | `mevedel-buddy-global-mode` | Enable Buddy in every buffer whose mode is tracked. |
 | `mevedel-buddy-review` | Review recent edits now, without waiting for the idle timer. |
 | `mevedel-buddy-guide` | Ask what to build in this region, rather than what went wrong. |
+| `/buddy` | Implement it yourself: feed this session's plan, Goal, or latest exchange to Buddy and turn Buddy on. `/buddy BRIEF` states the brief; `/buddy off` stops. |
 | `mevedel-buddy-dismiss-note` | Dismiss the Buddy note at point. |
 | `mevedel-buddy-dismiss-notes` | Dismiss every Buddy note in this buffer. |
 
