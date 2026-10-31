@@ -21,6 +21,32 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-execution-test-helpers"))
 
+(defun test-mevedel-execution-process--wait-for-exit (process &optional timeout)
+  "Wait for PROCESS exit without timers, bounded by TIMEOUT seconds or five."
+  (let ((deadline (time-add nil (or timeout 5))))
+    (while (and (process-live-p process) (time-less-p nil deadline))
+      (accept-process-output process 0.01 nil 1))
+    (when (process-live-p process)
+      (ert-fail "Child did not exit without timer delivery"))))
+
+(mevedel-deftest test-mevedel-execution-process--wait-for-exit
+  (:doc "a non-exiting child reaches the clock deadline with timers suppressed")
+  (let ((process (make-process :name "mevedel-test-non-exiting" :noquery t
+                               :command '("sh" "-c" "exec sleep 30")
+                               :connection-type 'pipe))
+        ran timer)
+    (unwind-protect
+        (progn
+          (setq timer (run-at-time 0 nil (lambda () (setq ran t))))
+          (let ((failure (should-error
+                          (test-mevedel-execution-process--wait-for-exit process 0.02)
+                          :type 'ert-test-failed)))
+            (should (string-search "Child did not exit without timer delivery"
+                                   (error-message-string failure))))
+          (should-not ran))
+      (when timer (cancel-timer timer))
+      (delete-process process))))
+
 (defun test-mevedel-execution-process--wait (predicate)
   "Wait until PREDICATE returns non-nil."
   (with-timeout (5 (error "Process did not settle"))
@@ -431,9 +457,7 @@
             ;; Observe the exit only from the simulated remote command: no
             ;; sentinel, and a wait that runs neither timers nor sentinels.
             (set-process-sentinel process #'ignore)
-            (with-timeout (5 (ert-fail "Child did not exit"))
-              (while (process-live-p process)
-                (accept-process-output process 0.01 nil 1)))
+            (test-mevedel-execution-process--wait-for-exit process)
             (mevedel-transport--handler-advice
              (lambda ()
                (let (timer-list timer-idle-list)
@@ -508,9 +532,7 @@
                         (when (eq process (mevedel-execution-process--child-process child))
                           (setq raced t)
                           (write-region "" nil gate nil 'silent)
-                          (with-timeout (5 (ert-fail "Child did not exit before EOF"))
-                            (while (process-live-p process)
-                              (accept-process-output process 0.01 nil 1))))
+                          (test-mevedel-execution-process--wait-for-exit process))
                         (funcall send-eof process))))
             (write-region "" nil spool nil 'silent)
             (should (eq child

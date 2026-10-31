@@ -182,17 +182,28 @@
          (exec-path (list root))
          (mevedel-sandbox--probe-cache nil)
          (mevedel-sandbox-probe-timeout 0.05)
-         result)
+         (clock 100.0)
+         waits result)
     (skip-unless (eq system-type 'gnu/linux))
     (unwind-protect
         (progn
           (with-temp-file executable
             (insert "#!/bin/sh\nexec /bin/sleep 30\n"))
           (set-file-modes executable #o700)
-          ;; This watchdog discriminates an ignored probe timeout from a
-          ;; stalled candidate; it does not measure host scheduling latency.
-          (with-timeout (5 (ert-fail "Probe timeout did not settle"))
+          ;; The probe's isolated wait suppresses timers, including any Lisp
+          ;; watchdog.  Advance its clock through the requested wait instead,
+          ;; and prove both the configured budget and deadline termination.
+          (cl-letf (((symbol-function 'float-time) (lambda (&optional _) clock))
+                    ((symbol-function 'accept-process-output)
+                     (lambda (process seconds &optional _milliseconds just-this-one)
+                       (when (process-live-p process)
+                         (when waits (error "Probe waited beyond its deadline"))
+                         (push (list seconds just-this-one) waits)
+                         (setq clock (+ clock seconds))))))
             (setq result (mevedel-sandbox-probe)))
+          (should (= 1 (length waits)))
+          (should (< (abs (- 0.05 (caar waits))) 0.000001))
+          (should (equal 1 (cadar waits)))
           (should-not (plist-get result :available))
           (should (string-match-p "timed out" (plist-get result :reason)))
           ;; A probe that never finished proves nothing about the backend.
