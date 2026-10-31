@@ -184,7 +184,7 @@ Also ensure the maintenance timer runs while this session is open."
   (setq mevedel-journal-idle--quiet-timer nil)
   (unless mevedel-journal-idle--inhibit-scheduling
     (dolist (workspace (mevedel-journal-idle--live-workspaces))
-      (when (mevedel-journal-worker-supported-p workspace)
+      (when (mevedel-journal-worker-local-p workspace)
         (condition-case err
             (progn
               (mevedel-journal-process-schedule workspace t)

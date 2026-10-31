@@ -83,11 +83,12 @@ RECOVER requests abandoned-capture recovery before this processing opportunity."
              (remhash key mevedel-journal-process--recover-requested)
              (unless mevedel-journal-process--inhibit-scheduling
                (condition-case err
-                   (if (mevedel-journal-worker-supported-p workspace)
+                   (if (mevedel-journal-worker-local-p workspace)
                        (let (worker)
                          (setq worker
                                (mevedel-journal-worker-start
                                 workspace 'digest-prepare
+                                (list :recover recover)
                                 (lambda (result)
                                   (when (eq worker (gethash key mevedel-journal-process--workers))
                                     (remhash key mevedel-journal-process--workers)
@@ -100,8 +101,7 @@ RECOVER requests abandoned-capture recovery before this processing opportunity."
                                           (mevedel-journal-process--prepared
                                            workspace (plist-get result :prepared))
                                         (error
-                                         (display-warning 'mevedel (error-message-string failure) :warning))))))
-                                nil (list :recover recover)))
+                                         (display-warning 'mevedel (error-message-string failure) :warning))))))))
                          (puthash key worker mevedel-journal-process--workers))
                      (when recover (mevedel-journal-recovery-run workspace))
                      (mevedel-journal-process-next workspace))
@@ -484,6 +484,11 @@ RETRY-ID selects an explicit additional attempt; a recovered accepted result
 returns its public entry.  Explicit retry reports recovery errors."
   (mevedel-journal-process--prepared
    workspace (mevedel-journal-process--prepare workspace retry-id)))
+
+(defun mevedel-journal-process-prepare-child (workspace payload)
+  "Recover when requested by PAYLOAD and prepare WORKSPACE digest admission."
+  (when (plist-get payload :recover) (mevedel-journal-recovery-run workspace))
+  (list :ok t :prepared (mevedel-journal-process--prepare workspace)))
 
 (provide 'mevedel-journal-process)
 ;;; mevedel-journal-process.el ends here

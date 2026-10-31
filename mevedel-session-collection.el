@@ -211,9 +211,8 @@ Cache observations only; the editor still checks authority and pins at deletion.
                                       names))))
                 (setf (plist-get job :head) head)
                 (when (and (not (equal head (plist-get job :worker-scanned)))
-                           (not (file-remote-p directory))
                            (mevedel-session-workspace session)
-                           (mevedel-journal-worker-supported-p (mevedel-session-workspace session)))
+                           (mevedel-journal-worker-local-p (mevedel-session-workspace session) (list directory)))
                   (let ((cold
                          (seq-filter
                           (lambda (generation)
@@ -229,8 +228,8 @@ Cache observations only; the editor still checks authority and pins at deletion.
                       (plist-put job :worker
                                  (mevedel-journal-worker-start
                                   (mevedel-session-workspace session) 'generation-observations
-                                  (lambda (result) (mevedel-session-collection--observed session job directory head cold result))
-                                  nil (list :directory directory :generations cold))))))
+                                  (list :directory directory :generations cold)
+                                  (lambda (result) (mevedel-session-collection--observed session job directory head cold result)))))))
                 (while (and (not (plist-get job :worker))
                             (plist-get job :remaining)
                             (< count 8)

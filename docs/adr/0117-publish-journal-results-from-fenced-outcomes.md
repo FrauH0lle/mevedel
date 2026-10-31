@@ -129,6 +129,17 @@ the original token, never renew or replace its authority. Scheduled publication
 recovery uses the same proof before child deletion and live-write scheduling.
 Generic maintenance-process teardown may still force-stop children without
 storage settlement; that separate boundary leaves durable evidence for recovery.
+All maintenance children, including the read-only cockpit display scan, use one
+launcher with a closed operation table. Each operation names its owner feature,
+public child entry and reply bound; requests carry frozen data, never a callable
+or load path. Launch failure signals without a callback. Successful completion
+is delivered once through idle transport (with a timer fallback if transport is
+disabled or cancelled), never in the sentinel or before launch returns.
+Cancelling a live child drops its reply; display cancellation neither fences nor
+settles a mutation claim. Mechanical locality checks belong to the launcher;
+domain admission and the intentionally different editor-side alternatives stay
+with owners. This removes duplicate process/codec lifecycle code without adding
+an in-editor adapter or changing storage authority.
 Automatic admission reads the
 live origin's policy rather than an incidental timer buffer's policy.
 Deferred retries retain and freshly validate their original buffer, session,

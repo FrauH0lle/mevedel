@@ -458,7 +458,7 @@ coalesce; a forced request received during cleanup runs after that batch."
                                     ((defer-memory))
                                     (t
                                      (puthash root job mevedel-journal-cleanup--active)
-                                     (if (mevedel-journal-worker-supported-p workspace)
+                                     (if (mevedel-journal-worker-local-p workspace)
                                          (let ((force (cdr job)))
                                            (setcdr job nil)
                                            (if (and (not force)
@@ -469,6 +469,7 @@ coalesce; a forced request received during cleanup runs after that batch."
                                              (setq worker
                                                    (mevedel-journal-worker-start
                                                     workspace 'cleanup
+                                                    (list :force force)
                                                     (lambda (result)
                                                       (when (eq job (gethash root mevedel-journal-cleanup--pending))
 							(setf (mevedel-workspace-journal-observation workspace) nil
@@ -479,8 +480,7 @@ coalesce; a forced request received during cleanup runs after that batch."
 							(when (and (plist-get result :error)
                                                                    (not mevedel-journal-cleanup--inhibit-scheduling))
                                                           (message "mevedel: journal cleanup failed: %s" (plist-get result :error)))
-							(finish)))
-                                                    force))))
+							(finish)))))))
                                        (unless iterator
                                          (setq iterator (mevedel-journal-cleanup--steps workspace (cdr job)))
                                          (setcdr job nil))
@@ -496,6 +496,14 @@ coalesce; a forced request received during cleanup runs after that batch."
                   (cancel)))))
            (puthash root job mevedel-journal-cleanup--pending)
            (setcar job (run-with-idle-timer .1 nil #'step))))))))
+
+(defun mevedel-journal-cleanup-child (workspace payload)
+  "Run journal-only retention for WORKSPACE using PAYLOAD's :force flag."
+  (let* ((mevedel-journal-cleanup--journal-only t)
+         (mevedel-journal-cleanup--more nil)
+         (count (mevedel-journal-cleanup-expired workspace (plist-get payload :force))))
+    (list :ok t :count count :more mevedel-journal-cleanup--more
+          :cleanup-at (mevedel-workspace-journal-cleanup-at workspace))))
 
 (provide 'mevedel-journal-cleanup)
 ;;; mevedel-journal-cleanup.el ends here
