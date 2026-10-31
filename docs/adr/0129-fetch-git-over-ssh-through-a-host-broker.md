@@ -16,9 +16,9 @@ host. Confinement itself never gains SSH keys, the ssh-agent, `known_hosts` or
 SSH configuration.
 
 - **When.** Local Bubblewrap confinement starts a per-command broker
-  (`scripts/mevedel-git-ssh.py serve`) when the command text names `git` and
-  the working directory's repository has fetch remotes that may use SSH. Every
-  other command gets none.
+  (`scripts/mevedel-git-ssh.py serve`) when the command text names `git`, the
+  working directory uses the primary root's own repository (below), and that
+  repository has fetch remotes that may use SSH. Every other command gets none.
 - **How.** Inside confinement `GIT_SSH_COMMAND` runs the client half of the
   same script. It passes Git's argv and its own stdin, stdout and stderr
   descriptors over a Unix socket in a per-command owner-only directory. The
@@ -32,10 +32,28 @@ SSH configuration.
   before the command starts. The host ssh argv is rebuilt from parsed values
   with `--` before the destination. Push (`git-receive-pack`), other remote
   commands, other ssh options and other hosts are refused before ssh runs.
-- **Whose remotes count.** The allow-list comes only from Git metadata no
-  confined command could have written first. A nested repository planted in a
-  writable root gets no broker. *(Being finalized on the B5 branch after its
-  security review; reconcile this bullet with the merged code.)*
+- **Whose remotes count.** The allow-list comes only from the primary root's
+  own repository, checked on the host before launch:
+  - Discovery runs from the root with `GIT_DIR`, `GIT_COMMON_DIR`,
+    `GIT_WORK_TREE`, `GIT_CEILING_DIRECTORIES` and
+    `GIT_DISCOVERY_ACROSS_FILESYSTEM` removed, so only on-disk `.git` entries
+    decide.
+  - The root's `.git` entry must exist and must not be a symlink. The
+    discovered top level must be the root itself, and discovery from the
+    working directory must yield the same top level, Git directory and common
+    directory. A nested `.git` directory or pointer file below the root
+    therefore cannot redirect the broker.
+  - A `.git` pointer file counts only for a genuine linked worktree: its
+    administrative directory's `gitdir` file must point back at it.
+  - The resolved Git and common directories must lie outside every writable
+    root, or be the root's own `.git` directory. That directory is refused
+    when the root sits inside another Git work tree, where it may itself be a
+    plant.
+  - Remotes are then read from that Git directory explicitly, never by
+    discovery.
+
+  The residual assumption: the broker trusts the session root's repository
+  as found on disk when the session starts.
 - **The agent stays hidden.** Local confinement masks the socket named by
   `SSH_AUTH_SOCK` and unsets the variable.
 - **Authority.** Fetch needs no network grant: the connection is the host's.
@@ -96,11 +114,16 @@ let confined code sign with the user's keys, regardless of key masking.
     text falls back to the old failure.
   - Local execution targets only. Remote targets get no broker; their SSH
     behaviour is unchanged.
-  - Submodule remotes and repositories whose metadata a confined command could
-    have planted get no broker.
-  - A `.git` write grant lets a command change remotes, `insteadOf` rules and
-    hooks that later brokers and host Git trust. The broker narrows *this*
-    command's reach; it does not make granted `.git` writes harmless.
+  - Only the primary root's own repository gets the broker. Nested
+    repositories, submodule remotes, a root that is itself a subdirectory of
+    a work tree, and a root `.git` directory inside another work tree get
+    none and fall back to the old failure.
+  - Trust in the root's repository is trust in the disk. Metadata outside
+    the writable roots may still have been written by an earlier command
+    under a grant. A `.git` write grant lets a command change the remotes,
+    `insteadOf` rules and hooks that later brokers and host Git trust. The
+    broker narrows *this* command's reach; it does not make granted `.git`
+    writes harmless.
   - A hostile remote is out of scope: the broker limits which service runs
     where, not what the remote returns.
 - Push stays a person's decision. A refusal is not a confinement failure to
