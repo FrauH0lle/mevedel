@@ -847,7 +847,8 @@ must not need a load-order recipe.
 - **Doc strings**: describe what is tested, group with shared prefix
 - **View/status redraws**: when changing async view, status-zone, agent, or
   task redraw paths, test that an active composer draft stays unchanged,
-  including a multiline draft whose first editable character is `>`.
+  including a multiline draft whose first editable character is `>`, and that
+  point, window start and the selected window do not move.
 - **New functions need tests**; modify tests when behavior changes
 - **Silent output**: a test run prints only ERT's own progress lines
   (`passed N/M name (time)`) and its final summary. No `mevedel:` messages,

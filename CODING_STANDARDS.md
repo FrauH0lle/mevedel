@@ -86,6 +86,35 @@ complex solutions; most do not.
 - A plan or slice that grows well beyond its original estimate is paused and
   re-justified with the person who owns the goal before work continues.
 
+## NO SURPRISES
+
+The user's point, windows and focus belong to the user. Only the command the
+user just invoked may change them, and only in the way its name promises.
+
+- **Background work never moves anything.** Process filters, timers, agent and
+  tool updates, status redraws and deferred renders keep point, mark, the
+  composer draft and each window's start where they were, in every window
+  showing the buffer ([ADR 0126](docs/adr/0126-keep-the-composer-still.md)).
+  Write through the view's preserving entries rather than editing view text
+  directly.
+- **No unrequested windows or focus changes.** Asynchronous events do not call
+  `pop-to-buffer`, `switch-to-buffer`, `select-window` or `select-frame`, and
+  do not split, resize or delete windows. Arriving prompts, results and
+  discoveries announce themselves (a rail count, a status row, a message) and
+  wait for the user to visit them.
+- **Commands change only what they name.** A command that opens a surface
+  displays it, and selects it only when the user is expected to act there; it
+  returns the user to the invoking window and draft position on close. A
+  command does not switch an unrelated view, tab or filter as a side effect.
+- **Stable targets.** Rows, buttons and cards under point or the pointer keep
+  their screen position while the user reads them; new content arrives at the
+  far edge.
+
+Treat an unexplained cursor jump, window or focus change as a defect, not a
+cosmetic issue. Test it the way the
+[testing conventions](docs/development.md#testing-conventions) describe for
+redraws.
+
 ## NO BACKWARDS COMPATIBILITY
 
 mevedel is under active development and has no backwards-compatibility

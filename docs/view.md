@@ -60,6 +60,16 @@ authoritative transcript.
   loss. It replaces the currently displayed view and never owns a composer,
   streaming target, or interaction registry.
 
+Root data buffers keep visible names (`*mevedel:SESSION@WORKSPACE*`, view
+`*mevedel:SESSION@WORKSPACE:view*`): `t` (`mevedel-view-toggle-transcript`)
+opens them as editable Org, and Emacs disables font-lock in buffers whose
+names start with a space and creates them without undo. Agent conversation
+buffers are hidden (` *mevedel-agent-ID*`, keeping that name after their
+transcript file is attached; cold ones load as ` *mevedel artifact FILE*`), so
+one sub-agent adds no `.chat.org` entry to buffer lists. Open them through
+the agent transcript view and `t`, or type a leading space at
+`switch-to-buffer`.
+
 An open running-agent transcript view follows the main view's update cadence:
 streamed text uses `mevedel-view-stream-render-delay` (a batch flushed by the
 stream bridge renders in the flush's own wakeup), tool boundaries use

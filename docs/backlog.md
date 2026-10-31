@@ -10,7 +10,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Inbox
 
-- Consider making mevedel's data buffers hidden
 - Donwload button in browser/lobby/files beside the files
   - Also drag-n-drop of files for upload
 - Make system prompt/role a bit more general so mevedel can also be used for writing for example
@@ -31,9 +30,7 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   My earlier suggestion that the memory directory had been treated as a workspace was incorrect: this scaffolding is created for **writable roots**, which can include the memory directory.
   ```
 - The cursor has the tendency to jump to the "  [Manage]" row of "background work" on updates/redraws even though it was on the composer or elsewhere
-- We meed to add this as a development guideline: The user should not get surprised, e.g. cursor jumps, windows opening, etc.
 - Why is the memory collection (cockpit -> Candidates or Memories) so slow? 5s or more? Especially for already included memories, what work is there to be done?
-- auto update plugins? Or at least notifications?
 - Maybe add edit/rewind/fork in browser?
 
 ## Memory and journal
@@ -172,6 +169,41 @@ Defer until a concrete integration needs that coverage.
 - Configuration, cwd/files, tool-batch, and shell-environment events: add
   individually when a caller needs a boundary existing events cannot express;
   define the event's scope and control effects before implementation.
+
+## Plugins
+
+### Opt-in update notifications
+
+Managed plugins are shallow GitHub clones (`mevedel-plugins-install`); they
+change only through `/plugin update NAME` (`git pull --ff-only`) or the
+cockpit's update action. Nothing tells the user an update exists. Automatic
+updates stay out of scope: they change executable code, and hooks, without
+consent.
+
+Shallow clones never refresh their remote refs, so any check needs the
+network. The current git seam (`mevedel-plugins--process-git`) is a
+synchronous `process-file` that would block Emacs, and the plugin modules
+have no async process, timer or place to surface results. Design:
+
+- `mevedel-plugins-update-check-interval`: nil (default, no checks) or a
+  number of days. No network call at load or startup: the first check runs
+  on an idle timer after the registry is first used in a session, and the
+  last check time persists in global plugin state, so restarts within the
+  interval do not check again.
+- The check runs `git ls-remote origin HEAD` asynchronously (`make-process`,
+  one plugin at a time) for each managed root and compares the result with
+  local `HEAD`. Results are cached per plugin.
+- Surfacing follows NO SURPRISES in CODING_STANDARDS.md: one echo-area message
+  per newly seen upstream commit ("updates available for N plugins; /plugin
+  to review"), never repeated for the same commit; cockpit rows show
+  "update available" from the cache. Offline or failed checks stay silent
+  apart from a "check failed" row note.
+- A cockpit "Check for updates" action runs the same async check on demand,
+  regardless of the interval setting.
+- Scope: `mevedel-plugin-lifecycle.el` (async check), `mevedel-plugin-registry.el`
+  (setting, cached state), `mevedel-plugin-ui.el` (row note, action),
+  docs/skills.md; tests through an async git-executor seam, including the
+  "no network at load" guarantee.
 
 ## Unexplained failures and unverified leads
 

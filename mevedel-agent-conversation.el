@@ -244,8 +244,10 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
                      "anon"))
          (buffer
           (or existing-buffer
+              ;; Hidden like other internal buffers: agent views and the
+              ;; transcript toggle are the user's way in.
               (generate-new-buffer
-               (format "*mevedel-agent-%s*" short-id))))
+               (format " *mevedel-agent-%s*" short-id))))
          (parent-session
           (and (buffer-live-p parent-data-buffer)
                (buffer-local-value 'mevedel--session parent-data-buffer)))
