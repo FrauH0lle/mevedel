@@ -183,3 +183,7 @@ to the decision bearing that ID.
 
 - [ADR 0128: Extract memory and expire working notes](0128-extract-memory-and-expire-working-notes.md)
   is Accepted; it separates disposable note review from unfinished-work tracking.
+
+- [ADR 0129: Fetch Git over SSH through a host broker](0129-fetch-git-over-ssh-through-a-host-broker.md)
+  lets confined Git fetch over SSH through a fetch-only host broker and hides
+  the ssh-agent from local confinement.

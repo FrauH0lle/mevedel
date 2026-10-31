@@ -10,6 +10,19 @@
 
 (require 'cl-lib)
 (require 'json)
+;; The view fixture's buffer macro; the runner loads it only in the child.
+(cl-eval-when (compile) (require 'helpers))
+
+(declare-function mevedel-tool-render-data-format "mevedel-tool-render-data"
+                  (render-data &optional tool-use-id))
+(declare-function mevedel-view--setup "mevedel-view" (view-buf data-buf &optional options))
+(declare-function mevedel-view--full-rerender "mevedel-view-render"
+                  (&optional transcript-buffer source-changed-p))
+(declare-function mevedel-view--interaction-rebuild "mevedel-view-interaction"
+                  (&optional owned visits))
+(declare-function mevedel-view--spinner-tick "mevedel-view-stream" ())
+(declare-function mevedel-view-table-rerender "mevedel-view-table" (&optional window))
+(declare-function mevedel-view--input-text "mevedel-view-composer" ())
 
 (defconst mevedel-graphical-check--root
   (file-name-directory
@@ -102,6 +115,15 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
                (created nil)
                (status 0))
     (setq command-line-args-left nil)
+    ;; SIGTERM/SIGHUP end batch Emacs through `kill-emacs', which runs this
+    ;; hook but skips the `unwind-protect' below.  `delete-process' kills the
+    ;; child synchronously.  It cannot also be reaped here: the hook runs
+    ;; inside the signal handler, where Emacs does not handle SIGCHLD, so the
+    ;; dead child remains a zombie until its adopter reaps it.
+    (add-hook 'kill-emacs-hook
+              (lambda ()
+                (when (and process (process-live-p process)) (delete-process process))
+                (when (file-exists-p temporary) (delete-directory temporary t))))
     (unwind-protect
         (condition-case err
             (progn
