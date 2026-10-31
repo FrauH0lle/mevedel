@@ -47,16 +47,21 @@
     (let* ((root (make-temp-file "mevedel-pass-lag-" t))
            (workspace (mevedel-workspace--create :root root))
            (noninteractive nil)
+           ;; Keep the real sampler and matched unwatched control, scaling
+           ;; the threshold and interval with the deliberate stall.
+           (mevedel-telemetry-lag-threshold .1)
+           (mevedel-telemetry--lag-interval .02)
+           (mevedel-telemetry--lag-count-threshold .04)
            (handle (let ((noninteractive (not watch)))
                      (mevedel-telemetry-memory-pass-start workspace "pass-production"))))
       (unwind-protect
           (progn
             ;; The negative control omits registration, not the stall or timer
             ;; delivery.  No internal lag clock, counter or emitter is stubbed.
-            (sleep-for 0.15)
-            (let ((end (+ (float-time) 0.75)))
+            (sleep-for 0.03)
+            (let ((end (+ (float-time) 0.15)))
               (while (< (float-time) end)))
-            (sleep-for 0.15)
+            (sleep-for 0.03)
             (let ((lags (test-mevedel-telemetry-memory-pass--events
                          workspace 'event-loop-lag)))
               (if watch
@@ -67,7 +72,7 @@
                     (dolist (row lags)
                       (should (equal "pass-production" (plist-get row :pass-id)))
                       (should (eq 'memory (plist-get row :workload)))
-                      (should (<= 500 (plist-get row :delay-ms)))
+                      (should (<= 100 (plist-get row :delay-ms)))
                       (should (numberp (plist-get row :cpu-ms)))
                       (should-not (plist-get row :settled))
                       (dolist (key '(:session-id :request-id :goal-id :preset
