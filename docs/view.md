@@ -1430,13 +1430,19 @@ right-side state is dropped. Clickable parts route to session cockpit
 surfaces such as top, mode, model, and tools. The request state is
 plain status text. Goal status/turns and the model name are separate links:
 the model always opens Model, even when a Goal is active or completed.
+**compact on/off** toggles automatic compaction for this open local-history
+session with the strip's usual left-click binding. It updates only the tab
+line, preserving the composer, cursor, selection and window positions. Native
+Claude sessions show **compact provider**, with explanatory hover text and no
+click action. Ephemeral `/btw` sides omit the control. See
+[compaction](compaction.md#user-model) for lifetime and failure-reset behavior.
 The view must not copy or proxy gptel's clickable
 data-buffer header line; gptel-owned header controls stay in the raw
 data buffer. The request state is `settling` while a lost turn's deferred
 terminal work still owns the session. The tab line is evaluated on every
 redisplay, so the strip is cached by its raw inputs: session name, root,
 target identity, publication and lease state, permission and Plan mode,
-directive scope, request state, model, Goal status and turns, preset, tool
+directive scope, request state, model, Goal status and turns, preset, compaction, tool
 count, width, display type and selected window. Each redisplay reads them
 without entering the transcript buffer and formats labels only when one
 changes. Entering an Org transcript buffer swaps its many buffer-local

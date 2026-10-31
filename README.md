@@ -834,6 +834,11 @@ the patch before applying it.
   `mevedel-buddy-abort`
 - `mevedel-retry-plan-implementation`
 
+The chat's top **compact on/off** control toggles automatic compaction for
+that open session without moving the cursor or changing other chats. It does
+not cancel compaction already running; `/compact` remains available for manual
+compaction. Reopening a session restores the configured default. Claude shows
+**compact provider** instead, because its native compaction is provider-managed.
 
 ## Tools & Agents
 
