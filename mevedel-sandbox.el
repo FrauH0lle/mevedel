@@ -411,7 +411,7 @@ of `mevedel-sandbox--landlock-probe' for a local target."
             (when (and (stringp root)
                        (file-directory-p (expand-file-name root)))
               (file-name-as-directory
-               (file-truename (expand-file-name root)))))
+               (mevedel-file-truename (expand-file-name root)))))
           roots))))
 
 (defun mevedel-sandbox--first-missing-path (path &optional planned)
@@ -538,7 +538,7 @@ across launches, since another active sandbox may still mount them."
                (lambda (root)
                  (and (file-directory-p (expand-file-name root))
                       (member (file-name-as-directory
-                               (file-truename (expand-file-name root)))
+                               (mevedel-file-truename (expand-file-name root)))
                               exempt)))
                writable-roots)
             writable-roots))
@@ -642,7 +642,7 @@ across launches, since another active sandbox may still mount them."
                   (setq target-home
                         (or target-home
                             (file-name-as-directory
-                             (file-truename (concat target-prefix "~/")))))
+                             (mevedel-file-truename (concat target-prefix "~/")))))
                   (if (string-equal root-pattern "~")
                       (directory-file-name target-home)
                     (file-name-concat target-home
@@ -811,7 +811,7 @@ a one-element list; path and symlink checks still happen here."
          (physical-roots
           (mapcar (lambda (root)
                     (let ((root (directory-file-name (expand-file-name root))))
-                      (cons root (directory-file-name (file-truename root)))))
+                      (cons root (directory-file-name (mevedel-file-truename root)))))
                   writable-roots))
          ;; Roots that are already canonical.  Below one, a path whose every
          ;; component was just proved not to be a symlink is its own truename.
@@ -938,7 +938,7 @@ a one-element list; path and symlink checks still happen here."
                                     (string-prefix-p (file-name-as-directory root) path))))
                             canonical-roots)
                            path
-                         (file-truename path))))
+                         (mevedel-file-truename path))))
                   (unless (string-equal canonical path)
                     (push (append (list :path canonical
                                         :mode mode
@@ -993,7 +993,7 @@ a one-element list; path and symlink checks still happen here."
 WORKDIR supplies the execution path domain.  Inspect containing masks and
 canonical aliases without scanning directory trees or preparing mounts.
 Launch preparation still checks the actual restrictions afresh."
-  (let* ((canonical (file-truename path))
+  (let* ((canonical (mevedel-file-truename path))
          (paths (delete-dups (list (expand-file-name path) canonical))))
     (or
      (cl-some
@@ -1020,7 +1020,7 @@ Launch preparation still checks the actual restrictions afresh."
           (let ((mask (plist-get candidate :path)))
             (and (file-directory-p mask)
                  (mevedel-permission-rules-path-in-allowed-roots-p
-                  canonical (list (file-truename mask))))))
+                  canonical (list (mevedel-file-truename mask))))))
         (mevedel-sandbox--protected-candidates workdir nil))))))
 
 (defun mevedel-sandbox--unrestricted-facts (sandbox reason)
@@ -1073,7 +1073,7 @@ dropped, so only the on-disk `.git' entries decide."
                                  "--git-dir" "--git-common-dir"))
         (let ((lines (split-string (buffer-string) "\n" t)))
           (when (= 3 (length lines))
-            (mapcar #'file-truename lines)))))))
+            (mapcar #'mevedel-file-truename lines)))))))
 
 (defun mevedel-sandbox--git-ssh-git-dir (git workdir roots)
   "Return the primary root's Git directory when WORKDIR uses it, else nil.
@@ -1096,7 +1096,7 @@ the broker; and the resolved directories must satisfy
                      ;; A genuine linked worktree records its pointer file.
                      (let ((back (file-name-concat directory "gitdir")))
                        (and (file-regular-p back)
-                            (equal (file-truename
+                            (equal (mevedel-file-truename
                                     (string-trim
                                      (with-temp-buffer
                                        (insert-file-contents back nil 0 4096)
@@ -1226,7 +1226,7 @@ names ending in a slash."
                             (runtime (getenv "XDG_RUNTIME_DIR"))
                             ((file-name-absolute-p runtime))
                             ((file-directory-p runtime)))
-                  (list (file-name-as-directory (file-truename runtime))))))
+                  (list (file-name-as-directory (mevedel-file-truename runtime))))))
          (existing (cl-remove-if-not
                     (lambda (directory)
                       (file-directory-p (concat remote directory)))
@@ -1248,7 +1248,7 @@ names ending in a slash."
                         (when-let* ((runtime (getenv "XDG_RUNTIME_DIR")))
                           (file-name-concat runtime display))))
               ((file-exists-p socket)))
-    (file-truename socket)))
+    (mevedel-file-truename socket)))
 
 (defun mevedel-sandbox--check-runtime-grants (grants masks)
   "Refuse resolved filesystem GRANTS that overlap runtime MASKS.
@@ -1257,7 +1257,8 @@ directory would bring its sockets back.  An approval for such a path cannot
 be confined; only a full escalation can reach those services."
   (dolist (grant grants)
     (dolist (path (mevedel-sandbox--grant-paths grant))
-      (let ((local (file-name-as-directory (file-local-name path))))
+      (let ((local (file-name-as-directory
+                    (mevedel-collapse-leading-slashes (file-local-name path)))))
         (when (cl-some (lambda (mask)
                          (or (string-prefix-p mask local)
                              (string-prefix-p local mask)))
@@ -1408,7 +1409,7 @@ LANDLOCK is the probe's :landlock fact; with its launcher, a local command
 reaches only the host Unix sockets `mevedel-sandbox--socket-allow-list'
 names."
   (let* ((canonical-workdir
-          (file-name-as-directory (file-truename workdir)))
+          (file-name-as-directory (mevedel-file-truename workdir)))
          (roots (mevedel-sandbox--canonical-directories writable-roots)))
     (unless roots
       (signal 'mevedel-sandbox-policy-error
@@ -1709,7 +1710,7 @@ Remote and non-native pattern discovery keep their synchronous behavior."
                                (prin1-to-string (mevedel-permission-protected-path-policy)))
                       candidates
                       (mevedel-sandbox--protected-candidates
-                       (file-name-as-directory (file-truename workdir))
+                       (file-name-as-directory (mevedel-file-truename workdir))
                        (mevedel-sandbox--canonical-directories writable-roots)
                        temporary-root
                        (lambda (root name executable protection)

@@ -875,7 +875,7 @@ authorization observes the target's current link destination."
   (if (or (not (stringp value)) (string-empty-p value))
       value
     (let* ((remote-file-name-inhibit-cache t)
-           (canonical (file-truename value)))
+           (canonical (mevedel-file-truename value)))
       (if execution-target
           (concat
            (mevedel-execution-target-prefix execution-target)

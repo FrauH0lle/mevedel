@@ -409,7 +409,7 @@ TARGET and DIRECTORY bind target-native paths to their execution target."
        (list :path (if target
                        (mevedel-execution-target-expand-path
                         target path directory)
-                     (expand-file-name path))
+                     (mevedel-expand-file-name path))
              :access access))
      paths)))
 

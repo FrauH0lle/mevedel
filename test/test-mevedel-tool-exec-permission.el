@@ -2856,6 +2856,14 @@ default Bash keeps bare dot inspection automatic"
     (should (eq :pattern (plist-get result :specifier-key)))
     (should (equal "make" (plist-get result :specifier-value)))))
 
+(mevedel-deftest mevedel-tool-exec-permission--filesystem-paths ()
+  ,test
+  (test)
+  :doc "a doubled leading slash in a requested grant is collapsed"
+  (should (equal '((:path "/run/user/1000/gnupg/" :access read))
+                 (mevedel-tool-exec-permission--filesystem-paths
+                  ["//run/user/1000/gnupg/"] 'read))))
+
 (provide 'test-mevedel-tool-exec-permission)
 
 ;;; test-mevedel-tool-exec-permission.el ends here

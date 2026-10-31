@@ -18,6 +18,10 @@
 ;; `files'
 (defvar remote-file-name-inhibit-cache)
 
+;; `mevedel-utilities'
+(declare-function mevedel-collapse-leading-slashes "mevedel-utilities" (path))
+(autoload 'mevedel-collapse-leading-slashes "mevedel-utilities")
+
 ;; `cl-lib'
 (declare-function cl-count-if "cl-lib" (predicate sequence &rest args))
 (declare-function cl-find-if "cl-lib" (predicate sequence &rest args))
@@ -279,11 +283,12 @@ base directory for relative values; malformed substitutions leave VALUE
 literal and are expanded in that same base directory."
   (if (or (not (stringp value)) (string-empty-p value))
       value
-    (expand-file-name
-     (condition-case nil
-         (substitute-in-file-name value)
-       (error value))
-     directory)))
+    (mevedel-collapse-leading-slashes
+     (expand-file-name
+      (condition-case nil
+          (substitute-in-file-name value)
+        (error value))
+      directory))))
 
 (defun mevedel-resource-encode-component (value)
   "Return VALUE encoded as one canonical RFC 3986 UTF-8 component."

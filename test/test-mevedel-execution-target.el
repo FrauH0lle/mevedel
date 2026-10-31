@@ -291,6 +291,13 @@
                    (mevedel-execution-target-expand-path
                     target "/etc/app.conf"))))
 
+  :doc "collapses a doubled leading slash in the target-native path"
+  (let ((target (mevedel-execution-target-create
+                 "/ssh:user@host:/srv/project/")))
+    (should (equal "/ssh:user@host:/run/user/1000"
+                   (mevedel-execution-target-expand-path
+                    target "//run/user/1000"))))
+
   :doc "resolves relative paths against the target-native directory"
   (let ((target (mevedel-execution-target-create
                  "/docker:dev:/workspace/")))
