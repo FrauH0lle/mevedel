@@ -676,6 +676,41 @@
               (set-buffer-modified-p nil))
             (kill-buffer buffer)))))))
 
+(mevedel-deftest mevedel-chat-discard-buffers/reentrant
+  (:doc "finishes the data buffer's hooks when its view kills it again")
+  ;; The view's kill hook kills the data buffer, as the real pair's does.
+  ;; That nested kill must not end the data buffer before its later hooks,
+  ;; such as the session lock release, run in it.
+  (let ((data (generate-new-buffer " *discard-reentrant-data*"))
+        (view (generate-new-buffer " *discard-reentrant-view*"))
+        later)
+    (unwind-protect
+        (progn
+          (with-current-buffer data
+            (setq-local mevedel--view-buffer view)
+            (add-hook 'kill-buffer-hook
+                      (lambda ()
+                        (setq later (list (eq (current-buffer) data)
+                                          (buffer-live-p data))))
+                      nil t)
+            ;; Added last, so it runs first: kill the companion view.
+            (add-hook 'kill-buffer-hook
+                      (lambda () (kill-buffer view))
+                      nil t))
+          (with-current-buffer view
+            (add-hook 'kill-buffer-hook
+                      (lambda () (when (buffer-live-p data) (kill-buffer data)))
+                      nil t))
+          (mevedel-chat-discard-buffers data t)
+          (should (equal '(t t) later))
+          (should-not (buffer-live-p data))
+          (should-not (buffer-live-p view)))
+      (dolist (buffer (list data view))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (setq-local kill-buffer-hook nil))
+          (kill-buffer buffer))))))
+
 (mevedel-deftest mevedel--probe-session-target ()
                  ,test
                  (test)

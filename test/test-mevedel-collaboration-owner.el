@@ -180,8 +180,9 @@ the room.  START replaces the child's room dial."
 
 (mevedel-deftest mevedel-collaboration--handle-fork/room-failure
   (:doc "keeps a published fork whose room fails, but no live child, and says how to open it")
-  (test-mevedel-collaboration--fork-harness
-   (lambda (h)
+  (let (view lock)
+    (test-mevedel-collaboration--fork-harness
+     (lambda (h)
      (let ((sent (plist-get h :sent))
            (children (plist-get h :children))
            (receive (plist-get h :receive)))
@@ -198,6 +199,12 @@ the room.  START replaces the child's room dial."
                        (mevedel-session-workspace
                         (plist-get (plist-get h :fixture) :session))))))
          (should-not (buffer-live-p child-buffer))
+         ;; The view and the session lock go with it: nothing of the child
+         ;; stays live or claimed in this Emacs.
+         (should (bufferp view))
+         (should-not (buffer-live-p view))
+         (should (stringp lock))
+         (should-not (file-exists-p lock))
          (should (eq :json-false (plist-get reply :ok)))
          (should (string-match-p "injected dial failure" (plist-get reply :message)))
          (should (string-match-p "M-x mevedel" (plist-get reply :message)))
@@ -211,7 +218,14 @@ the room.  START replaces the child's room dial."
          (funcall receive 3)
          (should (= 1 (length (funcall children))))
          (should (equal reply (cdar (funcall sent)))))))
-   (lambda (_session _buffer) (error "Injected dial failure"))))
+     (lambda (session buffer)
+       ;; The child holds its view and lock when its room is dialed.
+       (setq view (buffer-local-value 'mevedel--view-buffer buffer)
+             lock (mevedel-session-persistence--lock-path
+                   (mevedel-session-save-path session)))
+       (should (buffer-live-p view))
+       (should (file-exists-p lock))
+       (error "Injected dial failure")))))
 
 (mevedel-deftest mevedel-collaboration--handle-session-models
   (:doc "refreshes the current catalog only for peers allowed to request sessions")
@@ -305,6 +319,27 @@ the room.  START replaces the child's room dial."
           (remove-hook 'kill-buffer-hook hook t)
           (set-buffer-modified-p nil))
         (kill-buffer view)))))
+
+(mevedel-deftest mevedel-collaboration--discard-created-session/real-session
+  (:doc "releases a real paired session's lock when it discards the pair")
+  ;; Discarding the data buffer kills its view, whose hook kills the data
+  ;; buffer again.  That nested kill must not end the data buffer before
+  ;; its remaining hooks, the lock release among them, have run.
+  (test-mevedel-collaboration--fork-harness
+   (lambda (h)
+     (funcall (plist-get h :receive) 3)
+     (let* ((buffer (car (funcall (plist-get h :children))))
+            (view (buffer-local-value 'mevedel--view-buffer buffer))
+            (lock (mevedel-session-persistence--lock-path
+                   (mevedel-session-save-path
+                    (buffer-local-value 'mevedel--session buffer)))))
+       (should (buffer-live-p view))
+       (should (file-exists-p lock))
+       (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal) #'ignore))
+         (mevedel-collaboration--discard-created-session nil buffer))
+       (should-not (buffer-live-p buffer))
+       (should-not (buffer-live-p view))
+       (should-not (file-exists-p lock))))))
 
 (mevedel-deftest mevedel-collaboration--owner
   (:doc "grants owner authority only to a peer holding both tokens")

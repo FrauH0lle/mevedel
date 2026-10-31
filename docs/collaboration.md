@@ -113,11 +113,14 @@ than through the command allowlist:
   owner writes it in the child room.
   Each `reqId` forks at most once for the connection that sent it. A retry
   receives the recorded reply again, and a retry while the fork runs gets
-  none. The host remembers a bounded number of replies; a repeat of an id
-  it has forgotten is refused as stale, never performed again. If the
+  none. The host remembers a bounded number of replies. Any id at or below
+  the highest id it has forgotten is refused as stale and never performed,
+  including one it never saw, because the host cannot tell it from a
+  forgotten repeat. Higher ids it has not seen fork normally. If the
   fork is saved but its room cannot start, the host closes the child's
-  buffers in Emacs and keeps the saved session. The refusal names its
-  session id and says to open it in Emacs with `M-x mevedel`.
+  buffers in Emacs, releases its lock and keeps the saved session. The
+  refusal names its session id and says to open it in Emacs with
+  `M-x mevedel`.
 
 - `recovery` exposes selection among the offered models, reasoning efforts and
   registered presets, session rename, native-history recovery, retained-input
