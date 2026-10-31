@@ -299,6 +299,8 @@ BODY delivers the receipt and a Read call through `connection', `content' and
   (declare (indent 1) (debug t))
   `(mevedel-engine-test--with-claude-session
      (let ((file (file-name-concat root "evidence.txt"))
+           (receipt-release (file-name-concat root "receipt-release"))
+           (receipt-written (file-name-concat root "receipt-written"))
            dispatch content connection tool-result)
        (write-region "evidence" nil file nil 'silent)
        (setq-local gptel-system-prompt "Order fixture"
@@ -316,7 +318,9 @@ BODY delivers the receipt and a Read call through `connection', `content' and
                         ;; The test dispatches its call itself, unannounced.
                         (list :announces-tool-calls nil
                               :meta `((hookCommand . ,hook)
-                                      (promptAcknowledgement . ,,acknowledgement)))))))
+                                      (promptAcknowledgement . ,,acknowledgement)
+                                      (promptReceiptRelease . ,receipt-release)
+                                      (promptReceiptMarker . ,receipt-written)))))))
              (mevedel-session-enqueue-pending-reminder session "ORDER PENDING EVENT")
              (mevedel-session-ensure-reminder session (mevedel-reminders-make-pending-events))
              (mevedel--insert-user-turn "wait")
@@ -354,9 +358,13 @@ BODY delivers the receipt and a Read call through `connection', `content' and
 
   :doc "a tool call read before an already written ACP receipt still runs after it"
   (mevedel-acp-turn-test--with-receipt-race "late"
-    ;; Emacs is busy while the peer writes its receipt, so neither side is
-    ;; read; the socket is then read first.
-    (let ((end (+ (float-time) 0.5))) (while (< (float-time) end)))
+    ;; Release the peer only after "waiting" was read.  Observe its write
+    ;; without dispatching ACP I/O, then read the tool socket first.
+    (with-temp-file receipt-release)
+    (let ((deadline (+ (float-time) 5)))
+      (while (and (not (file-exists-p receipt-written)) (< (float-time) deadline))
+        (thread-yield)))
+    (should (file-exists-p receipt-written))
     (funcall dispatch "Read" (list :file_path file)
              (list :claudecode/toolUseId "order-1")
              (lambda (result) (setq tool-result result))))
