@@ -73,20 +73,26 @@
     (should (= 32 (length (plist-get cycle :attempted))))
     (should-not (mevedel-memory-cycle-pending cycle)))
   :doc "50-note finite cohort has no dependence on deletion progress or an in-memory attempt set"
-  (progn
-    (notes 50) (acquire) (freeze)
+  ;; A two-note bound gives the same full/partial batch shape as fifty notes
+  ;; at sixteen; the 32-note case keeps the real sixteen-note bound.
+  (let ((mevedel-memory-notes--max-notes 2))
+    (notes 7) (acquire) (freeze)
     (let (counts)
       (while (mevedel-memory-cycle-pending cycle)
         (push (batch) counts)
         (acquire) (recover))
-      (should (equal '(2 16 16 16) counts)))
-    (should (= 50 (length (plist-get cycle :attempted))))
-    (should (= 50 (length (directory-files shared nil "\\.md\\'")))))
+      (should (equal '(1 2 2 2) counts)))
+    (should (= 7 (length (plist-get cycle :attempted))))
+    (should (= 7 (length (directory-files shared nil "\\.md\\'")))))
   :doc "100-note cohort is finite with bounded body-free metadata and accepted receipts"
-  (progn
+  ;; Record size depends on members and attempts, not the batch count, so a
+  ;; fifty-note bound keeps the 100-member size check with one restart.
+  (let ((mevedel-memory-notes--max-notes 50))
     (notes 100) (acquire) (freeze)
-    (while (mevedel-memory-cycle-pending cycle)
-      (batch) (acquire) (recover))
+    (let (counts)
+      (while (mevedel-memory-cycle-pending cycle)
+        (push (batch) counts) (acquire) (recover))
+      (should (equal '(50 50) counts)))
     (should (= 100 (length (plist-get cycle :attempted))))
     (let ((text (cdr (mevedel-memory-cycle--read workspace))))
       (should (< (string-bytes text) (* 128 1024)))

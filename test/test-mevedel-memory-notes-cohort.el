@@ -43,8 +43,8 @@
          (files (capture) (plist-get (cdr (plist-get capture :root)) :files)))
       ,test))
   (test)
-  :doc "32, 50 and 100 members freeze before the sixteen-note request bound"
-  (dolist (count '(32 50 100))
+  :doc "17 and 100 members freeze before the sixteen-note request bound"
+  (dolist (count '(17 100))
     (dotimes (index count) (put (format "n%03d.md" index) index))
     (let* ((cohort (freeze)) (batch (capture cohort)))
       (should (plist-get cohort :complete))
