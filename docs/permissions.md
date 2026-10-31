@@ -963,6 +963,33 @@ Edits and changes only network isolation for that invocation. Full Access alread
 has unrestricted network and filesystem access. The namespace and mount boundary
 is inherited by descendants.
 
+Local confinement also masks the ssh-agent socket named by `SSH_AUTH_SOCK` and
+unsets the variable: a socket on a read-only mount still accepts connections,
+so an inherited agent would let confined code sign with the user's keys. Git
+over SSH instead uses a fetch-only broker (`scripts/mevedel-git-ssh.py`), started
+only for a command that names `git` in a local repository with SSH fetch
+remotes. Confined Git reaches it through `GIT_SSH_COMMAND` and a socket in a
+per-command owner-only directory under the tool-server socket root; that root is
+masked and only the command's own directory is bound back. The broker passes
+Git's stdio descriptors to the host's ssh and allows only `git-upload-pack` and
+`git-upload-archive` for the fetch remotes' destinations, read before the command
+starts. Those remotes come only from the primary root's own `.git` entry:
+Git must discover that same repository from the root and from the working
+directory, so a nested `.git` directory or pointer file below the root gets no
+broker. The entry must not be a symlink. A `.git` directory is refused when the
+root sits inside another Git work tree, where it may itself be a plant; a
+linked worktree's pointer file must be linked back from its administrative
+directory. Resolved metadata outside every writable root is accepted, but an
+earlier command may still have written it under a grant. The broker trusts
+the session root's repository as it is found on disk when the session
+starts, so a repository prepared by an earlier session rooted at a parent
+directory is trusted like any repository the user opens. A `.git` write grant
+likewise lets a command change the remotes,
+`insteadOf` rules and hooks that later brokers and host Git trust. ssh runs
+without connection sharing, and teardown stops the broker with its ssh
+children. The
+[execution manual](tools/execution.md#git-over-ssh) gives the model contract.
+
 An explicitly approved write grant for a character or block device mounts
 only that device node with device access enabled. Its source is opened and
 identity-checked before mounting; the mounted node is checked again and its

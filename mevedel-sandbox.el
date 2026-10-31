@@ -12,6 +12,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-permission-mode)
+(require 'mevedel-utilities)
 
 (eval-when-compile
   (require 'subr-x))
@@ -174,6 +175,15 @@ remote target is left untouched."
 
 (defconst mevedel-sandbox-intrinsic-paths '("/dev/null")
   "Paths supplied by the private child environment without host authority.")
+
+(defconst mevedel-sandbox--git-ssh-script
+  (file-name-concat
+   (mevedel-library-source-directory (or load-file-name buffer-file-name))
+   "scripts" "mevedel-git-ssh.py")
+  "Fetch-only Git SSH client and host broker.")
+
+(defvar mevedel-sandbox--git-ssh-program "ssh"
+  "Host ssh program the fetch-only Git broker runs.")
 
 
 ;;
@@ -664,7 +674,7 @@ across launches, since another active sandbox may still mount them."
       (nreverse candidates))))
 
 (defun mevedel-sandbox-cleanup (preparation)
-  "Remove unchanged synthetic mount targets owned by PREPARATION.
+  "Stop PREPARATION's Git broker and remove its unchanged mount targets.
 
 Teardown can run from a sentinel or settle timer while a remote command is
 active.  Every cleanup step is target I/O, so issuing it there can cross the
@@ -674,6 +684,8 @@ Nothing waits on a mount target being gone, so a busy transport defers
 the whole cleanup rather than nesting.  A disabled transport drops
 deferred work, so that case cleans up immediately rather than leaving
 the targets behind."
+  ;; The broker is local, so stopping it never crosses a remote transport.
+  (mevedel-sandbox--git-ssh-stop (plist-get preparation :git-ssh))
   (if (and (mevedel-transport-busy-p
             (plist-get (car (plist-get preparation :cleanup-paths)) :path))
            (mevedel-transport-run-when-idle
@@ -975,6 +987,182 @@ Launch preparation still checks the actual restrictions afresh."
         :network 'unrestricted
         :reason reason))
 
+
+;;
+;;; Fetch-only Git SSH transport
+
+(defun mevedel-sandbox--git-ssh-trusted-p (path roots git)
+  "Return non-nil when Git metadata PATH predates any confined write.
+ROOTS are the preparation's canonical writable roots, primary root first.
+Metadata outside every writable root is unreachable to this command, though
+an earlier command may have written it under a grant.
+Inside them, only the primary root's own `.git' directory qualifies: it is
+protected, or created empty, before every confined command there, while a
+nested `.git' elsewhere may have been planted by an earlier command.  A
+primary root inside another Git work tree may itself be such a plant, so
+its `.git' directory is refused; GIT finds the enclosing work tree."
+  (let ((primary-git (file-name-concat (car roots) ".git")))
+    (if (file-in-directory-p path primary-git)
+        (and (file-directory-p primary-git)
+             (not (file-symlink-p primary-git))
+             (let ((default-directory
+                    (file-name-directory (directory-file-name (car roots)))))
+               (not (eql 0 (call-process git nil nil nil "rev-parse"
+                                         "--is-inside-work-tree")))))
+      (not (cl-some (lambda (root) (file-in-directory-p path root)) roots)))))
+
+(defun mevedel-sandbox--git-ssh-discover (git directory)
+  "Return (TOPLEVEL GIT-DIR COMMON-DIR) that GIT discovers from DIRECTORY.
+Return nil outside a work tree.  Environment overrides of discovery are
+dropped, so only the on-disk `.git' entries decide."
+  (with-temp-buffer
+    (let ((default-directory (file-name-as-directory directory))
+          (process-environment
+           (seq-remove
+            (lambda (entry)
+              (string-match-p
+               (concat "\\`GIT_\\(?:DIR\\|COMMON_DIR\\|WORK_TREE\\|CEILING_DIRECTORIES"
+                       "\\|DISCOVERY_ACROSS_FILESYSTEM\\)=")
+               entry))
+            process-environment)))
+      (when (eql 0 (call-process git nil '(t nil) nil "rev-parse"
+                                 "--path-format=absolute" "--show-toplevel"
+                                 "--git-dir" "--git-common-dir"))
+        (let ((lines (split-string (buffer-string) "\n" t)))
+          (when (= 3 (length lines))
+            (mapcar #'file-truename lines)))))))
+
+(defun mevedel-sandbox--git-ssh-git-dir (git workdir roots)
+  "Return the primary root's Git directory when WORKDIR uses it, else nil.
+ROOTS are the canonical writable roots, primary root first.  Only the
+primary root's own `.git' entry is consulted: a directory, or a linked
+worktree's pointer file whose administrative directory links back to it,
+never a symlink.  GIT must discover exactly that repository from both the
+root and WORKDIR, so a nested `.git' entry anywhere below cannot redirect
+the broker; and the resolved directories must satisfy
+`mevedel-sandbox--git-ssh-trusted-p'."
+  (let* ((root (directory-file-name (car roots)))
+         (entry (file-name-concat root ".git")))
+    (when-let* (((file-exists-p entry))
+                ((not (file-symlink-p entry)))
+                (found (mevedel-sandbox--git-ssh-discover git root))
+                ((equal (car found) root))
+                ((equal found (mevedel-sandbox--git-ssh-discover git workdir)))
+                (directory (nth 1 found))
+                ((or (file-directory-p entry)
+                     ;; A genuine linked worktree records its pointer file.
+                     (let ((back (file-name-concat directory "gitdir")))
+                       (and (file-regular-p back)
+                            (equal (file-truename
+                                    (string-trim
+                                     (with-temp-buffer
+                                       (insert-file-contents back nil 0 4096)
+                                       (buffer-string))))
+                                   entry)))))
+                ((mevedel-sandbox--git-ssh-trusted-p directory roots git))
+                ((mevedel-sandbox--git-ssh-trusted-p (nth 2 found) roots git)))
+      directory)))
+
+(defun mevedel-sandbox--git-ssh-urls (git git-dir)
+  "Return the fetch URLs of the repository at GIT-DIR that may use SSH.
+GIT reads that repository explicitly, so a nested `.git' cannot be
+discovered in its place.  Git expands `insteadOf' rewrites.  The broker
+parses the URLs strictly; this only skips repositories whose remotes
+cannot use SSH.  Remote-helper URLs (`helper::address') are not SSH."
+  (with-temp-buffer
+    (let ((default-directory (file-name-as-directory git-dir))
+          urls)
+      (when (eql 0 (call-process git nil '(t nil) nil
+                                 (concat "--git-dir=" git-dir) "remote" "-v"))
+          (dolist (line (split-string (buffer-string) "\n" t))
+            (when (string-match "\\`[^\t]+\t\\(.+\\) (fetch)\\'" line)
+              (let ((url (match-string 1 line)))
+                (when (and (string-search ":" url)
+                           (not (string-match-p
+                                 "\\`[A-Za-z][A-Za-z0-9+.-]*::" url))
+                           (not (string-match-p
+                                 "\\`\\(?:https?\\|git\\|file\\)://" url)))
+                  (push url urls)))))
+          (delete-dups (nreverse urls))))))
+
+(defun mevedel-sandbox--git-ssh-start (command workdir roots)
+  "Start the fetch-only Git SSH broker for confined COMMAND in WORKDIR.
+ROOTS are the canonical writable roots, primary root first.
+Return a plist with :process, :directory and :socket, or nil when COMMAND
+does not mention git, WORKDIR is remote, its Git metadata may have been
+written by a confined command, or no fetch remote uses SSH.  The allowed
+destinations are read now, before the confined command starts.  A `.git'
+write grant still lets a command change what later brokers trust.  The
+broker lives in its own
+owner-only directory under the local tool-server socket root, which
+confinement masks; only this command's directory is bound back."
+  (when-let* (((not (file-remote-p workdir)))
+              ((cl-some (lambda (argument)
+                          (and (stringp argument)
+                               (string-match-p "\\bgit\\b" argument)))
+                        command))
+              (python (executable-find "python3"))
+              (git (executable-find "git"))
+              (git-dir (mevedel-sandbox--git-ssh-git-dir git workdir roots))
+              (urls (mevedel-sandbox--git-ssh-urls git git-dir))
+              (directory (with-file-modes #o700
+                           (make-temp-file
+                            (file-name-concat (mevedel-mcp-socket-root) "git-ssh-")
+                            t))))
+    (condition-case err
+        (let* ((socket (file-name-concat directory "socket"))
+               (default-directory (file-name-as-directory directory))
+               (process
+                (make-process
+                 :name "mevedel-git-ssh"
+                 :command (list python "-I" mevedel-sandbox--git-ssh-script
+                                "serve" socket
+                                (json-serialize
+                                 (list :ssh mevedel-sandbox--git-ssh-program
+                                       :urls (vconcat urls))))
+                 :connection-type 'pipe
+                 :coding 'binary
+                 :noquery t
+                 :filter #'ignore
+                 :sentinel #'ignore)))
+          (list :process process :directory directory :socket socket
+                :client (mapconcat #'shell-quote-argument
+                                   (list python "-I" mevedel-sandbox--git-ssh-script
+                                         "client")
+                                   " ")))
+      (error
+       (delete-directory directory t)
+       (signal (car err) (cdr err))))))
+
+(defun mevedel-sandbox--git-ssh-stop (broker)
+  "Stop BROKER and its ssh children, and remove its socket directory."
+  (when broker
+    (let ((process (plist-get broker :process))
+          (directory (plist-get broker :directory)))
+      ;; The broker runs in its own process group with its ssh children.
+      (when (process-live-p process)
+        (delete-process process))
+      (when (file-directory-p directory)
+        (delete-directory directory t)))))
+
+(defun mevedel-sandbox--git-ssh-arguments (broker)
+  "Return Bubblewrap arguments for local agent masking and BROKER.
+The user's ssh-agent socket is masked: a socket on a read-only mount still
+accepts connections, so inheriting it would let confined code sign with the
+user's keys.  BROKER, when non-nil, is reachable through `GIT_SSH_COMMAND'."
+  (append
+   (when-let* ((agent (getenv "SSH_AUTH_SOCK"))
+               ((file-name-absolute-p agent))
+               ((file-exists-p agent)))
+     (list "--ro-bind" "/dev/null" agent))
+   (list "--unsetenv" "SSH_AUTH_SOCK")
+   (when broker
+     (let ((directory (plist-get broker :directory)))
+       (list "--ro-bind" directory directory
+             "--setenv" "GIT_SSH_COMMAND" (plist-get broker :client)
+             "--setenv" "GIT_SSH_VARIANT" "ssh"
+             "--setenv" "MEVEDEL_GIT_SSH_SOCKET" (plist-get broker :socket))))))
+
 (defun mevedel-sandbox--refused-facts (sandbox reason)
   "Return facts for a child refused by SANDBOX for REASON."
   (list :sandbox sandbox :filesystem 'unavailable :network 'unavailable
@@ -1061,7 +1249,9 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
            (protected
             (mevedel-sandbox--protected-restrictions
              canonical-workdir roots temporary-root candidates))
-           (restrictions (plist-get protected :restrictions)))
+           (restrictions (plist-get protected :restrictions))
+           (local-p (not (file-remote-p canonical-workdir)))
+           broker)
       (condition-case err
           (let* ((filesystem-permissions
                   (mevedel-sandbox--resolve-filesystem-permissions
@@ -1084,6 +1274,17 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                  (filesystem-write-count
                   (cl-count 'write filesystem-permissions
                             :key (lambda (grant) (plist-get grant :access))))
+                 (_ (when local-p
+                      ;; Without the broker, SSH fails confined as before;
+                      ;; that must not refuse the whole command.
+                      (setq broker
+                            (condition-case err
+                                (mevedel-sandbox--git-ssh-start
+                                 command canonical-workdir roots)
+                              (error
+                               (message "mevedel: Git SSH broker unavailable: %s"
+                                        (error-message-string err))
+                               nil)))))
                  (facts (list :sandbox 'bubblewrap
                               :git-common-directories
                               (mapcar #'file-local-name
@@ -1111,9 +1312,11 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                    (plist-get plan :arguments)
                    ;; Local tool servers carry the owning turn's authority.
                    ;; Without a socket root no server can exist to mask.
-                   (when-let* (((not (file-remote-p canonical-workdir)))
+                   (when-let* ((local-p)
                                (root (mevedel-mcp-socket-root t)))
                      (list "--tmpfs" root))
+                   (when local-p
+                     (mevedel-sandbox--git-ssh-arguments broker))
                    (list "--unshare-user"
                          "--unshare-pid")
                    (unless network-access-p
@@ -1134,8 +1337,10 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                    canonical-workdir)
                   :marker marker
                   :cleanup-paths (plist-get protected :cleanup-paths)
+                  :git-ssh broker
                   :facts facts))
         (error
+         (mevedel-sandbox--git-ssh-stop broker)
          (mevedel-sandbox-cleanup protected)
          (signal (car err) (cdr err)))))))
 
