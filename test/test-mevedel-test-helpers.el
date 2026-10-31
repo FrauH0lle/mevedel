@@ -176,6 +176,34 @@
             (delete-directory path t)))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-test--with-idle-application
+  (:doc "emulates idle with one-shot callbacks and restores bindings on every exit")
+  (let ((idle (symbol-function 'current-idle-time))
+        (schedule (symbol-function 'run-with-idle-timer)))
+    (dolist (fail '(nil t))
+      (let (timer delivered)
+        (unwind-protect
+            (progn
+              (should
+               (eq 'finished
+                   (mevedel-test--with-idle-application
+                     (should (= 2 (float-time (current-idle-time))))
+                     (setq timer (run-with-idle-timer
+                                  3600 t (lambda (&rest args) (setq delivered args))
+                                  'payload 42))
+                     (should-not delivered)
+                     'finished)))
+              (should-not (timer--repeat-delay timer))
+              (mevedel-test--await 1 "Emulated idle callback did not run" delivered)
+              (should (equal '(payload 42) delivered))
+              (when fail
+                (should-error
+                 (mevedel-test--with-idle-application
+                   (error "Deliberate fixture failure")) :type 'error))
+              (should (eq idle (symbol-function 'current-idle-time)))
+              (should (eq schedule (symbol-function 'run-with-idle-timer))))
+          (when timer (cancel-timer timer)))))))
+
 (mevedel-deftest mevedel-test--cancel-stray-lease-timers
   (:doc "retires delayed store notifications before another test can observe them")
   (let* ((mevedel-artifact-store--content-changes (make-hash-table :test #'equal))

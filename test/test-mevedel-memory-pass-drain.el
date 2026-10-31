@@ -52,11 +52,8 @@
      :after-each ((mevedel-memory-pass-stop-all)
                   (when (buffer-live-p retry-origin) (kill-buffer retry-origin))
                   (delete-directory root t)))
-  (cl-letf (((symbol-function 'current-idle-time) (lambda () (seconds-to-time 2)))
-            ((symbol-function 'run-with-idle-timer)
-             (lambda (_delay _repeat function &rest args)
-               (apply #'run-at-time .01 nil function args)))
-            ((symbol-function 'yes-or-no-p) (lambda (&rest args) (ert-fail args)))
+  (mevedel-test--with-idle-application
+   (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest args) (ert-fail args)))
             ((symbol-function 'y-or-n-p) (lambda (&rest args) (ert-fail args)))
             ((symbol-function 'read-from-minibuffer) (lambda (&rest args) (ert-fail args)))
             ((symbol-function 'mevedel-model-resolve-workload)
@@ -152,7 +149,7 @@
                        (mevedel-journal-store-entries root)))
          (accepted ()
            (mevedel-memory-store-accepted workspace (plist-get (plist-get latest :claim) :owner))))
-      ,test))
+      ,test)))
   (test)
   :doc "explicit drain publishes successive bounded batches then stops without an empty model request"
   (progn

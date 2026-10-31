@@ -703,6 +703,13 @@ public journal observation, refreshing it and discarding pass proofs after
 each application. Every application still acquires fresh workspace and target
 ownership and performs the ordinary recovery and freshness checks.
 
+For local automatic application, the child selects both the proposal's previous
+decision and its required extraction decisions under the operation's workspace
+claim. The editor checks the exact dependency roster against the accepted
+proposal and freshly authenticates each selected decision before deleting a
+source note. Dependency checks do not rescan public history in the editor;
+manual and unsupported-target application retain native discovery.
+
 Before a later request, the coordinator recovers accepted decisions and includes
 bounded recent rejection evidence: the original suggestion and reason, under
 the original memory-root authority. It admits at most twenty whole records

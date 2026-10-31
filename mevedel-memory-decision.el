@@ -455,14 +455,29 @@ targets retain the root marker for checked recovery, never blind reapplication."
     (unless (eq status 'recovery-required) (mevedel-memory-write-retire target intent))
     published))
 
-(defun mevedel-memory-decision--requirements (workspace proposal)
+(defun mevedel-memory-decision--requirements (workspace proposal &optional observation)
   "Return nil when PROPOSAL's required extractions in WORKSPACE are applied.
 Otherwise return (:status STATUS :reason REASON).  An undecided requirement
 returns `waiting', which records no decision; any other outcome makes the
-dependent note disposal stale, so its note returns to review unchanged."
-  (let (waiting failed)
+dependent note disposal stale, so its note returns to review unchanged.
+OBSERVATION may select required decisions under the current workspace claim;
+authenticate each record again without rediscovering public history."
+  (let ((requirements (plist-get observation :requirements)) waiting failed)
+    (when observation
+      (unless (and (plist-member observation :requirements)
+                   (proper-list-p requirements)
+                   (equal (mapcar #'car requirements) (plist-get proposal :requires)))
+        (error "Missing or mismatched extraction decision observations")))
     (dolist (id (plist-get proposal :requires))
-      (let ((status (plist-get (mevedel-memory-decision-status workspace id) :status)))
+      (let* ((entry (if observation
+                        (let ((entry (cdr (assoc id requirements))))
+                          (when entry
+                            (unless (equal id (plist-get entry :proposal-id))
+                              (error "Selected extraction decision belongs to another proposal"))
+                            (mevedel-memory-decision--published workspace entry))
+                          entry)
+                      (mevedel-memory-decision-status workspace id)))
+             (status (plist-get entry :status)))
         (cond ((eq status 'applied))
               ((null status) (setq waiting t))
               (t (push status failed)))))
@@ -472,16 +487,17 @@ dependent note disposal stale, so its note returns to review unchanged."
           (waiting (list :status 'waiting
                          :reason "Apply the memory extractions from this note first.")))))
 
-(defun mevedel-memory-decision--application-input (accepted proposal &optional workspace)
+(defun mevedel-memory-decision--application-input (accepted proposal &optional workspace observation)
   "Prepare checked application input for ACCEPTED PROPOSAL without writes.
 Return :scope and :proposal working copies, plus :status and optional :reason.
 Only unrelated index edits may advance the captured before-state. Application
 must hold original-root ownership across this preparation and the transaction.
-With WORKSPACE, a note disposal also checks its required extractions."
+With WORKSPACE, a note disposal also checks its required extractions, using
+this claim's selected decisions in OBSERVATION when supplied."
   (let* ((scope (copy-tree (plist-get (plist-get accepted :prepared) :scope)))
          (item (copy-tree proposal))
          (index (assoc "MEMORY.md" (plist-get item :before)))
-         (check (and workspace (mevedel-memory-decision--requirements workspace proposal))))
+         (check (and workspace (mevedel-memory-decision--requirements workspace proposal observation))))
     (condition-case err
         (let ((root (mevedel-memory-scope--root scope (plist-get item :root))))
           (when index
@@ -543,7 +559,7 @@ claim's child-discovered :previous decision; authenticate it afresh here."
 	(mevedel-memory-write-call
 	 scope (plist-get item :root)
 	 (lambda (target)
-	   (let* ((input (mevedel-memory-decision--application-input accepted item workspace))
+	   (let* ((input (mevedel-memory-decision--application-input accepted item workspace observation))
 		  (scope (plist-get input :scope)) (effective (plist-get input :proposal)))
 	     (when (eq (plist-get input :status) 'waiting)
 		       (mevedel-memory-notes-record-hold workspace

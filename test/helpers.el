@@ -243,6 +243,19 @@ TYPE and ARGS are passed through unchanged."
   `(with-timeout (,timeout (ert-fail ,message))
      (while (not ,condition) (accept-process-output nil 0.01))))
 
+(defmacro mevedel-test--with-idle-application (&rest body)
+  "Run BODY with two seconds of idle time and short one-shot callbacks.
+Replace `run-with-idle-timer' with `run-at-time' after 0.01 seconds,
+ignoring the requested delay and repeat interval.  This batch fixture
+emulates idle application; it does not verify real idle scheduling.
+Callers remain responsible for cancelling timers they leave pending."
+  (declare (indent 0) (debug t))
+  `(cl-letf (((symbol-function 'current-idle-time) (lambda () (seconds-to-time 2)))
+             ((symbol-function 'run-with-idle-timer)
+              (lambda (_delay _repeat function &rest args)
+                (apply #'run-at-time .01 nil function args))))
+     ,@body))
+
 (defvar mevedel-test--timestamp-offset 0
   "Seconds added to every timestamp mevedel formats inside a shifted clock.
 

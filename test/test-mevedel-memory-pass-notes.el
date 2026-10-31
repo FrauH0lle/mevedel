@@ -54,11 +54,8 @@
                          :after-each ((mevedel-memory-pass-stop-all)
                                       (mapc (lambda (buffer) (when (buffer-live-p buffer) (kill-buffer buffer))) buffers)
                                       (delete-directory root t)))
-                 (cl-letf (((symbol-function 'current-idle-time) (lambda () (seconds-to-time 2)))
-                           ((symbol-function 'run-with-idle-timer)
-                            (lambda (_delay _repeat function &rest args)
-                              (apply #'run-at-time .01 nil function args)))
-                           ((symbol-value 'mevedel-journal-worker--child-p) t)
+                 (mevedel-test--with-idle-application
+                  (cl-letf (((symbol-value 'mevedel-journal-worker--child-p) t)
                            ((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) now))
             ((symbol-function 'mevedel-session-control-fs-observation-time) (lambda (_) now))
                            ((symbol-function 'mevedel-memory-review-request)
@@ -200,7 +197,7 @@
                                      (should (eq 'cancelled (plist-get cycle :error))))
                                    (should-not (mevedel-memory-pass-running workspace))))
                                (capture () (mevedel-memory-notes-capture workspace (mevedel-journal-store-entries root))))
-                     ,test))
+                     ,test)))
                  (test)
                  :doc "a notes-only workspace without a journal extracts and deletes automatically without prompts"
                  (mevedel-test-memory-pass-notes--without-prompts

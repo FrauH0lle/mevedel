@@ -580,7 +580,8 @@ The `setf' expansion of `plist-get' would rebind a local copy instead."
 					    ;; accepted/status/target proofs are always read afresh.
 				    (mevedel-memory-pass--application-next state job)))
 					(lambda () (mevedel-memory-pass--application-live-p state job))
-	                                        nil (list :application t :proposal-id (plist-get item :proposal))
+	                                        nil (list :application t :pass-id (plist-get item :pass)
+                                                          :proposal-id (plist-get item :proposal))
                                                 (plist-get job :recovery)))))
 	      (plist-put job :done t)
 	      (when (and (plist-get job :deferred) (not (plist-get state :stop-apply)))

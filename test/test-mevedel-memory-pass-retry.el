@@ -69,11 +69,8 @@ DIAGNOSTICS returns bounded details when the expected callback never arrives."
           (schedule (symbol-function 'run-with-timer))
           retry-timer result warnings)
      (unwind-protect
-         (cl-letf (((symbol-function 'current-idle-time) (lambda () (seconds-to-time 2)))
-                   ((symbol-function 'run-with-idle-timer)
-                    (lambda (_delay _repeat function &rest args)
-                      (apply #'run-at-time .01 nil function args)))
-                   ((symbol-function 'run-with-timer)
+         (mevedel-test--with-idle-application
+          (cl-letf (((symbol-function 'run-with-timer)
                     (lambda (seconds repeat function &rest args)
                       (let ((timer (apply schedule seconds repeat function args)))
                         (when (eq function #'mevedel-memory-pass--retry-notes)
@@ -82,7 +79,7 @@ DIAGNOSTICS returns bounded details when the expected callback never arrives."
                    ((symbol-function 'display-warning)
                     (lambda (_type text &rest _) (push text warnings))))
            (puthash key state mevedel-memory-pass--running)
-           ,@body)
+           ,@body))
        (when retry-timer (cancel-timer retry-timer))
        (when-let* ((running (gethash key mevedel-memory-pass--running))
                    (job (plist-get running :application)))

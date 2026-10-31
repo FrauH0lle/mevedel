@@ -42,9 +42,12 @@ with both predecessor records freshly verified alongside the new claim's exact
 identity, latest generation, absence of outcome and unexpired deadline in one
 pinned program. Only that continuity proof omits repeated history recovery;
 the next proposal, current status and target authorization are still read anew.
-The child discovers the selected proposal's previous public decision under that
-claim; the editor freshly authenticates that selection's private acceptance
-evidence, never treating a child observation as write authority.
+The child discovers the selected proposal's previous public decision and all
+required extraction decisions under that claim; the editor checks the exact
+dependency roster and freshly authenticates each selection's private acceptance
+evidence, never treating a child observation as write authority. Dependency
+discovery moved with status discovery because scanning public history per
+required extraction reintroduced history-dependent editor transaction cost.
 Intervening consolidation claims, context changes, failures, holds, cancellation,
 expired/failed outcomes or incomplete accounting discard continuity. New jobs and
 deferred retries begin with recovery. Pending discovery remains at the original
