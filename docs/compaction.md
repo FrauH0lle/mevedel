@@ -599,6 +599,10 @@ Agent compaction rewrites the agent's conversation buffer in place, so its
 completion also rebuilds every open transcript view of that agent and
 re-anchors live streaming to the preserved tail. A view left on its old
 projection would otherwise treat the rewritten buffer as the in-flight turn.
+Agent inspection shows the same compacted-conversation separator, retaining
+the task anchor and hiding the model-visible summary in both live and saved
+transcripts. Summary discovery runs only during full-history preparation;
+ordinary streaming does not rescan history for it.
 
 Continuation after compaction resets gptel's stream insertion state at the end
 of the new transcript. Response, reasoning, and tool output therefore follow

@@ -190,8 +190,12 @@
 		  "mevedel-transcript" (open-regexp close-tag limit))
 (declare-function mevedel-transcript--mailbox-open-at-point
                   "mevedel-transcript" (kind limit))
+(declare-function mevedel-transcript--org-block-depths-before
+                  "mevedel-transcript" (pos &optional start tool-depth summary-depth))
 (declare-function mevedel-transcript--org-tool-block-parts
 		  "mevedel-transcript" (start end))
+(declare-function mevedel-transcript--overlay-range
+                  "mevedel-transcript" (segments segment))
 (declare-function mevedel-transcript--skip-leading-properties-drawer
 		  "mevedel-transcript" (pos))
 (declare-function mevedel-transcript--skip-leading-summary-block
@@ -8595,12 +8599,49 @@ Call after restoring properties.  This does not mutate the view."
           (unless summary-source
             (setq summary-source (cons scan-start after-summary)))
           (setq scan-start after-summary)))
+      ;; Agents keep their task anchor ahead of the summary.  Discover it only
+      ;; during full-history preparation, never on the streaming/grouping path.
+      (when (and (not summary-source)
+                 (buffer-local-value 'mevedel-view--agent-transcript-p view-buf))
+        (save-excursion
+          (goto-char scan-start)
+          (while (and (not summary-source)
+                      (re-search-forward
+                       "^#\\+begin_summary mevedel-role=compaction-summary[ \t]*$" nil t))
+            (let* ((begin (match-beginning 0))
+                   (end (mevedel-transcript--skip-leading-summary-block begin))
+                   (property (get-text-property begin 'gptel)))
+              (when (and (> end begin)
+                         (or (and (eq property 'ignore)
+                                  (not (eq (get-text-property (1- begin) 'gptel)
+                                           'ignore)))
+                             ;; GPTEL_BOUNDS does not retain ignored wrappers.
+                             ;; Do not mistake a quoted marker in a block for
+                             ;; the persisted, explicitly tagged summary.
+                             (and (null property)
+                                  (equal '(0 . 0)
+                                         (mevedel-transcript--org-block-depths-before
+                                          begin)))))
+                (setq summary-source (cons begin end)))))))
       (let ((summary-audits
              (and summary-source
                   (mevedel-view--summary-hook-audits
                    data-buf (car summary-source) (cdr summary-source)))))
         (list :start scan-start :end (point-max)
               :summary-source summary-source :summary-audits summary-audits)))))
+
+(defun mevedel-view-render--without-summary (segments summary-source)
+  "Return SEGMENTS without the skipped SUMMARY-SOURCE range.
+Leading root summaries are already outside the scan.  An agent summary can
+overlap prompt or whitespace segments; retain their portions on either side."
+  (if (or (not summary-source) (not segments)
+          (<= (cdr summary-source) (cadar segments)))
+      segments
+    (cl-remove-if
+     (lambda (segment) (eq (car segment) 'compaction-summary))
+     (mevedel-transcript--overlay-range
+      segments (list 'compaction-summary
+                     (car summary-source) (cdr summary-source))))))
 
 (defun mevedel-view-render--plan-finish
     (plan turns data-buf session-data-buf agent-transcript-p)
@@ -8638,7 +8679,10 @@ headerless agent history.  Return source limits, turns, summary and variants."
         (narrow-to-region (plist-get plan :start) (plist-get plan :end))
         (mevedel-view-render--plan-finish
          plan (mevedel-view--group-transcript-turns
-               (mevedel-transcript-segments (point-min) (point-max)) data-buf)
+               (mevedel-view-render--without-summary
+                (mevedel-transcript-segments (point-min) (point-max))
+                (plist-get plan :summary-source))
+               data-buf)
          data-buf session-data-buf agent-transcript-p)))))
 
 (defun mevedel-view-render--plan-fontify-step (job)
@@ -8784,10 +8828,17 @@ remains intact; no unclassified placeholder can acquire a wrong prompt."
       ('filter
        (let ((rest (plist-get job :remaining))
              (filtered (plist-get job :filtered-rev))
+             (summary-source (plist-get (plist-get job :plan) :summary-source))
              (count 0))
          (while (and rest (< count 24))
            (unless (mevedel-view--directive-boundary-segment-p (car rest) data)
-             (push (car rest) filtered))
+             (if (and summary-source
+                      (< (cadar rest) (cdr summary-source))
+                      (> (caddar rest) (car summary-source)))
+                 (dolist (segment (mevedel-view-render--without-summary
+                                   (list (car rest)) summary-source))
+                   (push segment filtered))
+               (push (car rest) filtered)))
            (setq rest (cdr rest) count (1+ count)))
          (let ((remaining (if rest rest (reverse filtered))))
            (let ((inhibit-quit t))
