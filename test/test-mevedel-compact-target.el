@@ -749,6 +749,8 @@
               (should (= (point) (+ (mevedel-view--input-start) 4)))))
         (when (buffer-live-p view) (kill-buffer view))
         (when (buffer-live-p cold) (kill-buffer cold))
+        (when (buffer-live-p parent-buffer)
+          (with-current-buffer parent-buffer (set-buffer-modified-p nil)))
         (when (buffer-live-p parent-view) (kill-buffer parent-view)))))
 
   :doc "fully tagged task examples do not imply compaction in live or saved views"
