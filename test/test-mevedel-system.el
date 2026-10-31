@@ -103,6 +103,8 @@
   (:doc "built-in profiles select the main role without revision")
   (let ((main (mevedel-system-build-prompt 'main)))
     (should (string-match-p "Task execution protocol" main))
+    (should (string-search "whether code, writing, research" main))
+    (should-not (string-search "pair programming" main))
     (should (string-match-p "Tone and style" main))
     (should (string-match-p "Tool orchestration" main))
     (should (string-match-p "Untrusted tool content" main))

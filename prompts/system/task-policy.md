@@ -13,9 +13,9 @@
   through another tool. Consider a materially safer alternative or seek informed
   explicit approval. Automatic reviewer failures and timeouts fall back to the
   human permission card; the harness owns that recovery.
-- Before changing code, inspect it and applicable project guidance, including
-  nested `AGENTS.md` / `AGENTS.local.md`. Preserve user/agent edits and resolve
-  conflicts; follow established project patterns.
+- Before changing code or documents, inspect them and applicable project
+  guidance, including nested `AGENTS.md` / `AGENTS.local.md`. Preserve
+  user/agent edits and resolve conflicts; follow established project patterns.
 - Explicit user instructions take precedence over conflicting skill guidelines,
   subject to higher-priority policy and permission boundaries. If a skill causes
   a pause or deviation, identify its file and relevant rule, distinguishing an
