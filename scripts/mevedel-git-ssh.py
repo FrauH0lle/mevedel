@@ -23,9 +23,14 @@ can replace the client entirely.
 - Other hosts: the destination and port must match a fetch remote of the
   repository, read on the host before the confined command starts.
 - Keys: ssh runs on the host; the confined side receives only its own pipes.
-  The harness also masks SSH_AUTH_SOCK inside confinement.
+  The harness also masks the agent socket that SSH_AUTH_SOCK names; other
+  agent sockets are not discovered.
 - Lingering sessions: a client that disconnects takes its ssh child with it,
-  and the broker exits with the confined command.
+  the broker exits with the confined command, and ssh runs without
+  connection sharing (ControlMaster=no, ControlPath=none), so no master
+  connection outlives teardown.
+- Ambiguous text: every string is strict UTF-8 without C0 or C1 controls;
+  refusal messages escape what they echo.
 Out of scope: a remote that is itself hostile, and a writable development
 checkout of this script.
 """
@@ -53,8 +58,12 @@ class Refused(Exception):
 
 
 def _plain(text):
-    """Return True when TEXT has no control characters."""
-    return not any(ord(char) < 32 or ord(char) == 127 for char in text)
+    """Return True when TEXT is strict UTF-8 without C0 or C1 controls."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False  # Lone surrogates cannot reach ssh's argv.
+    return not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in text)
 
 
 def sq_quote(text):
@@ -96,7 +105,7 @@ def parse_remote_command(command):
         if service == "git-receive-pack":
             raise Refused("git-receive-pack refused: confined Git over SSH is "
                           "fetch-only; pushing stays with the user")
-        raise Refused(f"remote {name!r} refused: only git-upload-pack and "
+        raise Refused(f"remote {name!a} refused: only git-upload-pack and "
                       "git-upload-archive are allowed")
     if not separator:
         raise Refused("remote command has no path")
@@ -154,7 +163,10 @@ def parse_request(argv, protocol=None):
 def url_destination(url):
     """Return the (DESTINATION, PORT) Git passes to ssh for URL, or None.
 
-    Unrecognized forms return None and are therefore never allowed."""
+    Unrecognized forms return None and are therefore never allowed, as do
+    remote-helper URLs such as `codecommit::...', which do not use ssh."""
+    if re.match(r"[A-Za-z][A-Za-z0-9+.-]*::", url):
+        return None
     match = re.fullmatch(r"(?:ssh|git\+ssh|ssh\+git)://([^/]*)(/.*)", url)
     if match:
         authority = match.group(1)
@@ -198,7 +210,8 @@ def allowed_destinations(urls):
 
 def ssh_command(ssh, request):
     """Return the host ssh argv for a validated REQUEST."""
-    command = [ssh, "-T", "-o", "BatchMode=yes"]
+    command = [ssh, "-T", "-o", "BatchMode=yes",
+               "-o", "ControlMaster=no", "-o", "ControlPath=none"]
     if request["protocol"]:
         command += ["-o", "SendEnv=GIT_PROTOCOL"]
     if request["family"]:
@@ -273,12 +286,11 @@ class Broker:
                     raise Refused("malformed request")
                 request = parse_request(payload.get("argv"), payload.get("protocol"))
                 if (request["destination"], request["port"]) not in self.allowed:
-                    raise Refused(f"ssh destination {request['destination']!r} is not "
+                    raise Refused(f"ssh destination {request['destination']!a} is not "
                                   "a fetch remote of this repository")
-            except (Refused, ValueError, UnicodeDecodeError) as error:
-                reason = error if isinstance(error, Refused) else "malformed request"
-                os.write(fds[2], f"mevedel-git-ssh: {reason}\n".encode())
-                connection.sendall(f"{REFUSED_STATUS}\n".encode())
+            except (Refused, ValueError) as error:
+                self.refuse(connection, fds,
+                            error if isinstance(error, Refused) else "malformed request")
                 return
             environment = dict(os.environ)
             environment.pop("GIT_PROTOCOL", None)
@@ -287,9 +299,14 @@ class Broker:
             with self.lock:
                 if self.stopping:
                     return
-                child = subprocess.Popen(ssh_command(self.ssh, request),
-                                         stdin=fds[0], stdout=fds[1], stderr=fds[2],
-                                         env=environment, close_fds=True)
+                try:
+                    child = subprocess.Popen(ssh_command(self.ssh, request),
+                                             stdin=fds[0], stdout=fds[1], stderr=fds[2],
+                                             env=environment, close_fds=True)
+                except (ValueError, OSError) as error:
+                    self.refuse(connection, fds,
+                                f"could not start ssh: {type(error).__name__}")
+                    return
                 self.children.add(child)
             for fd in fds:
                 os.close(fd)
@@ -305,6 +322,12 @@ class Broker:
             for fd in fds:
                 os.close(fd)
             connection.close()
+
+    @staticmethod
+    def refuse(connection, fds, reason):
+        """Report REASON on the client's stderr and answer the refused status."""
+        os.write(fds[2], f"mevedel-git-ssh: {reason}\n".encode("ascii", "backslashreplace"))
+        connection.sendall(f"{REFUSED_STATUS}\n".encode())
 
     def wait(self, child, connection):
         """Return CHILD's shell-style status, or None if the client left.

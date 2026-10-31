@@ -75,6 +75,10 @@ class RemoteCommandTests(unittest.TestCase):
                 "git-upload-pack 'a\nb'",
                 "git-upload-pack 'a\x00b'",
                 "git-upload-pack\t'/srv/a.git'",
+                "git-upload-pack 'x\ud800'",
+                "git-upload-pack 'x\udcff'",
+                "git-upload-pack 'x\u0085y'",
+                "git-upload-pack ’x’",
                 "/usr/bin/git-upload-pack '/srv/a.git'"]:
             with self.subTest(command=command):
                 with self.assertRaises(broker.Refused):
@@ -96,12 +100,14 @@ class RequestTests(unittest.TestCase):
                          (request["destination"], request["port"],
                           request["family"], request["protocol"]))
         self.assertEqual(
-            ["ssh", "-T", "-o", "BatchMode=yes", "-o", "SendEnv=GIT_PROTOCOL",
+            ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ControlMaster=no",
+             "-o", "ControlPath=none", "-o", "SendEnv=GIT_PROTOCOL",
              "-4", "-p", "2222", "--", "git@h", self.COMMAND],
             broker.ssh_command("ssh", request))
         request = broker.parse_request(["h", self.COMMAND], "version=2")
         self.assertIsNone(request["protocol"], "protocol is forwarded only on request")
-        self.assertEqual(["ssh", "-T", "-o", "BatchMode=yes", "--", "h", self.COMMAND],
+        self.assertEqual(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ControlMaster=no",
+                          "-o", "ControlPath=none", "--", "h", self.COMMAND],
                          broker.ssh_command("ssh", request))
 
     def test_refused_options_and_destinations(self):
@@ -123,6 +129,8 @@ class RequestTests(unittest.TestCase):
                 ["", self.COMMAND],
                 ["h x", self.COMMAND],
                 ["h\n", self.COMMAND],
+                ["h\ud800", self.COMMAND],
+                ["h\u0085", self.COMMAND],
                 ["h", self.COMMAND, "extra"],
                 ["h"],
                 [],
@@ -173,7 +181,8 @@ class UrlTests(unittest.TestCase):
         for url in ["https://example.com/r.git", "http://h/r", "git://h/r",
                     "file:///srv/r", "/srv/r.git", "../r", "./a:b", "-oProxyCommand=id:r",
                     "ssh://-oProxyCommand=id/x", "@host:r", "user@:r", "ssh://h:0/x",
-                    "ssh://h:22x/x", "ssh://[::1/x"]:
+                    "ssh://h:22x/x", "ssh://[::1/x", "foo::bar", "codecommit::us-east-1://r",
+                    "s3::https://bucket/r", "gcrypt::git@host:r", "ssh://h::22/x"]:
             with self.subTest(url=url):
                 self.assertIsNone(broker.url_destination(url))
 
@@ -270,6 +279,40 @@ class BrokerTests(unittest.TestCase):
                 self.assertEqual(broker.REFUSED_STATUS, result.returncode)
         self.assertEqual("", self.log.read_text())
         self.assertFalse((self.root / "pwned").exists())
+
+    def raw_request(self, argv):
+        """Send ARGV as a raw request, bypassing the client's own encoding."""
+        read, write = os.pipe()
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.settimeout(5)
+            self.wait_for_socket()
+            connection.connect(str(self.socket))
+            null_in = os.open(os.devnull, os.O_RDONLY)
+            null_out = os.open(os.devnull, os.O_WRONLY)
+            socket.send_fds(connection, [json.dumps({"argv": argv}).encode()],
+                            [null_in, null_out, write])
+            for fd in (null_in, null_out, write):
+                os.close(fd)
+            status = connection.recv(16)
+        with os.fdopen(read, "rb") as stream:
+            return status, stream.read()
+
+    def wait_for_socket(self):
+        deadline = time.monotonic() + 10
+        while not self.socket.exists():
+            self.assertLess(time.monotonic(), deadline, "broker did not listen")
+            time.sleep(0.01)
+
+    def test_ambiguous_text_gets_a_status_and_an_escaped_message(self):
+        for argv in [["fake", f"git-upload-pack '{self.remote}\ud800'"],
+                     ["fake\ud800", COMMAND],
+                     ["hé‮", COMMAND]]:
+            with self.subTest(argv=argv):
+                status, stderr = self.raw_request(argv)
+                self.assertEqual(f"{broker.REFUSED_STATUS}\n".encode(), status)
+                self.assertTrue(stderr.startswith(b"mevedel-git-ssh: "))
+                self.assertTrue(stderr.isascii(), stderr)
+        self.assertEqual("", self.log.read_text())
 
     def test_client_exit_stops_its_ssh(self):
         stub = self.root / "ssh"
