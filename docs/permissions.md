@@ -308,6 +308,26 @@ path as given, its `/:`-unquoted form, a leading `//` collapsed to `/`, and,
 for a local path, its canonical target through symlinks (with a missing tail
 kept). A workspace symlink into `~/.ssh` is therefore as protected as
 `~/.ssh` itself. Filesystem grants refuse `/:`-quoted paths outright.
+
+Read and ApplyPatch, including resource-backed reads and writes, open the
+authorized canonical path through `scripts/mevedel-pin.py`. It walks the path
+from the root with `O_NOFOLLOW`, refuses any symlink component and holds a
+descriptor that Emacs reads or writes through, so a directory a confined
+process swaps for a symlink after authorization, or a dangling link it
+resolves later, refuses the operation instead of reaching a protected tree.
+The helper also performs every write itself, without reopening anything by
+name: it creates missing parent directories with `mkdirat`, creates a
+temporary file with `O_CREAT|O_EXCL|O_NOFOLLOW`, writes and `fchmod`s that
+descriptor, and renames it over the target within the pinned directory.
+Emacs encodes the content and sends the bytes. A symlink planted at the
+temporary name therefore cannot receive the content or mode, and a planted
+final symlink is replaced instead of followed. Deletion uses `unlinkat` in the
+pinned directory. One helper serves
+each execution target; the first use costs about 11 ms locally and each later
+pin about 0.1 ms. Grep, Glob and media converters run under the same
+confinement as the commands that could swap paths, where protected trees are
+masked by their canonical paths. Canonicalization cannot see hardlinks to a
+protected file that the user created earlier.
 String-only entries are invalid by design. Glob discovery walks the
 workspace, memory, and additional writable roots before every launch; the
 execution target's temporary directory is excluded as a discovery root. A
@@ -1237,6 +1257,10 @@ Signals, timeouts, and ordinary command failures are returned once and never
 replayed. `required` refuses an unavailable backend, while `off` selects direct
 execution deliberately. Direct execution reports `filesystem: unrestricted`
 and `network: unrestricted`; refused attempts report unavailable boundaries.
+With confinement off, Grep, Glob and Read's media converters (pdfinfo,
+pdftoppm, ImageMagick) are not protected against a path component swapped
+for a symlink after authorization, because they open paths by name; direct
+execution already grants the user's host authority.
 A pre-marker failure retains its launcher error, diagnostics, or exit code.
 The next independent invocation reprobes the backend, so a transient launch
 failure does not disable confinement permanently. Bash and batch-Eval results append their active
