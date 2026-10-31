@@ -113,9 +113,11 @@ than through the command allowlist:
   owner writes it in the child room.
   Each `reqId` forks at most once for the connection that sent it. A retry
   receives the recorded reply again, and a retry while the fork runs gets
-  none. The host remembers a bounded number of replies. Any id at or below
-  the highest id it has forgotten is refused as stale and never performed,
-  including one it never saw, because the host cannot tell it from a
+  none. The host retains a bounded number of replies, and an id whose
+  reply is still retained always replays that reply, whatever its value.
+  An id that is not in the retained ledger and is at or below the highest
+  id the host has forgotten is refused as stale and never performed,
+  even if the host never saw it, because it cannot tell it from a
   forgotten repeat. Higher ids it has not seen fork normally. If the
   fork is saved but its room cannot start, the host closes the child's
   buffers in Emacs, releases its lock and keeps the saved session. The
