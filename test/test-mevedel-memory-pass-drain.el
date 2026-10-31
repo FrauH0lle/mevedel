@@ -152,12 +152,14 @@
       ,test)))
   (test)
   :doc "explicit drain publishes successive bounded batches then stops without an empty model request"
-  (progn
-    (notes 35)
+  ;; A two-note bound crosses the request limit twice; the real sixteen-note
+  ;; bound is crossed in-process by the paused-resume case below.
+  (let ((mevedel-memory-notes--max-notes 2))
+    (notes 5)
     (start)
     (dotimes (_ 3) (finish))
     (wait-for (lambda () (not (mevedel-memory-pass-drain-status workspace))))
-    (should (equal '(3 16 16) batches))
+    (should (equal '(1 2 2) batches))
     (should (= 3 calls))
     (should (= 3 (length (reviews))))
     (should (eq 'empty (plist-get (car results) :outcome)))
@@ -712,19 +714,22 @@
           (should (eq 'empty (plist-get (car results) :outcome))))
       (when claimed (funcall settle claimed 'cancelled ""))))
   :doc "cancellation during inference suppresses late settlement and stops every successor batch"
-  (progn
-    (notes 20)
+  (let ((mevedel-memory-notes--max-notes 1))
+    (notes 2)
     (start)
     (wait-for (lambda () pending))
     (mevedel-memory-pass-cancel workspace)
     (finish)
     (should (= 1 calls))
+    ;; One of two notes was offered, so a successor batch remained.
+    (should (equal '(1) batches))
     (should-not (reviews))
     (should-not (mevedel-memory-pass-drain-status workspace))
     (should (eq 'aborted (plist-get (car results) :outcome))))
   :doc "accepted review application errors stop the drain without losing returned counts"
-  (let ((mevedel-memory-consolidation-mode 'auto))
-    (notes 20)
+  (let ((mevedel-memory-consolidation-mode 'auto)
+        (mevedel-memory-notes--max-notes 1))
+    (notes 2)
     ;; Inject an executor result, not a malformed provider reply: acceptance is
     ;; still real and must remain distinct from successful application.
     (cl-letf (((symbol-function 'mevedel-memory-pass--apply)
@@ -736,6 +741,7 @@
       (should-not (mevedel-memory-pass-drain-status workspace))
       (should (eq 'error (plist-get drain :status)))
       (should (= 1 calls))
+      (should (equal '(1) batches))
       (should (= 1 (length (reviews))))
       (should (eq 'success (plist-get (car results) :outcome)))
       (should (equal "Journal mutation is busy" (plist-get (car results) :error)))
@@ -744,9 +750,11 @@
       (should (= 15 (plist-get (car results) :unapplied-count)))))
   :doc "recovery-only diagnostics stop the drain while preserving the actual accepted result"
   (let ((mevedel-memory-consolidation-mode 'auto)
+        ;; One note per request leaves a successor batch the drain must not start.
+        (mevedel-memory-notes--max-notes 1)
         (start-pass (symbol-function 'mevedel-memory-pass-start))
         native-result)
-    (notes 20)
+    (notes 2)
     ;; Exercise the drain's consumer boundary with a recovery requirement and
     ;; no error; review acceptance and automatic decisions still run natively.
     (cl-letf (((symbol-function 'mevedel-memory-pass-start)
@@ -763,6 +771,7 @@
       (should-not (mevedel-memory-pass-drain-status workspace))
       (should (eq 'error (plist-get drain :status)))
       (should (= 1 calls))
+      (should (equal '(1) batches))
       (should (= 1 (length (reviews))))
       (should (eq 'success (plist-get (car results) :outcome)))
       (should-not (plist-get (car results) :error))
@@ -773,13 +782,14 @@
       (dolist (key '(:id :entry :updated-files :applied-count :held-count :unapplied-count :notes-reviewed))
         (should (equal (plist-get native-result key) (plist-get (car results) key))))))
   :doc "invalid provider output fails the real parser and stops the drain without coverage"
-  (progn
-    (notes 20)
+  (let ((mevedel-memory-notes--max-notes 1))
+    (notes 2)
     (start)
     (finish t)
     (should (= 1 calls))
+    (should (equal '(1) batches))
     (should-not (reviews))
-    (should (= 20 (length (directory-files shared nil "\\.md\\'"))))
+    (should (= 2 (length (directory-files shared nil "\\.md\\'"))))
     (should-not (mevedel-memory-pass-drain-status workspace))
     (should (eq 'error (plist-get (car results) :outcome))))
   :doc "quitting automatic application stops the drain but retains the published review and held proposals"
@@ -796,18 +806,18 @@
     (should-not (mevedel-memory-pass-drain-status workspace))
     (should (eq 'paused (plist-get (car (mevedel-memory-cycle--read workspace)) :status))))
   :doc "propose automatic offer services the whole finite cohort without deletion progress"
-  (progn
-    (notes 35)
+  (let ((mevedel-memory-notes--max-notes 2))
+    (notes 5)
     (offer)
     (dotimes (_ 3) (finish))
     (wait-for (lambda () (and (not (mevedel-memory-pass-running workspace))
                               (= 0 (hash-table-count mevedel-memory-pass--pending)))))
     (should (= 3 calls))
-    (should (equal '(3 16 16) batches))
-    (should (= 35 (length (directory-files shared nil "\\.md\\'"))))
+    (should (equal '(1 2 2) batches))
+    (should (= 5 (length (directory-files shared nil "\\.md\\'"))))
     (let ((cycle (car (mevedel-memory-cycle--read workspace))))
       (should (eq 'complete (plist-get cycle :status)))
-      (should (= 35 (length (plist-get cycle :attempted)))))
+      (should (= 5 (length (plist-get cycle :attempted)))))
     (offer)
     (should (= 3 calls)))
   :doc "arrivals after freezing wait for the next daily cohort despite a productive final batch"
@@ -828,8 +838,9 @@
     (finish)
     (should (= 2 calls)))
   :doc "manual mode requires explicit review and preserves one frozen cycle across separate requests"
-  (let ((mevedel-memory-consolidation-mode 'manual))
-    (notes 17)
+  (let ((mevedel-memory-consolidation-mode 'manual)
+        (mevedel-memory-notes--max-notes 2))
+    (notes 3)
     (offer)
     (should (= 0 calls))
     (mevedel-memory-pass-start workspace (lambda (result) (push result results)) :memory-only t)
@@ -839,10 +850,10 @@
       (finish)
       (should (equal id (plist-get (car (mevedel-memory-cycle--read workspace)) :id))))
     (should (= 2 calls))
-    (should (equal '(1 16) batches)))
+    (should (equal '(1 2) batches)))
   :doc "busy cleanup and a foreign claim preserve a frozen automatic opportunity"
-  (progn
-    (notes 17)
+  (let ((mevedel-memory-notes--max-notes 2))
+    (notes 3)
     (offer)
     (finish)
     (setq busy t)
@@ -858,13 +869,15 @@
         (mevedel-journal-claim-settle claim 'cancelled "")))
     (offer)
     (finish)
-    (should (= 2 calls)))
+    (should (= 2 calls))
+    (should (equal '(1 2) batches)))
   :doc "failed provider review pauses its remaining cohort instead of starting a fresh-arrival chain"
-  (progn
-    (notes 17)
+  (let ((mevedel-memory-notes--max-notes 2))
+    (notes 3)
     (offer)
     (finish t)
     (should (= 1 calls))
+    (should (equal '(2) batches))
     (let ((cycle (car (mevedel-memory-cycle--read workspace))))
       (should (eq 'paused (plist-get cycle :status)))
       (should-not (plist-get cycle :attempted)))

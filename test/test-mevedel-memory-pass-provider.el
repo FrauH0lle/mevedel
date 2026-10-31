@@ -132,16 +132,21 @@
     (should-not (mevedel-memory-store-accepted workspace (plist-get (plist-get state :claim) :owner)))
     (should (equal original (mevedel-session-control-fs-read-file path)))
     (should (= #o640 (file-modes path))))
-  :doc "a native fifty-note drain deletes admitted notes without acknowledgements and excludes changed or late versions"
+  :doc "a native multi-batch drain deletes admitted notes without acknowledgements and excludes changed or late versions"
+  ;; A two-note request bound keeps four serialized requests (2+2+2+1) over an
+  ;; eight-member cohort with real deletions per batch.  The production
+  ;; sixteen-note request size stays covered by the drain and cycle tests.
   (let ((old-mtime (file-attribute-modification-time (file-attributes path)))
         (arrival (file-name-concat shared "later-arrival.md"))
         (recent (file-name-concat shared "recent-handoff.md"))
+        (mevedel-memory-notes--max-notes 2)
+        (findings 7)
         (deadline (+ (float-time) 120))
         pending-response requests responses buffers offered)
-    ;; A headerless handoff below fourteen days is not in the eligible fifty.
+    ;; A headerless handoff below fourteen days is not in the eligible cohort.
     (write-region "# Recent handoff\nTODO: still working.\n" nil recent nil 'silent)
     (set-file-times recent (seconds-to-time (- (float-time) (* 13 86400))))
-    (dotimes (number 49)
+    (dotimes (number findings)
       (let ((file (file-name-concat shared (format "finding-%03d.md" (1+ number)))))
         (write-region (format "# Finding %d\nDisposable result only.\n" (1+ number)) nil file nil 'silent)
         (set-file-times file (seconds-to-time (- (float-time) (* 15 86400))))))
@@ -162,7 +167,7 @@
                   (cl-incf calls)
                   ;; Observe admitted notes from actual serialized input,
                   ;; not the captured roster or a fabricated callback :notes list.
-                  (should (<= 1 (length ids) 16))
+                  (should (<= 1 (length ids) 2))
                   (dolist (id ids)
                     (should-not (member id offered))
                     (should-not (equal id "work://shared/later-arrival.md"))
@@ -201,15 +206,15 @@
                   (funcall (plist-get pending :callback) nil)))))
           (should-not (mevedel-memory-pass-drain-status workspace))
           (should (= 4 calls (length requests)))
-          (should (= 49 (length offered) (length (delete-dups (copy-sequence offered)))))
+          (should (= findings (length offered) (length (delete-dups (copy-sequence offered)))))
           (let* ((success (seq-filter (lambda (response) (eq 'success (plist-get response :outcome))) responses))
                  (cycle (car (mevedel-memory-cycle--read workspace))))
             (should (= 4 (length success)))
-            (should (= 49 (apply #'+ (mapcar (lambda (response) (plist-get response :updated-files)) success))))
-            (should (= 49 (apply #'+ (mapcar (lambda (response) (plist-get response :notes-reviewed)) success))))
+            (should (= findings (apply #'+ (mapcar (lambda (response) (plist-get response :updated-files)) success))))
+            (should (= findings (apply #'+ (mapcar (lambda (response) (plist-get response :notes-reviewed)) success))))
             (should (eq 'complete (plist-get cycle :status)))
-            (should (= 50 (length (plist-get cycle :members))))
-            (should (= 49 (length (plist-get cycle :attempted))))
+            (should (= (1+ findings) (length (plist-get cycle :members))))
+            (should (= findings (length (plist-get cycle :attempted))))
             (should (= 1 (length (plist-get cycle :deferred))))
             (should-not (plist-get cycle :inflight)))
           (dolist (request requests)
@@ -217,7 +222,7 @@
               (should (equal (plist-get request :ids) (plist-get accepted :admitted-notes)))
               (should (equal (plist-get request :ids)
                              (mapcar (lambda (item) (plist-get item :note)) (plist-get accepted :proposals))))))
-          (dotimes (number 49)
+          (dotimes (number findings)
             (should-not (file-exists-p (file-name-concat shared (format "finding-%03d.md" (1+ number))))))
           (should (file-exists-p arrival))
           (should (equal "# Recent handoff\nTODO: still working.\n"
