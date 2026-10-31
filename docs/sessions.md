@@ -2670,6 +2670,10 @@ restart before the first child request can drop the report detail while the
 durable provenance facts remain available for regeneration. Failure outside
 Git never falls back to Conversation Fork.
 
+An owner-link browser guest can also create a Conversation Fork from a settled
+assistant response; see [browser collaboration](collaboration.md). It publishes
+the child without a first prompt and opens a room for it.
+
 `mevedel-session-fork-create` owns admission, staging, publication, and cleanup
 for both fork types. Worktree creation and restoration are conditional steps
 inside that transaction, with failures retaining the created Git artifacts and

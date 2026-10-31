@@ -651,6 +651,16 @@
     content.append(whoLine(record, scopeChip));
     const rendered = renderContent(record, onArtifactOpen, turn.disclosures, onExecutionOpen, onAgentOpen, href);
     content.append(rendered);
+    // A settled turn's last response can start a Conversation Fork. It
+    // follows the response, since a continuation turn hides its who line.
+    // Only owner links hold that authority, so the page hides it otherwise.
+    if (record.kind === 'assistant' && typeof record.forkPoint === 'string' && record.forkPoint) {
+      const fork = el('button', 'forkbtn', 'Fork from here');
+      fork.type = 'button';
+      fork.dataset.forkPoint = record.forkPoint;
+      fork.setAttribute('title', 'Continue from this response in a new session; this one stays as it is');
+      content.append(fork);
+    }
     turn.append(content);
     return restore();
   }

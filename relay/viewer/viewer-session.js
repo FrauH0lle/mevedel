@@ -258,6 +258,15 @@
       render();
     }
 
+    // A fork settles through the same reply and notice as a new session.
+    function fork(forkPoint) {
+      if (!state.owner || typeof forkPoint !== 'string' || !forkPoint) return;
+      const reqId = ++requestSequence;
+      send({t: 'fork', reqId, forkPoint});
+      notices.push({reqId, name: 'Fork', status: 'waiting'});
+      render();
+    }
+
     function showResult({reqId, ok, message, link, name}) {
       const notice = notices.find(candidate => ['waiting', 'interrupted'].includes(candidate.status)
                                   && candidate.reqId === reqId);
@@ -513,7 +522,7 @@
     if (inviteButton) inviteButton.addEventListener('click', openInvite);
 
     return Object.freeze({setVisible, setInviteVisible,
-                          showResult, showModels, offerRoom, useCredentials, setWorkspace, disconnected,
+                          showResult, showModels, offerRoom, fork, useCredentials, setWorkspace, disconnected,
                           rememberCurrent, rememberLobby, lobbyLink, rooms,
                           hasRooms: () => elsewhere().length > 0, openRooms,
                           openNewSession: open});

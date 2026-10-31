@@ -31,7 +31,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   ```
 - The cursor has the tendency to jump to the "  [Manage]" row of "background work" on updates/redraws even though it was on the composer or elsewhere
 - Why is the memory collection (cockpit -> Candidates or Memories) so slow? 5s or more? Especially for already included memories, what work is there to be done?
-- Maybe add edit/rewind/fork in browser?
 
 ## Memory and journal
 
@@ -242,6 +241,34 @@ have no async process, timer or place to surface results. Design:
   (setting, cached state), `mevedel-plugin-ui.el` (row note, action),
   docs/skills.md; tests through an async git-executor seam, including the
   "no network at load" guarantee.
+
+## Browser session history actions
+
+Owner links can create a Conversation Fork from a settled assistant response
+(`fork` frame, docs/collaboration.md). Rewind, edit and Worktree Fork remain
+Emacs-only. Each needs an owner-only typed frame that resolves the same stable
+`forkPoint` the projection already publishes, and runs the existing Emacs
+transaction. A browser frame runs under `inhibit-interaction`, so any native
+minibuffer or overlay confirmation would refuse it. Each action therefore
+needs a browser-side confirmation of its own.
+
+- **Rewind:** `mevedel-session-rewind` confirms in Emacs. It names both sides
+  of the boundary, capture gaps, the files to restore, external changes it
+  would overwrite, and the live state it would clear. A browser rewind needs
+  a host-built impact card (a `ui-request` like plan approval, bounded, with
+  an "open in Emacs" fallback when the impact does not fit) and an owner
+  confirmation. Every room in the session must then republish its records
+  after the truncation. Redo follows the same shape.
+- **Edit:** resubmitting an edited earlier prompt is Rewind before that
+  prompt plus a new prompt, so it should follow Rewind and reuse its card.
+- **Worktree Fork:** needs Git preflight, branch naming (the Worktree plan
+  acceptance already validates a browser branch name) and the retained-artifact
+  error path.
+- **Fork with a first prompt:** the browser fork publishes an empty child and
+  the owner writes in its room. Sending the prompt with the fork, as the `f`
+  composer flow does, could reuse the `new-session` first-prompt path.
+- **Non-owner request flow:** a full-control guest could ask, like
+  `new-session`, with the owner or host approving.
 
 ## Unexplained failures and unverified leads
 

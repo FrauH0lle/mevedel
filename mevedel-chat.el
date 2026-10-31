@@ -424,15 +424,26 @@ render immediately, so this never delays tool-call feedback."
   "Discard failed DATA-BUFFER and its companion view without querying.
 Run all cleanup hooks despite individual errors, then force closure if needed.
 With DISCARD-MODIFICATIONS, clear each buffer's modified flag before its hooks;
-otherwise leave the flag available to lifecycle cleanup."
+otherwise leave the flag available to lifecycle cleanup.
+
+While a buffer's hooks run, a nested kill of that same buffer is refused.
+The data buffer's view hook kills its companion, whose own hook kills the
+data buffer again; that inner kill would see the hook list this function
+suspended and finish the buffer early, so the remaining hooks, among
+them the session lock release, would run without the buffer or its
+session."
   (when (buffer-live-p data-buffer)
     (let ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer)))
       (dolist (buffer (list data-buffer view-buffer))
         (when (buffer-live-p buffer)
           (let* ((hooks (buffer-local-value 'kill-buffer-hook buffer))
+                 (refuse-nested (lambda () (not (eq (current-buffer) buffer))))
                  (safe-hooks
                   (lambda ()
-                    (let ((kill-buffer-hook hooks))
+                    ;; The outer kill has passed its queries; only nested
+                    ;; kills of this buffer consult this binding.
+                    (let ((kill-buffer-hook hooks)
+                          (kill-buffer-query-functions (list refuse-nested)))
                       (run-hook-wrapped
                        'kill-buffer-hook
                        (lambda (hook)

@@ -254,6 +254,14 @@ code, pre { font-family: var(--font-mono); }
   cursor: pointer;
 }
 .dirchip:hover { text-decoration: underline; }
+/* Forking is an owner-link authority; the host refuses everyone else. */
+.forkbtn { display: none; }
+body[data-owner-link] .forkbtn {
+  display: inline-block; margin-top: .3rem; padding: 0; border: 0;
+  background: none; color: var(--muted); font-family: inherit;
+  font-size: .72rem; cursor: pointer;
+}
+body[data-owner-link] .forkbtn:hover { color: var(--accent); text-decoration: underline; }
 
 /* ── Prose / markdown ───────────────────────────────────────────────── */
 /* Prose and tool output share the bounded conversation column. */

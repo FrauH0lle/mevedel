@@ -99,6 +99,31 @@ than through the command allowlist:
   authority for an owner, who can create a session outright. The sheet
   says which of the two it is doing before the guest presses anything.
 
+- `fork` creates a Conversation Fork of the shared session at a settled
+  assistant response, the browser's counterpart to `f` in the cockpit. It
+  is owner-only, like creating a session outright, and the host ignores it
+  from any other guest. Each settled turn's last assistant record carries
+  its stable `forkPoint`; the page shows **Fork from here** under it only
+  on an owner link. The host runs the ordinary fork transaction, so a
+  running request, pending input, live execution, active agent turn or
+  active Goal refuses it with the native reason. The source session is
+  unchanged. The reply reuses the `new-session` frame and its `reqId`,
+  carries an owner link to the child's new room, and other owners are
+  offered that room. The browser sends no first prompt with the fork: the
+  owner writes it in the child room.
+  Each `reqId` forks at most once for the connection that sent it. A retry
+  receives the recorded reply again, and a retry while the fork runs gets
+  none. The host retains a bounded number of replies, and an id whose
+  reply is still retained always replays that reply, whatever its value.
+  An id that is not in the retained ledger and is at or below the highest
+  id the host has forgotten is refused as stale and never performed,
+  even if the host never saw it, because it cannot tell it from a
+  forgotten repeat. Higher ids it has not seen fork normally. If the
+  fork is saved but its room cannot start, the host closes the child's
+  buffers in Emacs, releases its lock and keeps the saved session. The
+  refusal names its session id and says to open it in Emacs with
+  `M-x mevedel`.
+
 - `recovery` exposes selection among the offered models, reasoning efforts and
   registered presets, session rename, native-history recovery, retained-input
   retry, reviewed input requeue/discard,
@@ -1176,9 +1201,10 @@ A session shared while an interaction already waits presents that one too:
 starting a room adopts the session's pending prompts in the order they
 arrived, since each announces itself only once, when it is raised.
 `mevedel-collaboration-remote-interactions` gates that surface. Lease
-transfer, save, rewind, arbitrary forks, publication, and execution-target
-changes remain host operations. Owner acceptance of a Worktree plan is the typed,
-host-validated exception, not a general browser fork command.
+transfer, save, rewind, edit, Worktree forks, publication, and execution-target
+changes remain host operations. The owner-only `fork` frame above creates
+Conversation Forks only. Owner acceptance of a Worktree plan is the typed,
+host-validated exception, not a general browser Worktree Fork command.
 
 Plan cards render Markdown with the full implementation instructions and
 read-only settings, without native keyboard hints that a browser cannot use.
