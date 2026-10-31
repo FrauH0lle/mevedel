@@ -10,11 +10,14 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view)
+(require 'mevedel-view-agent)
 (require 'mevedel-view-animation)
 (require 'mevedel-view-composer)
+(require 'mevedel-view-interaction)
 (require 'mevedel-view-native)
 (require 'mevedel-view-power)
 (require 'mevedel-view-render)
+(require 'mevedel-view-segments)
 (require 'mevedel-view-stream)
 (require 'mevedel-agent-control)
 (require 'mevedel-collaboration)
@@ -1612,6 +1615,43 @@ turn's later text, live and after reconstruction."
   (:doc "tracks and renders the pending-tool live tail")
   ,test
   (test)
+
+  :doc "a running tool row rejects typing at every position"
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0))
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-min))))
+        (mevedel-view-stream-test--insert-composer-draft "> keep\nthis" 3))
+      (with-current-buffer data-buf
+        (mevedel-view-stream-pre-tool
+         '(:name "Bash" :args (:command "cd backend && cargo add polars"
+                               :description "Add polars"))))
+      (with-current-buffer view-buf
+        (let* ((text (buffer-string))
+               (row (string-match "● Bash: " text))
+               (row-start (and row (+ (point-min) row
+                                      (- (length (match-string 0 text))
+                                         (length "● Bash: ")))))
+               (row-end (and row-start
+                             (save-excursion
+                               (goto-char row-start)
+                               (line-end-position)))))
+          (should row-start)
+          (let ((before (buffer-string)))
+            (cl-loop for pos from (save-excursion
+                                    (goto-char row-start)
+                                    (line-beginning-position))
+                     to row-end
+                     do (goto-char pos)
+                     (should (eq 'text-read-only
+                                 (car (condition-case err
+                                          (progn (insert "x") '(inserted))
+                                        (text-read-only err))))))
+            (should (equal before (buffer-string))))
+          (should (equal "> keep\nthis" (mevedel-view--input-text)))))))
 
   :doc "routine polls show no pending row while input and stops stay visible"
   (mevedel-view-stream-test--with-buffers

@@ -4500,7 +4500,8 @@ the render so user toggles survive streaming ticks."
                                     (min (or (mevedel-view-stream-in-flight-turn-start-position)
                                              render-start)
                                          render-start)
-                                    (point) data-buf)))
+                                    (point) data-buf))
+                          (rows-start (point)))
                       (when interim
                         (mevedel-view--insert-assistant-header
                          nil '(mevedel-view-pending-tool-live t)))
@@ -4511,7 +4512,10 @@ the render so user toggles survive streaming ticks."
                         (insert (propertize "\n" 'mevedel-view-pending-tool-live t)
                                 (propertize "\n"
                                             'font-lock-face 'mevedel-view-turn-rule
-                                            'mevedel-view-pending-tool-live t)))))))
+                                            'mevedel-view-pending-tool-live t)))
+                      ;; Rows outside a turn miss its read-only pass.
+                      (mevedel-view-render-add-display-properties
+                       rows-start (point) 'tool-pending)))))
               (mevedel-view--ensure-request-progress data-buf))
             (mevedel-view--debug-log
              'incremental-after-insert
