@@ -703,7 +703,9 @@ changes a conversation buffer.
 
 Persisted agents may compact older history immediately before a continuation
 request.  The canonical transcript path remains stable, the original task and
-recent tail remain visible, and later compactions update the existing anchored
+recent tail remain visible. The latest direct follow-up task or immediate-parent
+MAIL is also carried verbatim, independently of the generated summary; peer mail
+and inherited context do not replace it. Later compactions update the existing anchored
 summary instead of stacking summaries.  Each rewrite first creates the next
 numbered `compact-NNNN` sibling as a recovery artifact.  Those siblings are not
 agent handles or sidecar entries; they belong only to the original session and

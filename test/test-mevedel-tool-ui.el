@@ -671,7 +671,9 @@
                                             (buffer-string)))
                     (should (string-match-p "Follow-up work compacted"
                                             (buffer-string)))
-                    (should-not (string-match-p "Follow-up child task"
+                    (should (string-match-p "Follow-up child task"
+                                            (buffer-string)))
+                    (should-not (string-match-p "Follow-up child result"
                                                 (buffer-string)))))))))
       (setq mevedel-agent--registry
             (assoc-delete-all "freeze_test" mevedel-agent--registry))
