@@ -963,6 +963,19 @@ Edits and changes only network isolation for that invocation. Full Access alread
 has unrestricted network and filesystem access. The namespace and mount boundary
 is inherited by descendants.
 
+Local confinement also masks the ssh-agent socket named by `SSH_AUTH_SOCK` and
+unsets the variable: a socket on a read-only mount still accepts connections,
+so an inherited agent would let confined code sign with the user's keys. Git
+over SSH instead uses a fetch-only broker (`scripts/mevedel-git-ssh.py`), started
+only for a command that names `git` in a local repository with SSH fetch
+remotes. Confined Git reaches it through `GIT_SSH_COMMAND` and a socket in a
+per-command owner-only directory under the tool-server socket root; that root is
+masked and only the command's own directory is bound back. The broker passes
+Git's stdio descriptors to the host's ssh and allows only `git-upload-pack` and
+`git-upload-archive` for the fetch remotes' destinations, read before the command
+starts. Teardown stops it with its ssh children. The
+[execution manual](tools/execution.md#git-over-ssh) gives the model contract.
+
 An explicitly approved write grant for a character or block device mounts
 only that device node with device access enabled. Its source is opened and
 identity-checked before mounting; the mounted node is checked again and its
