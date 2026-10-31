@@ -1307,23 +1307,29 @@ These are the sockets mevedel provides -- BROKER's directory and the Wayland
 display socket -- the canonical writable ROOTS except shared temporary space,
 and the paths of explicit write GRANTS.  Connecting needs write permission
 on a socket, so read grants add nothing.  TEMPORARY-ROOT, the local
-temporary directory and /tmp, and any root containing them, stay restricted:
-other programs put their sockets there."
+temporary directory and /tmp, and any root or write grant at or above them,
+stay restricted: other programs put their sockets there.  A grant below
+them, such as /tmp/build, is still allowed."
   (let ((shared (delete-dups
                  (mapcar (lambda (directory)
                            (file-name-as-directory (mevedel-file-truename directory)))
                          (delq nil (list temporary-root temporary-file-directory
-                                         "/tmp/"))))))
+                                         "/tmp/")))))
+        allowed)
+    (setq allowed
+          (lambda (path)
+            ;; Canonical, so a `//tmp' spelling or a link to /tmp is /tmp.
+            (let ((directory (file-name-as-directory (mevedel-file-truename path))))
+              (not (cl-some (lambda (shared) (string-prefix-p directory shared))
+                            shared)))))
     (delete-dups
      (append
       (when broker (list (plist-get broker :directory)))
       (when-let* ((socket (mevedel-sandbox--wayland-socket))) (list socket))
-      (cl-remove-if (lambda (root)
-                      (cl-some (lambda (directory) (string-prefix-p root directory))
-                               shared))
-                    roots)
+      (cl-remove-if-not allowed roots)
       (cl-loop for grant in grants
-               when (eq (plist-get grant :access) 'write)
+               when (and (eq (plist-get grant :access) 'write)
+                         (funcall allowed (plist-get grant :path)))
                collect (plist-get grant :path))))))
 
 (defun mevedel-sandbox--host-socket-facts (launcher)

@@ -13,6 +13,10 @@ create stay reachable.  No other filesystem or network access is handled, so
 Bubblewrap's mounts remain the filesystem boundary.  An ALLOWED path that
 cannot be opened gets no rule, which leaves its sockets unreachable.  Any
 other failure exits with status 125 before COMMAND starts.
+
+Out of scope, as for the Git SSH broker: a writable development checkout of
+this script.  Emacs runs `abi` on the host, so a confined edit to it in a
+workspace that is the mevedel checkout runs as host code.
 """
 
 import ctypes

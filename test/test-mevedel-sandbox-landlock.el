@@ -152,6 +152,22 @@ write grants are allowed; /tmp, roots containing it and read grants are not"
     (should (equal '("/work/")
                    (mevedel-sandbox--socket-allow-list
                     '("/srv/" "/work/") "//srv/tmp/" nil nil))))
+  :doc "write grants at or above shared temporary space, however spelled, are
+excluded; a grant below it stays"
+  (let* ((process-environment (cons "WAYLAND_DISPLAY" process-environment))
+         (work (file-truename (make-temp-file "mevedel-landlock-link-" t)))
+         (link (file-name-concat work "tmp-link"))
+         (temporary-file-directory "/tmp/"))
+    (unwind-protect
+        (progn
+          (make-symbolic-link "/tmp" link)
+          (should (equal '("/tmp/build")
+                         (mevedel-sandbox--socket-allow-list
+                          nil nil
+                          (mapcar (lambda (path) (list :path path :access 'write))
+                                  (list "/tmp" "//tmp" "/" link "/tmp/build"))
+                          nil))))
+      (delete-directory work t)))
   :doc "real Bubblewrap: host sockets in shared /tmp and the system bus are
 unreachable; workspace and write-granted sockets stay reachable"
   (test-mevedel-sandbox-landlock--with-launcher
@@ -187,6 +203,37 @@ unreachable; workspace and write-granted sockets stay reachable"
                            (test-mevedel-sandbox-landlock--reached prepared))))
         (when prepared (mevedel-sandbox-cleanup prepared))
         (mapc #'delete-process servers)
+        (delete-directory shared t)
+        (delete-directory root t))))
+  :doc "real Bubblewrap: a write grant on shared temporary space does not reopen
+its host sockets"
+  (test-mevedel-sandbox-landlock--with-launcher
+    ;; A test runner may keep XDG_RUNTIME_DIR inside temporary space, and a
+    ;; grant over a masked runtime directory is refused.
+    (let* ((process-environment (append '("WAYLAND_DISPLAY" "XDG_RUNTIME_DIR")
+                                        process-environment))
+           (temporary (file-name-as-directory (file-truename temporary-file-directory)))
+           (root (file-truename (make-temp-file "mevedel-landlock-root-" t)))
+           (shared (file-truename (make-temp-file "mevedel-landlock-shared-" t)))
+           (host (file-name-concat shared "host"))
+           (server (test-mevedel-sandbox-landlock--server host))
+           prepared)
+      (unwind-protect
+          (progn
+            (setq prepared
+                  (mevedel-sandbox-prepare
+                   (test-mevedel-sandbox-landlock--command host)
+                   root (list root)
+                   `(:file-system ((:path ,temporary :access write :recursive t)))
+                   nil 'required temporary))
+            ;; The grant reached the launch; only the allow-list leaves it out.
+            (ert-info ((format "%S" (list (plist-get prepared :state)
+                                          (plist-get prepared :error))))
+              (should (eql 1 (plist-get (plist-get prepared :facts)
+                                        :additional-filesystem-write))))
+            (should-not (test-mevedel-sandbox-landlock--reached prepared)))
+        (when prepared (mevedel-sandbox-cleanup prepared))
+        (delete-process server)
         (delete-directory shared t)
         (delete-directory root t))))
   :doc "real Bubblewrap fallback and negative control: without the launcher the

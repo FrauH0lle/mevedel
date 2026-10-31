@@ -1030,7 +1030,10 @@ a datagram to, a pathname Unix socket created outside the command fails with
   bound back beneath it;
 - writable roots other than shared temporary space: the session's temporary
   directory, `/tmp`, and any root containing them are excluded;
-- paths of explicitly approved write grants. Connecting requires write
+- paths of explicitly approved write grants, except a grant at or above shared
+  temporary space: a write grant on `/tmp` (however spelled or reached through
+  a link) would otherwise reopen every host socket there, while a grant on
+  `/tmp/build` still allows that directory. Connecting requires write
   permission on a socket, so a read grant does not reopen one.
 
 The ruleset also sets `LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET`, so an abstract
@@ -1040,9 +1043,21 @@ reachable to them. No other filesystem or network access is handled; the
 mounts above remain the filesystem boundary. The system D-Bus, systemd's local
 SSH and Varlink manager sockets, a Codex app-server control socket under
 `/tmp/codex-daemon-UID/`, and Qt single-instance or login-manager sockets in
-`/tmp` are therefore unreachable. A socket in a writable workspace root stays
-reachable, including one a host program created there and one an earlier
-confined command left listening.
+`/tmp` are therefore unreachable.
+
+Sockets in writable workspace roots remain a reachable class: one a host
+program created there, such as Git's fsmonitor daemon socket inside the
+protected read-only `.git` directory or a project-local database socket, and
+one an earlier confined command left listening. Landlock rules only add
+access, so a protected subtree cannot be carved out of a root's rule; doing
+so would mean listing every sibling instead of the root, which misses entries
+created later. Read-only protection of `.git` stops writes, not connections.
+
+The `abi` probe on the host and the launcher inside confinement run `python3`
+on the script in mevedel's source directory, like the Git SSH broker and the
+execution spool worker. When the workspace is a writable mevedel checkout, a
+confined edit to one of these scripts runs as host code at the next probe or
+launch; this development setup is outside the boundary.
 
 The Bubblewrap probe also asks the local kernel for its Landlock ABI with
 `landlock_create_ruleset`'s version query, through the same script. When
