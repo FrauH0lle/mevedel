@@ -153,13 +153,19 @@ run while it is pending."
                  (lambda (operation payload)
                    (let ((value (funcall decode operation payload)))
                      (if (eq (plist-get operation :op) 'target-time)
-                         (progn (push value readings) (+ value 2))
+                         (progn
+                           ;; Only the required observation builds the new
+                           ;; lease; an optional commit refresh may be later.
+                           (unless (plist-get operation :optional)
+                             (push value readings))
+                           (+ value 2))
                        value)))))
         (should (equal '(t nil)
                        (test-mevedel-durability-async--call
                         #'mevedel-session-durability--update-owned-lease-async
                         session '(active publishing) 'active 90))))
       (should readings)
+      (should (= 1 (length readings)))
       (should (= (plist-get (mevedel-session-lease session) :expires-at)
                  (+ (car readings) 2 90)))
       (should (eq 'owned (plist-get (mevedel-session-lease session) :state)))
