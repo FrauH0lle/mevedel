@@ -336,6 +336,8 @@ Plugin management:
   installs under `~/.mevedel/plugins/` or `~/.agents/plugins/`.
   If the update changes an enabled plugin's executable hook surface, the
   update result reports that hook consent is pending.
+  mevedel never updates plugins by itself and does not check for upstream
+  changes; updating is always this explicit command or the cockpit action.
 - `/plugin remove NAME` and `/plugin uninstall NAME` delete a
   global managed installed plugin. If the current workspace activation
   points at that source, mevedel clears that activation. Workspace plugin
