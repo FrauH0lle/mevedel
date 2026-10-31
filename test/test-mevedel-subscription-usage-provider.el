@@ -187,7 +187,8 @@
            (log (file-name-concat directory "prompts.json"))
            (gptel-model 'sonnet)
            (original-open (symbol-function 'mevedel-acp-open))
-           (mevedel-acp--control-timeout 0.3)
+           ;; Only the missing-advertisement case measures startup expiry.
+           (mevedel-acp--control-timeout (if (equal ,advertise "never") 0.3 5))
            (original-timer (symbol-function 'run-at-time))
            connection timer response-timer cancel results)
       (unwind-protect
@@ -210,7 +211,9 @@
                     ((symbol-function 'run-at-time)
                      (lambda (seconds repeat function &rest args)
                        (if (eql seconds 30)
-                           (setq response-timer (apply original-timer 0.15 repeat function args))
+                           (setq response-timer
+                                 (apply original-timer (if (eq ,wait t) 0.15 5)
+                                        repeat function args))
                          (apply original-timer seconds repeat function args)))))
             (setq cancel (mevedel-subscription-usage-provider-fetch
                           (mevedel-claude-code--make-backend :name "Selected Claude")
