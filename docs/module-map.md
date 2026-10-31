@@ -67,6 +67,7 @@ Data model
   mevedel-execution-telemetry.el safe execution facts and profiler adaptation
   mevedel-sandbox.el          optional Bubblewrap child-process confinement
   mevedel-sandbox-grants.el   FD-backed grant mounts and the protected-path mount plan
+  mevedel-pin.el              symlink-refusing opens and writes of authorized tool paths
   mevedel-telemetry.el        append-only lifecycle events and profiler capture
   mevedel-telemetry-usage.el  frozen per-provider-call identity and normalized usage
   mevedel-plan.el             lifecycle-neutral plan data and artifacts

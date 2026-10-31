@@ -308,6 +308,21 @@ path as given, its `/:`-unquoted form, a leading `//` collapsed to `/`, and,
 for a local path, its canonical target through symlinks (with a missing tail
 kept). A workspace symlink into `~/.ssh` is therefore as protected as
 `~/.ssh` itself. Filesystem grants refuse `/:`-quoted paths outright.
+
+Read and ApplyPatch, including resource-backed reads and writes, open the
+authorized canonical path through `scripts/mevedel-pin.py`. It walks the path
+from the root with `O_NOFOLLOW`, refuses any symlink component and holds a
+descriptor that Emacs reads or writes through, so a directory a confined
+process swaps for a symlink after authorization, or a dangling link it
+resolves later, refuses the operation instead of reaching a protected tree.
+Missing parent directories are created by the helper, and writes go to a
+temporary file in the pinned directory that is renamed over the target, which
+replaces a planted final symlink instead of following it. One helper serves
+each execution target; the first use costs about 11 ms locally and each later
+pin about 0.1 ms. Grep, Glob and media converters run under the same
+confinement as the commands that could swap paths, where protected trees are
+masked by their canonical paths. Canonicalization cannot see hardlinks to a
+protected file that the user created earlier.
 String-only entries are invalid by design. Glob discovery walks the
 workspace, memory, and additional writable roots before every launch; the
 execution target's temporary directory is excluded as a discovery root. A

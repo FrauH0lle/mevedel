@@ -21,6 +21,8 @@
 ;; `mevedel-utilities'
 (declare-function mevedel-collapse-leading-slashes "mevedel-utilities" (path))
 (autoload 'mevedel-collapse-leading-slashes "mevedel-utilities")
+(declare-function mevedel-file-truename "mevedel-utilities" (filename))
+(autoload 'mevedel-file-truename "mevedel-utilities")
 
 ;; `cl-lib'
 (declare-function cl-count-if "cl-lib" (predicate sequence &rest args))
@@ -831,7 +833,9 @@ or permission callback sees a target."
       (unless (mevedel-resource-within-root-p path root)
         (signal 'mevedel-resource-error
                 (list "Resource address escapes its owning root")))
-      path)))
+      ;; Canonical before authorization: handlers open it through a pin that
+      ;; refuses symlinks, so a legitimately linked root resolves here.
+      (mevedel-file-truename path))))
 
 (defun mevedel-resource--file-list (root &optional scheme)
   "Return regular files beneath ROOT in deterministic relative order.

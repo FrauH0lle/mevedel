@@ -17,6 +17,7 @@
 (require 'mevedel-edit-diagnostics)
 (require 'mevedel-execution-target)
 (require 'mevedel-file-state)
+(require 'mevedel-pin)
 (require 'mevedel-resource)
 (require 'mevedel-utilities)
 
@@ -106,10 +107,6 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
-
-;; `mevedel-utilities'
-(declare-function mevedel--write-file-atomically
-                  "mevedel-utilities" (path content &optional coding mode))
 
 (defvar mevedel-tool-patch-prepared-proposal nil)
 
@@ -497,7 +494,8 @@ When WITH-CODING is non-nil, return (CONTENTS . CODING-SYSTEM)."
   (when (file-directory-p path)
     (error "Cannot patch a directory: %s" path))
   (with-temp-buffer
-    (insert-file-contents path)
+    (mevedel-pin-with-file path
+      (mevedel-pin-insert-file-contents path))
     (let ((content (buffer-string)))
       (if with-coding
           (cons content last-coding-system-used)
@@ -1039,14 +1037,18 @@ Returns nil when the two contents hold the same lines."
         :bytes (and (file-exists-p path)
                     (with-temp-buffer
                       (set-buffer-multibyte nil)
-                      (insert-file-contents-literally path)
+                      (mevedel-pin-with-file path
+                        (insert-file-contents-literally
+                         (mevedel-pin-open-path path)))
                       (buffer-string)))
         :mode (and (file-exists-p path) (file-modes path))))
 
 (defun mevedel-tool-patch--write-file (path content &optional mode literal-p)
   "Replace PATH with CONTENT and restore MODE when non-nil.
 When LITERAL-P is non-nil, write CONTENT as literal bytes."
-  (mevedel--write-file-atomically
+  ;; Through the pinned parent: a directory swapped for a symlink after
+  ;; authorization is refused rather than written through.
+  (mevedel-pin-write-file-atomically
    path content (and literal-p 'no-conversion) mode))
 
 (defun mevedel-tool-patch--same-snapshot-p (left right)
@@ -1080,7 +1082,7 @@ MUTATE, when supplied, performs each before/after snapshot replacement."
                   (if (plist-get snapshot :exists)
                     (mevedel-tool-patch--write-file
                      path (plist-get snapshot :bytes) (plist-get snapshot :mode) t)
-                    (delete-file path))))
+                    (mevedel-pin-delete-file path))))
             (error (push (cons path err) failures))))))))
 
 (defun mevedel-tool-patch-missing-parent-directories (path)
@@ -1265,7 +1267,7 @@ Rollback never overwrites an intervening edit; it reports incomplete recovery."
                         (default-file-modes))
                     literal-p)))
                 ('delete
-                 (delete-file (plist-get change :path))))))
+                 (mevedel-pin-delete-file (plist-get change :path))))))
             (dolist (change changes)
               (mevedel-tool-patch--assert-current currentp)
               (when-let* ((buffer (mevedel-tool-patch--visiting-base-buffer
