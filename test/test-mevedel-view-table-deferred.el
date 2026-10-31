@@ -4,6 +4,7 @@
 ;;; Code:
 (require 'helpers (file-name-concat (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-view)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-markdown)
 (require 'mevedel-view-render)
 
@@ -79,6 +80,7 @@
                  :doc "opens raw, formats one visible table, and discovers off-screen work on scroll"
                  (mevedel-test--with-displayed-buffer
                   (mevedel-view-mode)
+                  (mevedel-view-render-initialize)
                   (let ((inhibit-read-only t)
                         (source "| A | B |\n|---|---|\n| target | value |\n")
                         (draft "> draft\nsecond line\n"))
@@ -118,6 +120,7 @@
                  :doc "queued formatting resolves shifted table positions after the active writer"
                  (mevedel-test--with-displayed-buffer
                   (mevedel-view-mode)
+                  (mevedel-view-render-initialize)
                   (let ((inhibit-read-only t))
                     (unwind-protect
                         (progn
@@ -138,6 +141,7 @@
   (dolist (kind '(overlay property))
     (mevedel-test--with-displayed-buffer
       (mevedel-view-mode)
+      (mevedel-view-render-initialize)
       (let ((inhibit-read-only t)
             (source "| A | B |\n|---|---|\n| target | value |\n")
             hidden)
@@ -166,6 +170,7 @@
   :doc "partly folded tables still render their visible rows and preserve the fold"
   (mevedel-test--with-displayed-buffer
     (mevedel-view-mode)
+    (mevedel-view-render-initialize)
     (let ((inhibit-read-only t) hidden)
       (unwind-protect
           (progn
@@ -188,6 +193,7 @@
   :doc "pending input postpones formatting without losing the scheduled work"
                  (mevedel-test--with-displayed-buffer
                   (mevedel-view-mode)
+                  (mevedel-view-render-initialize)
                   (let ((inhibit-read-only t))
                     (unwind-protect
                         (progn

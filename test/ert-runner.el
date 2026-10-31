@@ -5,6 +5,8 @@
 ;; Loaded by run_tests.py before the selected test-file roster.  Eask still
 ;; owns HOME/XDG isolation and ERT's exit status.  Each worker verifies the
 ;; inventory before running its assigned cases, in the supplied order.
+;; Discovery also reports each case's defining file, so the runner can keep a
+;; file's or a deftest's cases on one worker.
 ;; The fresh-file lane discovers and runs its one file in the same process.
 
 ;;; Code:
@@ -26,13 +28,18 @@ MEVEDEL_TEST_FRESH_FILE requests running that file's inventory immediately."
   (let* ((input (getenv "MEVEDEL_TEST_PARTITION"))
          (output (or (getenv "MEVEDEL_TEST_RESULTS")
                      (error "Missing test results path")))
+         (tests (ert-select-tests t t))
          (inventory
-          (mapcar (lambda (test) (symbol-name (ert-test-name test)))
-                  (ert-select-tests t t))))
+          (mapcar (lambda (test) (symbol-name (ert-test-name test))) tests)))
     (if (and (not input) (not (getenv "MEVEDEL_TEST_FRESH_FILE")))
         (progn
           (with-temp-file output
-            (insert (json-serialize (vconcat inventory))))
+            (insert (json-serialize
+                     (list :inventory (vconcat inventory)
+                           :files (vconcat
+                                   (mapcar (lambda (test)
+                                             (or (ert-test-file-name test) ""))
+                                           tests))))))
           ;; Returning through ERT, rather than exiting here, lets its batch
           ;; driver remove the native-compilation cache it created.
           (funcall original '(member)))
