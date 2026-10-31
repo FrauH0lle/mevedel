@@ -42,6 +42,44 @@ LIBRARIES = {
 
 
 class RunnerTests(unittest.TestCase):
+    def test_same_timestamp_runs_get_distinct_sortable_reports_and_replay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            reports = Path(directory) / 'reports'
+            stamp = '20261031-185939-693891'
+
+            def run(command, log, env=None):
+                log.write_text('native log\n')
+                if log.name == 'inventory.log':
+                    data = dict(inventory=['a'], files=[''])
+                elif log.name == '0.log':
+                    data = dict(ert_seconds=1, tests=[dict(
+                        test='a', seconds=1, status='ert-test-passed', expected=True)])
+                else:
+                    return 0, 1
+                Path(env['MEVEDEL_TEST_RESULTS']).write_text(json.dumps(data))
+                return 0, 1
+
+            with patch.object(run_tests, 'REPORTS', reports), \
+                 patch.object(run_tests.datetime, 'datetime') as clock, \
+                 patch.object(run_tests, 'run_logged', side_effect=run), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                clock.now.return_value.strftime.return_value = stamp
+                for arguments in (['test/test-mevedel-test-runner.el'],
+                                  ['test/test-mevedel-test-runner.el'],
+                                  ['--replay', str(reports / stamp / '0-partition.json')]):
+                    with patch.object(sys, 'argv', ['run_tests.py', '--jobs', '1', *arguments]):
+                        self.assertEqual(run_tests.main(), 0)
+                runs = sorted(path for path in reports.iterdir() if path.is_dir())
+                self.assertEqual(len(runs), 3)
+                self.assertEqual(runs[0].name, stamp)
+                for path in runs:
+                    self.assertTrue(path.name.startswith(stamp))
+                    self.assertEqual(json.loads((path / 'summary.json').read_text())['count'], 1)
+                self.assertEqual(json.loads((runs[-1] / 'summary.json').read_text())['mode'], 'replay')
+                with patch.object(sys, 'argv', ['run_tests.py', '--output', str(runs[0])]), \
+                     self.assertRaises(FileExistsError):
+                    run_tests.main()
+
     def test_public_cli_preserves_native_worker_exit_and_bounds_failures(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)

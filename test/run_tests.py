@@ -152,7 +152,7 @@ def main():
                         help=f'worker limit (default: {min(8, available_cpus)}; '
                              f'{available_cpus} CPUs available)')
     parser.add_argument('--durations', type=Path, default=REPORTS / 'latest-durations.csv')
-    parser.add_argument('--output', type=Path, default=REPORTS / datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
+    parser.add_argument('--output', type=Path)
     parser.add_argument('files', nargs='*', help='test files or quoted glob patterns (default: all)')
     parser.add_argument('--affected', nargs='?', const='master', metavar='REV',
                         help='fast tier: test files for changes since the merge base with '
@@ -194,8 +194,19 @@ def main():
            for key, value in os.environ.items()):
         args.jobs = 1
         print('Provisioned remote target detected: running serially.', flush=True)
-    output = args.output.resolve()
-    output.mkdir(parents=True, exist_ok=False)
+    base = (args.output or REPORTS / datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f')).resolve()
+    base.parent.mkdir(parents=True, exist_ok=True)
+    output = base
+    suffix = 0
+    while True:
+        try:
+            os.mkdir(output)
+            break
+        except FileExistsError:
+            if args.output is not None:
+                raise
+            suffix += 1
+            output = base.with_name(f'{base.name}-{suffix:06d}')
     # A standalone (pkg-built) Eask running this script exports PKG_EXECPATH;
     # a nested Eask inheriting it starts as plain Node and treats `clean' as a
     # script path.  Every Eask this runner starts must see its own launch.
