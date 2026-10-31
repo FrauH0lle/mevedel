@@ -434,9 +434,13 @@ REGION promises that THUNK replaces only that text."
   :doc "collapsing a background row keeps a mid-window composer in place"
   nil)
 
-(defun mevedel-view-user-state-test--wheel (direction)
-  "Scroll the selected window one notch in DIRECTION through the command loop."
-  (mevedel-view-user-state-test--deliver-wheel direction))
+(defun mevedel-view-user-state-test--wheel (direction &optional window)
+  "Scroll WINDOW one notch in DIRECTION through the command loop.
+WINDOW defaults to the selected window, but need not be selected."
+  (let ((window (or window (selected-window))))
+    (mevedel-view-user-state-test--deliver-scroll
+     (list (list direction (posn-at-point (window-start window) window)))
+     'mwheel-scroll)))
 
 (mevedel-deftest mevedel-view-user-state/status-visit ()
   (mevedel-view-user-state-test--with-view
@@ -466,20 +470,18 @@ REGION promises that THUNK replaces only that text."
     (mevedel-view-user-state-test--add-chunk data-buf "Arrived meanwhile.\n")
     (mevedel-view--full-rerender)))
 
-(defun mevedel-view-user-state-test--deliver-wheel (direction)
-  "Scroll the selected window one notch in DIRECTION through the command loop."
-  (let* ((window (selected-window))
-         (event (list direction (posn-at-point (window-start window) window)))
-         (done nil)
+(defun mevedel-view-user-state-test--deliver-scroll (events command)
+  "Deliver EVENTS through the command loop and wait for scroll COMMAND."
+  (let* ((done nil)
          (hook (lambda ()
-                 (when (eq this-command 'mwheel-scroll)
+                 (when (eq this-command command)
                    (setq done t)
                    (run-at-time 0 nil #'exit-recursive-edit))))
-         (timer (run-at-time 3 nil #'exit-recursive-edit)))
+         (timer (run-at-time 30 nil #'exit-recursive-edit)))
     (add-hook 'post-command-hook hook)
     (unwind-protect
         (progn
-          (setq unread-command-events (list event))
+          (setq unread-command-events events)
           (recursive-edit))
       (remove-hook 'post-command-hook hook)
       (cancel-timer timer)
@@ -523,6 +525,65 @@ REGION promises that THUNK replaces only that text."
     (setq agents (list (list :path "/root/arriving" :status 'running
                              :started-at 990.0)))
     (mevedel-view--render-status)))
+
+(mevedel-deftest mevedel-view-user-state/scroll-unselected ()
+  (progn
+    (skip-unless (display-graphic-p))
+    (let ((scroll-preserve-screen-position t)
+          (mouse-wheel-follow-mouse t)
+          (mouse-wheel-scroll-amount '(2 ((shift) . hscroll)))
+          (mouse-wheel-progressive-speed nil))
+      (mevedel-view-user-state-test--with-view
+        (let* ((windows (mevedel-view-user-state-test--arrange))
+               (composer (car windows))
+               (reader (cdr windows)))
+          (with-temp-buffer
+            (when ,different-buffer
+              (insert "The selected window is not a chat view.\n")
+              (set-window-buffer reader (current-buffer)))
+            (select-window reader)
+            (let ((reader-point (window-point reader))
+                  (reader-start (window-start reader)))
+              (dotimes (_ ,up-count) ,up)
+              (with-current-buffer view-buf
+                (should (< (window-point composer) (mevedel-view--input-start))))
+              (let ((notches 0))
+                (while (and (< notches 8)
+                            (with-current-buffer view-buf
+                              (not (mevedel-view--position-screen-y
+                                    (point-max) composer t))))
+                  ,down
+                  (cl-incf notches)))
+              (with-current-buffer view-buf
+                (should (mevedel-view--position-screen-y (point-max) composer t))
+                (should (equal mevedel-view-user-state-test--draft
+                               (mevedel-view--input-text)))
+                (should (= 4 (- (window-point composer) (mevedel-view--input-start)))))
+              (should-not (window-parameter composer 'mevedel-view-scroll-return))
+              (should (eq reader (selected-window)))
+              (should (= reader-point (window-point reader)))
+              (should (= reader-start (window-start reader)))))))))
+  (different-buffer up-count up down)
+  :doc "wheel scrolling a non-selected view window restores its own draft offset"
+  nil 3
+  (mevedel-view-user-state-test--wheel 'wheel-up composer)
+  (mevedel-view-user-state-test--wheel 'wheel-down composer)
+  :doc "wheel scrolling a view from another buffer restores its draft offset"
+  t 3
+  (mevedel-view-user-state-test--wheel 'wheel-up composer)
+  (mevedel-view-user-state-test--wheel 'wheel-down composer)
+  :doc "scroll-other-window restores the non-selected window's draft offset"
+  nil 3
+  (mevedel-view-user-state-test--deliver-scroll
+   (listify-key-sequence (kbd "C-u 2 C-M-S-v")) 'scroll-other-window-down)
+  (mevedel-view-user-state-test--deliver-scroll
+   (listify-key-sequence (kbd "C-u 2 C-M-v")) 'scroll-other-window)
+  :doc "scroll-other-window from another buffer restores the view's draft offset"
+  t 3
+  (mevedel-view-user-state-test--deliver-scroll
+   (listify-key-sequence (kbd "C-u 2 C-M-S-v")) 'scroll-other-window-down)
+  (mevedel-view-user-state-test--deliver-scroll
+   (listify-key-sequence (kbd "C-u 2 C-M-v")) 'scroll-other-window))
 
 (mevedel-deftest mevedel-view--return-from-scroll ()
   (mevedel-view-user-state-test--with-view

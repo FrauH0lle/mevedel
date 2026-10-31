@@ -1597,45 +1597,63 @@ the anonymous repeat-map commands used by `text-scale-adjust'."
   (mevedel-view--finish-draft-command)
   (setq mevedel-view--draft-command-buffer (current-buffer)))
 
-(defvar-local mevedel-view--scroll-origin nil
-  "Composer offset of point before the current scroll command, or nil.")
+(defvar mevedel-view--scroll-origins nil
+  "View windows before scrolling: (WINDOW BUFFER START VSCROLL OFFSET).
+OFFSET is the window point's composer offset, or nil for a history reader.")
 
 (defun mevedel-view--scroll-command-p (command)
   "Return non-nil when COMMAND only scrolls the window.
-Touchpad momentum keeps scrolling from `pixel-scroll-start-momentum', which
-lacks the `scroll-command' property the other scroll commands carry."
+Other-window scrolling and touchpad momentum lack the `scroll-command'
+property carried by commands that scroll the selected window."
   (and (symbolp command)
        (or (get command 'scroll-command)
-           (eq command 'pixel-scroll-start-momentum))))
+           (memq command '(scroll-other-window scroll-other-window-down
+                           pixel-scroll-start-momentum)))))
 
 (defun mevedel-view--note-scroll-origin ()
   "Remember the draft position a scroll command may displace point from.
+Capture each view window: wheel scrolling and commands that scroll another
+window can target a non-selected view, even from a different buffer.
 Any other command in the selected window drops a pending return: the user
 moved point deliberately."
+  (setq mevedel-view--scroll-origins nil)
   (if (mevedel-view--scroll-command-p this-command)
-      (setq mevedel-view--scroll-origin
-            (and (mevedel-view--point-in-input-region-p)
-                 (- (point) (mevedel-view--input-start))))
-    (setq mevedel-view--scroll-origin nil)
+      (walk-windows
+       (lambda (window)
+         (with-current-buffer (window-buffer window)
+           (when (and (derived-mode-p 'mevedel-view-mode)
+                      (not mevedel-view--agent-transcript-p))
+             (push (list window (current-buffer)
+                         (window-start window) (window-vscroll window t)
+                         (and (mevedel-view--position-in-input-region-p
+                               (window-point window))
+                              (- (window-point window) (mevedel-view--input-start))))
+                   mevedel-view--scroll-origins))))
+       'nomini t)
     (set-window-parameter nil 'mevedel-view-scroll-return nil)))
 
 (defun mevedel-view--return-from-scroll ()
   "Return point to the draft once scrolling shows its position again.
 Emacs keeps point visible, so scrolling away moves it onto transcript or
-chrome rows.  Like a terminal, scrolling back restores the draft position."
-  (when (mevedel-view--scroll-command-p this-command)
-    (let ((window (selected-window)))
-      (when (and mevedel-view--scroll-origin
-                 (not (mevedel-view--point-in-input-region-p)))
-        (set-window-parameter window 'mevedel-view-scroll-return
-                              mevedel-view--scroll-origin))
-      (setq mevedel-view--scroll-origin nil)
-      (when-let* ((offset (window-parameter window 'mevedel-view-scroll-return))
-                  ((eq (window-buffer window) (current-buffer)))
-                  (target (min (point-max) (+ (mevedel-view--input-start) offset)))
-                  ((mevedel-view--position-screen-y target window t)))
-        (goto-char target)
-        (set-window-parameter window 'mevedel-view-scroll-return nil)))))
+chrome rows.  Restore only windows whose viewport actually scrolled, using
+their own buffer and window point, without changing the selected window."
+  (let ((origins mevedel-view--scroll-origins))
+    (setq mevedel-view--scroll-origins nil)
+    (pcase-dolist (`(,window ,buffer ,start ,vscroll ,origin) origins)
+      (when (and (window-live-p window)
+                 (eq (window-buffer window) buffer)
+                 (or (/= start (window-start window))
+                     (/= vscroll (window-vscroll window t))))
+        (with-current-buffer buffer
+          (when (and origin
+                     (not (mevedel-view--position-in-input-region-p
+                           (window-point window))))
+            (set-window-parameter window 'mevedel-view-scroll-return origin))
+          (when-let* ((offset (window-parameter window 'mevedel-view-scroll-return))
+                      (target (min (point-max) (+ (mevedel-view--input-start) offset)))
+                      ((mevedel-view--position-screen-y target window t)))
+            (set-window-point window target)
+            (set-window-parameter window 'mevedel-view-scroll-return nil)))))))
 
 (defun mevedel-view--draft-deletion-keeps-height-p (beg end)
   "Return non-nil if deleting BEG to END cannot unwrap a plain draft line.
@@ -2135,8 +2153,9 @@ and other input properties remain untouched."
     (add-hook 'after-change-functions
               #'mevedel-view--restore-draft-window-state 90 t)
     (add-hook 'pre-command-hook #'mevedel-view--begin-draft-command -90 t)
-    (add-hook 'pre-command-hook #'mevedel-view--note-scroll-origin nil t)
-    (add-hook 'post-command-hook #'mevedel-view--return-from-scroll nil t)
+    ;; Scrolling can target this view from a different selected buffer.
+    (add-hook 'pre-command-hook #'mevedel-view--note-scroll-origin)
+    (add-hook 'post-command-hook #'mevedel-view--return-from-scroll)
     ;; A command can leave this buffer before post-command-hook runs.
     (add-hook 'post-command-hook
               #'mevedel-view--finish-draft-command 90)

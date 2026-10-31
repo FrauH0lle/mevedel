@@ -130,10 +130,14 @@ terminal. Emacs keeps point visible, so a scroll command that hides the
 draft moves point onto transcript or chrome rows, often the background
 `[Manage]` row just above the rail. The view remembers the draft offset per
 window; the next scroll command after which that position is fully visible
-puts point back. Commands carrying the `scroll-command` property and touchpad
-momentum (`pixel-scroll-start-momentum`) count as scrolling; any other command
-in that window is a deliberate move and drops the pending return. Redraws while
-scrolled away keep the reader position as before.
+puts point back. Commands carrying the `scroll-command` property, other-window
+scrolling, and touchpad momentum (`pixel-scroll-start-momentum`) count as
+scrolling; any other command in that window is a deliberate move and drops the
+pending return. Redraws while scrolled away keep the reader position as before.
+Capture uses each displayed view window's own point and buffer, and restoration
+applies only to windows whose viewport actually scrolled. Wheel scrolling over
+a non-selected window and `scroll-other-window` work even from a different
+selected buffer, without changing the selected window's point or viewport.
 
 Arriving permission prompts and questions do not move point. They render, the
 rail shows them as pending, and `C-c C-j` visits the next one from the invoking
@@ -234,8 +238,11 @@ focus is explicit.
   later redraws then preserved that chrome position as a reading position. A
   graphical command-loop reproduction confirmed both. Point now returns to its
   draft offset on the first scroll that shows it fully. Other commands cancel the
-  return, so a deliberate move is never undone. The hooks cost one property
-  lookup per command.
+  return, so a deliberate move is never undone. Native non-selected-window
+  regressions exposed that wheel scrolling restores selection before the hooks
+  run. Global command hooks now capture view windows only on scroll commands
+  and restore only those whose viewport changed; ordinary commands do not walk
+  windows or measure geometry.
 
 - **Status rows are visits too (2026-10-31).** Collapsing an expanded
   background row while the composer sat mid-window moved the composer to the
