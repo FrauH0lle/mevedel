@@ -143,7 +143,38 @@
       (dolist (property (cons 'mevedel-view-interaction-id
                               mevedel-view-zone-owned-properties))
         (should-not (text-property-not-all
-                     (mevedel-view--input-start) (point-max) property nil))))))
+                     (mevedel-view--input-start) (point-max) property nil)))))
+
+  :doc "a status redraw beside a pending approval keeps the card, its row and the draft"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer view-buf)
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
+        (let* ((card (mevedel-view--interaction-register
+                      '(:kind permission :id perm :body "Allow Bash?\n[y] yes [n] no")))
+               (render (lambda (body)
+                         (mevedel-view-zone-reconcile
+                          'status mevedel-view--status-marker mevedel-view--status-marker
+                          (list (list :namespace 'status :id 'tasks :body body)))))
+               (card-state
+                (lambda ()
+                  (let* ((start (text-property-any (point-min) (point-max)
+                                                   'mevedel-view-interaction-id 'perm))
+                         (end (next-single-property-change
+                               start 'mevedel-view-interaction-id nil (point-max))))
+                    (list (buffer-substring-no-properties start end)
+                          (- (mevedel-view--input-start) start)))))
+               (offset (- (point) (mevedel-view--input-start))))
+          (funcall render "one")
+          (let ((before (funcall card-state)))
+            (funcall render "one\ntwo\nthree")
+            (funcall render "x")
+            (should (equal before (funcall card-state)))
+            (should (eq card (gethash 'perm mevedel-view--interaction-overlays)))
+            (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
+            (should (= offset (- (point) (mevedel-view--input-start))))))))))
 
 (provide 'test-mevedel-view-zone-preservation)
 ;;; test-mevedel-view-zone-preservation.el ends here
