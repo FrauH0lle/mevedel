@@ -267,6 +267,51 @@ class StandardsTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn('untracked test fixture test/fixtures/nested/helper.py', errors[0])
 
+    def test_expand_file_name_parent_can_leave_fixture_directory(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '(expand-file-name "../helpers.el" "test/fixtures/")'))
+        self.commit()
+        self.assertEqual(standards.test_integrity_errors(
+            self.root, standards.inventory(self.root)), [])
+
+    def test_expand_file_name_absolute_name_replaces_fixture_directory(self):
+        for base in ('"test/fixtures/"',
+                     '(file-name-concat "test" "fixtures" "missing-base")'):
+            with self.subTest(base=base):
+                self.write('test/test-fixture.el', library('test-fixture').replace(
+                    "(provide 'test-fixture)",
+                    f'(expand-file-name "/tmp/example.c" {base})'))
+                self.commit()
+                self.assertEqual(standards.test_integrity_errors(
+                    self.root, standards.inventory(self.root)), [])
+
+    def test_expand_file_name_normalizes_paths_that_stay_in_fixtures(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '(expand-file-name ".././helper.py" "test/fixtures/nested/")'))
+        self.commit()
+        self.write('test/fixtures/helper.py', 'print("fixture")\n')
+        errors = standards.test_integrity_errors(self.root, standards.inventory(self.root))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('untracked test fixture test/fixtures/helper.py', errors[0])
+        self.git('add', 'test/fixtures/helper.py')
+        self.assertEqual(standards.test_integrity_errors(
+            self.root, standards.inventory(self.root)), [])
+
+    def test_literal_fixture_paths_are_normalized_before_classification(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '["test/fixtures/../helpers.el" "test/fixtures/nested/.././helper.py"]'))
+        self.commit()
+        self.write('test/fixtures/helper.py', 'print("fixture")\n')
+        errors = standards.test_integrity_errors(self.root, standards.inventory(self.root))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('untracked test fixture test/fixtures/helper.py', errors[0])
+        self.git('add', 'test/fixtures/helper.py')
+        self.assertEqual(standards.test_integrity_errors(
+            self.root, standards.inventory(self.root)), [])
+
     def test_ignored_fixture_and_directory_variable(self):
         self.write('test/test-fixture.el', library('test-fixture').replace(
             "(provide 'test-fixture)",

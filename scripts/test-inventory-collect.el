@@ -11,7 +11,8 @@
 
 (defun mevedel-test-inventory--collect (text)
   "Return literal test names, strings and fixture paths read from TEXT."
-  (let (tests strings paths globals)
+  (let ((file-name-handler-alist nil)
+        tests strings paths globals)
     (cl-labels
         ((path
           (form environment)
@@ -23,27 +24,34 @@
            ((symbolp form) (cdr (or (assq form environment) (assq form globals))))
            ((consp form)
             (pcase (car form)
-              ((or 'file-name-concat 'expand-file-name)
-               (let* ((args (if (eq (car form) 'expand-file-name)
-                                (list (nth 2 form) (nth 1 form))
-                              (cdr form)))
-                      (parts (mapcar (lambda (arg) (path arg environment)) args)))
+              ('file-name-concat
+               (let ((parts (mapcar (lambda (arg) (path arg environment)) (cdr form))))
                  (while (and parts (null (car parts))) (pop parts))
                  (when (and parts (cl-every #'stringp parts))
-                   (replace-regexp-in-string "/+" "/" (mapconcat #'identity parts "/")))))
+                   (apply #'file-name-concat parts))))
+              ('expand-file-name
+               (let ((name (path (cadr form) environment))
+                     (directory (path (nth 2 form) environment)))
+                 (when name (expand-file-name name directory))))
               ('file-name-directory
                (let ((value (path (cadr form) environment)))
                  (when value (file-name-directory value))))))))
          (walk
-          (form line quoted environment)
+          (form line quoted environment &optional constructed)
           (cond
-           ((stringp form) (push `((value . ,form) (line . ,line)) strings))
-           ((vectorp form) (mapc (lambda (item) (walk item line t environment)) form))
+           ((stringp form)
+            ;; Constructor arguments are components, not independent paths.
+            (unless constructed (push `((value . ,form) (line . ,line)) strings)))
+           ((vectorp form)
+            (mapc (lambda (item) (walk item line t environment constructed)) form))
            ((consp form)
-            (when (memq (car form) '(file-name-concat expand-file-name))
+            (when (and (not constructed)
+                       (memq (car form) '(file-name-concat expand-file-name)))
               (let ((value (path form environment)))
-                (when (and value (string-match-p "\\(?:\\`\\|/\\)fixtures/" value))
-                  (push `((value . ,value) (line . ,line)) paths))))
+                (when value
+                  (setq value (file-relative-name (expand-file-name value) default-directory))
+                  (when (string-match-p "\\`\\(?:test/\\)?fixtures/" value)
+                    (push `((value . ,value) (line . ,line)) paths)))))
             (when (memq (car form) '(defconst defvar))
               (push (cons (cadr form) (path (nth 2 form) environment)) globals))
             (unless quoted
@@ -67,17 +75,20 @@
                              (line . ,line)) tests))))))
             ;; Quoted data cannot define tests; strings still describe fixture
             ;; paths (including command strings passed to a child Emacs).
-            (let ((quoted (or quoted (memq (car form) '(quote function \`)))))
+            (let ((quoted (or quoted (memq (car form) '(quote function \`))))
+                  (constructed (or constructed
+                                   (memq (car form) '(file-name-concat expand-file-name)))))
               (if (memq (car form) '(let let*))
                   (let ((inner environment))
                     (dolist (binding (cadr form))
                       (let* ((name (if (consp binding) (car binding) binding))
                              (init (and (consp binding) (cadr binding)))
                              (scope (if (eq (car form) 'let*) inner environment)))
-                        (walk init line quoted scope)
+                        (walk init line quoted scope constructed)
                         (push (cons name (path init scope)) inner)))
-                    (dolist (body (cddr form)) (walk body line quoted inner)))
-                (while (consp form) (walk (pop form) line quoted environment))))))))
+                    (dolist (body (cddr form)) (walk body line quoted inner constructed)))
+                (while (consp form)
+                  (walk (pop form) line quoted environment constructed))))))))
       (with-temp-buffer
         (insert text)
         (emacs-lisp-mode)

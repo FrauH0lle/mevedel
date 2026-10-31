@@ -6,6 +6,7 @@ from collections import Counter
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import string
 import subprocess
@@ -277,7 +278,10 @@ def test_integrity_errors(root, names):
             literal = item['value']
             targets = set(suffixes.get(literal, ())) if item['path'] else set()
             # Also diagnose references to fixtures missing from disk entirely.
-            targets.update(re.findall(r'(?<![\w/])test/fixtures/[^\s"\'()]+', literal))
+            targets.update(normalized for target in re.findall(
+                r'(?<![\w/])test/fixtures/[^\s"\'()]+', literal)
+                if (normalized := posixpath.normpath(target)).startswith('test/fixtures/')
+                and not target.endswith('/'))
             for target in sorted(targets):
                 if ((root / target).is_dir() or
                         any(candidate.startswith(target + '/') for candidate in candidates)):
