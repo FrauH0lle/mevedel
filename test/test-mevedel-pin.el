@@ -285,6 +285,62 @@ while True:
                              (list :patch (test-mevedel-pin--patch
                                            "Update" updated "@@\n-LINE\n+INJECTED\n"))))))
 
+(defun test-mevedel-pin--call-with-stub-helper (source function)
+  "Call FUNCTION with a fresh local helper running Python SOURCE.
+FUNCTION receives the directory holding the stub."
+  (let* ((directory (make-temp-file "mevedel-pin-stub-" t))
+         (mevedel-pin--script (file-name-concat directory "stub.py"))
+         (mevedel-pin--helpers nil))
+    (unwind-protect
+        (progn
+          (write-region source nil mevedel-pin--script nil 'silent)
+          (funcall function directory))
+      (dolist (entry mevedel-pin--helpers)
+        (when (process-live-p (cdr entry)) (delete-process (cdr entry))))
+      (delete-directory directory t))))
+
+(mevedel-deftest mevedel-pin--request ()
+  ,test
+  (test)
+  :doc "a slow write succeeds past the timeout; a late reply is dropped"
+  (test-mevedel-pin--call-with-stub-helper
+   "import json, sys, time
+for line in sys.stdin:
+    request = json.loads(line)
+    time.sleep(1)
+    print(json.dumps({'id': request['id'], 'ok': True}), flush=True)
+"
+   (lambda (directory)
+     (skip-unless (executable-find "python3"))
+     (let ((mevedel-pin-timeout 0.3)
+           (path (file-name-concat directory "out")))
+       ;; A write waits while the helper lives, however long it takes.
+       (should (progn (mevedel-pin-write-file-atomically path "DATA") t))
+       ;; Other requests still give up at the deadline ...
+       (should-error (mevedel-pin--request nil (list :op "file" :path path))
+                     :type 'mevedel-pin-refused)
+       ;; ... and their late reply is not kept for anyone.
+       (let ((process (alist-get nil mevedel-pin--helpers))
+             (deadline (+ (float-time) 3)))
+         (while (and (process-get process 'mevedel-pin-pending)
+                     (< (float-time) deadline))
+           (accept-process-output process 0.05))
+         (accept-process-output process 1.5)
+         (should (zerop (hash-table-count
+                         (process-get process 'mevedel-pin-replies))))))))
+  :doc "a write to a helper that exits fails promptly"
+  (test-mevedel-pin--call-with-stub-helper
+   "import sys
+sys.stdin.readline()
+"
+   (lambda (directory)
+     (skip-unless (executable-find "python3"))
+     (let ((start (float-time)))
+       (should-error (mevedel-pin-write-file-atomically
+                      (file-name-concat directory "out") "DATA")
+                     :type 'mevedel-pin-refused)
+       (should (< (- (float-time) start) 3))))))
+
 (mevedel-deftest mevedel-pin-write-race ()
   ,test
   (test)

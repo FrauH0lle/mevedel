@@ -72,7 +72,10 @@ changes the real path behind TRAMP's back.  DIRECTORY-P flushes a subtree."
                              (json-parse-string line :object-type 'plist
                                                 :false-object nil :null-object nil)))
                     (id (plist-get reply :id)))
-          (puthash id reply replies))))
+          ;; Only an awaited id is recorded: a reply that arrives after its
+          ;; request gave up must not linger or answer a later request.
+          (when (eq (gethash id replies) :awaiting)
+            (puthash id reply replies)))))
     (process-put process 'mevedel-pin-pending pending)))
 
 (defun mevedel-pin--helper (prefix)
@@ -117,24 +120,33 @@ changes the real path behind TRAMP's back.  DIRECTORY-P flushes a subtree."
 
 (defun mevedel-pin--request (prefix request)
   "Send REQUEST to PREFIX's helper and return its answer plist.
-Signal `mevedel-pin-refused' when the helper refuses or does not answer."
+Signal `mevedel-pin-refused' when the helper refuses or does not answer.
+A write may take as long as its data needs, so it waits while the helper
+lives; other requests also give up after `mevedel-pin-timeout' seconds."
   (let* ((process (mevedel-pin--helper prefix))
          (replies (process-get process 'mevedel-pin-replies))
          (id (cl-incf mevedel-pin--next-id))
-         (deadline (+ (float-time) mevedel-pin-timeout))
+         (deadline (unless (equal (plist-get request :op) "write")
+                     (+ (float-time) mevedel-pin-timeout)))
          ;; Helper I/O must not change the coding a caller just read with.
          (last-coding-system-used last-coding-system-used)
          reply)
-    (process-send-string
-     process (concat (json-serialize (append (list :id id) request)) "\n"))
-    (while (and (not (setq reply (gethash id replies)))
-                (process-live-p process)
-                (< (float-time) deadline))
-      (accept-process-output process 0.05))
-    (remhash id replies)
+    (puthash id :awaiting replies)
+    (unwind-protect
+        (progn
+          (process-send-string
+           process (concat (json-serialize (append (list :id id) request)) "\n"))
+          (while (and (eq :awaiting (setq reply (gethash id replies)))
+                      (process-live-p process)
+                      (or (null deadline) (< (float-time) deadline)))
+            (accept-process-output process 0.05)))
+      (remhash id replies))
     (cond
-     ((null reply)
-      (signal 'mevedel-pin-refused '("the path pin helper did not answer")))
+     ((eq reply :awaiting)
+      (signal 'mevedel-pin-refused
+              (list (if (process-live-p process)
+                        "the path pin helper did not answer"
+                      "the path pin helper exited"))))
      ((not (plist-get reply :ok))
       (signal 'mevedel-pin-refused (list (plist-get reply :error))))
      (t reply))))
