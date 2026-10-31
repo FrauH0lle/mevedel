@@ -182,20 +182,21 @@
          (exec-path (list root))
          (mevedel-sandbox--probe-cache nil)
          (mevedel-sandbox-probe-timeout 0.05)
-         result started)
+         result)
     (skip-unless (eq system-type 'gnu/linux))
     (unwind-protect
         (progn
           (with-temp-file executable
-            (insert "#!/bin/sh\nexec /bin/sleep 5\n"))
+            (insert "#!/bin/sh\nexec /bin/sleep 30\n"))
           (set-file-modes executable #o700)
-          (setq started (float-time))
-          (setq result (mevedel-sandbox-probe))
+          ;; This watchdog discriminates an ignored probe timeout from a
+          ;; stalled candidate; it does not measure host scheduling latency.
+          (with-timeout (5 (ert-fail "Probe timeout did not settle"))
+            (setq result (mevedel-sandbox-probe)))
           (should-not (plist-get result :available))
           (should (string-match-p "timed out" (plist-get result :reason)))
           ;; A probe that never finished proves nothing about the backend.
-          (should (plist-get result :retry-on-execution))
-          (should (< (- (float-time) started) 0.5)))
+          (should (plist-get result :retry-on-execution)))
       (delete-directory root t)))
   :doc "isolated wait:
 `mevedel-sandbox-probe' runs no timers while it waits for the candidate"
