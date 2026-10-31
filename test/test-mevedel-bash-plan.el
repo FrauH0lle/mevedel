@@ -179,7 +179,8 @@
               ;; even though managed output already uses a bounded preview.
               ;; Observe the real persistence path and retained spool without
               ;; replacing either implementation or initializing the session.
-              (let* ((payload (make-string 60000 ?x))
+              (let* ((mevedel-pipeline--default-max-result-size 1000)
+                     (payload (make-string 3000 ?x))
                      (command (format "echo '%s'" payload))
                      (analysis (mevedel-bash-analysis-analyze command))
                      (persist (symbol-function 'mevedel-pipeline--persist-result))
@@ -204,6 +205,8 @@
                         (funcall retire record))))
                   (setq result (run command)))
                 (should (integerp raw-result-size))
+                (should (= 1000 mevedel-pipeline--default-max-result-size))
+                (should (> (length payload) mevedel-execution-inline-output-limit))
                 (should (> raw-result-size mevedel-pipeline--default-max-result-size))
                 (should (string-match-p "Output too large" result))
                 (should-not (mevedel-session-save-path session))
@@ -212,7 +215,14 @@
                 (should (file-in-directory-p spool (file-name-concat root "tmp")))
                 (with-temp-buffer
                   (insert-file-contents-literally spool)
-                  (should (equal (concat payload "\n") (buffer-string)))))
+                  (should (equal (concat payload "\n") (buffer-string))))
+                ;; The same real command stays inline without the lowered cap.
+                ;; This distinguishes persistence from command/output failure.
+                (let ((mevedel-pipeline--default-max-result-size 50000))
+                  (setq result (run command))
+                  (should-not (string-match-p "Output too large" result))
+                  (should (string-prefix-p (make-string 1000 ?x) result))
+                  (should (string-match-p "omitted 1001 chars" result))))
               ;; A Plan denial must precede execution, not merely rely on the
               ;; protected .git mount rejecting a write after launch.
               (cl-letf (((symbol-function 'mevedel-execution-start-bash)
