@@ -111,6 +111,7 @@
         (should (eq :false (gethash "journal-bearing" record)))
         (should (equal "general" (gethash "scope" record)))
         (should-not (times)))
+      (mevedel-journal-cleanup-expired workspace t)
       (should (equal "An uncertain finding, not durable guidance.\n"
                      (mevedel-session-control-fs-read-file
                       (file-name-concat root ".mevedel" "shared" "finding.md"))))))

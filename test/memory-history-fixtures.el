@@ -95,6 +95,11 @@ root would have, so no topic rows, identities or proofs carry over."
                         (when (seq-some (lambda (name) (string-search name text)) names)
                           (push key stale))))
                     table)
+           ;; Live ownership is a teardown leak, not a disposable read cache.
+           (when (memq symbol '(mevedel-memory-decision--operations
+                                mevedel-memory-pass--running
+                                mevedel-memory-pass--deferred))
+             (should-not stale))
            (dolist (key stale) (remhash key table))))))))
 
 (defun mevedel-test-memory-history-root (key)
