@@ -374,7 +374,7 @@ DIRECTORY may be target-native or already qualified for TARGET."
             (expand-file-name
              native-directory
              (mevedel-execution-target-native-root target))))
-         (resolved (expand-file-name native-path native-directory)))
+         (resolved (mevedel-expand-file-name native-path native-directory)))
     (concat (mevedel-execution-target-prefix target) resolved)))
 
 (defun mevedel-execution-target--process-output (target program &rest args)

@@ -406,10 +406,15 @@ TARGET and DIRECTORY bind target-native paths to their execution target."
            (mevedel-execution-target-error
             (mevedel-tool-exec-permission--policy-error
              "%s" (error-message-string err)))))
+       ;; Without a target nothing above refuses a quoted name, which would
+       ;; escape the spelling-based protection checks.
+       (when (file-name-quoted-p path)
+         (mevedel-tool-exec-permission--policy-error
+          "Quoted paths are not allowed: %s" path))
        (list :path (if target
                        (mevedel-execution-target-expand-path
                         target path directory)
-                     (expand-file-name path))
+                     (mevedel-expand-file-name path))
              :access access))
      paths)))
 

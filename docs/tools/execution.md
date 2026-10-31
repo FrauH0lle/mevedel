@@ -87,6 +87,19 @@ when the user asked for it. A wrapper that runs Git without `git` in the
 command text, submodule remotes, and remote execution targets do not get the
 transport.
 
+## Hidden host services
+
+Confined commands see an empty private `XDG_RUNTIME_DIR`: `/run/user` is
+replaced by a tmpfs, so the session D-Bus, the systemd user manager
+(`systemctl --user`, `systemd-run --user`), gpg-agent, keyrings, an Emacs
+server and audio servers are absent. The ssh-agent named by `SSH_AUTH_SOCK` is
+masked too, and so are the X11 and ICE socket directories under `/tmp`.
+Writable roots and the Wayland display socket stay available. Filesystem grants
+for paths at, below or above `/run/user` are refused. A missing bus or agent
+is this boundary, not a fault to repair; if the user's task truly needs that
+service, request a
+[full confinement bypass](#full-confinement-bypass).
+
 ## Full confinement bypass
 
 If a relevant confined attempt failed and additive grants cannot support the

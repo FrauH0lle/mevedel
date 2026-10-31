@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-utilities)
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-expand-path
@@ -237,9 +238,9 @@ Returns non-nil if PATH matches PATTERN."
               (mevedel-execution-target-expand-path target pattern))
              ((or (string-prefix-p "~" pattern)
                   (file-name-absolute-p pattern))
-              (expand-file-name pattern))
+              (mevedel-expand-file-name pattern))
              (t pattern)))
-           (expanded-path (expand-file-name path))
+           (expanded-path (mevedel-expand-file-name path))
            (directory-glob-root
             (when (string-suffix-p "/**" expanded)
               (substring expanded 0 -3)))
@@ -529,21 +530,37 @@ unqualified rules.  Within each group, deny > ask > allow.  Return
 
 TARGET supplies the path domain for target-home patterns.  When ACCESS is
 `read', read-only entries permit access; inaccessible entries still protect it.
+A quoted `/:' name and, for a local PATH, the canonical file it reaches
+through symlinks are checked too: a workspace link into a protected tree
+names that tree.
 Returns non-nil if the path is protected."
   (when path
-    (let ((expanded (expand-file-name path)))
+    (let* ((expanded (mevedel-expand-file-name path))
+           (unquoted (if (and (not (file-remote-p expanded))
+                              (string-prefix-p "/:" expanded))
+                         (mevedel-collapse-leading-slashes (substring expanded 2))
+                       expanded))
+           (spellings
+            (delete-dups
+             (list expanded unquoted
+                   (unless (file-remote-p unquoted)
+                     ;; Resolves existing ancestors and keeps a missing tail.
+                     (let ((file-name-handler-alist nil))
+                       (mevedel-file-truename unquoted)))))))
       (cl-loop for (pattern . mode) in
                (mevedel-permission-protected-path-policy)
                thereis
                (and (not (and (eq access 'read) (eq mode 'read-only)))
-                    (mevedel-permission-rules-match-path-p
-                     expanded pattern target))))))
+                    (cl-some (lambda (spelling)
+                               (mevedel-permission-rules-match-path-p
+                                spelling pattern target))
+                             spellings))))))
 
 (defun mevedel-permission-rules--path-contained-p (path root)
   "Return non-nil when PATH is ROOT or is contained by it."
   (when (and path root)
-    (let ((abs-path (expand-file-name path))
-          (abs-root (expand-file-name root)))
+    (let ((abs-path (mevedel-expand-file-name path))
+          (abs-root (mevedel-expand-file-name root)))
       (or (string= (directory-file-name abs-path)
                    (directory-file-name abs-root))
           (string-prefix-p (file-name-as-directory abs-root)
@@ -558,9 +575,9 @@ Returns non-nil if the path is protected."
 (defun mevedel-permission-rules-path-in-exact-allowed-paths-p (path allowed-paths)
   "Return non-nil when PATH exactly matches one of ALLOWED-PATHS."
   (when path
-    (let ((expanded (expand-file-name path)))
+    (let ((expanded (mevedel-expand-file-name path)))
       (cl-loop for allowed in allowed-paths
-               thereis (string= expanded (expand-file-name allowed))))))
+               thereis (string= expanded (mevedel-expand-file-name allowed))))))
 
 (defun mevedel-permission-rules-resource-granted-p
     (path access grants &optional recursive)
@@ -569,7 +586,7 @@ RECURSIVE non-nil requests authority over PATH and all descendants,
 which only a recursive grant containing PATH provides.  Otherwise an
 exact grant on PATH or a recursive grant containing PATH suffices."
   (when (and path (memq access '(read write)))
-    (let ((expanded (expand-file-name path)))
+    (let ((expanded (mevedel-expand-file-name path)))
       (cl-loop for grant in grants
                when (proper-list-p grant)
                thereis
@@ -581,9 +598,9 @@ exact grant on PATH or a recursive grant containing PATH suffices."
                            (if (plist-get grant :workspace-origin)
                                (string= (directory-file-name expanded)
                                         (directory-file-name
-                                         (expand-file-name (plist-get grant :path))))
+                                         (mevedel-expand-file-name (plist-get grant :path))))
                              (string= expanded
-                                      (expand-file-name
+                                      (mevedel-expand-file-name
                                        (plist-get grant :path))))))
                     (or (eq (plist-get grant :access) 'write)
                         (eq (plist-get grant :access) access)))))))
@@ -711,7 +728,7 @@ ORIGIN preserves a private workspace-relative bound on runtime authority."
     (error "Invalid resource access: %s" access))
   (unless (memq recursive '(t nil))
     (error "Invalid resource recursive flag: %S" recursive))
-  (append (list :path (expand-file-name path) :access access)
+  (append (list :path (mevedel-expand-file-name path) :access access)
           (and recursive '(:recursive t))
           (and origin (list :workspace-origin origin))))
 
@@ -727,7 +744,7 @@ recursive grant on the same path.  ORIGIN is part of the grant identity."
           (lambda (item)
             (and (stringp (plist-get item :path))
                   (equal origin (plist-get item :workspace-origin))
-                 (string= expanded (expand-file-name (plist-get item :path)))
+                 (string= expanded (mevedel-expand-file-name (plist-get item :path)))
                  (eq (and (plist-get item :recursive) t) (and recursive t))))))
     (if (cl-find-if (lambda (item)
                       (and (funcall same-identity-p item)

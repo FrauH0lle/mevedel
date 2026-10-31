@@ -96,11 +96,19 @@ Exact directory reads outside INACCESSIBLE-PATHS need no additional mount:
 the base read-only filesystem already allows them."
   (delq nil (mapcar
              (lambda (grant)
-               (let ((path (plist-get grant :path))
+               ;; One spelling for every prefix comparison and mount:
+               ;; `//run/user' is `/run/user' to the kernel.
+               (let ((path (mevedel-collapse-leading-slashes (plist-get grant :path)))
                      (access (plist-get grant :access)))
                  (unless (mevedel-permission-origin-valid-p grant)
                    (signal 'mevedel-sandbox-policy-error
                            (list (format "Workspace-relative filesystem grant is no longer contained: %S"
+                                         path))))
+                 ;; A quoted name escapes spelling-based protection and
+                 ;; would otherwise be dropped silently as an exact read.
+                 (when (and (stringp path) (file-name-quoted-p path))
+                   (signal 'mevedel-sandbox-policy-error
+                           (list (format "Quoted filesystem grant paths are not supported: %S"
                                          path))))
                  (unless (and (stringp path)
                               (file-name-absolute-p path)
@@ -115,13 +123,13 @@ the base read-only filesystem already allows them."
                  (if (and (file-directory-p path) (not (plist-get grant :recursive)))
                      (when (or (eq access 'write)
                                (mevedel-permission-rules-path-in-allowed-roots-p
-                                (file-truename path) inaccessible-paths))
+                                (mevedel-file-truename path) inaccessible-paths))
                        (signal 'mevedel-sandbox-policy-error
                                (list (format
                                       "Exact directory access cannot be confined: %s; select a recursive directory scope in the permission prompt"
                                       path))))
                    (let* ((resolved (copy-sequence grant))
-                          (canonical (file-truename path))
+                          (canonical (mevedel-file-truename path))
                           (attributes (mevedel-sandbox--target-stat canonical))
                           (identity (plist-get attributes :identity))
                           (device-p (plist-get attributes :device-p)))

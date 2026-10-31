@@ -303,6 +303,31 @@ a trailing `/**`, policy covers both the directory and its descendants. On a
 remote session, leading `~` uses the target user's probed home; a
 client-absolute custom pattern stays in the client path domain and therefore
 does not become a remote protection rule.
+Protection is matched against every spelling that reaches the file: the
+path as given, its `/:`-unquoted form, a leading `//` collapsed to `/`, and,
+for a local path, its canonical target through symlinks (with a missing tail
+kept). A workspace symlink into `~/.ssh` is therefore as protected as
+`~/.ssh` itself. Filesystem grants refuse `/:`-quoted paths outright.
+
+Read and ApplyPatch, including resource-backed reads and writes, open the
+authorized canonical path through `scripts/mevedel-pin.py`. It walks the path
+from the root with `O_NOFOLLOW`, refuses any symlink component and holds a
+descriptor that Emacs reads or writes through, so a directory a confined
+process swaps for a symlink after authorization, or a dangling link it
+resolves later, refuses the operation instead of reaching a protected tree.
+The helper also performs every write itself, without reopening anything by
+name: it creates missing parent directories with `mkdirat`, creates a
+temporary file with `O_CREAT|O_EXCL|O_NOFOLLOW`, writes and `fchmod`s that
+descriptor, and renames it over the target within the pinned directory.
+Emacs encodes the content and sends the bytes. A symlink planted at the
+temporary name therefore cannot receive the content or mode, and a planted
+final symlink is replaced instead of followed. Deletion uses `unlinkat` in the
+pinned directory. One helper serves
+each execution target; the first use costs about 11 ms locally and each later
+pin about 0.1 ms. Grep, Glob and media converters run under the same
+confinement as the commands that could swap paths, where protected trees are
+masked by their canonical paths. Canonicalization cannot see hardlinks to a
+protected file that the user created earlier.
 String-only entries are invalid by design. Glob discovery walks the
 workspace, memory, and additional writable roots before every launch; the
 execution target's temporary directory is excluded as a discovery root. A
@@ -990,6 +1015,45 @@ without connection sharing, and teardown stops the broker with its ssh
 children. The
 [execution manual](tools/execution.md#git-over-ssh) gives the model contract.
 
+Confinement also hides per-user runtime directories, because their sockets act
+with the user's full authority outside the sandbox and a read-only mount does
+not stop a connection. `/run/user` on the execution target, and locally an
+`XDG_RUNTIME_DIR` outside it, are replaced by an empty private tmpfs. This
+hides the session D-Bus (whose systemd manager would run `systemd-run --user`
+commands on the host), the systemd user manager, gpg-agent and its ssh socket,
+the GNOME keyring and KWallet, an Emacs server, PipeWire and PulseAudio,
+accessibility, portal and podman sockets, and the X authority cookie stored
+there. Inside, the runtime directory is writable, private and discarded on
+exit. Writable roots beneath it, the Git SSH broker directory and, locally,
+the Wayland socket named by `WAYLAND_DISPLAY` are bound back on top of the
+tmpfs, so graphical checks keep their display. The compositor therefore
+remains reachable, and its own protocol policy governs what a client may do.
+Grant mounts follow the mask, so a filesystem grant at, below or above a
+masked directory (for example `/run/user/UID`, its `gnupg/` or `/run`) would
+bring the sockets back; confined preparation refuses such a grant, and only
+a full escalation reaches those services. `/tmp/.X11-unix` and `/tmp/.ICE-unix`
+are also replaced by empty tmpfs mounts: an X server accepts input injection
+and the ICE session manager controls the desktop session.
+
+Socket masking is path-based, so other host sockets remain reachable:
+
+- The system D-Bus at `/run/dbus/system_bus_socket`. polkit gates each action;
+  those allowed without authentication are essentially logind power
+  operations for the active session.
+- systemd's local SSH socket `/run/ssh-unix-local/socket`, which still requires
+  SSH authentication; the ssh-agent and `~/.ssh` are hidden.
+- The system manager's Varlink socket `/run/systemd/io.systemd.Manager`, whose
+  privileged methods are permission-checked.
+- Sockets other programs place elsewhere in shared temporary space or in
+  writable roots, such as a Codex app-server control socket under
+  `/tmp/codex-daemon-UID/` and Qt single-instance or login-manager sockets in
+  `/tmp`. The temporary directory stays shared because commands, native tools
+  and batch Eval exchange files through it.
+- Abstract sockets, including Xwayland's, only with a network grant: network
+  isolation separates the abstract namespace.
+
+A remote target's `XDG_RUNTIME_DIR` outside `/run/user` is not masked.
+
 An explicitly approved write grant for a character or block device mounts
 only that device node with device access enabled. Its source is opened and
 identity-checked before mounting; the mounted node is checked again and its
@@ -1156,6 +1220,10 @@ Signals, timeouts, and ordinary command failures are returned once and never
 replayed. `required` refuses an unavailable backend, while `off` selects direct
 execution deliberately. Direct execution reports `filesystem: unrestricted`
 and `network: unrestricted`; refused attempts report unavailable boundaries.
+With confinement off, Grep, Glob and Read's media converters (pdfinfo,
+pdftoppm, ImageMagick) are not protected against a path component swapped
+for a symlink after authorization, because they open paths by name; direct
+execution already grants the user's host authority.
 A pre-marker failure retains its launcher error, diagnostics, or exit code.
 The next independent invocation reprobes the backend, so a transient launch
 failure does not disable confinement permanently. Bash and batch-Eval results append their active

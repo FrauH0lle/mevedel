@@ -18,6 +18,12 @@
 ;; `files'
 (defvar remote-file-name-inhibit-cache)
 
+;; `mevedel-utilities'
+(declare-function mevedel-collapse-leading-slashes "mevedel-utilities" (path))
+(autoload 'mevedel-collapse-leading-slashes "mevedel-utilities")
+(declare-function mevedel-file-truename "mevedel-utilities" (filename))
+(autoload 'mevedel-file-truename "mevedel-utilities")
+
 ;; `cl-lib'
 (declare-function cl-count-if "cl-lib" (predicate sequence &rest args))
 (declare-function cl-find-if "cl-lib" (predicate sequence &rest args))
@@ -279,11 +285,12 @@ base directory for relative values; malformed substitutions leave VALUE
 literal and are expanded in that same base directory."
   (if (or (not (stringp value)) (string-empty-p value))
       value
-    (expand-file-name
-     (condition-case nil
-         (substitute-in-file-name value)
-       (error value))
-     directory)))
+    (mevedel-collapse-leading-slashes
+     (expand-file-name
+      (condition-case nil
+          (substitute-in-file-name value)
+        (error value))
+      directory))))
 
 (defun mevedel-resource-encode-component (value)
   "Return VALUE encoded as one canonical RFC 3986 UTF-8 component."
@@ -826,7 +833,9 @@ or permission callback sees a target."
       (unless (mevedel-resource-within-root-p path root)
         (signal 'mevedel-resource-error
                 (list "Resource address escapes its owning root")))
-      path)))
+      ;; Canonical before authorization: handlers open it through a pin that
+      ;; refuses symlinks, so a legitimately linked root resolves here.
+      (mevedel-file-truename path))))
 
 (defun mevedel-resource--file-list (root &optional scheme)
   "Return regular files beneath ROOT in deterministic relative order.

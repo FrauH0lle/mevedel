@@ -483,6 +483,8 @@ unavailable Wayland sockets, inaccessible displays and missing export support;
 a bounded parent process terminates a hung graphical child. A relative Wayland
 socket is resolved against the original runtime directory before isolation;
 X authentication is preserved separately from HOME.
+Inside mevedel's command confinement only a Wayland display is reachable:
+`/tmp/.X11-unix` and the runtime directory's X authority are masked.
 
 Both **`markdown` and `markdown-inline` tree-sitter grammars** must load in the
 isolated child. Missing grammars are a hard failure, not silently unfontified

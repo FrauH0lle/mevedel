@@ -18,6 +18,10 @@
 (require 'mevedel-resource)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
+(require 'mevedel-tool-fs)
+(require 'mevedel-workspace)
+(require 'mevedel-hooks)
+(require 'mevedel-permission-queue)
 
 (defun mevedel-test--run-read-access-tool (args spec session)
   "Run a mutating tool declaring ARG SPEC with ARGS in SESSION.
@@ -80,6 +84,65 @@ Return a plist with the `:attempt' its handler saw for the source address."
          '(:source "work://notes/../secret"))))
     (should (string-match-p "Error:" result))
     (should-not handled)))
+
+(defun mevedel-test--read-through-pipeline (session directory path)
+  "Run the real Read tool for PATH in SESSION from DIRECTORY.
+Return (:queued QUEUED :result RESULT); a queued prompt is left unanswered."
+  (let (queued result)
+    (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+               (lambda (_event _payload callback &rest _) (funcall callback nil)))
+              ((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session) (setq queued entry))))
+      (with-temp-buffer
+        (setq-local mevedel--session session)
+        (setq default-directory directory)
+        (mevedel-pipeline-run-tool
+         (mevedel-tool-get "Read") (lambda (value) (setq result value))
+         (list :file_path path))
+        (let ((deadline (+ (float-time) 5)))
+          (while (and (not (or queued result)) (< (float-time) deadline))
+            (accept-process-output nil 0.02)))))
+    (list :queued (and queued t) :result result)))
+
+(mevedel-deftest mevedel-tool-permission-paths ()
+  ,test
+  (test)
+  :doc "Read through a workspace symlink into a protected tree asks, never allows"
+  (let* ((top (file-truename (make-temp-file "mevedel-read-symlink-" t)))
+         (outside (file-name-concat top "outside"))
+         (ws (file-name-as-directory (file-name-concat top "ws")))
+         (workspace nil)
+         (mevedel-permission-rules nil)
+         ;; A decoy protected tree; no real key material is involved.
+         (mevedel-protected-paths `((,(concat outside "/.ssh/**") . inaccessible))))
+    (unwind-protect
+        (progn
+          (mevedel-tool-fs--register)
+          (make-directory (file-name-concat outside ".ssh") t)
+          (make-directory ws t)
+          (setq workspace (mevedel-workspace-get-or-create 'project ws ws "ws"))
+          (write-region "DECOY-KEY" nil (file-name-concat outside ".ssh/key") nil 'silent)
+          (write-region "PLAIN" nil (file-name-concat ws "plain.txt") nil 'silent)
+          (make-symbolic-link (file-name-concat outside ".ssh") (file-name-concat ws "s"))
+          (dolist (mode '(edits ask))
+            (let* ((mevedel-permission-mode mode)
+                   (session (mevedel-session-create "main" workspace)))
+              (setf (mevedel-session-permission-mode session) mode)
+              (dolist (path (list (file-name-concat ws "s/key")
+                                  (concat "/:" (file-name-concat ws "s/key"))
+                                  (file-name-concat outside ".ssh/key")))
+                (let ((run (mevedel-test--read-through-pipeline session ws path)))
+                  ;; Asked, or refused outright for a quoted `/:' name.
+                  (should (or (plist-get run :queued)
+                              (string-prefix-p "Error:" (plist-get run :result))))
+                  (should-not (string-match-p "DECOY-KEY"
+                                              (format "%s" (plist-get run :result))))))
+              ;; Negative control: an ordinary workspace file is read unasked.
+              (let ((run (mevedel-test--read-through-pipeline
+                          session ws (file-name-concat ws "plain.txt"))))
+                (should-not (plist-get run :queued))
+                (should (string-match-p "PLAIN" (format "%s" (plist-get run :result))))))))
+      (delete-directory top t))))
 
 (provide 'test-mevedel-pipeline-read-access)
 ;;; test-mevedel-pipeline-read-access.el ends here

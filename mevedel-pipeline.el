@@ -875,7 +875,7 @@ authorization observes the target's current link destination."
   (if (or (not (stringp value)) (string-empty-p value))
       value
     (let* ((remote-file-name-inhibit-cache t)
-           (canonical (file-truename value)))
+           (canonical (mevedel-file-truename value)))
       (if execution-target
           (concat
            (mevedel-execution-target-prefix execution-target)
@@ -911,11 +911,11 @@ target path signals for the pipeline runner to handle."
                      (not resource-p))
             (let* ((expanded (mevedel-pipeline--normalize-path-value
                               value target directory))
-                   (normalized
-                    (if (eq type 'path)
-                        (mevedel-pipeline--canonicalize-path-value
-                         expanded target)
-                      expanded)))
+                   ;; Ordinary paths of either type name what the handler
+                   ;; opens: a workspace symlink must not pass authorization
+                   ;; as the workspace path and then read its target.
+                   (normalized (mevedel-pipeline--canonicalize-path-value
+                                expanded target)))
               (unless (equal value normalized)
                 (setq updated
                       (plist-put (or updated (copy-sequence args))

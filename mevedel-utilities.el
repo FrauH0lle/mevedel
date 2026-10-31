@@ -145,6 +145,34 @@ data, not resource descendants; it does not relax their containment checks."
     (file-name-directory
      (file-truename (if (and source (file-regular-p source)) source file)))))
 
+
+;;
+;;; Path spelling
+
+(defun mevedel-collapse-leading-slashes (path)
+  "Return PATH with a leading run of slashes in its local part as one.
+POSIX lets `//' name an implementation-defined root, so `expand-file-name'
+and `file-truename' keep it, but Linux resolves it as `/'.  Prefix-based
+path policy must compare one spelling, or `//run/user' escapes a check
+written for `/run/user'.  A remote PATH keeps its method prefix."
+  (if (not (stringp path))
+      path
+    ;; Split the authored spelling: `file-remote-p' returns the expanded
+    ;; prefix, whose length differs for shorthand such as `/-::'.
+    (let* ((local (file-local-name path))
+           (prefix (substring path 0 (- (length path) (length local)))))
+      (concat prefix (replace-regexp-in-string "\\`//+" "/" local t t)))))
+
+(defun mevedel-expand-file-name (name &optional directory)
+  "Return NAME expanded in DIRECTORY with a single leading slash.
+This is `expand-file-name' for paths that path policy compares."
+  (mevedel-collapse-leading-slashes (expand-file-name name directory)))
+
+(defun mevedel-file-truename (filename)
+  "Return FILENAME's `file-truename' with a single leading slash.
+A symlink whose target begins with `//' otherwise yields that spelling."
+  (mevedel-collapse-leading-slashes (file-truename filename)))
+
 ;;;###autoload
 (defun mevedel-version (&optional here message)
   "Return the current version of mevedel.

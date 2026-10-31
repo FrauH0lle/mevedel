@@ -13,6 +13,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-execution-target)
 (require 'mevedel-file-state)
+(require 'mevedel-pin)
 (require 'mevedel-pipeline)
 (require 'mevedel-resource)
 (require 'mevedel-structs)
@@ -188,6 +189,10 @@ K continues the current Read in its original buffer, pipeline context and
 Read state rather than waiting here: a wait would re-enter the event loop
 from gptel's process callbacks, where quitting is inhibited.  A helper that
 could not run, and any error K raises, settle the Read as an error."
+  ;; Converters (pdfinfo, pdftoppm, ImageMagick) open READ-PATHS by name, not
+  ;; through a pin.  They are safe against a swapped symlink only because they
+  ;; run under the same confinement as any process that could swap it, which
+  ;; masks protected trees by canonical path -- like Grep and Glob.
   (let ((values (mapcar (lambda (symbol) (and (boundp symbol) (symbol-value symbol)))
                         mevedel-tool-fs-read--continuation-variables)))
     (mevedel-start-helper-capturing-output
@@ -384,7 +389,8 @@ neither may reuse or poison the parent conversation's Read history."
   "Return non-nil when PATH has EXPECTED byte string at OFFSET."
   (with-temp-buffer
     (set-buffer-multibyte nil)
-    (insert-file-contents-literally path nil offset (+ offset (length expected)))
+    (insert-file-contents-literally (mevedel-pin-open-path path)
+                                    nil offset (+ offset (length expected)))
     (string-equal (buffer-string) expected)))
 
 (defun mevedel-tool-fs-read--valid-media-file-p (path mime)
@@ -456,7 +462,7 @@ Use DISPLAY-PATH in model-visible errors when non-nil."
       (error "Media file is too large (%d bytes > %d bytes): %s"
              size cap (or display-path path)))
     (with-temp-buffer
-      (insert-file-contents-literally path)
+      (insert-file-contents-literally (mevedel-pin-open-path path))
       (base64-encode-region (point-min) (point-max) :no-line-break)
       (buffer-string))))
 
@@ -488,7 +494,7 @@ is deleted before returning."
                    (mevedel--session nil)
                    (local (file-name-concat
                            directory (file-name-nondirectory path))))
-              (copy-file path local t)
+              (copy-file (mevedel-pin-open-path path) local t)
               (let ((mevedel-tool-fs-read--local-media-copy (cons path local)))
                 (funcall function local)))
           (unless deferred
@@ -1179,7 +1185,7 @@ wrap in `condition-case'."
             (when (> file-size (* 512 1024))
               (error "File is too large (> 512 KB).  Use offset and limit to read specific portions"))
             (with-temp-buffer
-              (insert-file-contents path)
+              (mevedel-pin-insert-file-contents path)
               (let ((line-truncated-p
                      (mevedel-tool-fs-read--truncate-buffer-to-lines num-lines)))
                 (mevedel-tool-fs-read--finalize-read-buffer
@@ -1189,7 +1195,7 @@ wrap in `condition-case'."
                (chunk-size (min file-size (* 512 1024)))
                (coding
                 (with-temp-buffer
-                  (insert-file-contents path nil 0 chunk-size)
+                  (mevedel-pin-insert-file-contents path nil 0 chunk-size)
                   last-coding-system-used))
                (text-coding
                 (coding-system-change-eol-conversion coding 'unix))
@@ -1219,7 +1225,7 @@ wrap in `condition-case'."
                          (min file-size (+ byte-offset chunk-size))))
                     (goto-char (point-max))
                     (insert-file-contents-literally
-                     path nil byte-offset chunk-end)
+                     (mevedel-pin-open-path path) nil byte-offset chunk-end)
                     (setq byte-offset chunk-end)))
                  (next-newline
                   ()
@@ -1397,112 +1403,115 @@ returning; media reads may continue from helper callbacks."
     (when (mevedel-tool-fs-read--blocked-device-p filename)
       (error "Cannot read %s: device file would block or produce infinite output"
              (mevedel-tool-fs-read--visible-path filename)))
-    (if (mevedel-tool-fs-read-media-mime-type filename)
-        (progn
-          (when (and char-offset (> char-offset 0))
-            (error "Parameter char_offset is only supported for text reads"))
-          ;; A model without document input reads a whole PDF as its
-          ;; leading page images; the result says how to continue.
-          (when (and (mevedel-tool-fs-read-pdf-media-p filename)
-                     (null (plist-get args :pages))
-                     (mevedel-tool-fs-read--pdf-page-images-only-p))
-            (setq args (plist-put args :pages "1-")))
-          ;; Strict tool schemas make models fill every field, so a media
-          ;; read arrives with whatever offset and limit they chose.  A line
-          ;; range means nothing for media; ignore it rather than fail.
-          (unless (or (mevedel-tool-fs-read-pdf-media-p filename)
-                      (null (plist-get args :pages)))
-            (error "Parameter pages is only supported for PDF files"))
-          (when (and (mevedel-tool-fs-read-pdf-media-p filename)
-                     (null (plist-get args :pages))
-                     (mevedel-tool-fs-read--media-transform-requested-p args))
-            (error "`max_width', `max_height', and `max_tokens' are only supported for image files and PDF page images"))
-          (mevedel-tool-fs-read--ensure-media-capable
-           (mevedel-tool-fs-read--media-result-mime filename args))
-          (let ((dedup-key (mevedel-tool-fs-read--media-dedup-key args)))
-            (cond
-             ((and (mevedel-tool-fs-read--dedup-p)
-                   (mevedel-session-read-is-duplicate-p
-                    mevedel--session filename dedup-key nil))
-              (funcall k (format "File %s unchanged since last read.  Reuse the previous contents."
-                                 (mevedel-tool-fs-read--visible-path filename))))
-             (t
-              (let ((whole-pdf (and (mevedel-tool-fs-read-pdf-media-p filename)
-                                    (null (plist-get args :pages)))))
-                (cl-labels
-                    ((record (result)
-                       (when (mevedel-tool-fs-read--dedup-p)
-                         (mevedel-session-record-file-access
-                          mevedel--session filename 'read dedup-key nil))
-                       (funcall k result))
-                     (read-media ()
-                       (condition-case err
-                           (mevedel-tool-fs-read--media-file
-                            filename args
-                            (lambda (result)
-                              (if (not whole-pdf)
-                                  (record result)
-                                (mevedel-tool-fs-read--pdf-page-count
-                                 filename
-                                 (lambda (page-count)
-                                   (record
-                                    (if (mevedel-tool-fs-read-large-pdf-p
-                                         filename page-count)
-                                        (mevedel-tool-fs-read--append-system-reminder
-                                         result
-                                         (mevedel-tool-fs-read-format-large-pdf-reminder
-                                          filename page-count))
-                                      result)))))))
-                         (error
-                          (let ((message (error-message-string err)))
-                            (if (and whole-pdf
-                                     (string-match-p "Media file is too large"
-                                                     message))
-                                (mevedel-tool-fs-read--pdf-page-count
-                                 filename
-                                 (lambda (page-count)
-                                   (error "%s%s"
-                                          message
+    ;; Opens resolve through a pin of the authorized path, so a
+    ;; component swapped for a symlink after authorization is refused.
+    (mevedel-pin-with-file filename
+      (if (mevedel-tool-fs-read-media-mime-type filename)
+          (progn
+            (when (and char-offset (> char-offset 0))
+              (error "Parameter char_offset is only supported for text reads"))
+            ;; A model without document input reads a whole PDF as its
+            ;; leading page images; the result says how to continue.
+            (when (and (mevedel-tool-fs-read-pdf-media-p filename)
+                       (null (plist-get args :pages))
+                       (mevedel-tool-fs-read--pdf-page-images-only-p))
+              (setq args (plist-put args :pages "1-")))
+            ;; Strict tool schemas make models fill every field, so a media
+            ;; read arrives with whatever offset and limit they chose.  A line
+            ;; range means nothing for media; ignore it rather than fail.
+            (unless (or (mevedel-tool-fs-read-pdf-media-p filename)
+                        (null (plist-get args :pages)))
+              (error "Parameter pages is only supported for PDF files"))
+            (when (and (mevedel-tool-fs-read-pdf-media-p filename)
+                       (null (plist-get args :pages))
+                       (mevedel-tool-fs-read--media-transform-requested-p args))
+              (error "`max_width', `max_height', and `max_tokens' are only supported for image files and PDF page images"))
+            (mevedel-tool-fs-read--ensure-media-capable
+             (mevedel-tool-fs-read--media-result-mime filename args))
+            (let ((dedup-key (mevedel-tool-fs-read--media-dedup-key args)))
+              (cond
+               ((and (mevedel-tool-fs-read--dedup-p)
+                     (mevedel-session-read-is-duplicate-p
+                      mevedel--session filename dedup-key nil))
+                (funcall k (format "File %s unchanged since last read.  Reuse the previous contents."
+                                   (mevedel-tool-fs-read--visible-path filename))))
+               (t
+                (let ((whole-pdf (and (mevedel-tool-fs-read-pdf-media-p filename)
+                                      (null (plist-get args :pages)))))
+                  (cl-labels
+                      ((record (result)
+                         (when (mevedel-tool-fs-read--dedup-p)
+                           (mevedel-session-record-file-access
+                            mevedel--session filename 'read dedup-key nil))
+                         (funcall k result))
+                       (read-media ()
+                         (condition-case err
+                             (mevedel-tool-fs-read--media-file
+                              filename args
+                              (lambda (result)
+                                (if (not whole-pdf)
+                                    (record result)
+                                  (mevedel-tool-fs-read--pdf-page-count
+                                   filename
+                                   (lambda (page-count)
+                                     (record
+                                      (if (mevedel-tool-fs-read-large-pdf-p
+                                           filename page-count)
                                           (mevedel-tool-fs-read--append-system-reminder
-                                           ""
+                                           result
                                            (mevedel-tool-fs-read-format-large-pdf-reminder
-                                            filename page-count)))))
-                              (signal (car err) (cdr err))))))))
-                  (if (and whole-pdf (file-remote-p filename))
-                      (mevedel-tool-fs-read--with-local-media-source
-                       filename (lambda (_source) (read-media)))
-                    (read-media))))))))
-      (when (plist-get args :pages)
-        (error "Parameter pages is only supported for PDF files"))
-      (when (mevedel-tool-fs-read--media-transform-requested-p args)
-        (error "`max_width', `max_height', and `max_tokens' are only supported for image files and PDF page images"))
-      (when (mevedel-tool-fs-read--binary-extension-p filename)
-        (let ((ext (file-name-extension filename)))
-          (error "Cannot read binary file (type: .%s): %s" ext
-                 (mevedel-tool-fs-read--visible-path filename))))
-      (funcall
-       k
-       (cond
-        ((and (mevedel-tool-fs-read--dedup-p)
-              (mevedel-session-read-is-duplicate-p
-               mevedel--session filename dedup-offset limit))
-         (format "File %s unchanged since last read.  Reuse the previous contents."
-                 (mevedel-tool-fs-read--visible-path filename)))
-        ((zerop (file-attribute-size (file-attributes filename)))
-         (when (mevedel-tool-fs-read--dedup-p)
-           (mevedel-session-record-file-access
-            mevedel--session filename 'read dedup-offset limit))
-         (format "<system-reminder>\n\
-File %s exists but is empty (0 bytes). This is the actual file \
-content, not a read failure.\n</system-reminder>"
-                 (mevedel-tool-fs-read--visible-path filename)))
-        (t
-         (let ((content (mevedel-tool-fs-read-slurp-file-contents
-                         filename offset limit nil char-offset)))
+                                            filename page-count))
+                                        result)))))))
+                           (error
+                            (let ((message (error-message-string err)))
+                              (if (and whole-pdf
+                                       (string-match-p "Media file is too large"
+                                                       message))
+                                  (mevedel-tool-fs-read--pdf-page-count
+                                   filename
+                                   (lambda (page-count)
+                                     (error "%s%s"
+                                            message
+                                            (mevedel-tool-fs-read--append-system-reminder
+                                             ""
+                                             (mevedel-tool-fs-read-format-large-pdf-reminder
+                                              filename page-count)))))
+                                (signal (car err) (cdr err))))))))
+                    (if (and whole-pdf (file-remote-p filename))
+                        (mevedel-tool-fs-read--with-local-media-source
+                         filename (lambda (_source) (read-media)))
+                      (read-media))))))))
+        (when (plist-get args :pages)
+          (error "Parameter pages is only supported for PDF files"))
+        (when (mevedel-tool-fs-read--media-transform-requested-p args)
+          (error "`max_width', `max_height', and `max_tokens' are only supported for image files and PDF page images"))
+        (when (mevedel-tool-fs-read--binary-extension-p filename)
+          (let ((ext (file-name-extension filename)))
+            (error "Cannot read binary file (type: .%s): %s" ext
+                   (mevedel-tool-fs-read--visible-path filename))))
+        (funcall
+         k
+         (cond
+          ((and (mevedel-tool-fs-read--dedup-p)
+                (mevedel-session-read-is-duplicate-p
+                 mevedel--session filename dedup-offset limit))
+           (format "File %s unchanged since last read.  Reuse the previous contents."
+                   (mevedel-tool-fs-read--visible-path filename)))
+          ((zerop (file-attribute-size (file-attributes filename)))
            (when (mevedel-tool-fs-read--dedup-p)
              (mevedel-session-record-file-access
               mevedel--session filename 'read dedup-offset limit))
-           content))))))))
+           (format "<system-reminder>\n\
+File %s exists but is empty (0 bytes). This is the actual file \
+content, not a read failure.\n</system-reminder>"
+                   (mevedel-tool-fs-read--visible-path filename)))
+          (t
+           (let ((content (mevedel-tool-fs-read-slurp-file-contents
+                           filename offset limit nil char-offset)))
+             (when (mevedel-tool-fs-read--dedup-p)
+               (mevedel-session-record-file-access
+                mevedel--session filename 'read dedup-offset limit))
+             content)))))))))
 
 (defun mevedel-tool-fs-read--resource-directory (path address k)
   "Call K with a logical listing for resource ADDRESS rooted at PATH."

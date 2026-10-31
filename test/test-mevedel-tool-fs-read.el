@@ -9,6 +9,7 @@
 (require 'gptel-request)
 (require 'mevedel-structs)
 (require 'mevedel-tool-fs-read)
+(require 'mevedel-pin)
 (require 'mevedel-agents)
 (require 'mevedel-execution)
 (require 'mevedel-sandbox)
@@ -1523,7 +1524,8 @@ An error result is signalled, as a Read that failed before waiting does."
     (let ((size (file-attribute-size (file-attributes tmp)))
           (original-raw (symbol-function 'insert-file-contents-literally))
           (original-decoded (symbol-function 'insert-file-contents))
-          ranges (probes 0) appended)
+          (original-pinned (symbol-function 'mevedel-pin-insert-file-contents))
+          ranges (probes 0) appended probing)
       (let ((failure
              (cl-letf (((symbol-function 'insert-file-contents)
                         (lambda (&rest args)
@@ -1531,11 +1533,19 @@ An error result is signalled, as a Read that failed before waiting does."
                           (unless (eq coding-system-for-read 'no-conversion)
                             (cl-incf probes))
                           (apply original-decoded args)))
+                       ;; The decoded probe reads literally through the pin.
+                       ((symbol-function 'mevedel-pin-insert-file-contents)
+                        (lambda (&rest args)
+                          (cl-incf probes)
+                          (setq probing t)
+                          (unwind-protect (apply original-pinned args)
+                            (setq probing nil))))
                        ((symbol-function 'insert-file-contents-literally)
                         (lambda (&rest args)
-                          (push (list (nth 2 args) (nth 3 args)) ranges)
+                          (unless probing
+                            (push (list (nth 2 args) (nth 3 args)) ranges))
                           (prog1 (apply original-raw args)
-                            (unless appended
+                            (unless (or appended probing)
                               (setq appended t)
                               (write-region "\nfour\nfive\n" nil tmp t 'silent))))))
                (should-error
@@ -1559,7 +1569,7 @@ An error result is signalled, as a Read that failed before waiting does."
                            (plist-get (mevedel-test--read
                                        (list :file_path tmp :offset 2 :limit 1)) :result)))
     (test-mevedel-tool-fs-read--assert-eof tmp 2 "last"))
-  :doc "follows symlinks"
+  :doc "reads the canonical target and refuses a symlink spelling"
   (let ((tmp (make-temp-file "mevedel-test-"))
         (link (make-temp-file "mevedel-link-")))
     (unwind-protect
@@ -1567,10 +1577,16 @@ An error result is signalled, as a Read that failed before waiting does."
           (with-temp-file tmp (insert "real content\n"))
           (delete-file link)
           (make-symbolic-link tmp link)
-          (let ((result (test-mevedel-tool-fs-read--settle
-                         (lambda (k)
-                           (mevedel-tool-fs-read--file (list :file_path link) k)))))
-            (should (string-match-p "real content" result))))
+          ;; The pipeline hands the handler the canonical target.
+          (should (string-match-p
+                   "real content"
+                   (test-mevedel-tool-fs-read--settle
+                    (lambda (k)
+                      (mevedel-tool-fs-read--file
+                       (list :file_path (file-truename link)) k)))))
+          ;; A link where the authorized path names a file is a swap.
+          (should-error (mevedel-tool-fs-read--file (list :file_path link) #'ignore)
+                        :type 'mevedel-pin-refused))
       ;; Remove the link while its target exists, or it tests as missing.
       (when (file-exists-p link) (delete-file link))
       (delete-file tmp)))
