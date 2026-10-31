@@ -228,6 +228,28 @@ three-disposition remedy is replaced, not the separation from journal capture.
 
 ## Decision history
 
+On 2026-10-31 an architecture review proposed moving shared-note disposal
+out of the proposal-decision protocol: a notes-owned delete with fresh use,
+unsaved-buffer and reference checks, one hash-and-mode-verified deletion and an
+attempt record in the cycle record, with no per-note proposal decision. Before
+the decision transaction was deepened, one note deletion cost 139-185 control
+programs (compiled probe, one pass of four 64-byte notes, one run per apply).
+The deepened transaction (sweep commit a4d795e7) measured 83 programs for the
+first deletion and 60 for each following one in the same probe. For a fresh
+128-byte note-deleting automatic apply, compiled, five measured samples per
+build after warmup, medians before and after: wall time 2540 ms and 2079 ms;
+longest synchronous application callback (Lisp and IO, excluding child waits)
+605 ms and 305 ms; longest heartbeat-sampled block 554 ms and 289 ms; sampled
+total blocking 660 ms and 385 ms (a lower bound). Blocking therefore remains
+material. The proposal was
+rejected for that sweep: the per-note decision carries `propose`-mode approval,
+cockpit shared-note rows with their disposition and `awaits extraction` state,
+and inspectable decisions, which a separate module would either remove or
+rebuild. If matched measurements still show material editor blocking per
+deletion, the owned note-delete path inside the decision transaction is
+optimized first; its durable write intent and root marker stay until a
+complete replacement contract exists.
+
 The first draft and implementation slices introduced lifecycle frontmatter,
 scratch/open tool defaults, explicit handoff/report/done labels, and split
 seven/fourteen-day ages. A later draft required thirty-day undo, single-preimage

@@ -156,6 +156,22 @@ protocol, extraction directory, or generic resolver cache is needed.
 
 ## Decision history
 
+- **Domain tests keep the real carrier (2026-10-31).** An architecture review
+  found memory and journal fixtures spending 97-98% of their wall time inside
+  control programs (about 5.7 ms per program, interpreted, one run per
+  fixture shape) and proposed an in-process implementation of the program
+  verbs on real temporary files for domain tests. It was rejected: a second
+  implementation of exclusive create, `flock` and `verify-latest` semantics
+  would let domain tests pass against behavior production does not have.
+  Repeated decision-time recovery and authentication are identified
+  optimization targets; matched implementation measurements must establish
+  their savings before attributing the remaining cost. Fault
+  injection keeps wrapping the real program boundary; no production
+  interleaving hook exists for tests. Reconsider after a matched
+  re-measurement shows material remaining time or blocking, first through
+  real-carrier batching or startup cost; any test adapter would need
+  demonstrably equivalent coverage and authority.
+
 - **Programs still blocked the editor while the target worked (2026-10-20).**
   The merged background-command delivery (three programs, about 120 ms) left
   the editor waiting in each program; the earlier trace put 98 of 135 ms in
