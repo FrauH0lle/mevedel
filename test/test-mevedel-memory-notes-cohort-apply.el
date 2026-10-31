@@ -78,18 +78,25 @@
   :doc "unchanged frozen input passes the real decision boundary and checked deletion"
   (progn
     (prepare)
-    (should (eq 'fresh (plist-get (mevedel-memory-decision--application-input accepted note workspace) :status)))
+    (should (eq 'fresh (plist-get (plist-get (mevedel-memory-decision-inspect workspace :pass pass :proposal (plist-get note :id))
+                                             :check)
+                                  :status)))
     (should (eq 'applied (plist-get (apply-note) :status)))
     (should-not (file-exists-p path)))
   :doc "same-byte recreation with restored old mtime and mode is a nonterminal hold"
   (progn
     (prepare)
     (recreate)
-    (let ((input (mevedel-memory-decision--application-input accepted note workspace)))
+    (let ((input (plist-get (mevedel-memory-decision-inspect workspace :pass pass :proposal (plist-get note :id)) :check)))
       (should (eq 'waiting (plist-get input :status))))
-    (should-error (apply-note) :type 'user-error)
+    ;; The program-backed hold runs at the deletion boundary: the prepared
+    ;; intent is abandoned unmarked and no decision is recorded.
+    (should (eq 'held (plist-get (apply-note) :status)))
     (unchanged)
-    (should-not (mevedel-memory-write-recovery-candidates workspace)))
+    (let ((writes (mevedel-memory-write--list workspace)))
+      (should (= 1 (length writes)))
+      (should-not (plist-get (car writes) :marked)))
+    (should-not (mevedel-memory-write--recovery-candidates workspace)))
   :doc "late recreation at final write admission is held immediately before mutation"
   (progn
     (prepare)
@@ -98,14 +105,14 @@
                  (lambda (&rest args)
                    (unless injected (setq injected t) (recreate))
                    (apply commit args))))
-        (should-error (apply-note) :type 'mevedel-memory-decision-held))
+        (should (eq 'held (plist-get (apply-note) :status))))
       (should injected))
     (unchanged)
-    (let ((writes (mevedel-memory-write-list workspace)))
+    (let ((writes (mevedel-memory-write--list workspace)))
       (should (= 1 (length writes)))
       (should-not (plist-get (car writes) :error))
       (should-not (plist-get (car writes) :marked)))
-    (should-not (mevedel-memory-write-recovery-candidates workspace)))
+    (should-not (mevedel-memory-write--recovery-candidates workspace)))
   :doc "ordinary noncohort capture retains byte-mode-age semantics rather than gaining a new identity lock"
   (progn
     (prepare t)

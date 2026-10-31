@@ -87,7 +87,7 @@
                    ;; Resolve disposal so only the unreconciled cycle pins history.
                    (should (eq 'rejected (plist-get (mevedel-memory-decision-reject
                                                     workspace (plist-get prepared :id) (plist-get proposal :id)
-                                                    "Retain the fixture note")
+                                                    :reason "Retain the fixture note")
                                                    :status))))))))))
     ,test)
   (test)

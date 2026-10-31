@@ -26,7 +26,7 @@
 
 ;; `mevedel-memory-decision'
 (declare-function mevedel-memory-decision-recovering-p "mevedel-memory-decision" (workspace))
-(defvar mevedel-memory-decision--operations)
+(declare-function mevedel-memory-decision-admitted-p "mevedel-memory-decision" (key))
 
 ;; `mevedel-memory-pass'
 (declare-function mevedel-memory-pass-drain-status "mevedel-memory-pass" (workspace))
@@ -384,9 +384,9 @@ load review or provider machinery.  Target claims remain authoritative."
                (mevedel-memory-pass-drain-status workspace)))
       (and (featurep 'mevedel-memory-decision)
            (or (mevedel-memory-decision-recovering-p workspace)
-               (gethash (mevedel-journal-store-claim-directory
-                         (mevedel-journal-store-directory (mevedel-workspace-root workspace)) 'consolidation)
-                        mevedel-memory-decision--operations)))))
+               (mevedel-memory-decision-admitted-p
+                (mevedel-journal-store-claim-directory
+                 (mevedel-journal-store-directory (mevedel-workspace-root workspace)) 'consolidation))))))
 
 (defun mevedel-journal-cleanup-wait (workspace)
   "Let this client's active WORKSPACE cleanup release its claims.

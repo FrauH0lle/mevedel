@@ -91,7 +91,7 @@
     (should (string-search "Current check" text))
     (should (string-search "Ready to apply" text))
     (should (string-search "Pending" text))
-    (mevedel-memory-decision-reject workspace pass (plist-get proposal :id) "Manual refusal")
+    (mevedel-memory-decision-reject workspace pass (plist-get proposal :id) :reason "Manual refusal")
     (should (string-search "Manual refusal" (decision-text proposal))))
   :doc "ordinary memory and generated attachment and directory housekeeping retain their genuine rendered reasons"
   (should (= 4 (length (plist-get accepted :proposals))))
@@ -171,9 +171,9 @@
            (scope (plist-get (plist-get accepted :prepared) :scope))
            (proposal (car (plist-get accepted :proposals))))
       (setq claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
-      (mevedel-memory-write-call
+      (mevedel-memory-write--call
        scope (plist-get proposal :root)
-       (lambda (target) (setq intent (mevedel-memory-write-prepare workspace claim target accepted proposal))))
+       (lambda (target) (setq intent (mevedel-memory-write--prepare workspace claim target accepted proposal))))
       (mevedel-journal-claim-settle claim 'cancelled ""))
     (should (= 1 (plist-get (mevedel-workspace-memory-observation workspace) :pending)))
     (setf (plist-get (mevedel-workspace-memory-observation workspace) :at) 0)
@@ -326,7 +326,7 @@
           (mevedel-cockpit-goto-id id)
           (let ((pass (plist-get (mevedel-cockpit-surface-selected) :pass)))
             (mevedel-cockpit-surface-details)
-            (mevedel-memory-decision-reject workspace pass id "Later rejection")
+            (mevedel-memory-decision-reject workspace pass id :reason "Later rejection")
             (with-current-buffer "*mevedel memory proposal*"
               (mevedel-report-refresh)
               (mevedel-report-select-section 'decision)

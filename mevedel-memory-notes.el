@@ -1129,7 +1129,7 @@ the cockpit or retain their review's history.  Return (REJECTED . FAILED)."
                 (condition-case nil
                     (progn
                       (mevedel-memory-decision-reject workspace id (plist-get proposal :id)
-                                                      mevedel-memory-notes-superseded-reason)
+                                                      :reason mevedel-memory-notes-superseded-reason)
                       (cl-incf rejected))
                   (error (cl-incf failed)))))))))
     (cons rejected failed)))
@@ -1199,17 +1199,17 @@ empty; absence is a state.  Links and other entries signal."
       (setq directory (file-name-directory (directory-file-name directory))))
     (nreverse ancestors)))
 
-(defun mevedel-memory-notes-commit (workspace root target changes currentp &optional before-write)
-  "Permanently delete shared-note CHANGES below ROOT in WORKSPACE.
+(defun mevedel-memory-notes-commit (_workspace root target changes currentp &optional before-write)
+  "Permanently delete shared-note CHANGES below ROOT in a workspace.
 TARGET and CURRENTP guard the existing write operation.  BEFORE-WRITE rechecks
-forward admission; active use and unsaved buffers still prevent deletion.
+forward admission, including active local use; unsaved buffers still prevent
+deletion.
 The native deletion checks the reviewed bytes and mode.  No undo or trash copy
 is created, and this entry point cannot restore a deleted file."
   (let ((lock (plist-get target :directory)))
     (dolist (change changes)
       (let* ((before (plist-get change :before))
              (path (plist-get before :path))
-             (relative (file-relative-name path (plist-get root :dir)))
              (fence (list (list :op 'verify :path (mevedel-journal-claim--path target nil)
                                 :content (json-serialize (mevedel-journal-claim--record target)))
                           (list :op 'absent :path (mevedel-journal-claim--path target t))
@@ -1226,8 +1226,6 @@ is created, and this entry point cannot restore a deleted file."
           (error "Shared-note disposal cannot write or restore files"))
         (when before-write (funcall before-write))
         (unless (funcall currentp) (error "Shared-note ownership is unavailable"))
-        (when (mevedel-memory-notes-in-use-p workspace relative)
-          (signal 'mevedel-memory-decision-held '("Shared file is in active local use")))
         (when-let* ((buffer (find-buffer-visiting path)) ((buffer-modified-p buffer)))
           (error "Shared note has unsaved buffer changes: %s" path))
         (dolist (result

@@ -261,7 +261,7 @@
                          (list :cancel #'ignore)))
                       ((symbol-function 'mevedel-memory-pass--async-application-p)
                        (lambda (&rest _) async))
-                      ((symbol-function 'mevedel-memory-decision--operation-context)
+                      ((symbol-function 'mevedel-memory-decision--context)
                        (lambda (&rest _)
                          (cl-incf injections)
                          (should (plist-get state :settled))

@@ -20,9 +20,9 @@
 (defun mevedel-test-recovery-mark (workspace accepted claim)
   "Prepare an authentic marked write for WORKSPACE ACCEPTED under CLAIM."
   (let ((proposal (car (plist-get accepted :proposals))))
-    (mevedel-memory-write-call
+    (mevedel-memory-write--call
      (plist-get (plist-get accepted :prepared) :scope) (plist-get proposal :root)
-     (lambda (target) (mevedel-memory-write-prepare workspace claim target accepted proposal)))))
+     (lambda (target) (mevedel-memory-write--prepare workspace claim target accepted proposal)))))
 
 (mevedel-deftest mevedel-journal-worker-start/recovery-selection ()
   ,test
@@ -262,7 +262,7 @@
 		 (let* ((root (make-temp-file "mevedel-recovery-yield-" t))
 			(workspace (mevedel-workspace--create :root root))
 			(directory (mevedel-memory-write--directory workspace))
-			(inspect (symbol-function 'mevedel-memory-write-list))
+			(inspect (symbol-function 'mevedel-memory-write--list))
 			(origin (current-buffer)) groups ticks completed job timer warnings)
 		   (unwind-protect
 		       (progn
@@ -270,7 +270,7 @@
 			 (dotimes (n 4)
 			   (write-region "(:invalid t)" nil (file-name-concat directory (concat (secure-hash 'sha256 (number-to-string n)) ".el")) nil 'silent))
 			 (cl-letf (((symbol-function 'display-warning) (lambda (_ text &rest _) (push text warnings)))
-				   ((symbol-function 'mevedel-memory-write-list)
+				   ((symbol-function 'mevedel-memory-write--list)
 				    (lambda (&rest args)
 				      (push (cadr args) groups)
 				      (push (and timer (not (memq timer timer-list))) ticks)
@@ -311,7 +311,7 @@
 				    (lambda (actual ids &optional operation-claim)
 				      (should (eq actual workspace))
 				      (should (equal (list (plist-get intent :id)) ids))
-				      (should (mevedel-journal-claim-owned-p operation-claim))
+				      (should (mevedel-journal-claim-owned-p (plist-get operation-claim :claim)))
 				      (mevedel-memory-decision-stop-recovery))))
 			   (mevedel-memory-decision--recover-next-write workspace job)
 			   (let ((deadline (+ (float-time) 10)))
