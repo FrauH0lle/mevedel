@@ -159,7 +159,9 @@
                   ;; character height.  Settle it before capturing the baseline.
                   (dolist (target (list (1+ frame-height) frame-height))
                     (set-frame-height composer-frame target nil t)
-                    (let ((deadline (+ (float-time) 1)))
+                    ;; The window manager configures asynchronously; this is
+                    ;; a progress watchdog, not a frame-resize latency test.
+                    (let ((deadline (+ (float-time) 5)))
                       (while (and (/= target (frame-text-height composer-frame))
                                   (< (float-time) deadline))
                         (setq unread-command-events nil)
@@ -200,7 +202,7 @@
                           ('frame-grow
                            (dolist (target (list (+ frame-height 12) frame-height))
                              (set-frame-height composer-frame target nil t)
-                             (let ((deadline (+ (float-time) 1)))
+                             (let ((deadline (+ (float-time) 5)))
                                (while (and (/= target (frame-text-height composer-frame))
                                            (< (float-time) deadline))
                                  ;; Window-manager configure events are asynchronous.

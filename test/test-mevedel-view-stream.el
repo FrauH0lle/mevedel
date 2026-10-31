@@ -1756,10 +1756,8 @@ turn's later text, live and after reconstruction."
            (mevedel-view-stream-pre-tool
             '(:name "Grep" :args (:pattern "x")))))
         (should (= 0 render-count))
-        (let ((deadline (+ (float-time) 1.0)))
-          (while (and (= render-count 0)
-                      (< (float-time) deadline))
-            (accept-process-output nil 0.01)))
+        ;; Debouncing/coalescing is asserted by the counts, not wall latency.
+        (mevedel-test--await 5 "tool-boundary render settles" (> render-count 0))
         (should (= 1 render-count)))))
 
   :doc "immediate pending live tail inserts above status-zone content"

@@ -404,8 +404,11 @@ BODY can release it by setting RELEASED and inspect WORKER."
             (setq unattended t)
             ;; Let the worker wait across child exit, without dispatching
             ;; callbacks on the main thread until afterward.
-            (let ((deadline (+ (float-time) 0.1)))
-              (while (< (float-time) deadline) (thread-yield)))
+            (let ((deadline (+ (float-time) 5)))
+              (while (and (process-live-p process) (< (float-time) deadline))
+                (thread-yield)))
+            (should-not (process-live-p process))
+            (should-not calls)
             (setq unattended nil)
             (mevedel-view-prepare-resume)
             (mevedel-prepare-test--wait

@@ -193,8 +193,8 @@ UPDATE, like input already queued by the display backend."
   "mouse-tool-target.el" t t 'stream)
 
 (defun mevedel-view-mouse-test--wait (predicate)
-  "Run real timers until PREDICATE succeeds, with a bounded deadline."
-  (let ((deadline (+ (float-time) 1.0)))
+  "Run real timers until PREDICATE succeeds, with a progress watchdog."
+  (let ((deadline (+ (float-time) 5.0)))
     (while (and (not (funcall predicate)) (< (float-time) deadline))
       (accept-process-output nil 0.01))
     (should (funcall predicate))))
