@@ -1359,7 +1359,21 @@ Policy tests use terminal rows, not production's pixel measurement helper."
           ;; An unchanged width does not rewrite the prompt.
           (let ((tick (buffer-modified-tick)))
             (mevedel-view--refit-input-prompt)
-            (should (= tick (buffer-modified-tick)))))))))
+            (should (= tick (buffer-modified-tick))))
+          ;; Scaling text changes the remapped columns without resizing a
+          ;; window; batch frames cannot, so the narrower budget is stubbed.
+          (require 'face-remap)
+          (cl-letf (((symbol-function 'mevedel-view--input-prompt-columns)
+                     (lambda () 24)))
+            (text-scale-set 2)
+            (let ((rows (mevedel-view-test--prompt-rows)))
+              (should (= 4 (length rows)))
+              (dolist (row rows)
+                (should (<= (string-width row) 24)))
+              (should (string-suffix-p "…" (nth 1 rows)))))
+          (text-scale-set 0)
+          (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+          (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
 
 (mevedel-deftest mevedel-view--switch-composer-scope (:quiet t)
   ,test
