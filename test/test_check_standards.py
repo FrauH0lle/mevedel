@@ -266,6 +266,36 @@ class StandardsTests(unittest.TestCase):
         self.assertEqual([test['name'] for test in data['test/test-demo.el']['tests']],
                          ['single/test', 'many/test@1', 'many/test@2'])
 
+    def test_nested_fixture_split_arguments_and_vector_literals(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '(defconst test-fixture-path (file-name-concat "fixtures" "nested" "helper.py"))\n'
+            '(defconst test-fixture-args ["test/fixtures/another.py"])'))
+        self.commit()
+        self.write('test/fixtures/nested/helper.py', 'print("fixture")\n')
+        errors = standards.test_integrity_errors(self.root, standards.inventory(self.root))
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(any('untracked test fixture test/fixtures/nested/helper.py' in error
+                            for error in errors))
+        self.assertTrue(any('untracked test fixture test/fixtures/another.py' in error
+                            for error in errors))
+
+    def test_same_file_duplicates_and_empty_templates(self):
+        data = standards.test_inventory(self.root, [('test/test-demo.el',
+                '(mevedel-deftest empty ())\n'
+                '(ert-deftest shared () (should t))\n'
+                '(ert-deftest shared () (should t))\n'
+                '["fixture.py" (ert-deftest vector-data () nil)]')])
+        self.assertEqual([test['name'] for test in data['test/test-demo.el']['tests']],
+                         ['shared', 'shared'])
+        self.assertEqual(data['test/test-demo.el']['strings'][0]['value'], 'fixture.py')
+        self.write('test/test-demo.el', library('test-demo').replace(
+            "(provide 'test-demo)", '(ert-deftest same () (should t))\n'
+            '(ert-deftest same () (should t))'))
+        errors = standards.test_integrity_errors(self.root, standards.inventory(self.root))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('duplicate ERT test name same', errors[0])
+
     def stub_source(self, body, requires=''):
         return library('test-demo').replace(
             '(defun test-demo-value (value)\n  "Return VALUE."\n  value)',

@@ -17,6 +17,7 @@
           (form line quoted)
           (cond
            ((stringp form) (push `((value . ,form) (line . ,line)) strings))
+           ((vectorp form) (mapc (lambda (item) (walk item line t)) form))
            ((consp form)
             (unless quoted
               (pcase (car form)
@@ -27,7 +28,7 @@
                  (let* ((template (cdddr form))
                         (variables (cadr template))
                         (values (cddr template))
-                        (count (if variables 0 1)))
+                        (count (if (or (null template) variables) 0 1)))
                    (when variables
                      (while values
                        (when (eq (car values) :doc) (setq values (cddr values)))

@@ -254,7 +254,9 @@ def test_integrity_errors(root, names):
     suffixes = {}
     for fixture in fixtures:
         relative = fixture.removeprefix('test/fixtures/')
-        for suffix in (fixture, 'fixtures/' + relative, relative):
+        parts = Path(relative).parts
+        for suffix in (fixture, 'fixtures/' + relative,
+                       *('/'.join(parts[index:]) for index in range(len(parts)))):
             suffixes.setdefault(suffix, set()).add(fixture)
     errors, owners = [], {}
     for name, data in test_inventory(root, sources).items():
