@@ -18,8 +18,10 @@ Discover enabled model-invocable skills by name or purpose.
 - Without a query, list currently active model-invocable skills. Results are
   capped and report omitted matches; narrow the query when needed.
 - Returned canonical names can be passed to `Skill`. Discovery does not invoke
-  a skill or make its workflow mandatory. User-only and disabled skills are
-  excluded; a missing result is not permission to guess a name.
+  a skill or make its workflow mandatory. A query also names matching
+  user-only skills, marked as such: `Skill` cannot invoke them, but the user
+  can run them. Disabled skills are excluded; a missing result is not
+  permission to guess a name.
 
 - File-backed entries include their registered `skill://` address. Use `Read`
   on that address to inspect the source, or `Read("skill://")` to list
