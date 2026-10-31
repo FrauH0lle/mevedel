@@ -57,6 +57,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-publication "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
