@@ -108,6 +108,9 @@ block and whitespace rules. A single user-text part needs no joining copy.
 Grouping also skips the unused scaffolding cleanup of a confirmed audit-only
 segment; its audit verdict already determines attachment and preceding-type
 preservation. Other ignored segments still require scaffolding classification.
+The Emacs view and browser projection normalize their decoded activity and share
+`mevedel-activity-group-partition` in `mevedel-activity-group.el` for run
+boundaries, grouping thresholds, summaries, and running/failure/warning facts.
 A tool/delivery activity run remains mutable until its surrounding
 transcript boundary closes it; substantive reasoning is a standalone,
 initially expanded disclosure and closes the preceding tool run. An individual completed call can still join a
@@ -462,6 +465,49 @@ Observers must not change execution or steal focus; a failed projection warns
 and retains the last good display where possible.
 
 ## Decision history
+
+### October 31, 2026: one activity-group rule for both surfaces
+
+The Emacs view and browser projection had separate grouping rules, with the
+browser borrowing private view summary helpers. An agreement test on unchanged
+code reproduced seven divergences rather than merely assuming the duplication
+was harmful. Both surfaces now normalize their decoded entries and call
+`mevedel-activity-group-partition`; the pure module owns partitioning and summary
+facts, while each surface retains rendering and disclosure state.
+
+The shared rule resolves the divergent cases:
+
+- A tool carrying a displayed audit stays individually presented in both
+  surfaces; previously only Emacs kept it out of a group.
+- A standalone audit splits a run, rather than vetoing the whole mixed run in
+  Emacs or being ignored by the browser.
+- The transcript owner's own completion mail is transparent, not an additional
+  browser completion; the original tool's breadcrumb owns that presentation.
+- A breadcrumb merged into a tool is normalized before classification, so it
+  no longer makes that tool special in an Emacs run containing mail.
+- Request summaries, including failed-request summaries, are transparent rather
+  than splitting browser runs. Successful empty-input polls are transparent too:
+  neither joins nor splits the run.
+- Coalescing rows are boundaries, including expandable rows that previously
+  joined Emacs tool runs.
+- Pending browser records join as running tools and count toward the same
+  threshold, instead of remaining ungrouped.
+
+The shared running fact includes settled transcript tools whose background work
+is still running; the Emacs header animates only calls still in flight. These
+are distinct presentation needs, not different partition rules. A threshold of
+`nil` means "group any run with a tool" and is used only to rebuild an existing
+group, not as the normal collapse threshold; zero disables grouping.
+
+The compiled 40-turn fixture against `a54df292`, with 15 samples per version,
+recorded:
+
+- Full rerender time: median 54.8 -> 46.2 ms.
+- Full rerender allocation: median 300,789 -> 220,767 conses.
+
+These are batch render measurements, not graphical presentation latency. The
+decision removes duplicated policy and the demonstrated disagreement without
+adding a second transcript model.
 
 ### October 24, 2026: interrupt pure preparation, not publication
 

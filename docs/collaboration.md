@@ -1288,6 +1288,8 @@ current files. Raw model-facing reminder wrappers are not the display body.
 Plain activity runs over the native grouping threshold fold into one browser
 disclosure with the native semantic summary. Running counts and failed tool
 names stay in its one-line heading; the full summary is available on hover.
+Browser activity groups come from the same `mevedel-activity-group` module as
+the Emacs view's, through `mevedel-activity-group-partition`.
 Opening the group exposes the original tool/message/completion rows, with
 their own disclosure choices intact. Newly grouped rows already being read
 remain open; an explicit group fold wins thereafter. Scope changes, compound
