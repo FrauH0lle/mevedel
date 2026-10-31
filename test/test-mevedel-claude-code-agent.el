@@ -14,6 +14,7 @@
 (mevedel-deftest mevedel-agent-control-spawn/claude-sample-limit (:quiet t)
   (dolist (limit '(1 3 8 nil))
     (mevedel-engine-test--with-claude-session
+      :file-workspace (not (equal limit 1))
       (let ((file (file-name-concat root "evidence.txt"))
             (launches 0) record invocation)
         (write-region "Evidence" nil file nil 'silent)

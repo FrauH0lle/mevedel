@@ -15,6 +15,7 @@
 (mevedel-deftest mevedel--send-request/claude-child-permission-wait (:quiet t)
                  (dolist (scenario '((allow) (deny) (interrupt) (allow . t) (deny . t) (interrupt . t)))
                    (mevedel-engine-test--with-claude-session
+                    :file-workspace (not (equal scenario '(allow)))
                     (let* ((decision (car scenario))
                            (nested (cdr scenario))
                            (path (if nested "/root/reader/helper" "/root/reader"))
