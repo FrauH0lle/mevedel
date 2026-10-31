@@ -261,29 +261,56 @@
                  (should (= 1 (length (mevedel-journal-store-entries (mevedel-workspace-root workspace)))))))
            (mevedel-journal-process-cancel workspace))))))
 
-  :doc "a real deadline cancels the request and preserves evidence for a later attempt"
-  (mevedel-test-journal-capture--with-session
-   (lambda (session buffer)
-     (mevedel-test-journal-capture--turn session buffer "Request" "Result")
-     (mevedel-journal-capture-seal session buffer 'session-end)
-     (let ((workspace (mevedel-session-workspace session))
-           (mevedel-journal-process--timeout-seconds 3)
-           callback request-buffer)
-       (cl-letf (((symbol-function 'gptel-request)
-                  (lambda (_prompt &rest args)
-                    (setq callback (plist-get args :callback)
-                          request-buffer (plist-get args :buffer)))))
-         (unwind-protect
-             (let ((state (mevedel-journal-process-next workspace))
-                   (stop (+ (float-time) 6)))
-               (while (and (not (plist-get state :settled)) (< (float-time) stop))
-                 (accept-process-output nil 0.05))
-               (should (plist-get state :settled))
-               (should-not (buffer-live-p request-buffer))
-               (funcall callback mevedel-test-journal-process--digest nil)
-               (should-not (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
-               (should (mevedel-journal-pins-present-p (mevedel-session-save-path session))))
-           (mevedel-journal-process-cancel workspace))))))
+  :doc "deadline delivery cancels a live request and preserves evidence, directly and on the real clock"
+  (dolist (delivery '(direct event-loop))
+    (mevedel-test-journal-capture--with-session
+     (lambda (session buffer)
+       (mevedel-test-journal-capture--turn session buffer "Request" "Result")
+       (mevedel-journal-capture-seal session buffer 'session-end)
+       (let ((workspace (mevedel-session-workspace session))
+             callback request-buffer)
+         (cl-letf (((symbol-function 'gptel-request)
+                    (lambda (_prompt &rest args)
+                      (setq callback (plist-get args :callback)
+                            request-buffer (plist-get args :buffer)))))
+           (unwind-protect
+               (let* ((state (mevedel-journal-process-next workspace))
+                      (timer (plist-get state :timer))
+                      (stop (+ (float-time) 6)))
+                 ;; Keep ordinary production admission and deadline registration.
+                 ;; Only advance delivery once inference is demonstrably live.
+                 (should callback)
+                 (should (buffer-live-p request-buffer))
+                 (should-not (plist-get state :settled))
+                 (should (timerp timer))
+                 (should (memq timer timer-list))
+                 (should (> (float-time (timer--time timer)) (float-time)))
+                 ;; The native target clock has whole-second resolution.  A
+                 ;; wrong delay must fail before the test advances delivery.
+                 (should (< (abs (- (float-time (timer--time timer))
+                                    (plist-get (plist-get state :claim) :expires-at)))
+                            1.0))
+                 (should (mevedel-journal-pins-present-p (mevedel-session-save-path session)))
+                 (cancel-timer timer)
+                 (if (eq delivery 'direct)
+                     (apply (timer--function timer) (timer--args timer))
+                   ;; Retain one real event-loop delivery, without making the
+                   ;; request's preparation race a shortened startup deadline.
+                   (timer-set-time timer (time-add (current-time) 0.05))
+                   (timer-activate timer)
+                   (while (and (not (plist-get state :settled)) (< (float-time) stop))
+                     (accept-process-output nil 0.01)))
+                 (should (plist-get state :settled))
+                 (let ((outcome (mevedel-journal-claim-outcome (plist-get state :claim))))
+                   (should (eq 'failed (plist-get outcome :status)))
+                   (let ((payload (json-parse-string (plist-get outcome :payload))))
+                     (should (equal "timeout" (gethash "class" payload)))
+                     (should (equal "Digest request timed out" (gethash "error" payload)))))
+                 (should-not (buffer-live-p request-buffer))
+                 (funcall callback mevedel-test-journal-process--digest nil)
+                 (should-not (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
+                 (should (mevedel-journal-pins-present-p (mevedel-session-save-path session))))
+             (mevedel-journal-process-cancel workspace)))))))
 
   :doc "missing frozen provider stays unavailable instead of selecting a fallback"
   (mevedel-test-journal-capture--with-session
