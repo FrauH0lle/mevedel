@@ -10,6 +10,7 @@
           (file-name-directory (or load-file-name buffer-file-name))
           "mevedel-engine-test-support"))
 (require 'mevedel-claude-code)
+(require 'mevedel-directive-plan)
 
 (mevedel-deftest mevedel-claude-code-register ()
   (let ((gptel--known-backends nil))

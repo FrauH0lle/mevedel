@@ -102,7 +102,10 @@ per delivery.
 
 The Claude engine collects configured reminders once at prompt submission,
 using the same session or invocation context and firing policy as gptel. Pending
-root hook context joins that delivery. Mid-turn turn events, changed selected
+root hook context joins that delivery. Like gptel's dispatch, root startup first
+prepares `edited-file` diffs as helper processes, so an external edit reaches
+the prompt with its diff rather than as a bare change notice; cancellation stops
+a pending preparation. Mid-turn turn events, changed selected
 observations, new direct children and mail ride native tool-batch hooks, and
 native compaction restores current guidance. Exact SDK receipt, not submission,
 commits firing marks, including silent commits, and consumes only captured
