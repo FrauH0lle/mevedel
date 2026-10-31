@@ -767,14 +767,17 @@ connection charges for, so the program path is proved here too."
                                                            (push args calls)
                                                            (apply original-signal-process args))))
                                                 (let ((result
-                                                       (mevedel-execution-run-one-shot
-                                                        :name "mevedel-test-remote-group"
-                                                        :command
-                                                        '("sh" "-c"
-                                                          "trap '' TERM; sleep 30 & child=$!; printf '%s' \"$child\" > child.pid; wait")
-                                                        :workdir remote-root
-                                                        :writable-roots (list remote-root)
-                                                        :timeout 0.1)))
+                                                       (test-mevedel-execution--timeout-after-ready
+                                                        pid-file
+                                                        (lambda ()
+                                                          (mevedel-execution-run-one-shot
+                                                           :name "mevedel-test-remote-group"
+                                                           :command
+                                                           '("sh" "-c"
+                                                             "trap '' TERM; sleep 30 & child=$!; printf '%s' \"$child\" > child.pid; wait")
+                                                           :workdir remote-root
+                                                           :writable-roots (list remote-root)
+                                                           :timeout 0.1)))))
                                                   (should (plist-get result :timed-out-p))
                                                   (should (eq 'timed-out (plist-get result :termination)))
                                                   (setq child-pid
@@ -816,15 +819,18 @@ connection charges for, so the program path is proved here too."
                                                                (error "Transport lost")
                                                              (apply original-signal-process args)))))
                                                 (let ((result
-                                                       (mevedel-execution-run-one-shot
-                                                        :name "mevedel-test-remote-unknown"
-                                                        :command
-                                                        '("sh" "-c"
-                                                          "ps -o pgid= -p $$ | tr -d ' ' > group.pid; trap '' TERM; sleep 30 & wait")
-                                                        :workdir remote-root
-                                                        :writable-roots (list remote-root)
-                                                        :timeout 0.05
-                                                        :session session)))
+                                                       (test-mevedel-execution--timeout-after-ready
+                                                        pid-file
+                                                        (lambda ()
+                                                          (mevedel-execution-run-one-shot
+                                                           :name "mevedel-test-remote-unknown"
+                                                           :command
+                                                           '("sh" "-c"
+                                                             "ps -o pgid= -p $$ | tr -d ' ' > group.pid; trap '' TERM; sleep 30 & wait")
+                                                           :workdir remote-root
+                                                           :writable-roots (list remote-root)
+                                                           :timeout 0.05
+                                                           :session session)))))
                                                   (setq group-id
                                                         (test-mevedel-execution--read-pid pid-file))
                                                   (should (eq 'unknown (plist-get result :termination)))
@@ -1331,10 +1337,16 @@ connection charges for, so the program path is proved here too."
                                                  (lambda () (file-exists-p holder-file)))
                                                 (setq holder-pid
                                                       (test-mevedel-execution--read-pid holder-file))
-                                                ;; Let the short-lived child become the held zombie.
-                                                (let ((deadline (+ (float-time) 0.3)))
-                                                  (while (< (float-time) deadline)
-                                                    (accept-process-output nil 0.02)))
+                                                ;; Observe the fixture's zombie instead of assuming
+                                                ;; the short-lived child ran within 0.3 seconds.
+                                                (test-mevedel-execution--wait
+                                                 (lambda ()
+                                                   (cl-some
+                                                    (lambda (pid)
+                                                      (let ((attributes (process-attributes pid)))
+                                                        (and (eql group-id (alist-get 'pgrp attributes))
+                                                             (equal "Z" (alist-get 'state attributes)))))
+                                                    (list-system-processes))))
                                                 (let ((start (float-time)))
                                                   (mevedel-execution-stop
                                                    session "main"

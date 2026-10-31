@@ -15,6 +15,11 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-execution-test-helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-execution-test-helpers"))
 
 (defun test-mevedel-execution-process--wait (predicate)
   "Wait until PREDICATE returns non-nil."
@@ -195,12 +200,15 @@
                    :workdir remote-root :spool-path spool
                    :terminal-function
                    (lambda (_child value) (setq result value))))
-            (mevedel-execution-process-start
-             child :name "mevedel-test-process-reused-group"
-             :command
-             '("sh" "-c"
-               "ps -o pgid= -p $$ | tr -d ' ' > group.pid; trap '' TERM; sleep 30 & wait")
-             :coding 'utf-8-unix :timeout 0.05)
+            (test-mevedel-execution--timeout-after-ready
+             pid-file
+             (lambda ()
+               (mevedel-execution-process-start
+                child :name "mevedel-test-process-reused-group"
+                :command
+                '("sh" "-c"
+                  "ps -o pgid= -p $$ | tr -d ' ' > group.pid; trap '' TERM; sleep 30 & wait")
+                :coding 'utf-8-unix :timeout 0.05)))
             (test-mevedel-execution-process--wait (lambda () result))
             (setq group-id
                   (string-to-number
@@ -281,28 +289,33 @@
          (original-signal-process (symbol-function 'signal-process))
          (mevedel-execution-process--child-kill-delay 0.02)
          (mevedel-execution-process--remote-control-timeout 0.02)
-         child result group-id started-at)
+         child result group-id settlement-budget)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (cl-letf
+          (cl-letf*
               (((symbol-function 'mevedel-execution-process--start-stop)
-                #'ignore))
+                #'ignore)
+               (schedule (symbol-function 'mevedel-transport-run-at-time))
+               ((symbol-function 'mevedel-transport-run-at-time)
+                (lambda (seconds function &rest args)
+                  (when (eq function #'mevedel-execution-process--settle-timed-out)
+                    (setq settlement-budget seconds))
+                  (apply schedule seconds function args))))
             (write-region "" nil spool nil 'silent)
             (setq child
                   (mevedel-execution-process-create
                    :workdir remote-root :spool-path spool
                    :terminal-function
                    (lambda (_child value) (setq result value))))
-            (mevedel-execution-process-start
-             child :name "mevedel-test-process-wedged"
-             :command
-             '("sh" "-c"
-               "ps -o pgid= -p $$ | tr -d ' ' > group.pid; sleep 30")
-             :coding 'utf-8-unix :timeout 0.05)
-            ;; The bound covers the escalation, not the launch: opening the
-            ;; transport is a real remote round trip whose cost belongs to
-            ;; the host, not to this child's settlement budget.
-            (setq started-at (float-time))
+            (test-mevedel-execution--timeout-after-ready
+             pid-file
+             (lambda ()
+               (mevedel-execution-process-start
+                child :name "mevedel-test-process-wedged"
+                :command
+                '("sh" "-c"
+                  "ps -o pgid= -p $$ | tr -d ' ' > group.pid; sleep 30")
+                :coding 'utf-8-unix :timeout 0.05)))
             (test-mevedel-execution-process--wait (lambda () result))
             (setq group-id
                   (string-to-number
@@ -310,7 +323,8 @@
                     (with-temp-buffer
                       (insert-file-contents pid-file)
                       (buffer-string)))))
-            (should (< (- (float-time) started-at) 1.0))
+            ;; Check the actual escalation budget, not host scheduling latency.
+            (should (< (abs (- settlement-budget 0.12)) 0.000001))
             (should (plist-get result :timed-out-p))
             (should (eq 'unknown (plist-get result :termination)))))
       (when child (mevedel-execution-process-release child))

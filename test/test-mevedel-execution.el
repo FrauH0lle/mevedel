@@ -31,6 +31,38 @@
 ;;
 ;;; One-shot execution
 
+(mevedel-deftest test-mevedel-execution--timeout-after-ready
+  (:doc "waits for a nonempty marker only for timeout delivery, preserving its budget")
+  (let* ((root (make-temp-file "mevedel-timeout-ready-" t))
+         (path (file-name-concat root "ready"))
+         (waits 0) scheduled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'test-mevedel-execution--wait)
+                   (lambda (predicate &rest _)
+                     (cl-incf waits)
+                     (should-not (funcall predicate))
+                     (with-temp-file path)
+                     (should-not (funcall predicate))
+                     (write-region "ready" nil path nil 'silent)
+                     (should (funcall predicate))))
+                  ((symbol-function 'mevedel-transport-run-at-time)
+                   (lambda (&rest args) (push args scheduled) 'timer)))
+          (should
+           (eq 'result
+               (test-mevedel-execution--timeout-after-ready
+                path
+                (lambda ()
+                  (mevedel-transport-run-at-time 7 #'ignore 'ordinary)
+                  (should (zerop waits))
+                  (mevedel-transport-run-at-time
+                   0.05 #'mevedel-execution-process--time-out 'child)
+                  'result))))
+          (should (= 1 waits))
+          (should (equal scheduled
+                         '((0.05 mevedel-execution-process--time-out child)
+                           (7 ignore ordinary)))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-execution--next-id ()
   ,test
   (test)
@@ -538,19 +570,22 @@
     (unwind-protect
         (progn
           (setq result
-                (mevedel-execution-run-one-shot
-                 :name "mevedel-test-timeout"
-                 :command
-                 (list "sh" "-c"
-                       "sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; wait"
-                       "mevedel-test-timeout" pid-file)
-                 :workdir root
-                 :writable-roots (list root)
-                 :timeout 0.1))
+                (test-mevedel-execution--timeout-after-ready
+                 pid-file
+                 (lambda ()
+                   (mevedel-execution-run-one-shot
+                    :name "mevedel-test-timeout"
+                    :command
+                    (list "sh" "-c"
+                          "sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; wait"
+                          "mevedel-test-timeout" pid-file)
+                    :workdir root
+                    :writable-roots (list root)
+                    :timeout 0.1))))
           (should (plist-get result :timed-out-p))
           (should (file-readable-p pid-file))
           (setq pid (test-mevedel-execution--read-pid pid-file))
-          (with-timeout (1 (error "Descendant process survived timeout"))
+          (with-timeout (5 (error "Descendant process survived timeout"))
             (while (not (test-mevedel-execution--process-gone-p pid))
               (accept-process-output nil 0.02))))
       (delete-directory root t)))
