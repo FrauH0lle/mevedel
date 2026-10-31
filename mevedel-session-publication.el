@@ -203,6 +203,17 @@ Errors are reported and do not stop the queue.")
              (mevedel-session-save-path session) thunk later 0)
       (funcall later))))
 
+(defun mevedel-session-publication-enqueue (session preparation &optional failure)
+  "Queue PREPARATION for SESSION's next transport-safe mutation opportunity.
+PREPARATION receives the gate token; FAILURE receives any error it signals.
+Unlike `mevedel-session-publication-defer', always queue, even at an idle gate.
+Synchronous saves and teardown drain this accepted work through the barrier."
+  (setf (mevedel-session-publication-preparations session)
+        (nconc (mevedel-session-publication-preparations session)
+               (list (cons preparation failure))))
+  (mevedel-session-publication--schedule session)
+  t)
+
 (defun mevedel-session-publication-defer (session preparation &optional failure token)
   "Defer PREPARATION before it mutates or captures SESSION when its gate is held.
 Return t when queued, nil when the caller may proceed.  FAILURE receives an
@@ -211,11 +222,7 @@ PREPARATION receives an explicit ownership token.  Only a caller carrying that
 TOKEN may reenter its own gate; unrelated event callbacks cannot inherit it."
   (when (and (not (and token (eq token (mevedel-session-publication-preparation-token session))))
              (mevedel-session-publication-busy-p session))
-    (setf (mevedel-session-publication-preparations session)
-          (nconc (mevedel-session-publication-preparations session)
-                 (list (cons preparation failure))))
-    (mevedel-session-publication--schedule session)
-    t))
+    (mevedel-session-publication-enqueue session preparation failure)))
 
 (defvar mevedel-session-publication--barrier-seconds 30
   "Drain deadline in seconds, checked between event-pump calls.

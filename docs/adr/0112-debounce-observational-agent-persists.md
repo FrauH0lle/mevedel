@@ -12,16 +12,22 @@ whose terminal transaction later rolls back. Observational activity changes and
 explicit mailbox discards schedule one sidecar-only registry save per session, with
 a two-second default debounce through the idle-transport scheduler.
 
-One acknowledged mutation is asynchronous, for warm local sessions only:
-delivering a background command's completion or monitor batch to its owner's
-mailbox. The producer passes an acknowledgement, and the append commits as a
+One acknowledged mutation may complete later: delivering a background command's
+completion or monitor batch to its owner's mailbox. For warm local portable
+sessions, the producer passes an acknowledgement, and the append commits as a
 session-owned publication job whose callbacks run across event-loop turns. The
 acknowledgement still means what it meant: it runs once, after the new head is
 authoritative and adopted (success) or after a definitive rollback (failure).
 Until then the records are tentative and hidden, and the producer keeps the
-output it would otherwise have consumed. Every other acknowledged mutation, and
-every cold, remote, file-backed or PID-lock session, keeps the synchronous
-path above. [Sessions](../sessions.md#warm-local-asynchronous-mailbox-publication)
+output it would otherwise have consumed. Remote, file-backed and PID-lock
+background arrivals share one synchronous commit at the next transport-safe
+timer opportunity. They queue before mutation in the existing preparation gate;
+each producer is acknowledged only after the shared commit succeeds. Arrivals
+during that commit form the next batch. Explicit saves and teardown drain these
+preparations too. Cold sessions with an existing save path and live root use the
+same batching path; without either, delivery stays immediately synchronous.
+Every other acknowledged mutation keeps the synchronous path above.
+[Sessions](../sessions.md#warm-local-asynchronous-mailbox-publication)
 owns the job's phases, gate and recovery. Automatic warm-local root and agent
 transcript checkpoints also use that job. Explicit saves and settlement still
 wait synchronously for their commits.
@@ -223,6 +229,28 @@ transactional journal.
 
 All revisions belong to ADR 0112:
 
+- **2026-10-31 fallback mailbox coalescing:** file-backed and remote sessions
+  previously rewrote the entire sidecar for every background Monitor batch.
+  They now collect arrivals before mutation in the existing preparation gate
+  and share one synchronous commit at the next transport-safe opportunity.
+  Keeping the existing writer avoids migrating PID-lock/file authority to the
+  immutable-head protocol required by the asynchronous publisher. The journal
+  alternative below remains unnecessary. Success-only acknowledgements, hidden
+  tentative records and producer retention preserve the durability boundary;
+  an orderly close drains accepted work rather than dropping it.
+  A real-process pressure harness held delivery, emitted 80-byte payloads and
+  sampled a 100 ms timer (one source-loaded batch-Emacs run per configuration
+  and build). At 3 monitors, one line per 0.65 s for 120 s, p99 timer lateness
+  fell from 29 to 11 ms; at 10 monitors, one line per 2 s for 120 s, from 84
+  to 10 ms. At 30 monitors, one line per 0.65 s for 90 s, it fell from 1,907
+  to 101 ms, with commit busy time falling from 76.6% to 13.2%. On a local-shell
+  TRAMP mock with 10 monitors at one line per 2 s for 120 s, p99 fell from
+  3,977 to 420 ms and commit busy time from 95.8% to 75.0%. All runs drained
+  cleanly without terminal/flood notices. Remote process spools were local,
+  matching the production tool; earlier remote-spool harness failures were
+  discarded. Individual commits still copy the full unread mailbox, and TRAMP
+  remains expensive. These are single-run event-loop observations, not network
+  or graphical latency guarantees; batch mode also omits idle collection.
 - **2026-10-31 gate-open notification turn:** notifications used to wait until
   publication was entirely idle, queued preparations included, and only the
   backoff timer could flush them. Sustained background producers keep that

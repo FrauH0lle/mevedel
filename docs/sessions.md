@@ -1471,13 +1471,23 @@ Delivering a background command's completion or monitor batch to its owner's
 mailbox and automatic root or agent transcript checkpoints do not block the
 editor on target programs. Only a materialized local portable session qualifies: its
 save path is local, its authority is portable, a committed publication with a
-sidecar exists, its root buffer is live, and it is not stopping. Cold
-materialization, remote targets, file-backed and PID-lock sessions use the
-synchronous publication above. Every other acknowledged mutation is
+sidecar exists, its root buffer is live, and it is not stopping. Remote,
+file-backed and PID-lock background deliveries instead coalesce arrivals for
+the next transport-safe timer opportunity and commit them together through the
+synchronous writer above. They use the same mutation preparation gate, without
+changing their storage authority or format. Before that opportunity, arrivals
+are producer-owned, not visible mailbox records. During the commit they remain
+tentative; success acknowledgements and delivery run only after commit. Failure removes
+only the batch's tentative records and leaves producers holding their output.
+New arrivals during a commit wait for the next batch. Explicit saves and orderly
+close drain accepted batches; a forced process kill can lose unacknowledged
+producer output, never mail from a completed acknowledgement. Cold background
+delivery uses this path when a save location and live root already exist;
+otherwise it retains the immediate synchronous path. Every other acknowledged mutation is
 synchronous too; agent mail, spawn, RESULT and settlement drain the gate first
 (below) and then commit as before.
 
-The mailbox append is one session-owned publication job that holds
+The warm-local mailbox append is one session-owned publication job that holds
 `publication-active-p` from acceptance to acknowledgement, so renewal timers
 stay quiet and cooperative transfer stays blocked. Its phases are admission,
 freeze, reservation, generation, head commit, adoption, acknowledgement and
