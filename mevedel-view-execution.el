@@ -71,7 +71,7 @@
 (autoload 'mevedel-view-audit-show-result "mevedel-view-audit" nil t)
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--call-preserving-user-view-state
+(declare-function mevedel-view-call-preserving-user-view-state
                   "mevedel-view-composer" (thunk &optional region))
 
 ;; `mevedel-view-render'
@@ -789,7 +789,7 @@ the metadata is cut."
                      (cl-remf properties 'face)
                      (cl-remf properties 'font-lock-face)
                      (add-text-properties 0 (length row) properties row))
-                   (mevedel-view--call-preserving-user-view-state
+                   (mevedel-view-call-preserving-user-view-state
                     (lambda ()
                       (let ((inhibit-read-only t)
                             (inhibit-modification-hooks t))

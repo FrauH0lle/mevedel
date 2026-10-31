@@ -19,7 +19,8 @@
 
 (defconst mevedel-graphical-check--files
   '("test-mevedel-view-table-graphical.el" "test-mevedel-view-geometry.el"
-    "test-mevedel-view-mouse.el" "test-mevedel-window-graphical.el")
+    "test-mevedel-view-mouse.el" "test-mevedel-window-graphical.el"
+    "test-mevedel-view-user-state.el")
   "Default real-display ERT suites.")
 
 (defun mevedel-graphical-check--options (arguments)

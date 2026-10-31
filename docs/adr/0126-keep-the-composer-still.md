@@ -7,7 +7,8 @@ Status: accepted
 The view keeps the user's active surface at its screen position. Zone reconciliation
 and its enclosing full-render transaction
 choose one viewport anchor per window: point inside a surviving visited
-interaction card takes priority; otherwise a previously visible composer keeps
+interaction card or status row (background work, tasks, notices) takes
+priority; otherwise a previously visible composer keeps
 its position only when that window's caret is in the composer. A history reader
 keeps its reading position even if the composer is still visible. Logical
 positions are restored before applying
@@ -30,7 +31,7 @@ and its character tail. After logical restoration, they apply this policy:
 
 | Window context before mutation | Viewport policy | Discriminating case |
 | --- | --- | --- |
-| Point visits a surviving interaction card | Retain the visited row, then fill only newly created blank pixels | Shrinking a visited card below point must not leave a newly empty viewport |
+| Point visits a surviving interaction card or status row | Retain the visited row, then fill only newly created blank pixels | Shrinking a visited card below point must not leave a newly empty viewport; collapsing a background row must not move a mid-window composer to the last page |
 | Caret in visible composer, saved logical start survives | Retain the composer position and pre-existing blank space, except when growth overflows the window | Shorter status text must not erase intentional blank space; oversized incoming growth fills the last page |
 | Saved logical start removed or truncated | Fill the last page, bypassing the character-tail guard | Ask submission can expose longer history lines and increase the tail despite losing rows |
 | Caret in transcript history, saved logical start survives | Retain the reading viewport through growth and shrinkage below it | A focus click into history must not move it when deferred rendering catches up |
@@ -124,6 +125,20 @@ blank separator above the rail depends on how the text before it ends, so it is
 checked again whenever a transcript writer finishes and redrawn only when it no
 longer fits.
 
+Scrolling away from the composer and back returns point to the draft, as in a
+terminal. Emacs keeps point visible, so a scroll command that hides the
+draft moves point onto transcript or chrome rows, often the background
+`[Manage]` row just above the rail. The view remembers the draft offset per
+window; the next scroll command after which that position is fully visible
+puts point back. Commands carrying the `scroll-command` property, other-window
+scrolling, and touchpad momentum (`pixel-scroll-start-momentum`) count as
+scrolling; any other command in that window is a deliberate move and drops the
+pending return. Redraws while scrolled away keep the reader position as before.
+Capture uses each displayed view window's own point and buffer, and restoration
+applies only to windows whose viewport actually scrolled. Wheel scrolling over
+a non-selected window and `scroll-other-window` work even from a different
+selected buffer, without changing the selected window's point or viewport.
+
 Arriving permission prompts and questions do not move point. They render, the
 rail shows them as pending, and `C-c C-j` visits the next one from the invoking
 window, which returns to its draft position on settlement only if it is still
@@ -215,6 +230,30 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Scrolling back returns to the draft (2026-10-31).** With
+  `scroll-preserve-screen-position` and two-line wheel steps, three wheel
+  notches up from a composer at the window bottom moved point onto background
+  rows, and scrolling back left it there while the composer was visible again;
+  later redraws then preserved that chrome position as a reading position. A
+  graphical command-loop reproduction confirmed both. Point now returns to its
+  draft offset on the first scroll that shows it fully. Other commands cancel the
+  return, so a deliberate move is never undone. Native non-selected-window
+  regressions exposed that wheel scrolling restores selection before the hooks
+  run. Global command hooks now capture view windows only on scroll commands
+  and restore only those whose viewport changed; ordinary commands do not walk
+  windows or measure geometry.
+
+- **Status rows are visits too (2026-10-31).** Collapsing an expanded
+  background row while the composer sat mid-window moved the composer to the
+  bottom (graphical reproduction: composer at body pixel 400 moved to 600).
+  Point on a status row was neither a composer, history-reader nor visited-card
+  anchor, so the shrinking character tail clamped the window to its last page.
+  Status rows are rows a user visits deliberately, like interaction cards, so
+  they now take the visited-row policy: the row keeps its screen position and
+  only newly created blank space is filled, which returns the composer to its
+  row. A full redraw under a visited `[Manage]` row no longer moves that row.
+  Only windows whose point is in a managed row pay for the row measurement.
 
 - **Size round trips retain their blank-space baseline (2026-10-26).** A live
   focus trace showed focus returning to one frame repeatedly invoking window

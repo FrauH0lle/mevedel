@@ -32,7 +32,7 @@
           (should before-y)
           (should before-end-y)
           (should (< before-end-y (- height 2)))
-          (mevedel-view--call-preserving-user-view-state
+          (mevedel-view-call-preserving-user-view-state
            (lambda ()
              (mevedel-view--call-with-render-boundaries-advancing
               (lambda ()

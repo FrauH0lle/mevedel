@@ -2179,7 +2179,23 @@ Attention gating is a redraw path like any other: a skipped tick or flush
 leaves buffer text, properties, and the composer byte-identical, and the
 resumed render runs through the same preserving wrappers.
 
-`mevedel-view--call-preserving-window-state` restores point, mark, window points,
+Every asynchronous writer outside zone reconciliation goes through one entry,
+`mevedel-view-call-preserving-user-view-state`: live and settled stream
+updates, full and batched rerenders, latest-turn and tool-row refreshes,
+agent handle refreshes, terminal breadcrumbs, request-rail ticks and
+background elapsed ticks. It keeps composer text (also in a view no window
+shows), point, mark and every window's viewport, and drops the writer's undo
+entries. Status, interaction and rail zones reconcile through
+`mevedel-view-zone-reconcile`, which applies the same policy itself, so the
+request spinner's start, update and stop need no wrapper of their own. Three
+mechanisms stay distinct by design: draft and prompt replacements are single
+composer mutations ([ADR 0126](adr/0126-keep-the-composer-still.md)), table
+splices map positions by cell, and
+`mevedel-view-call-preserving-window-configuration` also restores frame
+layout. Decorative animation frames change only `display` properties and
+move no positions.
+
+The entry restores point, mark, window points,
 and window starts through semantic render anchors rather than raw buffer
 positions: a composer position by its input offset, a managed-fragment
 position by zone namespace, fragment id, and offset, and rendered transcript

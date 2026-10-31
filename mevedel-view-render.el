@@ -268,13 +268,8 @@
 (defvar mevedel-view--agent-path)
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--call-preserving-input-text
-                  "mevedel-view-composer" (thunk))
-(declare-function mevedel-view--call-preserving-user-view-state
+(declare-function mevedel-view-call-preserving-user-view-state
                   "mevedel-view-composer" (thunk &optional region))
-(declare-function mevedel-view--call-preserving-window-state
-                  "mevedel-view-composer"
-                  (thunk &optional positions-preserved region))
 (declare-function mevedel-view--call-with-render-boundaries-advancing
                   "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--ensure-interactive-chat-view
@@ -1296,12 +1291,6 @@ buffer's font-lock refontification cycles."
 
 ;;
 ;;; Rendering state and agent helpers
-
-(defmacro mevedel-view-render--preserving-window-state (&rest body)
-  "Execute BODY while preserving point and window positions."
-  (declare (indent 0) (debug t))
-  `(mevedel-view--call-preserving-window-state
-    (lambda () ,@body)))
 
 (defun mevedel-view--running-agent-transcript-buffer-p ()
   "Return non-nil when the current buffer is a live agent transcript."
@@ -3362,7 +3351,7 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
           (setq rendering
                 (plist-put (copy-sequence rendering)
                            :initially-collapsed-p collapsed)))
-        (mevedel-view--call-preserving-user-view-state
+        (mevedel-view-call-preserving-user-view-state
          (lambda ()
            (mevedel-view--call-with-render-boundaries-advancing
             (lambda ()
@@ -4372,8 +4361,7 @@ the render so user toggles survive streaming ticks."
      :turn-detail (mevedel-view--debug-turn-summary turns data-buf)
      :pending pending
      :state (mevedel-view--debug-state data-buf data-from data-to))
-    (mevedel-view-render--preserving-window-state
-     (mevedel-view--call-preserving-input-text
+    (mevedel-view-call-preserving-user-view-state
       (lambda ()
         ;; rebuild region stops at status-marker (top of zone
         ;; 2) rather than input-marker, so any future status- or
@@ -4575,7 +4563,7 @@ the render so user toggles survive streaming ticks."
             (mevedel-view--render-agent-status)
             (mevedel-view--interaction-rebuild)
             (when (fboundp 'mevedel-directive-frame-refresh-filter)
-              (mevedel-directive-frame-refresh-filter))))))))))
+              (mevedel-directive-frame-refresh-filter)))))))))
 
 (defvar-local mevedel-view-render--owner nil
   "Non-nil while this view has an active projection writer.")
@@ -9042,7 +9030,7 @@ non-nil on success; nil leaves the old rendering in place."
     (unwind-protect
         (condition-case err
             (progn
-              (mevedel-view--call-preserving-user-view-state
+              (mevedel-view-call-preserving-user-view-state
                (lambda ()
                  (atomic-change-group
                    (mevedel-view-render--batch-turn
@@ -9201,7 +9189,7 @@ to DATA's tail, schedule a full projection instead."
                    (condition-case err
                        (let ((mevedel-view-render--prepared-responses
                               (plist-get job :fontified)))
-                         (mevedel-view--call-preserving-user-view-state
+                         (mevedel-view-call-preserving-user-view-state
                           (lambda ()
                             (atomic-change-group
                               (mevedel-view-render--batch-turn
@@ -9309,7 +9297,7 @@ Until the complete plan is ready, keep the previous view in place."
         (clrhash (plist-get job :tool-cache)))
       (unwind-protect
           (progn
-            (mevedel-view--call-preserving-user-view-state
+            (mevedel-view-call-preserving-user-view-state
              (lambda ()
                (atomic-change-group
                  (let ((inhibit-read-only t))
@@ -9514,8 +9502,7 @@ view chrome."
     (mevedel-view-prepare-cancel))
   (mevedel-view-render-cancel-batch)
   (atomic-change-group
-    (mevedel-view-render--preserving-window-state
-     (mevedel-view--call-preserving-input-text
+    (mevedel-view-call-preserving-user-view-state
       (lambda ()
       (let* ((mevedel-view--tool-cache-used (make-hash-table :test #'equal))
              (mevedel-transcript--tool-block-index (make-hash-table :test #'eq))
@@ -9588,7 +9575,7 @@ view chrome."
               (mevedel-view--full-rerender-finish
                data-buf live-data-buf rendering historical-p start-time)
             (mevedel-view--sweep-tool-rendering-cache
-             mevedel-view--tool-cache-used)))))))))
+             mevedel-view--tool-cache-used))))))))
 
 ;;
 ;;; Optimistic user turn rendering

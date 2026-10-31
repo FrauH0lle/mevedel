@@ -4,6 +4,12 @@
 
 ;; Owns editable composer geometry, prompt submission, root dispatch, and
 ;; fork/send coordination with the authoritative gptel data buffer.
+;;
+;; It also owns user view-state preservation.  Asynchronous view writers
+;; call `mevedel-view-call-preserving-user-view-state'; the partial
+;; preservers it composes (window state, composer text, composer point) are
+;; private building blocks for it and for the draft command transaction,
+;; table splices and `mevedel-view-call-preserving-window-configuration'.
 
 ;;; Code:
 
@@ -531,6 +537,7 @@
                   (anchor &optional strict))
 (declare-function mevedel-view-zone-position-anchor "mevedel-view-zone"
                   (position &optional window))
+(declare-function mevedel-view-zone-visit-anchor "mevedel-view-zone" (position))
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-fork-preflight
@@ -1590,6 +1597,64 @@ the anonymous repeat-map commands used by `text-scale-adjust'."
   (mevedel-view--finish-draft-command)
   (setq mevedel-view--draft-command-buffer (current-buffer)))
 
+(defvar mevedel-view--scroll-origins nil
+  "View windows before scrolling: (WINDOW BUFFER START VSCROLL OFFSET).
+OFFSET is the window point's composer offset, or nil for a history reader.")
+
+(defun mevedel-view--scroll-command-p (command)
+  "Return non-nil when COMMAND only scrolls the window.
+Other-window scrolling and touchpad momentum lack the `scroll-command'
+property carried by commands that scroll the selected window."
+  (and (symbolp command)
+       (or (get command 'scroll-command)
+           (memq command '(scroll-other-window scroll-other-window-down
+                           pixel-scroll-start-momentum)))))
+
+(defun mevedel-view--note-scroll-origin ()
+  "Remember the draft position a scroll command may displace point from.
+Capture each view window: wheel scrolling and commands that scroll another
+window can target a non-selected view, even from a different buffer.
+Any other command in the selected window drops a pending return: the user
+moved point deliberately."
+  (setq mevedel-view--scroll-origins nil)
+  (if (mevedel-view--scroll-command-p this-command)
+      (walk-windows
+       (lambda (window)
+         (with-current-buffer (window-buffer window)
+           (when (and (derived-mode-p 'mevedel-view-mode)
+                      (not mevedel-view--agent-transcript-p))
+             (push (list window (current-buffer)
+                         (window-start window) (window-vscroll window t)
+                         (and (mevedel-view--position-in-input-region-p
+                               (window-point window))
+                              (- (window-point window) (mevedel-view--input-start))))
+                   mevedel-view--scroll-origins))))
+       'nomini t)
+    (set-window-parameter nil 'mevedel-view-scroll-return nil)))
+
+(defun mevedel-view--return-from-scroll ()
+  "Return point to the draft once scrolling shows its position again.
+Emacs keeps point visible, so scrolling away moves it onto transcript or
+chrome rows.  Restore only windows whose viewport actually scrolled, using
+their own buffer and window point, without changing the selected window."
+  (let ((origins mevedel-view--scroll-origins))
+    (setq mevedel-view--scroll-origins nil)
+    (pcase-dolist (`(,window ,buffer ,start ,vscroll ,origin) origins)
+      (when (and (window-live-p window)
+                 (eq (window-buffer window) buffer)
+                 (or (/= start (window-start window))
+                     (/= vscroll (window-vscroll window t))))
+        (with-current-buffer buffer
+          (when (and origin
+                     (not (mevedel-view--position-in-input-region-p
+                           (window-point window))))
+            (set-window-parameter window 'mevedel-view-scroll-return origin))
+          (when-let* ((offset (window-parameter window 'mevedel-view-scroll-return))
+                      (target (min (point-max) (+ (mevedel-view--input-start) offset)))
+                      ((mevedel-view--position-screen-y target window t)))
+            (set-window-point window target)
+            (set-window-parameter window 'mevedel-view-scroll-return nil)))))))
+
 (defun mevedel-view--draft-deletion-keeps-height-p (beg end)
   "Return non-nil if deleting BEG to END cannot unwrap a plain draft line.
 Be conservative about remapped faces and display properties.  Graphical
@@ -1738,10 +1803,7 @@ found without scanning the rest of the buffer."
                     (with-current-buffer mevedel-view--pww-current-buffer
 		      (let* ((wp (window-point w))
                              (ws (window-start w))
-                             (visit (and (eq (get-text-property
-                                              wp 'mevedel-view-zone-namespace)
-                                             'interaction)
-                                         (mevedel-view-zone-position-anchor wp)))
+                             (visit (mevedel-view-zone-visit-anchor wp))
                              (visit-y (and visit (mevedel-view--position-screen-y wp w))))
                         (list w
 			      wp
@@ -1907,18 +1969,31 @@ caller's buffer, not in a displayed view."
   `(mevedel-view--call-with-render-boundaries-advancing
     (lambda () ,@body)))
 
-(defun mevedel-view--call-preserving-user-view-state (thunk &optional region)
-  "Call THUNK without moving the user's live view cursor.
-Async redraws may insert, delete, or reconcile view-owned text while the
-user is typing in the composer or browsing transcript history.  Preserve
-all displayed windows plus the editable composer text around THUNK.
-REGION, a cons (START . END), promises that THUNK replaces only that
-transcript text; see `mevedel-view--call-preserving-window-state'."
+(defun mevedel-view-call-preserving-user-view-state (thunk &optional region)
+  "Call THUNK, a view write the user did not command; return its value.
+This is the entry every asynchronous view writer uses: timers, process
+output, stream chunks, deferred and batched renders.  Around THUNK it keeps
+what the user sees and edits:
+
+- the composer's text and properties, even when no window shows the view;
+- point and mark, by offset inside the composer and by semantic anchor in
+  the transcript and managed chrome;
+- every displaying window's point and viewport, under the composer
+  policy: a window editing the visible composer keeps its screen row, a
+  history reader keeps its reading position, a window visiting an
+  interaction card or status row keeps that row, and a lost start fills
+  the last page.
+
+REGION, a cons (START . END), promises that THUNK replaces only that text.
+Anchors inside it are then resolved locally instead of scanning the
+buffer, so frequent small writers stay cheap.
+
+Command-driven writes use the draft command transaction instead, table
+splices map positions by cell, and zone reconciliation applies the same
+policy itself; `mevedel-view-call-preserving-window-configuration'
+additionally restores frame layout."
   (prog1 (mevedel-view--call-preserving-window-state
-          (lambda ()
-            (mevedel-view--call-preserving-input-text
-             (lambda ()
-               (mevedel-view--call-preserving-input-point thunk))))
+          (lambda () (mevedel-view--call-preserving-input-text thunk))
           nil region)
     (mevedel-view--sanitize-undo)))
 
@@ -2078,6 +2153,9 @@ and other input properties remain untouched."
     (add-hook 'after-change-functions
               #'mevedel-view--restore-draft-window-state 90 t)
     (add-hook 'pre-command-hook #'mevedel-view--begin-draft-command -90 t)
+    ;; Scrolling can target this view from a different selected buffer.
+    (add-hook 'pre-command-hook #'mevedel-view--note-scroll-origin)
+    (add-hook 'post-command-hook #'mevedel-view--return-from-scroll)
     ;; A command can leave this buffer before post-command-hook runs.
     (add-hook 'post-command-hook
               #'mevedel-view--finish-draft-command 90)

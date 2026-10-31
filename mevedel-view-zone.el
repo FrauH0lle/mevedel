@@ -860,10 +860,20 @@ Return nil when its fragment is gone.  With STRICT, also return nil when
 its sub-anchor or offset no longer exists, rather than clamping it."
   (mevedel-view-zone--restore-fragment-position (car anchor) (cdr anchor) strict))
 
+(defun mevedel-view-zone-visit-anchor (position)
+  "Return an anchor for POSITION when it visits a managed row, or nil.
+Interaction cards and status rows (background work, tasks, notices) are
+rows a user visits deliberately: a redraw keeps such a row's screen
+position instead of applying the composer or reading-start policy."
+  (and (memq (get-text-property position 'mevedel-view-zone-namespace)
+             '(interaction status))
+       (mevedel-view-zone-position-anchor position)))
+
 (defun mevedel-view-zone--capture-logical-state (zone region composer-anchors)
   "Capture logical positions and each window's viewport policy for ZONE REGION.
-REGION may be nil on first render.  A visible interaction visit anchors
-point's screen row, even when another zone is being reconciled.  Only
+REGION may be nil on first render.  A visible interaction or status
+visit anchors point's screen row, even when another zone is being
+reconciled.  Only
 visiting windows pay for the bounded display-row measurement.
 COMPOSER-ANCHORS identify other windows whose visible composer stays still."
   (list
@@ -877,10 +887,7 @@ COMPOSER-ANCHORS identify other windows whose visible composer stays still."
       (let* ((position (window-point window))
              (composer (assq window composer-anchors))
              (visit (and (not (mevedel-view-zone--input-offset position))
-                         (when-let* ((interaction
-                                      (mevedel-view-zone--live-region 'interaction)))
-                           (mevedel-view-zone--fragment-position-state
-                            'interaction interaction position))))
+                         (mevedel-view-zone-visit-anchor position)))
              (y (and visit (mevedel-view--position-screen-y position window))))
         (list window
               (and region (mevedel-view-zone--fragment-position-state
@@ -911,8 +918,7 @@ Other windows retain their logical or marker-backed reading starts."
           (when-let* ((position (mevedel-view-zone--restore-fragment-position
                                  zone point-state)))
             (set-window-point window position))
-          (let ((visited (and y (mevedel-view-zone--restore-fragment-position
-                                   'interaction visit)))
+          (let ((visited (and y (mevedel-view-zone-anchor-position visit)))
                 (start (mevedel-view-zone--restore-fragment-position
                         zone start-state t)))
             (when (and start-state (not start))
