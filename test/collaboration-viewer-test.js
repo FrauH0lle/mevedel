@@ -2337,6 +2337,29 @@ async function main() {
   assert.equal(nodes.invites.children.length, 2);
   assert.equal(JSON.parse(storage.get('mevedel-rooms')).length, 3);
 
+  // Owner link: a settled response carries its fork point, and Fork from
+  // here asks the host for a Conversation Fork. The page marks the owner
+  // tier so the control shows only there; the host rechecks it anyway.
+  assert.equal('data-owner-link' in document.body.attributes, true);
+  await deliver({t: 'record', record: {id: 'forkable', kind: 'assistant', revision: 0,
+                                       text: 'Settled answer.', forkPoint: 'fp-1'}});
+  const forkButton = findByClass(findByRecordId(nodes.transcript, 'forkable'), 'forkbtn');
+  assert.ok(forkButton, 'fork control');
+  assert.equal(forkButton.dataset.forkPoint, 'fp-1');
+  const forkBefore = first.sent.length;
+  nodes.transcript.dispatch('click', {target: {closest: selector =>
+    (selector.startsWith('.forkbtn') ? forkButton : null)}});
+  await waitFor(() => first.sent.length === forkBefore + 1, 'sealed fork request');
+  assert.deepEqual(await unseal(key, first.sent[forkBefore]),
+                   {t: 'fork', reqId: 3, forkPoint: 'fp-1'});
+  assert.match(textOf(nodes.invites), /Fork · waiting for the host/);
+  // The fork settles through the new-session reply, as its own room.
+  await deliver({t: 'new-session', reqId: 3, ok: true, name: 'forked-id',
+                 link: `http://127.0.0.1:1/#forked.${thirdSecret}`});
+  assert.match(textOf(nodes.invites), /forked-id · open/);
+  // A record without a fork point, such as a streaming answer, offers none.
+  assert.equal(findByClass(findByRecordId(nodes.transcript, 'assistant'), 'forkbtn'), null);
+
   // Inviting hands on this room's own link, at the holder's tier or any
   // below it -- an owner link can offer all three, and never a fourth.
   nodes['invite-button'].dispatch('click');

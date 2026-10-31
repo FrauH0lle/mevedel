@@ -137,6 +137,9 @@
                   "mevedel-collaboration-owner" (room peer))
 (autoload 'mevedel-collaboration--handle-new-session
   "mevedel-collaboration-owner")
+(declare-function mevedel-collaboration--handle-fork
+                  "mevedel-collaboration-owner" (room peer frame))
+(autoload 'mevedel-collaboration--handle-fork "mevedel-collaboration-owner")
 (autoload 'mevedel-collaboration--handle-session-models
   "mevedel-collaboration-owner")
 (autoload 'mevedel-collaboration--handle-set-mode
@@ -1364,6 +1367,7 @@ sending guest instead of waiting for an answer."
      (mevedel-collaboration--handle-set-mode room peer frame))
     ("new-session"
      (mevedel-collaboration--handle-new-session room peer frame))
+    ("fork" (mevedel-collaboration--handle-fork room peer frame))
     ("session-models"
      (mevedel-collaboration--handle-session-models room peer))))
 

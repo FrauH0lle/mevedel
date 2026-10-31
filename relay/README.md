@@ -40,6 +40,9 @@ carry `effort` alongside `model`. Session owners rename through
 `{"t":"rename-session","reqId":N,"id":"session-id","name":"New name"}`;
 the reply repeats `reqId` with `ok` and, on refusal, `message`. Successful names
 propagate through room status and fresh lobby listings.
+An owner link forks the shared session with
+`{"t":"fork","reqId":N,"forkPoint":"ID"}`, where `ID` is an assistant record's
+`forkPoint`; the host answers with the `new-session` reply for that `reqId`.
 
 The bounded `history-index` records stream contains artifact metadata and
 canonical chat descriptors: `{kind:"chat",number,firstSegment,lastSegment,title}`.

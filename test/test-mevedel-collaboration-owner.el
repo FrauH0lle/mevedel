@@ -20,8 +20,86 @@
 (require 'mevedel-collaboration-projection)
 (require 'mevedel-collaboration-task)
 (require 'mevedel-collaboration-transport)
+(require 'mevedel-models)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-structs)
+(require 'mevedel-session-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-session-test-support"))
+
+(mevedel-deftest mevedel-collaboration--handle-fork
+  (:doc "forks the shared session for owner links only, through guest dispatch")
+  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
+         (data-buffer (plist-get fixture :buffer))
+         (guests (make-hash-table :test #'eql))
+         (room (list :session (plist-get fixture :session)
+                     :guests guests :transport 'relay))
+         (owner (list :name "Owner" :writable t :owner t :guest-id "o"))
+         sent started children)
+    (puthash 2 (list :name "Writer" :writable t :owner nil :guest-id "w") guests)
+    (puthash 3 owner guests)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--room-for-buffer)
+                   (lambda (_buffer) room))
+                  ((symbol-function 'mevedel-collaboration--room-data-buffer)
+                   (lambda (_room) data-buffer))
+                  ((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport peer frame) (push (cons peer frame) sent)))
+                  ;; The child room's relay dial is outside this test.
+                  ((symbol-function 'mevedel-collaboration--start)
+                   (lambda (session buffer)
+                     (push (cons session buffer) started)
+                     (list :session session :link-owner "owner-link")))
+                  ((symbol-function 'mevedel-collaboration--guest-link)
+                   (lambda (new-room guest)
+                     (and (plist-get guest :owner) (plist-get new-room :link-owner))))
+                  ((symbol-function 'mevedel--display-chat-buffer) #'ignore)
+                  ((symbol-function 'mevedel--run-session-start-hooks) #'ignore)
+                  ((symbol-function 'mevedel-model-apply-session-policy) #'ignore))
+          ;; A full-control guest without the owner token cannot fork, and
+          ;; is not even answered: the authority is not its to ask about.
+          (mevedel-collaboration--on-frame
+           data-buffer 2 '(:t "fork" :reqId 1 :forkPoint "fixture-fork"))
+          (should-not sent)
+          (should-not started)
+          ;; An unknown fork point is refused to the owner with the reason.
+          (mevedel-collaboration--on-frame
+           data-buffer 3 '(:t "fork" :reqId 2 :forkPoint "no-such-point"))
+          (should (equal "new-session" (plist-get (cdar sent) :t)))
+          (should (eq :json-false (plist-get (cdar sent) :ok)))
+          (should (string-match-p "no longer exists" (plist-get (cdar sent) :message)))
+          (should-not started)
+          (setq sent nil)
+          (mevedel-collaboration--on-frame
+           data-buffer 3 '(:t "fork" :reqId 3 :forkPoint "fixture-fork"))
+          (should (= 1 (length started)))
+          (let ((child (caar started)))
+            (push (cdar started) children)
+            (should (equal "fixture-fork"
+                           (mevedel-session-forked-from-fork-point-id child)))
+            (should (eq 'conversation (mevedel-session-fork-type child)))
+            (should (equal '(3) (mapcar #'car sent)))
+            (should (eq t (plist-get (cdar sent) :ok)))
+            (should (equal 3 (plist-get (cdar sent) :reqId)))
+            (should (equal "owner-link" (plist-get (cdar sent) :link)))
+            (should (equal (mevedel-session-name child)
+                           (plist-get (cdar sent) :name))))
+          ;; The source session is left as it was.
+          (should (eq (plist-get fixture :session)
+                      (buffer-local-value 'mevedel--session data-buffer)))
+          ;; A retransmitted request is the same fork, not a second one.
+          (mevedel-collaboration--on-frame
+           data-buffer 3 '(:t "fork" :reqId 3 :forkPoint "fixture-fork"))
+          (should (= 1 (length started))))
+      (dolist (child children)
+        (when (buffer-live-p child)
+          (let ((view (buffer-local-value 'mevedel--view-buffer child)))
+            (with-current-buffer child (set-buffer-modified-p nil))
+            (when (buffer-live-p view) (kill-buffer view)))
+          (kill-buffer child)))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
 
 (mevedel-deftest mevedel-collaboration--handle-session-models
   (:doc "refreshes the current catalog only for peers allowed to request sessions")

@@ -3,7 +3,8 @@
 ;;; Commentary:
 
 ;; Owns the browser owner-link authorities: changing permission mode and
-;; creating isolated sessions for authenticated writable guests.
+;; creating isolated sessions for authenticated writable guests, including
+;; Conversation Forks of the shared session.
 
 ;;; Code:
 
@@ -95,6 +96,11 @@
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-sanitize
                   "mevedel-session-artifacts" (name))
+
+;; `mevedel-session-fork'
+(declare-function mevedel-session-fork-create
+                  "mevedel-session-fork" (buffer target type))
+(autoload 'mevedel-session-fork-create "mevedel-session-fork")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -410,6 +416,66 @@ its first prompt like one started in Emacs without a name."
              room peer guest request-id name prompt images model effort)
           (mevedel-collaboration--ask-host-new-session
            room peer guest request-id name prompt images model effort)))))))
+
+(defun mevedel-collaboration--handle-fork (room peer frame)
+  "Fork ROOM's session at FRAME's fork point for owner PEER.
+
+This is the browser's Conversation Fork: a new session whose transcript
+ends at the assistant response that carries FRAME's `forkPoint', in the
+same working directory, with the source session left unchanged.  It is
+an owner-link authority, like creating a session outright, because the
+child copies the session's configuration and history.  The fork shares
+the `new-session' reply, so the requester's waiting notice settles with
+an owner link to the child's room; other owners are offered it too.
+
+A fork that published but whose room could not start stays a saved
+session the host can open: discarding it would lose the only copy of a
+state the requester asked to keep."
+  (when-let* ((guest (mevedel-collaboration--owner room peer))
+              (request-id (plist-get frame :reqId))
+              ((mevedel-collaboration--request-id-p request-id)))
+    (let ((fork-point (mevedel-collaboration--guest-text
+                       (plist-get frame :forkPoint)))
+          (data-buffer (mevedel-collaboration--room-data-buffer room))
+          (last (plist-get guest :last-fork))
+          (now (float-time))
+          name new-room failure)
+      (cond
+       ;; A retransmitted request is the same request, not a second fork.
+       ((and last
+             (eql request-id (car last))
+             (< (- now (cdr last))
+                mevedel-collaboration--duplicate-prompt-window))
+        nil)
+       ((not (and fork-point data-buffer (plist-get room :session)))
+        (mevedel-collaboration--new-session-reply
+         room peer request-id nil :ok :json-false
+         :message "Choose a settled assistant response to fork"))
+       (t
+        (plist-put guest :last-fork (cons request-id now))
+        (condition-case err
+            (let* ((child-buffer
+                    (mevedel-session-fork-create
+                     data-buffer (list :fork-point-id fork-point)
+                     'conversation))
+                   (child (buffer-local-value 'mevedel--session child-buffer)))
+              (setq name (mevedel-session-name child))
+              (setq new-room (mevedel-collaboration--start child child-buffer))
+              (ignore-errors (mevedel--display-chat-buffer child-buffer)))
+          (error (setq failure (error-message-string err))))
+        (if (not new-room)
+            (mevedel-collaboration--new-session-reply
+             room peer request-id name :ok :json-false
+             :message (format "Fork could not be shared: %s"
+                              (or failure "the room did not start")))
+          (when (mevedel-collaboration--new-session-reply
+                 room peer request-id name :ok t
+                 :link (mevedel-collaboration--guest-link new-room guest))
+            (ignore-errors
+              (mevedel-collaboration--offer-room-to-owners
+               room peer name (plist-get new-room :link-owner))))
+          (message "mevedel: session forked as %s by owner %s"
+                   name (plist-get guest :name))))))))
 
 (provide 'mevedel-collaboration-owner)
 ;;; mevedel-collaboration-owner.el ends here

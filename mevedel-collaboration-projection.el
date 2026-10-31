@@ -32,6 +32,9 @@
                   "mevedel-session-artifacts" (session live-buffer))
 (autoload 'mevedel-session-artifacts-read-transcript-segment "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-transcript-segments "mevedel-session-artifacts")
+(declare-function mevedel-session-artifacts-fork-point-spans
+                  "mevedel-session-artifacts" (buffer))
+(autoload 'mevedel-session-artifacts-fork-point-spans "mevedel-session-artifacts")
 
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability-lease-owned-p
@@ -290,7 +293,7 @@ an artifact only by its record id, never by a filesystem path."
                        :truncated :guest :directive :item :detail :details :diff
                        :artifact :title :store :size :missing :presentation :shared
                        :execution :description :number :firstSegment :lastSegment
-                       :sender :mailType :outcome :activity :toolUseId))
+                       :sender :mailType :outcome :activity :toolUseId :forkPoint))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -856,6 +859,27 @@ the turn always begins before its own attribution block."
               (plist-put owner :shared shared))))))
     background))
 
+(defun mevedel-collaboration--attribute-fork-points (response-starts)
+  "Name each settled turn's fork point on its last assistant record.
+RESPONSE-STARTS is an ordered list of (SEGMENT-START . RECORD) for the
+current buffer's assistant records.  A fork-point audit closes the turn
+it follows, so it belongs to the last assistant record starting after
+the previous fork point and before it; a turn without one gets none.
+Both lists are in source order, so one pass pairs them."
+  (let ((floor 0))
+    (dolist (point (mevedel-session-artifacts-fork-point-spans
+                    (current-buffer)))
+      (let ((start (plist-get point :record-start))
+            (id (plist-get point :fork-point-id))
+            owner)
+        (while (and response-starts (< (caar response-starts) start))
+          (when (>= (caar response-starts) floor)
+            (setq owner (cdar response-starts)))
+          (setq response-starts (cdr response-starts)))
+        (when (and owner (stringp id))
+          (plist-put owner :forkPoint id))
+        (setq floor start)))))
+
 (defun mevedel-collaboration--execution-ids-in-buffer (buffer ids)
   "Add trusted execution identities in BUFFER to hash table IDS."
   (with-current-buffer buffer
@@ -1223,7 +1247,7 @@ owner; omitted means the root transcript."
              (prior-executions (and completions
                                     (gethash :prior-executions completions)))
              (prior-ready (and completions t))
-             records user-starts live-reasoning
+             records user-starts response-starts live-reasoning
              ;; Track audit attachment before splitting breadcrumbs out of their
              ;; source tool.  Deferred summaries never replace either pointer.
              activity-tool activity-record activity-scope
@@ -1390,7 +1414,9 @@ owner; omitted means the root transcript."
                         records)
                   (setq activity-record (car records))
                   (when userp
-                    (push (cons start (car records)) user-starts)))))
+                    (push (cons start (car records)) user-starts))
+                  (when (eq type 'response)
+                    (push (cons start (car records)) response-starts)))))
              ((memq (car segment) '(ignored render-data))
               (let ((summary (project-segment
                               segment nil
@@ -1502,6 +1528,7 @@ owner; omitted means the root transcript."
         (let ((background
                (mevedel-collaboration--attribute-guest-prompts (nreverse user-starts))))
           (setq records (cl-delete-if (lambda (record) (memq record background)) records)))
+        (mevedel-collaboration--attribute-fork-points (nreverse response-starts))
         (when cache
           ;; Projection does not edit the transcript; if anything did, the
           ;; retained sources describe no single state, so start over.

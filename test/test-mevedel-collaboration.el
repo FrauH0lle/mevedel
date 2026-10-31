@@ -686,6 +686,56 @@
         (should (= 2 (cdr (assoc "revision" (car sent)))))
         (should (equal "First second" (cdr (assoc "text" (car sent)))))))))
 
+(mevedel-deftest mevedel-collaboration--attribute-fork-points
+  (:doc "names each settled turn's fork point on its last assistant record")
+  (with-temp-buffer
+    (let (segments)
+      (cl-flet ((add (type text)
+                  (let ((start (point)))
+                    (insert text)
+                    (push (list type start (1- (point))) segments)))
+                (fork (id)
+                  (insert (mevedel--format-hook-audit-record
+                           (list :type 'fork-point :fork-point-id id)))))
+        (add 'user "first prompt\n")
+        (add 'response "early answer\n")
+        (add 'response "settled answer\n")
+        (fork "fork-1")
+        ;; A turn without a response gets no fork point of its own; the
+        ;; earlier turn's answer must not take this one's.
+        (add 'user "second prompt\n")
+        (fork "fork-2")
+        ;; A turn that has not settled has no fork point yet.
+        (add 'user "third prompt\n")
+        (add 'response "streaming answer\n"))
+      (setq segments (nreverse segments))
+      (cl-letf (((symbol-function 'mevedel-transcript-segments)
+                 (lambda (_start _end) segments))
+                ((symbol-function 'mevedel-view--user-turn-text)
+                 (lambda (turn-segments buffer)
+                   (let ((segment (car turn-segments)))
+                     (string-trim (with-current-buffer buffer
+                                    (buffer-substring (cadr segment)
+                                                      (caddr segment)))))))
+                ((symbol-function 'mevedel-view--visible-response-text)
+                 #'string-trim))
+        (let* ((records (mevedel-collaboration--canonical-records
+                         (current-buffer)))
+               (answers (cl-remove-if-not
+                         (lambda (record)
+                           (equal "assistant" (plist-get record :kind)))
+                         records)))
+          (should (equal '("early answer" "settled answer" "streaming answer")
+                         (mapcar (lambda (record) (plist-get record :text))
+                                 answers)))
+          (should (equal '(nil "fork-1" nil)
+                         (mapcar (lambda (record) (plist-get record :forkPoint))
+                                 answers)))
+          (should (equal "fork-1"
+                         (cdr (assoc "forkPoint"
+                                     (mevedel-collaboration--json-record
+                                      (nth 1 answers)))))))))))
+
 (mevedel-deftest mevedel-collaboration--attribute-guest-prompts
   (:doc "attributes each guest record to the nearest preceding user turn")
   (with-temp-buffer
