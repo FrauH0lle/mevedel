@@ -10,6 +10,9 @@
 (require 'mevedel-mcp)
 (require 'mevedel-permission-rules)
 (require 'mevedel-sandbox)
+;; Several cases stub `mevedel-session-control-fs-run-program' and call the
+;; captured original; a lazy autoload there would replace the stub mid-case.
+(require 'mevedel-session-control-fs)
 (require 'mevedel-structs)
 (require 'helpers
          (file-name-concat

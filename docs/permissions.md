@@ -973,7 +973,21 @@ per-command owner-only directory under the tool-server socket root; that root is
 masked and only the command's own directory is bound back. The broker passes
 Git's stdio descriptors to the host's ssh and allows only `git-upload-pack` and
 `git-upload-archive` for the fetch remotes' destinations, read before the command
-starts. Teardown stops it with its ssh children. The
+starts. Those remotes come only from the primary root's own `.git` entry:
+Git must discover that same repository from the root and from the working
+directory, so a nested `.git` directory or pointer file below the root gets no
+broker. The entry must not be a symlink. A `.git` directory is refused when the
+root sits inside another Git work tree, where it may itself be a plant; a
+linked worktree's pointer file must be linked back from its administrative
+directory. Resolved metadata outside every writable root is accepted, but an
+earlier command may still have written it under a grant. The broker trusts
+the session root's repository as it is found on disk when the session
+starts, so a repository prepared by an earlier session rooted at a parent
+directory is trusted like any repository the user opens. A `.git` write grant
+likewise lets a command change the remotes,
+`insteadOf` rules and hooks that later brokers and host Git trust. ssh runs
+without connection sharing, and teardown stops the broker with its ssh
+children. The
 [execution manual](tools/execution.md#git-over-ssh) gives the model contract.
 
 Confinement also hides per-user runtime directories, because their sockets act
