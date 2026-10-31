@@ -652,9 +652,11 @@ relative paths open sessions are using; like recent files, they wait.
 COHORT, when supplied, is a closed allowlist.  FREEZE
 selects metadata only for the whole eligible cohort, not request bodies.
 With COHORT, :deferred lists (:member MEMBER :reason REASON) rows for
-members that could enter this batch but are unavailable or changed.  A
-member past this batch's limits counts in :remaining without its version
-being read; its own later batch verifies it and defers it if changed.
+members neither captured nor bounded out: unavailable, changed or blocked.
+A ready member past this batch's limits counts in :remaining without its
+version being read; its own later batch verifies it and defers it if
+changed.  One in use or with unsaved changes is verified before being
+reported blocked, so a changed member defers without a blocked row.
 
 Complete UTF-8 notes are admitted oldest first, or in frozen cohort order.
 An oversized note within
@@ -719,21 +721,27 @@ changed; the summary is recorded as the latest observation."
                  (push (cons relative reason) blocked)))
              (ready-p (relative modified version &optional unverified)
                ;; UNVERIFIED skips the cohort version read for a member this
-               ;; batch cannot admit; it is verified when its batch comes.
-               (and (plist-get (mevedel-working-note-files-eligibility (float-time modified) now) :eligible)
-                    (or (not cohort-p)
-                        (when-let* ((member (seq-find (lambda (item) (equal relative (plist-get item :file))) cohort-members)))
-                          (or unverified
-                              (ignore-errors
-                                (equal (plist-get member :version)
-                                       (mevedel-memory-notes--version (file-name-concat directory relative)))))))
-                    (not (cond ((or (member relative in-use) (mevedel-memory-notes-in-use-p workspace relative))
-                                (block relative "Shared file is in active local use") t)
-                               ((when-let* ((buffer (find-buffer-visiting (file-name-concat directory relative))))
-                                  (buffer-modified-p buffer))
-                                (block relative "Shared file has unsaved buffer changes") t)))
-                    (not (mevedel-memory-notes--suppressed
-                          (gethash relative history) version)))))
+               ;; batch cannot admit; it is verified when its batch comes, or
+               ;; before reporting it blocked, since a changed member defers.
+               (let* ((member (and cohort-p
+                                   (seq-find (lambda (item) (equal relative (plist-get item :file))) cohort-members)))
+                      (current (lambda ()
+                                 (ignore-errors
+                                   (equal (plist-get member :version)
+                                          (mevedel-memory-notes--version (file-name-concat directory relative)))))))
+                 (and (plist-get (mevedel-working-note-files-eligibility (float-time modified) now) :eligible)
+                      (or (not cohort-p) (and member (or unverified (funcall current))))
+                      (not (when-let* ((reason
+                                        (cond ((or (member relative in-use) (mevedel-memory-notes-in-use-p workspace relative))
+                                               "Shared file is in active local use")
+                                              ((when-let* ((buffer (find-buffer-visiting (file-name-concat directory relative))))
+                                                 (buffer-modified-p buffer))
+                                               "Shared file has unsaved buffer changes"))))
+                             (when (or (not (and cohort-p unverified)) (funcall current))
+                               (block relative reason))
+                             t))
+                      (not (mevedel-memory-notes--suppressed
+                            (gethash relative history) version))))))
           (dolist (row selected-rows)
             (let* ((relative (car row))
                    (path (file-name-concat directory relative))

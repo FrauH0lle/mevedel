@@ -108,6 +108,35 @@
         (should (= 0 (plist-get last :remaining)))
         (should (equal '("c.md") (mapcar (lambda (row) (plist-get (plist-get row :member) :file))
                                          (plist-get last :deferred)))))))
+  :doc "a used or dirty member past the batch is reported blocked only while it is still its frozen version"
+  (let ((mevedel-memory-notes--max-notes 2))
+    (dolist (use '(dirty in-use))
+      (dolist (changed '(t nil))
+        (put "a.md" 0) (put "b.md" 1)
+        (let* ((late (put "c.md" 2)) (cohort (freeze)) buffer)
+          (when changed
+            ;; Edited on disk but still age-ready: only its version differs.
+            (write-region "Edited after freezing\n" nil late nil 'silent)
+            (set-file-times late (seconds-to-time (+ (- now (* 20 86400)) 2))))
+          (when (eq use 'dirty)
+            (setq buffer (find-file-noselect late))
+            (with-current-buffer buffer (setq-local create-lockfiles nil) (insert "Draft")))
+          (let ((batch (mevedel-memory-notes-capture workspace nil :cohort cohort
+                                                     :in-use (when (eq use 'in-use) '("c.md")))))
+            (should (equal '("a.md" "b.md") (files batch)))
+            (should (= 0 (plist-get batch :remaining)))
+            (should (equal '("c.md") (mapcar (lambda (row) (plist-get (plist-get row :member) :file))
+                                             (plist-get batch :deferred))))
+            ;; A changed member defers silently, as when its version is read first;
+            ;; the unchanged control still explains why it waits.
+            (should (equal (unless changed
+                             (list (cons "c.md" (if (eq use 'dirty) "Shared file has unsaved buffer changes"
+                                                  "Shared file is in active local use"))))
+                           (plist-get batch :blocked))))
+          (when buffer
+            (with-current-buffer buffer (set-buffer-modified-p nil))
+            (kill-buffer buffer))
+          (dolist (name (directory-files shared nil "\\.md\\'")) (delete-file (file-name-concat shared name)))))))
   :doc "only raw metadata survives serialization and tied mtimes sort by relative path"
   (progn
     (put "z.md" 0 "UNIQUE-SOURCE-BODY\n")
