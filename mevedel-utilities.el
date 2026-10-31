@@ -1286,13 +1286,19 @@ Preserve atomic mention bindings and live structural producer provenance."
 Clear inherited transcript properties while retaining mention bindings and
 structural provenance.  Return the start of INPUT, leaving point after its
 trailing newline.  The caller owns request admission and response markers."
-  (let ((start (point)))
-    (insert gptel-response-separator)
-    (unless (bolp) (insert "\n"))
-    (let ((body-start (point)))
-      (insert input "\n")
-      (mevedel--clear-user-turn-gptel-properties start (point))
-      body-start)))
+  ;; Insertion hooks can save a Goal mutation, rewriting the leading property
+  ;; drawer.  Both positions must follow those edits before clearing properties.
+  (let ((start (copy-marker (point))) body-start)
+    (unwind-protect
+        (progn
+          (insert gptel-response-separator)
+          (unless (bolp) (insert "\n"))
+          (setq body-start (copy-marker (point)))
+          (insert input "\n")
+          (mevedel--clear-user-turn-gptel-properties start (point))
+          (marker-position body-start))
+      (set-marker start nil)
+      (when body-start (set-marker body-start nil)))))
 
 (defconst mevedel--render-data-open "<!-- mevedel-render-data -->"
   "Opening delimiter for internal render-data side-channel blocks.")

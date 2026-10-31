@@ -20,7 +20,9 @@
   (test)
   :doc "yielding readiness rejects changed Goal authority before native launch"
   (dolist (change '(pause clear replace edit policy resume))
-    (mevedel-engine-test--with-claude-session
+    ;; Keep project publication for pause; the other mutations fence the same
+    ;; live Goal identity before dispatch and still run the real ACP peer.
+    (mevedel-engine-test--with-claude-session :file-workspace (not (eq change 'pause))
       (mevedel-request-end)
       (mevedel-model-set-session-provider
        session (mevedel-model-resolve-provider "Claude Code:haiku") buffer)
@@ -106,7 +108,9 @@
   :doc "real insertion hooks cannot transfer Goal kickoff policy to inactive or replacement work"
   (dolist (case '((insertion pause) (insertion clear) (insertion replace) (insertion edit)
                  (close pause) (close clear) (close replace) (close edit)))
-    (mevedel-engine-test--with-claude-session
+    ;; File saves can rewrite the leading property drawer inside the insertion
+    ;; hook.  Keep insertion/pause as a portable-project control too.
+    (mevedel-engine-test--with-claude-session :file-workspace (not (equal case '(insertion pause)))
       (mevedel-request-end)
       (mevedel-permission-mode-set-raw 'ask)
       (setq-local gptel-system-prompt "Goal insertion fixture" gptel-tools nil)
