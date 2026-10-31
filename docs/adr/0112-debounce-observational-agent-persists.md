@@ -12,16 +12,22 @@ whose terminal transaction later rolls back. Observational activity changes and
 explicit mailbox discards schedule one sidecar-only registry save per session, with
 a two-second default debounce through the idle-transport scheduler.
 
-One acknowledged mutation is asynchronous, for warm local sessions only:
-delivering a background command's completion or monitor batch to its owner's
-mailbox. The producer passes an acknowledgement, and the append commits as a
+One acknowledged mutation may complete later: delivering a background command's
+completion or monitor batch to its owner's mailbox. For warm local portable
+sessions, the producer passes an acknowledgement, and the append commits as a
 session-owned publication job whose callbacks run across event-loop turns. The
 acknowledgement still means what it meant: it runs once, after the new head is
 authoritative and adopted (success) or after a definitive rollback (failure).
 Until then the records are tentative and hidden, and the producer keeps the
-output it would otherwise have consumed. Every other acknowledged mutation, and
-every cold, remote, file-backed or PID-lock session, keeps the synchronous
-path above. [Sessions](../sessions.md#warm-local-asynchronous-mailbox-publication)
+output it would otherwise have consumed. Remote, file-backed and PID-lock
+background arrivals share one synchronous commit at the next transport-safe
+timer opportunity. They queue before mutation in the existing preparation gate;
+each producer is acknowledged only after the shared commit succeeds. Arrivals
+during that commit form the next batch. Explicit saves and teardown drain these
+preparations too. Cold sessions with an existing save path and live root use the
+same batching path; without either, delivery stays immediately synchronous.
+Every other acknowledged mutation keeps the synchronous path above.
+[Sessions](../sessions.md#warm-local-asynchronous-mailbox-publication)
 owns the job's phases, gate and recovery. Automatic warm-local root and agent
 transcript checkpoints also use that job. Explicit saves and settlement still
 wait synchronously for their commits.
@@ -58,10 +64,19 @@ one coalesced FIFO of pending notifications and at most one timer. A
 notification runs at once only when the publication gate is idle (no job,
 preparation or active publication), the transport is idle, and nothing is
 already pending; otherwise it joins the FIFO, so a later acknowledgement never
-overtakes an earlier one. The timer starts at 50 ms and doubles up to 500 ms
-while the gate or transport stays busy, then flushes in order, and only while
-the root buffer is live and the session is not stopping. Every callback starts
+overtakes an earlier one. The FIFO flushes in order whenever no work is in
+flight; queued preparations do not hold it back, because a callback's own
+mutation queues behind them. It flushes each time the gate opens between
+queued preparations, before the next one starts, and from a timer that starts
+at 50 ms and doubles up to 500 ms while work stays in flight. Both run only
+while the root buffer is live and the session is not stopping. Every callback starts
 with fresh transaction observations, including an immediate notification.
+Job finalization retains a separate dispatch/notification exclusion through
+acknowledgement and cleanup, including any event-loop yield. Ordinary publication
+ownership is already released so an acknowledgement may stage a new artifact;
+that does not open the gate to a successor or an arbitrary mailbox callback.
+After finalization returns, the next scheduled gate opening offers notifications
+ahead of the successor, without waiting for the entire preparation queue to empty.
 Temporary stopping retains actual suppressed offers without a timer, so a
 vetoed close re-arms the same FIFO once rather than inventing another wake.
 An idle close schedules nothing. A close that proceeds cancels the timer and
@@ -220,6 +235,52 @@ transactional journal.
 
 All revisions belong to ADR 0112:
 
+- **2026-10-31 finishing ownership correction:** review reproduced a mailbox
+  wake during the first job's cleanup with a successor still queued. Clearing
+  the job and active-publication slots before acknowledgement did not mean the
+  finishing save had unwound. A separate transient finishing exclusion now
+  blocks notification timers and preparation dispatch until cleanup returns;
+  callback/cleanup cancellation releases it too. This retains the gate-open
+  starvation fix rather than restoring queue-wide notification blocking.
+- **2026-10-31 fallback mailbox coalescing:** file-backed and remote sessions
+  previously rewrote the entire sidecar for every background Monitor batch.
+  They now collect arrivals before mutation in the existing preparation gate
+  and share one synchronous commit at the next transport-safe opportunity.
+  Keeping the existing writer avoids migrating PID-lock/file authority to the
+  immutable-head protocol required by the asynchronous publisher. The journal
+  alternative below remains unnecessary. Success-only acknowledgements, hidden
+  tentative records and producer retention preserve the durability boundary;
+  an orderly close drains accepted work rather than dropping it.
+  A real-process pressure harness held delivery, emitted 80-byte payloads and
+  sampled a 100 ms timer (one source-loaded batch-Emacs run per configuration
+  and build). At 3 monitors, one line per 0.65 s for 120 s, p99 timer lateness
+  fell from 29 to 11 ms; at 10 monitors, one line per 2 s for 120 s, from 84
+  to 10 ms. At 30 monitors, one line per 0.65 s for 90 s, it fell from 1,907
+  to 101 ms, with commit busy time falling from 76.6% to 13.2%. On a local-shell
+  TRAMP mock with 10 monitors at one line per 2 s for 120 s, p99 fell from
+  3,977 to 420 ms and commit busy time from 95.8% to 75.0%. All runs drained
+  cleanly without terminal/flood notices. Remote process spools were local,
+  matching the production tool; earlier remote-spool harness failures were
+  discarded. Individual commits still copy the full unread mailbox, and TRAMP
+  remains expensive. These are single-run event-loop observations, not network
+  or graphical latency guarantees; batch mode also omits idle collection.
+- **2026-10-31 gate-open notification turn:** notifications used to wait until
+  publication was entirely idle, queued preparations included, and only the
+  backoff timer could flush them. Sustained background producers keep that
+  queue non-empty, and the next job starts in the same timer pass that opens
+  the gate, so the timer almost never found it open. A batch harness drove real
+  Monitor processes through the production sink into a warm local portable
+  session (40 s per run, no model reads). With one monitor at one line per
+  0.65 s, the first root wake offer came after 0.4 s. Three monitors at that
+  rate and ten at one line per 2 s each produced no wake offer at all, with
+  the notifier blocked in 99% of 50 ms samples. Every monitor was far below
+  its own 100 events/minute flood limit, and the same queue carries agent MAIL
+  and RESULT wakes. With queued preparations no longer blocking and a flush at
+  each gate opening, the first offer came after 0.5 s in both starving cases
+  (177 and 203 offers), with p99 timer lateness 2-36 ms. Immediate notification still
+  defers while preparations are queued: a producer's acknowledgement runs
+  inside the completing job, and arbitrary waiter code must not drain the queue
+  from there.
 - **2026-10-20 asynchronous automatic transcript checkpoints:** a live trace
   of the 30-second checkpoint on a 1.6 MB session still blocked the editor
   for 280-314 ms after mailbox delivery became asynchronous. The auto-save

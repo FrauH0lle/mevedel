@@ -1475,17 +1475,32 @@ Delivering a background command's completion or monitor batch to its owner's
 mailbox and automatic root or agent transcript checkpoints do not block the
 editor on target programs. Only a materialized local portable session qualifies: its
 save path is local, its authority is portable, a committed publication with a
-sidecar exists, its root buffer is live, and it is not stopping. Cold
-materialization, remote targets, file-backed and PID-lock sessions use the
-synchronous publication above. Every other acknowledged mutation is
+sidecar exists, its root buffer is live, and it is not stopping. Remote,
+file-backed and PID-lock background deliveries instead coalesce arrivals for
+the next transport-safe timer opportunity and commit them together through the
+synchronous writer above. They use the same mutation preparation gate, without
+changing their storage authority or format. Before that opportunity, arrivals
+are producer-owned, not visible mailbox records. During the commit they remain
+tentative; success acknowledgements and delivery run only after commit. Failure removes
+only the batch's tentative records and leaves producers holding their output.
+New arrivals during a commit wait for the next batch. Explicit saves and orderly
+close drain accepted batches; a forced process kill can lose unacknowledged
+producer output, never mail from a completed acknowledgement. Cold background
+delivery uses this path when a save location and live root already exist;
+otherwise it retains the immediate synchronous path. Every other acknowledged mutation is
 synchronous too; agent mail, spawn, RESULT and settlement drain the gate first
 (below) and then commit as before.
 
-The mailbox append is one session-owned publication job that holds
+The warm-local mailbox append is one session-owned publication job that holds
 `publication-active-p` from acceptance to acknowledgement, so renewal timers
 stay quiet and cooperative transfer stays blocked. Its phases are admission,
 freeze, reservation, generation, head commit, adoption, acknowledgement and
-cleanup. Each target phase is a pinned control program launched without
+cleanup. Finalization keeps a separate dispatch/notification exclusion until
+acknowledgement and cleanup return, even though authoritative adoption has
+already released ordinary publication ownership. This lets an acknowledgement
+stage an artifact without admitting a successor or running a mailbox wake
+inside a yielding finalizer. The next gate-open opportunity offers notifications
+before starting the successor. Each target phase is a pinned control program launched without
 waiting; its result is stored by the sentinel and the next phase is scheduled
 from a timer through the idle transport, never from the sentinel. The
 transaction's clock, asserted-directory and recovery cells are job-owned and
@@ -1710,9 +1725,18 @@ one coalesced first-in-first-out set of pending notifications and at most one
 timer. A notification runs at once only when the publication gate is idle (no
 job, preparation or active publication), the transport is idle and nothing is
 already pending; otherwise it joins the set, so a later acknowledgement cannot
-overtake an earlier one. The timer starts at 50 ms and doubles up to 500 ms
-while the gate or transport stays busy, then flushes the set in order, only
-while the root buffer is live and the session is not stopping. A waiter
+overtake an earlier one. The set flushes in order whenever no work is in
+flight (no job, running preparation, active publication or transport
+operation); queued preparations do not hold it back, since a callback's own
+mutation queues behind them. Two triggers flush it: each time the gate opens
+between queued preparations, before the next one starts
+(`mevedel-session-publication-gate-open-functions`), and a timer that starts
+at 50 ms and doubles up to 500 ms while work stays in flight. Both run only
+while the root buffer is live and the session is not stopping. The gate-open
+turn exists because sustained producers keep the queue non-empty: ten
+monitors each emitting one line every two seconds kept publication busy for
+99% of samples, and the timer alone offered no root wake in 40 seconds. A
+waiter
 callback can resume tool code and gated operations, so it runs with no token
 and fresh transaction observations, and defers or drains like any other
 caller. A failing notification warns and does not stop the rest. Temporary
