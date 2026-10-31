@@ -1015,31 +1015,31 @@ Other buffers render a table once and cache nothing."
   (let ((key (mevedel-view-table--layout-key source window inset)))
     (or (and key mevedel-view-table--layout-cache
              (gethash key mevedel-view-table--layout-cache))
-        (let ((rendered (mevedel-view-table--render-source
-                         (if key (car key) source) window inset)))
+        (let ((content (if key (car key) source)))
+          ;; Detach before rendering so neither the key nor the rendered cells
+          ;; retain mutable rendering properties owned by SOURCE.
           (when key
-            (unless mevedel-view-table--layout-cache
-              (setq mevedel-view-table--layout-cache
-                    (make-hash-table :test 'mevedel-view-table--layout-equal)))
-            (when (>= (hash-table-count mevedel-view-table--layout-cache)
-                      mevedel-view-table--layout-cache-limit)
-              (clrhash mevedel-view-table--layout-cache))
-            ;; Snapshot mutable key inputs; a caller can re-fontify SOURCE or
-            ;; change remapping in place before asking for the next layout.
-            (let ((content (copy-sequence (car key))))
-              (dolist (property '(face font-lock-face composition invisible))
-                (let ((position 0))
-                  (while (< position (length content))
-                    (let ((next (next-single-property-change
-                                 position property content (length content)))
-                          (value (get-text-property position property content)))
-                      (when (or (consp value) (vectorp value))
-                        (put-text-property position next property
-                                           (copy-tree value t) content))
-                      (setq position next)))))
+            (dolist (property '(face font-lock-face composition invisible))
+              (let ((position 0))
+                (while (< position (length content))
+                  (let ((next (next-single-property-change
+                               position property content (length content)))
+                        (value (get-text-property position property content)))
+                    (when (or (consp value) (vectorp value))
+                      (put-text-property position next property
+                                         (copy-tree value t) content))
+                    (setq position next))))))
+          (let ((rendered (mevedel-view-table--render-source content window inset)))
+            (when key
+              (unless mevedel-view-table--layout-cache
+                (setq mevedel-view-table--layout-cache
+                      (make-hash-table :test 'mevedel-view-table--layout-equal)))
+              (when (>= (hash-table-count mevedel-view-table--layout-cache)
+                        mevedel-view-table--layout-cache-limit)
+                (clrhash mevedel-view-table--layout-cache))
               (puthash (cons content (copy-tree (cdr key)))
-                       rendered mevedel-view-table--layout-cache)))
-          rendered))))
+                       rendered mevedel-view-table--layout-cache))
+            rendered)))))
 
 (defun mevedel-view-table--cached-layout-p (source window inset)
   "Return non-nil when SOURCE already has a layout for WINDOW at INSET."

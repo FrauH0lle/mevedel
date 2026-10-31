@@ -178,17 +178,23 @@
                      'font-lock-face (list :height 1.0) source)
   (let* ((position (string-match "cell" source))
          (face (get-text-property position 'font-lock-face source)))
-    ;; Keep the comparison snapshot independent of the deliberately mutated
-    ;; face value that the rendered cell originally shared with SOURCE.
-    (setq before-layout (copy-sequence before-layout))
-    (let ((cell (string-match "cell" before-layout)))
-      (put-text-property cell (+ cell 4) 'font-lock-face
-                         (list :height 1.0) before-layout))
     (setf (plist-get face :height) 2.0)
     (maphash (lambda (key _rendered)
                (should (= 1.0 (plist-get (get-text-property position 'font-lock-face (car key))
                                          :height))))
-             mevedel-view-table--layout-cache)))
+             mevedel-view-table--layout-cache))
+  (put-text-property (string-match "cell" source) (+ 4 (string-match "cell" source))
+                     'font-lock-face (list :height 1.0) source)
+  (let* ((position (string-match "cell" source))
+         (original (substring-no-properties source)))
+    ;; Revisit the first layout using independent input after mutating SOURCE.
+    (put-text-property position (+ position 4) 'font-lock-face
+                       (list :height 1.0) original)
+    (setf (plist-get (get-text-property position 'font-lock-face source) :height) 2.0)
+    (should (equal-including-properties
+             (mevedel-view-table--layout (string-trim-right original) window 0)
+             (funcall render (string-trim-right original) window 0)))
+    (should (= calls 1))))
 
 (provide 'test-mevedel-view-table-graphical)
 ;;; test-mevedel-view-table-graphical.el ends here
