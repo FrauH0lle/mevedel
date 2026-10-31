@@ -593,9 +593,12 @@ optional `gzip' that `mevedel-session-control-fs--script-arguments' uses."
   "The program script as wrapped base64 of its gzip bytes, once computed.
 The symbol `none' records that local compression is unavailable.")
 
+;; A reload installs a new program script, so discard its old encoding too.
+(setq mevedel-session-control-fs--compressed-script nil)
+
 (defconst mevedel-session-control-fs--compressed-bootstrap
   (concat "g=$1; s=$2; shift 2; "
-          "script=$(printf %s \"$s\" | base64 -d | \"$g\" -dc) || exit 70; "
+          "script=$(set -o pipefail; printf %s \"$s\" | base64 -d | \"$g\" -dc) || exit 70; "
           "eval \"$script\"")
   "Command line that decompresses the program script and runs it in place.
 Its first two arguments are the target `gzip' and the encoded script; the
