@@ -2913,6 +2913,21 @@ once a log grew to megabytes."
           (mevedel-workspace-state-dir
            (mevedel-session-workspace session)))))
 
+(defun mevedel-session-publication-observe-child (_workspace payload)
+  "Observe frozen PAYLOAD generations without editor collection or deletion."
+  (let ((directory (plist-get payload :directory)))
+    (unless (and (stringp directory) (file-name-absolute-p directory)
+                 (not (file-remote-p directory)))
+      (error "Publication observations require a local absolute directory"))
+    (list :ok t :observations
+          (mapcar
+           (lambda (generation)
+             (let* ((head (plist-get generation :head))
+                    (observed (mevedel-session-publication--cached-generation directory head)))
+               (list head observed
+                     (and observed (mevedel-session-publication--cached-sidecar-facts directory head observed)))))
+           (plist-get payload :generations)))))
+
 (provide 'mevedel-session-publication)
 
 ;;; mevedel-session-publication.el ends here

@@ -389,15 +389,14 @@ in the cockpit for an explicit decision."
 
 (defun mevedel-memory-pass--async-application-p (workspace accepted)
   "Return non-nil when WORKSPACE and ACCEPTED's targets support local workers."
-  (and (mevedel-journal-worker-supported-p workspace)
-       (if accepted
-           (not (cl-some (lambda (root) (file-remote-p (plist-get (cdr root) :dir)))
-                         (plist-get (plist-get (plist-get accepted :prepared) :scope) :roots)))
-         (not (cl-some #'file-remote-p
-                       (append (mapcar (lambda (root) (plist-get root :dir))
-                                       (mevedel-system--memory-roots workspace))
-                               (mevedel-system-workspace-config-files workspace)
-                               (list (or (mevedel-memory-notes-directory workspace) ""))))))))
+  (mevedel-journal-worker-local-p
+   workspace
+   (if accepted
+       (mapcar (lambda (root) (plist-get (cdr root) :dir))
+               (plist-get (plist-get (plist-get accepted :prepared) :scope) :roots))
+     (append (mapcar (lambda (root) (plist-get root :dir)) (mevedel-system--memory-roots workspace))
+             (mevedel-system-workspace-config-files workspace)
+             (list (or (mevedel-memory-notes-directory workspace) ""))))))
 
 (defun mevedel-memory-pass--application-live-p (state job)
   "Return non-nil while STATE's current JOB can admit a forward automatic write."
@@ -706,9 +705,10 @@ here are diagnostic only."
       (mevedel-memory-pass--timing-end state key))
     (when (and (eq (plist-get result :outcome) 'success)
                (not (plist-get state :publication-finished))
-               (mevedel-journal-worker-supported-p (plist-get state :workspace))
-               (not (cl-some (lambda (root) (file-remote-p (plist-get (cdr root) :dir)))
-                             (plist-get (plist-get (plist-get state :prepared) :scope) :roots))))
+               (mevedel-journal-worker-local-p
+                (plist-get state :workspace)
+                (mapcar (lambda (root) (plist-get (cdr root) :dir))
+                        (plist-get (plist-get (plist-get state :prepared) :scope) :roots))))
       (unless (plist-get state :publishing)
         (plist-put state :publishing t)
         (mevedel-memory-pass--timing-start state :publication-duration-ms)
@@ -716,6 +716,11 @@ here are diagnostic only."
             (plist-put state :worker
                        (mevedel-journal-worker-start
                         (plist-get state :workspace) 'memory-publish
+                        (list :prepared (plist-get state :prepared)
+                                  :reply (plist-get result :reply) :entries (plist-get result :entries)
+                                  :notes (plist-get result :notes)
+                                  :model (mevedel-memory-pass--producer result)
+                                  :references (plist-get (plist-get result :references) :references))
                         (lambda (reply)
                           (unless (plist-get state :settled)
                             (plist-put state :worker nil)
@@ -725,12 +730,7 @@ here are diagnostic only."
                             (mevedel-memory-pass--finish
                              state (if (plist-get reply :entry) result
                                      (append (list :outcome 'error :error
-                                                   (or (plist-get reply :error) "Memory publication returned no entry")) result)))))
-                        nil (list :prepared (plist-get state :prepared)
-                                  :reply (plist-get result :reply) :entries (plist-get result :entries)
-                                  :notes (plist-get result :notes)
-                                  :model (mevedel-memory-pass--producer result)
-                                  :references (plist-get (plist-get result :references) :references))))
+                                                   (or (plist-get reply :error) "Memory publication returned no entry")) result)))))))
           (error
            (plist-put state :publication-finished t)
            (mevedel-memory-pass--finish
@@ -775,7 +775,7 @@ here are diagnostic only."
       (plist-put state :timer nil)
       (when-let* ((worker (plist-get state :worker)))
         (plist-put state :worker nil)
-        (when (process-live-p worker) (delete-process worker)))
+        (mevedel-journal-worker-cancel worker))
       (condition-case err
           (when (eq (plist-get result :outcome) 'success)
             (setq failure-class 'publication)
@@ -1304,13 +1304,20 @@ from the automatic or drain queue owner; direct starts omit admission dwell."
 		(mevedel-memory-pass--finish state '(:outcome aborted))
 		(cl-return-from mevedel-memory-pass-start nil))
 		      (mevedel-memory-pass--timing-start state :preparation-duration-ms)
-		      (if (and (mevedel-journal-worker-supported-p workspace)
-		       (not (cl-some (lambda (root) (file-remote-p (plist-get root :dir))) roots)))
+			      (if (mevedel-journal-worker-local-p workspace (mapcar (lambda (root) (plist-get root :dir)) roots))
 		  (plist-put state :worker
-			     (mevedel-journal-worker-start workspace 'memory-prepare ready nil payload))
+			     (mevedel-journal-worker-start workspace 'memory-prepare payload ready))
 		(funcall ready (list :ok t :prepared (mevedel-memory-pass--prepare workspace payload))))))
 	(error (mevedel-memory-pass--finish state (list :outcome 'error :error (error-message-string err)))))
       (unless (plist-get state :skipped) state))))
+
+(defun mevedel-memory-pass-prepare-child (workspace payload)
+  "Prepare WORKSPACE consolidation from frozen PAYLOAD for the editor."
+  (list :ok t :prepared (mevedel-memory-pass--prepare workspace payload)))
+
+(defun mevedel-memory-pass-publish-child (workspace payload)
+  "Publish WORKSPACE's accepted consolidation described by PAYLOAD."
+  (mevedel-memory-pass--publish workspace payload))
 
 (provide 'mevedel-memory-pass)
 ;;; mevedel-memory-pass.el ends here

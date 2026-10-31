@@ -23,6 +23,65 @@
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "mevedel-memory-list-test-support"))
 
+(defvar mevedel-test-memory-list--fault nil "Frozen fault for the display child.")
+(defvar mevedel-test-memory-list--checks 0 "Metadata checks observed by the last child.")
+
+(defun mevedel-test-memory-list-child-scan (workspace &optional previous)
+  "Scan WORKSPACE through the launcher, returning reply and IO count.
+PREVIOUS is a display snapshot.  Fault instrumentation runs in the real child."
+  (let* ((spawn (symbol-function 'make-process))
+         (stats (make-temp-file (file-name-concat (mevedel-workspace-root workspace) "scan-stats-")))
+         (fault mevedel-test-memory-list--fault)
+         child result)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'make-process)
+                     (lambda (&rest args)
+                       (let* ((command (plist-get args :command))
+                              (setup
+                               `(progn
+                                  (require 'mevedel-session-control-fs)
+                                  (defvar mevedel-test-scan-count 0)
+                                  (defvar mevedel-test-scan-checks 0)
+                                  ,(when (eq (car fault) 'unrunnable)
+                                     '(setq mevedel-session-control-fs--program-script
+                                            (replace-regexp-in-string "    stat-tree)" "    disabled-stat-tree)"
+                                                                      mevedel-session-control-fs--program-script t t)))
+                                  (advice-add
+                                   'mevedel-session-control-fs--run-program :around
+                                   (lambda (run operations &rest rest)
+                                     (cl-incf mevedel-test-scan-count)
+                                     (when (eq 'stat-tree (plist-get (car operations) :op))
+                                       (cl-incf mevedel-test-scan-checks)
+                                       ,(pcase (car fault)
+                                          ('failed '(error "Injected metadata failure"))
+                                          ('write `(when (= mevedel-test-scan-checks 2)
+                                                     (make-directory (file-name-directory ,(nth 1 fault)) t)
+                                                     (write-region ,(nth 2 fault) nil ,(nth 1 fault) nil 'silent)))))
+                                     (apply run operations rest))))))
+                         (apply spawn
+                                (plist-put args :command
+                                           (append (butlast command 2) (list "--eval" (prin1-to-string setup))
+                                                   (last command 2)
+                                                   (list "--eval" (prin1-to-string
+                                                                   `(with-temp-file ,stats
+                                                                      (prin1 (list mevedel-test-scan-count mevedel-test-scan-checks)
+                                                                             (current-buffer))))))))))))
+            (setq child (mevedel-journal-worker-start
+                         workspace 'memory-display
+                         (list :client (mevedel-workspace-identity-client)
+                               :roots (mevedel-system--memory-roots workspace) :previous previous)
+                         (lambda (reply) (setq result reply)))))
+          (let ((until (+ (float-time) 15)))
+            (while (and (not result) (< (float-time) until)) (accept-process-output nil .01)))
+          (should result)
+          (should-not (plist-get result :error))
+          (let ((counts (with-temp-buffer (insert-file-contents stats) (read (current-buffer)))))
+            (setq mevedel-test-memory-list--checks (cadr counts))
+            (cons result (car counts))))
+      (when (and child (process-live-p child)) (delete-process child))
+      (delete-file stats))))
+
 (mevedel-deftest mevedel-memory-list-latency
     (:vars* ((root (make-temp-file "mevedel-cockpit-latency-" t))
              (workspace (mevedel-workspace--create :root root :type 'project))
@@ -67,7 +126,7 @@
                     ;; Without prior counts, opening must scan to choose a view.
                     (let* ((job (or mevedel-memory-list--job (ert-fail "Opening did not start a history scan")))
                            (library (cadr (member "-l" (process-command (plist-get job :worker))))))
-                      (should (equal (locate-library "mevedel-memory-list") library))
+                      (should (equal (locate-library "mevedel-journal-worker") library))
                       (when-let* ((snapshot (getenv "MEVEDEL_COCKPIT_SNAPSHOT")))
                         (dolist (source (list library (symbol-file 'mevedel-memory-list-open)
                                               (symbol-file 'gptel-request)))
@@ -127,13 +186,9 @@
     (should (< (- (car samples) (cadr samples)) 45)))
   :doc "invalid local bundles remain unavailable in the actual child reader"
   (let* ((bundles (mevedel-test-memory-history-create workspace 2 1 64))
-         (pass (plist-get (plist-get (car bundles) :prepared) :id))
-         (request (file-name-concat root "request.el"))
-         (reply (file-name-concat root "reply.el")))
+         (pass (plist-get (plist-get (car bundles) :prepared) :id)))
     (write-region "invalid" nil (file-name-concat (mevedel-memory-store--directory workspace pass) "accepted.el") nil 'silent)
-    (mevedel-journal-worker--write request (list :root root :client (mevedel-workspace-identity-client) :roots nil))
-    (mevedel-memory-list--run request reply)
-    (let* ((result (mevedel-journal-worker--read reply)) (rows (plist-get result :rows)))
+    (let* ((result (car (mevedel-test-memory-list-child-scan workspace))) (rows (plist-get result :rows)))
       (should-not (plist-get result :native))
       (should-not (plist-get result :error))
       (should (= 1 (seq-count (lambda (row) (eq 'applied (plist-get row :status))) rows)))
@@ -183,24 +238,14 @@
              (workspace (mevedel-workspace--create :root root :type 'project))
              (mevedel-memory-dirs nil)
              (mevedel-journal-cleanup--inhibit-scheduling t)
-             (request (file-name-concat root "request.el"))
-             (reply (file-name-concat root "reply.el")))
+             (mevedel-test-memory-list--checks 0))
      :after-each ((delete-directory root t)))
   (progn
     (mevedel-workspace-identity-ensure root)
     (mevedel-test-memory-history-build
      'memory-list-reuse root (lambda () (mevedel-test-memory-history-create workspace 2 2 64)))
     (cl-labels ((scan (&optional previous)
-                  (mevedel-journal-worker--write
-                   request (list :root root :client (mevedel-workspace-identity-client)
-                                 :roots (mevedel-system--memory-roots workspace) :previous previous))
-                  (let ((run (symbol-function 'mevedel-session-control-fs--run-program)) (calls 0))
-                    (cl-letf (((symbol-function 'mevedel-session-control-fs--run-program)
-                               (lambda (&rest args) (cl-incf calls) (apply run args))))
-                      (mevedel-memory-list--run request reply))
-                    (let ((result (mevedel-journal-worker--read reply)))
-                      (should-not (plist-get result :error))
-                      (cons result calls))))
+                  (mevedel-test-memory-list-child-scan workspace previous))
                 (topic ()
                   (let* ((memory (file-name-concat root "memory"))
                          (mevedel-memory-dirs (list memory)))
@@ -245,19 +290,12 @@
         (should (= 4 (seq-count (lambda (row) (eq 'applied (plist-get row :status))) (plist-get (car second) :rows)))))))
   :doc "history changing during reuse falls back to a full scan on the same open"
   (let* ((first (scan))
-         (run (symbol-function 'mevedel-session-control-fs--run-program))
          (pass (plist-get (car (plist-get (car first) :rows)) :pass))
          (marker (file-name-concat root ".mevedel/state/journal/retired-passes" pass))
-         (checks 0) raced second)
-    (cl-letf (((symbol-function 'mevedel-session-control-fs--run-program)
-               (lambda (operations &rest args)
-                 (when (and (eq 'stat-tree (plist-get (car operations) :op)) (= 2 (cl-incf checks)))
-                   (setq raced t)
-                   (make-directory (file-name-directory marker) t)
-                   (write-region "retired" nil marker nil 'silent))
-                 (apply run operations args))))
+         second)
+    (let ((mevedel-test-memory-list--fault (list 'write marker "retired")))
       (setq second (scan (car first))))
-    (should raced)
+    (should (file-exists-p marker))
     (should (= 2 (length (plist-get (car second) :rows))))
     (should-not (member pass (mapcar (lambda (row) (plist-get row :pass)) (plist-get (car second) :rows))))
     (let ((third (scan (car second))))
@@ -309,16 +347,10 @@
   (let* ((item (topic))
          (intent (plist-get (seq-find (lambda (row) (equal (car item) (plist-get (plist-get row :intent) :pass)))
                                      (mevedel-memory-write--list workspace)) :intent))
-         (pin (mevedel-memory-write--pin intent))
-         (run (symbol-function 'mevedel-session-control-fs--run-program))
-         (checks 0) first)
-    (cl-letf (((symbol-function 'mevedel-session-control-fs--run-program)
-               (lambda (operations &rest args)
-                 (when (and (eq 'stat-tree (plist-get (car operations) :op)) (= 2 (cl-incf checks)))
-                   (write-region (plist-get intent :hash) nil pin nil 'silent))
-                 (apply run operations args))))
+         (pin (mevedel-memory-write--pin intent)) first)
+    (let ((mevedel-test-memory-list--fault (list 'write pin (plist-get intent :hash))))
       (setq first (scan)))
-    (should (= 2 checks))
+    (should (= 2 mevedel-test-memory-list--checks))
     (should-not (plist-get (car first) :fingerprint))
     (let ((second (scan (car first))))
       (should (plist-get (car second) :fingerprint))
@@ -368,23 +400,17 @@
       (should-not (equal (plist-get (car first) :fingerprint) (plist-get (car second) :fingerprint)))
       (should (equal (plist-get (car first) :rows) (plist-get (car second) :rows)))))
   :doc "failed, unrunnable and unsafe metadata checks fall back to full authentication"
-  (let* ((first (scan)) (run (symbol-function 'mevedel-session-control-fs--run-program)))
+  (let ((first (scan)))
     (should (plist-get (car first) :fingerprint))
     (dolist (kind '(failed unrunnable symlink))
-      (let ((attempts 0) second)
+      (let (second)
         (pcase kind
           ('failed
-           (cl-letf (((symbol-function 'mevedel-session-control-fs--run-program)
-                      (lambda (operations &rest args)
-                        (if (eq 'stat-tree (plist-get (car operations) :op))
-                            (progn (cl-incf attempts) (error "Injected metadata failure"))
-                          (apply run operations args)))))
+           (let ((mevedel-test-memory-list--fault '(failed)))
              (setq second (scan (car first))))
-           (should (> attempts 0)))
+           (should (> mevedel-test-memory-list--checks 0)))
           ('unrunnable
-           (let ((mevedel-session-control-fs--program-script
-                  (replace-regexp-in-string "    stat-tree)" "    disabled-stat-tree)"
-                                            mevedel-session-control-fs--program-script t t)))
+           (let ((mevedel-test-memory-list--fault '(unrunnable)))
              (setq second (scan (car first)))))
           ('symlink
            (make-symbolic-link "missing" (file-name-concat root ".mevedel/state/journal/unsafe"))
@@ -548,7 +574,7 @@
   (with-current-buffer buffer
     (mevedel-memory-list--start context)
     (let* ((old mevedel-memory-list--job) (child (plist-get old :worker))
-           (directory (plist-get old :directory)))
+           (directory (file-name-directory (nth 1 (read (car (last (process-command child))))))))
       (should (process-live-p child))
       (mevedel-memory-list-refresh)
       (should-not (process-live-p child))
@@ -564,18 +590,20 @@
       (mevedel-memory-list-mode)
       (setq mevedel-cockpit--context context)
       (mevedel-memory-list--start context)
-      (let ((old mevedel-memory-list--job))
+      (let* ((old mevedel-memory-list--job)
+             (child (plist-get old :worker))
+             (directory (file-name-directory (nth 1 (read (car (last (process-command child))))))))
         (if kill (kill-buffer buffer) (fundamental-mode))
-        (should-not (process-live-p (plist-get old :worker)))
-        (should-not (file-directory-p (plist-get old :directory)))
+        (should-not (process-live-p child))
+        (should-not (file-directory-p directory))
         (mevedel-memory-list--received buffer old '(:error "Late failure")))))
   :doc "the original deadline stops its child and leaves a visible retryable error"
   (with-current-buffer buffer
     (mevedel-memory-list--start context)
-    (let ((job mevedel-memory-list--job))
+    (let* ((job mevedel-memory-list--job) (child (plist-get job :worker)))
       (funcall (timer--function (plist-get job :timer)))
       (should-not mevedel-memory-list--job)
-      (should-not (process-live-p (plist-get job :worker)))
+      (should-not (process-live-p child))
       (should (string-search "timed out" mevedel-memory-list--error))
       (should (string-search "g retries" (mevedel-memory-list--header nil context)))))
   :doc "reopening observes a coalesced recovery owner started outside this cockpit"
@@ -675,7 +703,8 @@
               (cl-letf (((symbol-function 'make-process)
                          (lambda (&rest args)
                            (setq child (apply create args)
-                                 directory (plist-get mevedel-memory-list--job :directory) quit-flag t)
+                                 directory (file-name-directory (nth 1 (read (car (last (plist-get args :command))))))
+                                 quit-flag t)
                            (unless inhibit-quit (setq quit-flag nil) (signal 'quit nil))
                            child)))
                 (condition-case nil (mevedel-memory-list--start context) (quit (setq cancelled t)))))
@@ -721,7 +750,8 @@
         (dolist (failure '(error quit))
           (mevedel-memory-list--start context)
           (let* ((job mevedel-memory-list--job) (child (plist-get job :worker))
-                 (timer (plist-get job :timer)) (directory (plist-get job :directory))
+                 (timer (plist-get job :timer))
+                 (directory (process-get child 'mevedel-journal-worker-directory))
                  (stop (symbol-function 'delete-process)) (inject t) (stops 0) caught)
             (should (process-live-p child))
             (cl-letf (((symbol-function 'delete-process)
@@ -751,8 +781,8 @@
   (with-current-buffer buffer
     (let (directory)
       (cl-letf (((symbol-function 'mevedel-journal-worker--write)
-                 (lambda (&rest _)
-                   (setq directory (plist-get mevedel-memory-list--job :directory))
+                 (lambda (file _value)
+                   (setq directory (file-name-directory file))
                    (should-not inhibit-quit)
                    (signal 'quit nil))))
         (condition-case nil (mevedel-memory-list--start context) (quit nil)))

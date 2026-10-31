@@ -85,7 +85,7 @@
                              ;; as registering the new, not-yet-returned handle.
                              (funcall real-start)
                              (signal (car expected) (cdr expected))))
-                          ((symbol-function 'mevedel-journal-worker-supported-p) #'ignore)
+                          ((symbol-function 'mevedel-journal-worker-local-p) #'ignore)
                           ((symbol-function 'mevedel-memory-review-request)
                            (lambda (&rest _)
                              (cl-incf reviews)
@@ -186,7 +186,7 @@
          (append-row (symbol-function 'mevedel-session-control-fs-run-program))
          state review-callback job raised (injections 0) (callbacks 0))
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-journal-worker-supported-p) #'ignore)
+        (cl-letf (((symbol-function 'mevedel-journal-worker-local-p) #'ignore)
                   ((symbol-function 'mevedel-memory-pass--async-application-p) #'always)
                   ;; Batch fixtures never become idle on their own.
                   ((symbol-function 'current-idle-time) (lambda () (seconds-to-time 2)))
@@ -254,7 +254,7 @@
              (expected (list kind "Injected application setup failure"))
              state review-callback raised (injections 0) (callbacks 0))
         (unwind-protect
-            (cl-letf (((symbol-function 'mevedel-journal-worker-supported-p) #'ignore)
+            (cl-letf (((symbol-function 'mevedel-journal-worker-local-p) #'ignore)
                       ((symbol-function 'mevedel-memory-review-request)
                        (lambda (_scope _entries callback &rest _)
                          (setq review-callback callback)

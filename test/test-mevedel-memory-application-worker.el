@@ -72,9 +72,9 @@ Observe the real transport owner for fault injection and cleanup assertions;
 the public verb, not this helper, constructs and drives the operation."
   (let ((start (symbol-function 'mevedel-journal-worker-start)) owner)
     (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-               (lambda (ws operation reply &optional force payload job)
+               (cl-function (lambda (ws operation payload reply &key ((:owner job)))
                  (setq owner job)
-                 (funcall start ws operation reply force payload job))))
+                 (funcall start ws operation payload reply :owner job)))))
       (mevedel-memory-decision-apply
        workspace (plist-get (plist-get accepted :prepared) :id) (plist-get proposal :id)
        :automatic context :callback callback))
@@ -130,9 +130,9 @@ the public verb, not this helper, constructs and drives the operation."
                      (push (lambda () (apply function args)) idle-callbacks)
                      (timer-create)))
                   ((symbol-function 'mevedel-journal-worker-start)
-                   (lambda (ws kind callback &rest args)
+                   (lambda (ws kind payload callback &rest args)
                      (apply start ws kind
-                            (lambda (reply)
+                            payload (lambda (reply)
                               (when (eq kind 'memory-decision-publish) (setq pending t))
                               (funcall callback reply)) args))))
           ;; Explicit user application remains immediate even during activity.
@@ -183,9 +183,9 @@ the public verb, not this helper, constructs and drives the operation."
                    (push (lambda () (apply function args)) idle-callbacks)
                    (timer-create)))
                 ((symbol-function 'mevedel-journal-worker-start)
-                 (lambda (ws kind callback &rest args)
+                 (lambda (ws kind payload callback &rest args)
                    (apply start ws kind
-                          (lambda (reply)
+                          payload (lambda (reply)
                             (when (and (eq kind 'memory-recover) (not claim))
                               (setq quiet nil claim (copy-tree (plist-get (gethash key mevedel-memory-decision--operations) :claim))))
                             (funcall callback reply)
@@ -222,7 +222,7 @@ the public verb, not this helper, constructs and drives the operation."
         ;; rather than acquiring a new idle-scheduling policy accidentally.
         (let ((native (car (mevedel-test-memory-history-create workspace 1 1 100 t))))
           (setq quiet nil result nil idle-callbacks nil)
-          (cl-letf (((symbol-function 'mevedel-journal-worker-supported-p) (lambda (_) nil)))
+          (cl-letf (((symbol-function 'mevedel-journal-worker-local-p) (lambda (_ &optional _roots) nil)))
             (mevedel-memory-pass--apply-async state native (lambda (value) (setq result value)))
             (mevedel-test-application-wait (lambda () result)))
           (should-not idle-callbacks)
@@ -234,7 +234,7 @@ the public verb, not this helper, constructs and drives the operation."
     (let ((start (symbol-function 'mevedel-journal-worker-start))
           (children 0) operation)
       (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                 (lambda (ws kind callback &rest args)
+                 (lambda (ws kind payload callback &rest args)
                    (when (eq kind 'memory-decision-publish)
                      (cl-incf children)
                      (setq operation (gethash key mevedel-memory-decision--operations))
@@ -245,7 +245,7 @@ the public verb, not this helper, constructs and drives the operation."
                      (should (eq 'completed
                                  (plist-get (mevedel-journal-claim-outcome (plist-get operation :claim)) :status)))
                      (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id))))
-                   (apply start ws kind callback args))))
+                   (apply start ws kind payload callback args))))
         (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
         (mevedel-test-application-wait (lambda () result)))
       (should (= 1 children))
@@ -288,9 +288,9 @@ the public verb, not this helper, constructs and drives the operation."
       (unwind-protect
           (progn
             (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                       (lambda (ws kind callback &rest args)
+                       (lambda (ws kind payload callback &rest args)
                          (apply start ws kind
-                                (lambda (reply)
+                                payload (lambda (reply)
                                   (when (and (not injected) (plist-get reply :previous))
                                     (setq injected t)
                                     (write-region "\n" nil file t 'silent))
@@ -309,12 +309,12 @@ the public verb, not this helper, constructs and drives the operation."
       (let ((start (symbol-function 'mevedel-journal-worker-start))
             job entered (written 0) (callbacks 0))
         (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                   (lambda (ws kind callback &rest args)
+                   (lambda (ws kind payload callback &rest args)
                      (if (not (eq kind 'memory-decision-publish))
-                         (apply start ws kind callback args)
+                         (apply start ws kind payload callback args)
                        (setq entered t)
                        (when (eq failure 'launch) (error "Injected publication launch failure"))
-                       (let ((child (apply start ws kind callback args)))
+                       (let ((child (apply start ws kind payload callback args)))
                          (signal-process child 'SIGSTOP)
                          (run-at-time .01 nil (lambda () (mevedel-memory-decision--operation-stop job)))
                          child)))))
@@ -392,9 +392,9 @@ the public verb, not this helper, constructs and drives the operation."
 	      (with-current-buffer conversation
 	        (setq-local mevedel--session (mevedel-session--create :workspace workspace)))
 	      (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-			 (lambda (ws operation callback &rest args)
+			 (lambda (ws operation payload callback &rest args)
 			   (apply start ws operation
-				  (lambda (reply)
+				  payload (lambda (reply)
 				    (with-current-buffer conversation
 				      (if (eq late 'use)
 					  (mevedel-resource-prepare
@@ -419,9 +419,9 @@ the public verb, not this helper, constructs and drives the operation."
     (let ((start (symbol-function 'mevedel-journal-worker-start))
           (create-lockfiles nil) buffer)
       (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-		 (lambda (ws operation callback &rest args)
+		 (lambda (ws operation payload callback &rest args)
 		   (apply start ws operation
-			  (lambda (reply)
+			  payload (lambda (reply)
 			    (unless buffer
 			      (setq buffer (find-file-noselect path))
 			      (with-current-buffer buffer (goto-char (point-max)) (insert "unsaved")))
@@ -538,9 +538,9 @@ the public verb, not this helper, constructs and drives the operation."
         (unwind-protect
             (progn
               (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                         (lambda (ws operation callback &rest args)
+                         (lambda (ws operation payload callback &rest args)
                            (apply start ws operation
-                                  (lambda (reply)
+                                  payload (lambda (reply)
                                     (unless injected
                                       (setq injected t)
                                       (write-region (if (eq tamper 'accepted) (concat text "\n") (concat (make-string 64 ?f) "\n"))
@@ -650,9 +650,9 @@ the public verb, not this helper, constructs and drives the operation."
                 (unwind-protect
                     (progn
                       (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                                 (lambda (ws kind callback &rest args)
+                                 (lambda (ws kind payload callback &rest args)
                                    (apply start ws kind
-                                          (lambda (observation)
+                                          payload (lambda (observation)
                                             (when-let* ((entry (cdar (plist-get observation :requirements))))
                                               (setq changed-path
                                                     (file-name-concat (mevedel-memory-decision--directory workspace)
@@ -700,9 +700,9 @@ the public verb, not this helper, constructs and drives the operation."
           (start (symbol-function 'mevedel-journal-worker-start))
           child claim ready ran (callbacks 0))
       (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                 (lambda (ws kind callback &optional force payload owner)
+                 (cl-function (lambda (ws kind payload callback &key owner)
                    (setq ready callback claim (plist-get payload :claim)
-                         child (funcall start ws kind callback force payload owner)))))
+                         child (funcall start ws kind payload callback :owner owner))))))
         (mevedel-memory-decision-apply
          workspace (plist-get (plist-get accepted :prepared) :id) (plist-get proposal :id)
          :automatic automatic :on-applied (lambda (_) (setq ran t))
@@ -730,9 +730,9 @@ the public verb, not this helper, constructs and drives the operation."
             (cl-letf (((symbol-function 'mevedel-journal-claim-acquire)
                        (lambda (directory _seconds) (funcall acquire directory 1)))
                       ((symbol-function 'mevedel-journal-worker-start)
-                       (lambda (ws kind callback &optional force payload owner)
+                       (cl-function (lambda (ws kind payload callback &key owner)
                          (setq ready callback claim (plist-get payload :claim)
-                               child (funcall start ws kind callback force payload owner)))))
+                               child (funcall start ws kind payload callback :owner owner))))))
               (mevedel-memory-decision-apply
                workspace (plist-get (plist-get accepted :prepared) :id) (plist-get proposal :id)
                :automatic automatic :on-applied (lambda (_) (setq ran t))
@@ -757,10 +757,10 @@ the public verb, not this helper, constructs and drives the operation."
         (unwind-protect
             (progn
               (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                         (lambda (ws operation callback &rest args)
-                           (setq ready callback claim (plist-get (cadr args) :claim))
+                         (lambda (ws operation payload callback &rest args)
+                           (setq ready callback claim (plist-get payload :claim))
                            (apply start ws operation
-                                  (lambda (reply)
+                                  payload (lambda (reply)
                                     (setq injected t)
                                     (pcase failure
                                       ('origin (kill-buffer origin))
@@ -791,9 +791,9 @@ the public verb, not this helper, constructs and drives the operation."
           (automatic (mevedel-memory-decision-automatic-context workspace (current-buffer)))
           ready observed outer-done (entries 0) (callbacks 0))
       (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                 (lambda (ws kind callback &rest args)
+                 (lambda (ws kind payload callback &rest args)
                    (apply start ws kind
-                          (lambda (reply)
+                          payload (lambda (reply)
                             (when (eq kind 'memory-recover) (setq ready callback observed reply))
                             (funcall callback reply)) args))))
         (mevedel-memory-decision-apply
@@ -829,9 +829,9 @@ the public verb, not this helper, constructs and drives the operation."
               (with-current-buffer origin
                 (setq-local mevedel--session session mevedel-memory-consolidation-mode 'auto))
               (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                         (lambda (ws operation callback &rest args)
+                         (lambda (ws operation payload callback &rest args)
                            (apply start ws operation
-                                  (lambda (reply)
+                                  payload (lambda (reply)
                                     (setq injected t)
                                     (pcase failure
                                       ('session (with-current-buffer origin
@@ -1494,10 +1494,10 @@ the public verb, not this helper, constructs and drives the operation."
           (store (symbol-function 'mevedel-memory-store-recover))
           (children 0) (recoveries 0) (stores 0) replies recovered)
       (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                 (lambda (ws operation callback &rest args)
+                 (lambda (ws operation payload callback &rest args)
                    (cl-incf children)
                    (apply start ws operation
-                          (lambda (reply)
+                          payload (lambda (reply)
                             (push reply replies)
                             (funcall callback reply)) args)))
                 ((symbol-function 'mevedel-memory-decision-recover)
@@ -1618,9 +1618,9 @@ the public verb, not this helper, constructs and drives the operation."
             (should (mevedel-journal-claim-settle mutation 'completed (secure-hash 'sha256 text)))
             (delete-file file)
             (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                       (lambda (ws operation callback &rest args)
+                       (lambda (ws operation payload callback &rest args)
                          (apply start ws operation
-                                (lambda (reply)
+                                payload (lambda (reply)
                                   (setq synchronous (plist-get reply :synchronous))
                                   (funcall callback reply)) args))))
               (mevedel-memory-decision--start-operation
@@ -2076,13 +2076,13 @@ the public verb, not this helper, constructs and drives the operation."
       (let ((start (symbol-function 'mevedel-journal-worker-start))
             (full 0) (selection 0) (discovery 0) (publication 0))
         (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                   (lambda (ws operation callback &optional force payload owner)
+                   (cl-function (lambda (ws operation payload callback &key owner)
                      (when (eq operation 'memory-decision-publish) (cl-incf publication))
                      (when (eq operation 'memory-recover)
                        (cond ((not (plist-get payload :recovery-predecessor)) (cl-incf full))
                              ((plist-get payload :pending-selection) (cl-incf selection))
                              (t (cl-incf discovery))))
-                     (funcall start ws operation callback force payload owner))))
+                     (funcall start ws operation payload callback :owner owner)))))
           (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
           (mevedel-test-application-wait (lambda () result)))
         (should (= 1 full selection))
@@ -2105,9 +2105,9 @@ the public verb, not this helper, constructs and drives the operation."
             (start (symbol-function 'mevedel-journal-worker-start))
             (second (cadr (plist-get accepted :proposals))) (full 0) injected)
         (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                   (lambda (ws operation callback &optional force payload owner)
+                   (cl-function (lambda (ws operation payload callback &key owner)
                      (when (and (eq operation 'memory-recover) (not (plist-get payload :recovery-predecessor))) (cl-incf full))
-                     (funcall start ws operation callback force payload owner)))
+                     (funcall start ws operation payload callback :owner owner))))
                   ((symbol-function 'mevedel-memory-pass--application-next)
                    (lambda (state job)
                      (when (and (not injected) (= 1 (plist-get job :applied)))
@@ -2131,9 +2131,9 @@ the public verb, not this helper, constructs and drives the operation."
       (let ((apply-owned (symbol-function 'mevedel-memory-decision--apply-owned))
             (start (symbol-function 'mevedel-journal-worker-start)) (full 0) injected)
         (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                   (lambda (ws operation callback &optional force payload owner)
+                   (cl-function (lambda (ws operation payload callback &key owner)
                      (when (and (eq operation 'memory-recover) (not (plist-get payload :recovery-predecessor))) (cl-incf full))
-                     (funcall start ws operation callback force payload owner)))
+                     (funcall start ws operation payload callback :owner owner))))
                   ((symbol-function 'mevedel-memory-decision--apply-owned)
                    (lambda (&rest args)
                      (unless injected (setq injected t) (error "Injected first application failure"))

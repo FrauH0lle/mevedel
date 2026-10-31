@@ -106,7 +106,7 @@
                   (delete-directory directory t)))
   (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
              (lambda (&rest _) (list :backend backend :model model)))
-            ((symbol-function 'mevedel-journal-worker-supported-p) (lambda (_) nil))
+            ((symbol-function 'mevedel-journal-worker-local-p) (lambda (_ &optional _roots) nil))
             ((symbol-function 'mevedel-telemetry--monotonic-now) (lambda () clock))
             ((symbol-function 'url-retrieve)
              (lambda (url callback &rest _)

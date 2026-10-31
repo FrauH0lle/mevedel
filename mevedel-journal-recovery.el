@@ -105,5 +105,10 @@ remain pending; one failure does not prevent unrelated captures from recovering.
                    results)))
          (nreverse results))))))
 
+(defun mevedel-journal-recovery-child (workspace _payload)
+  "Recover abandoned WORKSPACE captures without editor-side scheduling."
+  (list :ok t :count (length (mevedel-journal-recovery-run workspace))
+        :more nil :cleanup-at (mevedel-workspace-journal-cleanup-at workspace)))
+
 (provide 'mevedel-journal-recovery)
 ;;; mevedel-journal-recovery.el ends here

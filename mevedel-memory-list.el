@@ -80,7 +80,7 @@
 (defun mevedel-memory-list--cancel ()
   "Retire this buffer's scan, retaining ownership if cleanup fails."
   (when-let* ((job mevedel-memory-list--job))
-    ;; A synchronous sentinel must be inert, but a failed stop must not lose
+    ;; A queued reply must be inert, but a failed stop must not lose
     ;; the only child handle. Keep the retired job until every cleanup succeeds.
     (plist-put job :retired t)
     (condition-case err
@@ -88,10 +88,8 @@
           (let ((inhibit-quit t))
             (when (timerp (plist-get job :timer)) (cancel-timer (plist-get job :timer)))
             (plist-put job :timer nil)
-            (when-let* ((child (plist-get job :worker)) ((process-live-p child))) (delete-process child))
+            (when-let* ((child (plist-get job :worker))) (mevedel-journal-worker-cancel child))
             (plist-put job :worker nil))
-          (when-let* ((directory (plist-get job :directory)))
-            (when (file-directory-p directory) (delete-directory directory t)))
           (setq mevedel-memory-list--job nil))
       ((error quit)
        (setq mevedel-memory-list--error (format "Memory display cleanup failed: %s" (error-message-string err)))
@@ -391,22 +389,12 @@ This is a display hint, not content authentication or an atomic snapshot."
         (list :rows rows :key key :markers markers :fingerprint stable
               :observation (mevedel-workspace-memory-observation workspace))))))
 
-(defun mevedel-memory-list--run (request reply)
-  "Read cockpit REQUEST in a batch child and write display-only REPLY."
-  (unless noninteractive (error "Memory display reader requires batch Emacs"))
-  (let* ((options (mevedel-journal-worker--read request))
-         (workspace (mevedel-workspace--create :root (plist-get options :root) :type 'project))
-         (mevedel-journal-worker--child-p t)
-         (result
-          (condition-case err
-              (cl-letf (((symbol-function 'mevedel-workspace-identity-client) (lambda () (plist-get options :client)))
-                        ((symbol-function 'mevedel-system--memory-roots) (lambda (_) (plist-get options :roots))))
-                       (catch 'mevedel-memory-list-native
-                         (when (file-remote-p (mevedel-workspace-root workspace))
-                           (throw 'mevedel-memory-list-native '(:native t)))
-                         (mevedel-memory-list--scan workspace options)))
-            (error (list :error (error-message-string err))))))
-    (mevedel-journal-worker--write reply result)))
+(defun mevedel-memory-list-scan-child (workspace payload)
+  "Collect display-only WORKSPACE rows under frozen PAYLOAD configuration."
+  (cl-letf (((symbol-function 'mevedel-workspace-identity-client) (lambda () (plist-get payload :client)))
+            ((symbol-function 'mevedel-system--memory-roots) (lambda (_) (plist-get payload :roots))))
+    (catch 'mevedel-memory-list-native
+      (mevedel-memory-list--scan workspace payload))))
 
 (defun mevedel-memory-list--start (context)
   "Start a cancellable read-only history observation for CONTEXT."
@@ -419,40 +407,15 @@ This is a display hint, not content authentication or an atomic snapshot."
     (setq mevedel-memory-list--job job)
     (condition-case err
         (progn
-          (if (or (not (mevedel-journal-worker-supported-p workspace))
-                  (seq-some (lambda (root) (file-remote-p (plist-get root :dir))) (plist-get job :roots)))
+          (if (not (mevedel-journal-worker-local-p
+                    workspace (mapcar (lambda (root) (plist-get root :dir)) (plist-get job :roots))))
               (mevedel-memory-list--received buffer job (list :native t))
-            (let* ((directory (let ((inhibit-quit t))
-                                (plist-put job :directory (make-temp-file "mevedel-memory-display-" t))
-                                (plist-get job :directory)))
-                   (request (file-name-concat directory "request.el"))
-                   (reply (file-name-concat directory "reply.el")))
-              (mevedel-journal-worker--write request
-                                             (list :root (plist-get job :root) :client (plist-get job :client)
-                                                   :roots (plist-get job :roots)
-                                                   :previous (gethash workspace mevedel-memory-list--reuse)))
-              (let ((inhibit-quit t))
-                (plist-put job :worker
-                           (make-process
-                            :name "mevedel-memory-display" :noquery t :connection-type 'pipe :buffer nil
-                            :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
-                                           "--eval" (let ((print-length nil) (print-level nil))
-                                                      (prin1-to-string `(setq load-path ',load-path)))
-                                           "-l" (locate-library "mevedel-memory-list") "--eval"
-                                           (prin1-to-string `(mevedel-memory-list--run ,request ,reply)))
-                            :sentinel
-                            (lambda (child _event)
-                              (when (memq (process-status child) '(exit signal))
-                                (unwind-protect
-                                    (mevedel-memory-list--received
-                                     buffer job
-                                     (condition-case failure
-                                         (progn
-                                           (unless (and (zerop (process-exit-status child)) (file-exists-p reply))
-                                             (error "Memory display reader exited with status %s" (process-exit-status child)))
-                                           (mevedel-journal-worker--read reply))
-                                       (error (list :error (error-message-string failure)))))
-                                  (when (file-directory-p directory) (delete-directory directory t))))))))
+            (progn
+              (mevedel-journal-worker-start
+               workspace 'memory-display
+               (list :client (plist-get job :client) :roots (plist-get job :roots)
+                     :previous (gethash workspace mevedel-memory-list--reuse))
+               (lambda (result) (mevedel-memory-list--received buffer job result)) :owner job)
               (let ((inhibit-quit t))
                 (plist-put job :timer
                            (run-at-time 180 nil

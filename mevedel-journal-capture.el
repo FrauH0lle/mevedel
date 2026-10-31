@@ -29,8 +29,9 @@
 
 ;; `mevedel-journal-worker'
 (declare-function mevedel-journal-worker-start "mevedel-journal-worker"
-                  (workspace operation callback &optional force payload))
-(declare-function mevedel-journal-worker-supported-p "mevedel-journal-worker" (workspace))
+                  (workspace operation payload callback &rest keys))
+(declare-function mevedel-journal-worker-local-p "mevedel-journal-worker" (workspace &optional roots))
+(declare-function mevedel-journal-worker-cancel "mevedel-journal-worker" (process))
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-mutation-authority
@@ -571,7 +572,7 @@ leaving the turns to the next checkpoint.  CALLBACK receives the published
 capture, nil, or (:error MESSAGE).  Return a cancellation function;
 cancellation never publishes or calls CALLBACK."
   (require 'mevedel-journal-worker)
-  (unless (and (mevedel-journal-worker-supported-p (mevedel-session-workspace session))
+  (unless (and (mevedel-journal-worker-local-p (mevedel-session-workspace session))
                (mevedel-session-codec-portable-authority-p session)
                (buffer-live-p buffer)
                (eq buffer (mevedel-session-root-buffer session)))
@@ -584,8 +585,7 @@ cancellation never publishes or calls CALLBACK."
         (setq head (plist-get (mevedel-session-publication session) :head)
               process
               (mevedel-journal-worker-start
-               (mevedel-session-workspace session) 'capture-prepare #'finish nil
-               (with-current-buffer buffer
+               (mevedel-session-workspace session) 'capture-prepare (with-current-buffer buffer
                  (list :session-id (mevedel-session-session-id session)
                        :name (mevedel-session-name session) :save-path directory
                        :publication (copy-tree (mevedel-session-publication session))
@@ -593,11 +593,11 @@ cancellation never publishes or calls CALLBACK."
                        :current-segment (mevedel-session-current-segment session)
                        :prompt-index (copy-tree (mevedel-session-prompt-index session))
                        :client (mevedel-workspace-identity-client)
-                       :policy (mevedel-journal-capture--freeze-policy))))))
+                       :policy (mevedel-journal-capture--freeze-policy))) #'finish)))
       (cancel ()
         (setq settled t)
         (when timer (cancel-timer timer))
-        (when (and process (process-live-p process)) (delete-process process)))
+        (when process (mevedel-journal-worker-cancel process)))
       (finish (result)
         (unless settled
           (let* ((owned (and mevedel-journal-enabled (buffer-live-p buffer)
@@ -636,6 +636,20 @@ cancellation never publishes or calls CALLBACK."
      (unless settled
        (setq timer (run-at-time 120 nil (lambda () (finish '(:error "Checkpoint preparation timed out"))))))
      #'cancel)))
+
+(defun mevedel-journal-capture-prepare-child (workspace payload)
+  "Prepare committed evidence for WORKSPACE from frozen PAYLOAD."
+  (let ((session (mevedel-session--create
+                  :workspace workspace :authority-mode 'portable
+                  :session-id (plist-get payload :session-id)
+                  :name (plist-get payload :name)
+                  :save-path (plist-get payload :save-path)
+                  :publication (plist-get payload :publication)
+                  :turn-count (plist-get payload :turn-count)
+                  :current-segment (plist-get payload :current-segment)
+                  :prompt-index (plist-get payload :prompt-index))))
+    (list :ok t :prepared
+          (mevedel-journal-capture--prepare session (plist-get payload :policy) (plist-get payload :client)))))
 
 (provide 'mevedel-journal-capture)
 ;;; mevedel-journal-capture.el ends here

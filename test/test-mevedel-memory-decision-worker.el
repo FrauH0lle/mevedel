@@ -51,8 +51,7 @@
               (write-region "(:invalid t)" nil
                             (file-name-concat (mevedel-memory-write--directory workspace) (concat id ".el")) nil 'silent)))
           (setq child (mevedel-journal-worker-start
-                       workspace 'memory-recover (lambda (value) (setq result value)) nil
-                       (list :claim claim :operation-id (plist-get claim :owner) :write-selection t)))
+                       workspace 'memory-recover (list :claim claim :operation-id (plist-get claim :owner) :write-selection t) (lambda (value) (setq result value))))
           (with-timeout (30 (ert-fail "Recovery child did not reply"))
             (while (not result) (accept-process-output nil .01)))
           (should (plist-get result :ok))
@@ -80,8 +79,7 @@
         (progn
           (make-symbolic-link root directory)
           (setq child (mevedel-journal-worker-start
-                       workspace 'memory-recover (lambda (value) (setq result value)) nil
-                       (list :claim claim :operation-id (plist-get claim :owner) :write-selection t)))
+                       workspace 'memory-recover (list :claim claim :operation-id (plist-get claim :owner) :write-selection t) (lambda (value) (setq result value))))
           (with-timeout (20 (ert-fail "Discovery failure did not reply"))
             (while (not result) (accept-process-output nil .01)))
           (should-not (plist-get result :ok))
@@ -120,9 +118,9 @@
             (mevedel-journal-claim-settle claim 'cancelled "")
             (mevedel-test--with-captured-diagnostics diagnostics
               (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                         (lambda (ws operation callback &rest args)
+                         (lambda (ws operation payload callback &rest args)
                            (apply start ws operation
-                                  (lambda (reply)
+                                  payload (lambda (reply)
                                     (unless delivered
                                       (setq delivered t observed (plist-get reply :writes))
                                       (write-region "(:invalid t)" nil late nil 'silent)
@@ -194,9 +192,9 @@
          claim child completed tick timer)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                   (lambda (ws operation callback &optional force payload owner)
+                   (cl-function (lambda (ws operation payload callback &key owner)
                      (setq claim (plist-get payload :claim)
-                           child (funcall start ws operation callback force payload owner))))
+                           child (funcall start ws operation payload callback :owner owner)))))
                   ((symbol-function 'mevedel-memory-decision-recover)
                    (lambda (&rest _) (ert-fail "Publication recovery ran in editor")))
                   ((symbol-function 'mevedel-memory-store-recover)
@@ -241,10 +239,10 @@
             (make-directory key t)
             (mevedel-test--with-captured-diagnostics diagnostics
               (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                         (lambda (ws operation callback &rest args)
-                           (setq claim (plist-get (cadr args) :claim))
+                         (lambda (ws operation payload callback &rest args)
+                           (setq claim (plist-get payload :claim))
                            (apply start ws operation
-                                  (lambda (reply)
+                                  payload (lambda (reply)
                                     (setq delivered t reply
                                           (pcase failure
                                             ('child '(:error "Injected discovery failure"))
@@ -381,9 +379,9 @@
          (start (symbol-function 'mevedel-journal-worker-start)) job ready diagnostics)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                   (lambda (ws operation callback &optional force payload owner)
+                   (cl-function (lambda (ws operation payload callback &key owner)
                      (setq job owner ready callback)
-                     (funcall start ws operation callback force payload owner))))
+                     (funcall start ws operation payload callback :owner owner)))))
           (make-directory (mevedel-memory-store--claim-directory workspace) t)
           (mevedel-memory-decision-schedule-recovery
            workspace (lambda () (ert-fail "Failed recovery admitted review")))
@@ -406,9 +404,9 @@
          (start (symbol-function 'mevedel-journal-worker-start)) job ready)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                   (lambda (ws operation callback &optional force payload owner)
+                   (cl-function (lambda (ws operation payload callback &key owner)
                      (setq job owner ready callback)
-                     (funcall start ws operation callback force payload owner))))
+                     (funcall start ws operation payload callback :owner owner)))))
           (make-directory (mevedel-memory-store--claim-directory workspace) t)
           (mevedel-memory-decision-schedule-recovery
            workspace (lambda () (ert-fail "Stopped recovery admitted review")))
@@ -430,7 +428,7 @@
            (observation (list :at 1 :pending 0 :recovery 0 :unavailable 0))
            completed)
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-journal-worker-supported-p) #'ignore)
+          (cl-letf (((symbol-function 'mevedel-journal-worker-local-p) #'ignore)
                     ((symbol-function 'mevedel-memory-decision-recover) (lambda (_) changed))
                     ((symbol-function 'mevedel-memory-store-recover) #'ignore))
             (setf (mevedel-workspace-memory-observation workspace) observation
@@ -453,7 +451,7 @@
          warnings completed)
     (unwind-protect
         (cl-letf (((symbol-function 'display-warning) (lambda (_ text &rest _) (push text warnings)))
-                  ((symbol-function 'mevedel-journal-worker-supported-p) #'ignore)
+                  ((symbol-function 'mevedel-journal-worker-local-p) #'ignore)
                   ((symbol-function 'mevedel-memory-decision-recover) #'ignore)
                   ((symbol-function 'mevedel-memory-store-recover)
                    (lambda (_) (when failure (error "%s" failure)))))
@@ -584,7 +582,7 @@
           (mevedel-workspace-identity-ensure root)
           (make-directory key t)
           (cl-letf (((symbol-function 'mevedel-journal-worker-start)
-                     (lambda (_workspace operation callback &optional _force payload owner)
+                     (cl-function (lambda (_workspace operation payload callback &key owner)
                        (pcase operation
                          ('memory-recover
                           (cl-incf recoveries)
@@ -596,7 +594,7 @@
                           (setq prepare-ready callback prepare-payload payload)
                           (should (mevedel-journal-claim-owned-p (plist-get payload :claim))))
                          (_ (ert-fail (format "Unexpected worker %S" operation))))
-                       nil))
+                       nil)))
                     ((symbol-function 'mevedel-model-resolve-workload)
                      (lambda (&rest _) (ert-fail "Empty coordination case reached a provider"))))
             (cl-labels
@@ -794,7 +792,7 @@
 					 (with-current-buffer origin
 					   (setq drain (mevedel-memory-pass-drain workspace (lambda (reply) (push reply outcomes)))))
 					 (cancel-timer (plist-get drain :timer))))
-				      (cl-letf (((symbol-function 'mevedel-journal-worker-supported-p) (lambda (_) nil))
+				      (cl-letf (((symbol-function 'mevedel-journal-worker-local-p) (lambda (_ &optional _roots) nil))
 						((symbol-function 'mevedel-journal-worker-start)
 						 (lambda (&rest _) (ert-fail "Unsupported recovery started a child")))
 						((symbol-function 'mevedel-model-resolve-workload)
@@ -912,11 +910,11 @@
                                    (inject))
                                  result)))
                             ((symbol-function 'mevedel-journal-worker-start)
-                             (lambda (_workspace kind callback &optional _force _payload owner)
+                             (cl-function (lambda (_workspace kind _payload callback &key owner)
                                (should (eq kind 'memory-recover))
                                (cl-incf workers)
                                (setq ready callback job owner)
-                               nil)))
+                               nil))))
                     (mevedel-memory-decision-schedule-recovery workspace (lambda () (cl-incf callbacks)))
                     (setq timer (gethash key mevedel-memory-decision--recovery-pending) armed t)
                     (mevedel-test--with-captured-diagnostics diagnostics (deliver timer))

@@ -1205,8 +1205,8 @@ expiry only after freshly observing CLAIM's original target-clock deadline."
               ;; it stays tracked until the original deadline's final fencing
               ;; attempt.  Persistent inability to prove a fence stays visible.
               (when fenced
-                (when-let* ((worker (plist-get job :worker)) ((process-live-p worker)))
-                  (delete-process worker)))
+                (when-let* ((worker (plist-get job :worker)))
+                  (mevedel-journal-worker-cancel worker)))
             ((error quit)
              (when (eq (car err) 'quit) (setq cancelled t))
              (setq failure (concat failure "; " (error-message-string err)))))
@@ -1244,8 +1244,8 @@ expiry only after freshly observing CLAIM's original target-clock deadline."
           ;; durable outcome before deleting any still-live child.
           (mevedel-memory-decision--operation-fence (plist-get job :claim))
           (plist-put job :unsettled nil)
-          (when-let* ((worker (plist-get job :worker)) ((process-live-p worker)))
-            (delete-process worker)))
+          (when-let* ((worker (plist-get job :worker)))
+            (mevedel-journal-worker-cancel worker)))
       ((error quit)
        (plist-put job :cleanup-error (error-message-string err))
        (display-warning 'mevedel
@@ -1372,9 +1372,9 @@ Keep :error, :cancelled and timing alongside the decision's result."
           (condition-case err
               (mevedel-journal-worker-start
                (plist-get job :workspace) 'memory-decision-publish
-               (lambda (reply) (mevedel-memory-decision--publication-ready job reply))
-               nil (append (list :operation-id (plist-get (plist-get job :claim) :owner))
-                           (plist-get job :publication)) job)
+               (append (list :operation-id (plist-get (plist-get job :claim) :owner))
+                           (plist-get job :publication))
+               (lambda (reply) (mevedel-memory-decision--publication-ready job reply)) :owner job)
             ((error quit)
              (if (eq (car err) 'quit) (plist-put result :cancelled t)
                (plist-put result :error
@@ -1423,16 +1423,16 @@ crosses the child.  Unsupported targets recover synchronously in the editor."
           (if (and (plist-get job :recovered) (null payload))
               (mevedel-memory-decision--operation-ready
                job (list :ok t :operation-id (plist-get claim :owner)))
-            (if (mevedel-journal-worker-supported-p workspace)
+            (if (mevedel-journal-worker-local-p workspace)
               (mevedel-journal-worker-start
                workspace 'memory-recover
-               (lambda (reply) (mevedel-memory-decision--operation-ready job reply))
-               nil (append (list :claim claim :operation-id (plist-get claim :owner)
+               (append (list :claim claim :operation-id (plist-get claim :owner)
 				 :decisions-only decisions-only
                                  :recovery-predecessor
                                  (when (plist-get job :recovered)
                                    (list :claim (plist-get recovery :claim) :outcome (plist-get recovery :outcome))))
                            payload)
+               (lambda (reply) (mevedel-memory-decision--operation-ready job reply)) :owner
                job)
             (mevedel-memory-decision--operation-ready
              job (list :ok t :operation-id (plist-get claim :owner) :synchronous t)))))
@@ -1533,8 +1533,8 @@ An unproved fence leaves the original deadline and tracked child intact."
        (plist-put job :unsettled t)
        (signal (car err) (cdr err)))))
   (when (timerp (plist-get job :timer)) (cancel-timer (plist-get job :timer)))
-  (when-let* ((worker (plist-get job :worker)) ((process-live-p worker)))
-    (delete-process worker)))
+  (when-let* ((worker (plist-get job :worker)))
+    (mevedel-journal-worker-cancel worker)))
 
 (defun mevedel-memory-decision--recovery-deadline (workspace job)
   "Finish or retire publication recovery JOB at WORKSPACE's original deadline."
@@ -1627,7 +1627,7 @@ use synchronous publication recovery under the same claim and deadline."
                           (max 0 (- (plist-get claim :expires-at)
                                     (mevedel-session-control-fs-target-time key))) nil
                           #'mevedel-memory-decision--recovery-deadline workspace job))
-              (let ((supported (mevedel-journal-worker-supported-p workspace)))
+              (let ((supported (mevedel-journal-worker-local-p workspace)))
 		(if (and (eq job (gethash key mevedel-memory-decision--recovery-workers))
 			 (funcall currentp)
 			 (eq job (gethash key mevedel-memory-decision--recovery-workers)))
@@ -1635,8 +1635,8 @@ use synchronous publication recovery under the same claim and deadline."
                       (if supported
                           (mevedel-journal-worker-start
 			   workspace 'memory-recover
-			   (lambda (result) (mevedel-memory-decision--recovered workspace job result))
-			   nil (list :claim claim :operation-id (plist-get claim :owner) :write-selection t) job)
+			   (list :claim claim :operation-id (plist-get claim :owner) :write-selection t)
+			   (lambda (result) (mevedel-memory-decision--recovered workspace job result)) :owner job)
 			(mevedel-memory-decision--recovered
                          workspace job (list :ok t :operation-id (plist-get claim :owner) :synchronous t)))
                       ;; Request-file IO may cancel before the child exists.
@@ -2003,65 +2003,62 @@ public decision records and :resolved-at.  Signal when dependencies remain."
 ;;
 ;;; Maintenance child
 
-(defun mevedel-memory-decision--child-run (operation workspace payload)
-  "Run decision child OPERATION for WORKSPACE from frozen PAYLOAD.
-`memory-recover' recovers under the parent's claim and selects identities;
-`memory-decision-publish' reauthenticates and publishes one accepted decision.
-Neither returns reusable acceptance proofs."
-  (pcase operation
-    ('memory-recover
-     (mevedel-memory-store--assert-owned (plist-get payload :claim))
-     (let* ((predecessor (plist-get payload :recovery-predecessor))
-            (recovered
-             (and predecessor
-                  (or (mevedel-memory-decision--recovery-successor-p
-                       (list :claim (plist-get payload :claim)) predecessor)
-                      (error "Memory recovery predecessor changed")))))
-       (when (and recovered (not (or (plist-get payload :pending-selection)
-                                     (plist-get payload :application))))
-         (error "Recovery continuity requires decision discovery"))
-       (if (and (not recovered) (not (mevedel-memory-decision--worker-local-p workspace)))
-           (list :ok t :operation-id (plist-get payload :operation-id) :synchronous t)
-         (let ((changed (unless recovered (mevedel-memory-decision-recover workspace))))
-           (unless (or recovered (plist-get payload :decisions-only))
-             (when (mevedel-memory-store-recover workspace) (setq changed t)))
-           (cond
-            ((plist-get payload :application)
-             (unless (mevedel-journal-store-id-p (plist-get payload :proposal-id))
-               (error "Invalid application proposal identity"))
-             (let* ((accepted (mevedel-memory-store-accepted workspace (plist-get payload :pass-id) t))
-                    (proposal (seq-find (lambda (item) (equal (plist-get item :id) (plist-get payload :proposal-id)))
-                                        (plist-get accepted :proposals)))
-                    (entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
-                    (passes (make-hash-table :test #'equal)))
-               (unless proposal (error "Unknown accepted application proposal"))
-               (puthash (plist-get payload :pass-id) accepted passes)
-               (cl-labels ((selected (id)
-                             (when-let* ((entry (mevedel-memory-decision-status workspace id entries passes)))
-                               (cl-loop for field in mevedel-journal-store--decision-fields
-                                        append (list (cdr field) (plist-get entry (cdr field)))))))
-                 (list :ok t :operation-id (plist-get payload :operation-id)
-                       :changed changed :previous (selected (plist-get proposal :id))
-                       :requirements (mapcar (lambda (id) (cons id (selected id)))
-                                             (plist-get proposal :requires))))))
-            ((plist-get payload :pending-selection)
-             (list :ok t :operation-id (plist-get payload :operation-id)
-                   :changed changed :items
-                   (mevedel-memory-decision--pending-items workspace (plist-get payload :skip))))
-            (t (append (list :ok t :operation-id (plist-get payload :operation-id)
-                             :changed changed)
-                       (when (plist-get payload :write-selection)
-                         (list :writes (mevedel-memory-write--recovery-selection workspace))))))))))
-    ('memory-decision-publish
-     (let ((id (plist-get payload :decision-id)))
-       (unless (and (mevedel-journal-store-id-p id)
-                    (equal id (plist-get payload :operation-id))
-                    (mevedel-journal-store-id-p (plist-get payload :hash)))
-         (error "Invalid decision publication identity"))
-       (mevedel-memory-decision--publish workspace id (plist-get payload :hash))
-       (list :ok t :operation-id id
-             :publication (list :decision-id id :hash (plist-get payload :hash)))))
-    (_ (error "Unknown memory decision child operation"))))
+(defun mevedel-memory-decision-recover-child (workspace payload)
+  "Recover WORKSPACE under PAYLOAD's parent claim and select identities.
+Never return reusable acceptance proofs."
+  (mevedel-memory-store--assert-owned (plist-get payload :claim))
+  (let* ((predecessor (plist-get payload :recovery-predecessor))
+         (recovered
+          (and predecessor
+               (or (mevedel-memory-decision--recovery-successor-p
+                    (list :claim (plist-get payload :claim)) predecessor)
+                   (error "Memory recovery predecessor changed")))))
+    (when (and recovered (not (or (plist-get payload :pending-selection)
+                                 (plist-get payload :application))))
+      (error "Recovery continuity requires decision discovery"))
+    (if (and (not recovered) (not (mevedel-memory-decision--worker-local-p workspace)))
+        (list :ok t :operation-id (plist-get payload :operation-id) :synchronous t)
+      (let ((changed (unless recovered (mevedel-memory-decision-recover workspace))))
+        (unless (or recovered (plist-get payload :decisions-only))
+          (when (mevedel-memory-store-recover workspace) (setq changed t)))
+        (cond
+         ((plist-get payload :application)
+          (unless (mevedel-journal-store-id-p (plist-get payload :proposal-id))
+            (error "Invalid application proposal identity"))
+          (let* ((accepted (mevedel-memory-store-accepted workspace (plist-get payload :pass-id) t))
+                 (proposal (seq-find (lambda (item) (equal (plist-get item :id) (plist-get payload :proposal-id)))
+                                     (plist-get accepted :proposals)))
+                 (entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
+                 (passes (make-hash-table :test #'equal)))
+            (unless proposal (error "Unknown accepted application proposal"))
+            (puthash (plist-get payload :pass-id) accepted passes)
+            (cl-labels ((selected (id)
+                          (when-let* ((entry (mevedel-memory-decision-status workspace id entries passes)))
+                            (cl-loop for field in mevedel-journal-store--decision-fields
+                                     append (list (cdr field) (plist-get entry (cdr field)))))))
+              (list :ok t :operation-id (plist-get payload :operation-id)
+                    :changed changed :previous (selected (plist-get proposal :id))
+                    :requirements (mapcar (lambda (id) (cons id (selected id)))
+                                          (plist-get proposal :requires))))))
+         ((plist-get payload :pending-selection)
+          (list :ok t :operation-id (plist-get payload :operation-id)
+                :changed changed :items
+                (mevedel-memory-decision--pending-items workspace (plist-get payload :skip))))
+         (t (append (list :ok t :operation-id (plist-get payload :operation-id)
+                          :changed changed)
+                    (when (plist-get payload :write-selection)
+                      (list :writes (mevedel-memory-write--recovery-selection workspace))))))))))
+
+(defun mevedel-memory-decision-publish-child (workspace payload)
+  "Reauthenticate and publish WORKSPACE's accepted decision named by PAYLOAD."
+  (let ((id (plist-get payload :decision-id)))
+    (unless (and (mevedel-journal-store-id-p id)
+                 (equal id (plist-get payload :operation-id))
+                 (mevedel-journal-store-id-p (plist-get payload :hash)))
+      (error "Invalid decision publication identity"))
+    (mevedel-memory-decision--publish workspace id (plist-get payload :hash))
+    (list :ok t :operation-id id
+          :publication (list :decision-id id :hash (plist-get payload :hash)))))
 
 (provide 'mevedel-memory-decision)
 ;;; mevedel-memory-decision.el ends here

@@ -262,6 +262,17 @@ unproved release cannot schedule subsequent live-write inspection.
 Generic maintenance-process teardown can still force-stop children without
 waiting for storage; it does not establish settlement or erase retained evidence.
 
+The shared maintenance launcher also owns cockpit display children. Its closed
+operation table selects public owner entries and bounded replies. Launch failure
+signals to the owner without a callback. After a successful launch, completion
+arrives once through idle transport, never in the process sentinel or before
+launch returns; disabled or cancelled transport uses a deferred timer fallback.
+Explicit launcher cancellation drops live or queued replies; unsolicited signals
+and nonzero exits deliver an error once. The operation owner still checks identity
+and fences mutation claims before cancellation; display cancellation has no
+mutation claim to settle. Native editor recovery remains an owner policy, not
+another launcher adapter.
+
 Callbacks distinguish held admission and ordinary user cancellation from errors;
 neither fabricates an accepted decision. Timeout, malformed replies,
 authentication, IO and cleanup failures remain errors. Cancellation cannot erase
