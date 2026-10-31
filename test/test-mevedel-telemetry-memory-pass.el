@@ -47,8 +47,8 @@
     (let* ((root (make-temp-file "mevedel-pass-lag-" t))
            (workspace (mevedel-workspace--create :root root))
            (noninteractive nil)
-           ;; Keep the real sampler and matched unwatched control, scaling
-           ;; the threshold and interval with the deliberate stall.
+           ;; Keep the real sampler and matched unwatched control.  A 200 ms
+           ;; stall clears the 100 ms gate by 80 ms after one sample interval.
            (mevedel-telemetry-lag-threshold .1)
            (mevedel-telemetry--lag-interval .02)
            (mevedel-telemetry--lag-count-threshold .04)
@@ -59,7 +59,7 @@
             ;; The negative control omits registration, not the stall or timer
             ;; delivery.  No internal lag clock, counter or emitter is stubbed.
             (sleep-for 0.03)
-            (let ((end (+ (float-time) 0.15)))
+            (let ((end (+ (float-time) 0.2)))
               (while (< (float-time) end)))
             (sleep-for 0.03)
             (let ((lags (test-mevedel-telemetry-memory-pass--events
@@ -72,7 +72,7 @@
                     (dolist (row lags)
                       (should (equal "pass-production" (plist-get row :pass-id)))
                       (should (eq 'memory (plist-get row :workload)))
-                      (should (<= 100 (plist-get row :delay-ms)))
+                      (should (<= 150 (plist-get row :delay-ms)))
                       (should (numberp (plist-get row :cpu-ms)))
                       (should-not (plist-get row :settled))
                       (dolist (key '(:session-id :request-id :goal-id :preset
@@ -124,13 +124,18 @@
             (should (= 1 (length mevedel-telemetry--lag-windows)))
             (should (= 1 (length mevedel-telemetry--lag-pass-windows)))
             (test-mevedel-telemetry-memory-pass--sample 0.75)
-            (let ((row (car (mevedel-session-telemetry-pending session))))
-              (should (eq 'event-loop-lag (plist-get row :event)))
-              (should (equal "same-id" (plist-get row :request-id)))
-              (should-not (plist-member row :pass-id)))
-            (should (equal "same-id" (plist-get
-                                      (car (test-mevedel-telemetry-memory-pass--events workspace))
-                                      :pass-id)))
+            ;; Slow control programs can precede the lag row in the session's
+            ;; pending stream.  Assert the exact lag cohort, not stream order.
+            (let ((rows (seq-filter (lambda (row) (eq 'event-loop-lag (plist-get row :event)))
+                                    (mevedel-session-telemetry-pending session))))
+              (should (= 1 (length rows)))
+              (let ((row (car rows)))
+                (should (eq 'event-loop-lag (plist-get row :event)))
+                (should (equal "same-id" (plist-get row :request-id)))
+                (should-not (plist-member row :pass-id))))
+            (let ((rows (test-mevedel-telemetry-memory-pass--events workspace 'event-loop-lag)))
+              (should (= 1 (length rows)))
+              (should (equal "same-id" (plist-get (car rows) :pass-id))))
             ;; Session-only synchronous measurement must not treat a workspace
             ;; object as a session, even while the shared heartbeat watches it.
             (mevedel-telemetry-measure nil 'control-program 0 (lambda () 'ok))
