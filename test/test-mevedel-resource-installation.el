@@ -14,6 +14,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-tool-fs-search)
+(require 'mevedel-pipeline)
 
 (mevedel-deftest mevedel-resource-installed-package
   ()
@@ -364,6 +365,7 @@
            (mevedel-resource--source-dir root)
            (make-temp (symbol-function 'make-temp-file))
            (scratch-attempts 0)
+           (cancel-cell (list nil))
            scratch-failure escaped results cancel attempt)
       (unwind-protect
           (with-temp-buffer
@@ -389,20 +391,29 @@
                 (setq attempt (mevedel-resource-prepare
                                operation address (list :session session)))
                 (setq cancel
-                      (mevedel-pipeline--step-handler
-                       (list :tool (mevedel-tool--create
-                                    :name (if (eq operation 'grep) "Grep" "Glob")
-                                    :handler (if (eq operation 'grep)
-                                                 #'mevedel-tool-fs-search-grep
-                                               #'mevedel-tool-fs-search-glob)
-                                    :async-p t)
-                             :args (list :path address
-                                         :pattern (if (eq operation 'grep) "needle" "*.md")
-                                         :output_mode "content")
-                             :resource-attempts
-                             (list (cons address attempt)))
-                       (lambda (context) (push context results))
-                       (lambda (&rest failure) (ert-fail failure))))
+                      (lambda ()
+                        (when-let* ((current (car cancel-cell)))
+                          (funcall current))))
+                ;; Steps register cancellation in the runner's cell; their
+                ;; return values are not cancellation functions.
+                (mevedel-pipeline--run
+                 (list #'mevedel-pipeline--step-handler
+                       (lambda (context next _fail)
+                         (push context results)
+                         (funcall next context)))
+                 #'ignore
+                 (list :cancel-cell cancel-cell
+                       :tool (mevedel-tool--create
+                              :name (if (eq operation 'grep) "Grep" "Glob")
+                              :handler (if (eq operation 'grep)
+                                           #'mevedel-tool-fs-search-grep
+                                         #'mevedel-tool-fs-search-glob)
+                              :async-p t)
+                       :args (list :path address
+                                   :pattern (if (eq operation 'grep) "needle" "*.md")
+                                   :output_mode "content")
+                       :resource-attempts
+                       (list (cons address attempt))))
                 (let ((deadline (+ (float-time) 5)))
                   (condition-case failure
                       (while (and (not results) (not scratch-failure)
@@ -412,6 +423,7 @@
               (should (= failure-stage scratch-attempts))
               (should (eq 'file-error (car scratch-failure)))
               (should-not escaped)
+              (should-not (car cancel-cell))
               (should-not (gethash attempt mevedel-resource--attempt-table))
               (should-not (mevedel-execution-session-live-p session))
               (should (= 1 (length results)))
