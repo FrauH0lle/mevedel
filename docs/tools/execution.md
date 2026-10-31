@@ -58,8 +58,8 @@ sandbox; confinement also hides the agent socket that `SSH_AUTH_SOCK` names,
 but not other agent sockets, and `~/.ssh` stays masked. No network grant is
 needed. HTTPS remotes are unaffected and still need the network grant above.
 
-The repository must be the workspace's own (or metadata outside every
-writable root, such as a linked worktree's main repository): a nested `.git`
+The repository must be the workspace root's own, discovered from both the
+root and the working directory: a nested `.git` directory or pointer file
 inside the workspace may have been written by an earlier confined command,
 so it gets no transport.
 

