@@ -44,7 +44,7 @@ DIAGNOSTICS returns bounded details when the expected callback never arrives."
 (defmacro mevedel-test-retry-fixture (&rest body)
   "Run BODY with real pending decisions, original controller and unrelated buffer."
   (declare (indent 0) (debug t))
-  `(let* ((root (make-temp-file "mevedel-retry-" t))
+  `(let* ((root (mevedel-test-memory-history-root 'retry-worker))
           (workspace (mevedel-workspace--create :root root))
           (mevedel-memory-dirs nil)
           (mevedel-memory-consolidation-mode 'propose)
@@ -59,7 +59,9 @@ DIAGNOSTICS returns bounded details when the expected callback never arrives."
                       (setq-local mevedel--session (mevedel-session--create :workspace workspace))
                       (with-current-buffer mevedel-test-retry--reader
                         (setq-local mevedel--session (mevedel-session--create :workspace workspace)))
-                      (mevedel-test-memory-history-create workspace 1 1 100 t)))
+                      (mevedel-test-memory-history-build
+                       'retry-worker root
+                       (lambda () (mevedel-test-memory-history-create workspace 1 1 100 t)))))
           (accepted (car accepted))
           (proposal (car (plist-get accepted :proposals)))
           (path (plist-get (cdr (car (plist-get proposal :before))) :path))

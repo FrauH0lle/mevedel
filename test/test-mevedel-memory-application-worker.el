@@ -83,14 +83,18 @@ the public verb, not this helper, constructs and drives the operation."
 (defmacro mevedel-test-application-fixture (&rest body)
   "Run BODY with an accepted pending note, STATE and its real WORKSPACE."
   (declare (indent 0) (debug t))
-  `(let* ((root (make-temp-file "mevedel-application-" t))
+  `(let* ((fixture-key (list 'application-worker mevedel-test-application-items))
+          (root (mevedel-test-memory-history-root fixture-key))
           (workspace (mevedel-workspace--create :root root))
           (mevedel-memory-dirs nil)
           (mevedel-memory-consolidation-mode 'auto)
           (mevedel-journal-cleanup--inhibit-scheduling t)
           (kill-emacs-hook kill-emacs-hook)
           (_identity (mevedel-workspace-identity-ensure root))
-          (accepted (car (mevedel-test-memory-history-create workspace 1 mevedel-test-application-items 100 t)))
+          (accepted (mevedel-test-memory-history-build
+                     fixture-key root
+                     (lambda ()
+                       (car (mevedel-test-memory-history-create workspace 1 mevedel-test-application-items 100 t)))))
           (proposal (car (plist-get accepted :proposals)))
           (path (plist-get (cdr (car (plist-get proposal :before))) :path))
           (key (mevedel-memory-store--claim-directory workspace))
@@ -113,6 +117,33 @@ the public verb, not this helper, constructs and drives the operation."
        (when-let* ((buffer (find-buffer-visiting path)))
          (with-current-buffer buffer (set-buffer-modified-p nil)) (kill-buffer buffer))
        (delete-directory root t))))
+
+(mevedel-deftest mevedel-test-application-fixture
+  (:doc "restored setup has independent bytes and proposal data, with no decisions or live ownership")
+  (let (original-file original-path original-id)
+    (mevedel-test-application-fixture
+      (setq original-file (copy-sequence (plist-get proposal :file))
+            original-path (copy-sequence path)
+            original-id (copy-sequence (plist-get proposal :id)))
+      ;; Change both the live data and disk; neither may alter the snapshot.
+      (aset (plist-get proposal :file) 0 ?X)
+      (plist-put proposal :fixture-tampered t)
+      (write-region "Changed fixture bytes" nil path nil 'silent))
+    (mevedel-test-application-fixture
+      (should (equal original-path path))
+      (should (equal original-file (plist-get proposal :file)))
+      (should (equal original-id (plist-get proposal :id)))
+      (should-not (plist-get proposal :fixture-tampered))
+      (should (equal (make-string 100 ?x) (mevedel-session-control-fs-read-file path)))
+      (should-not (mevedel-journal-claim-owned-p (plist-get state :claim)))
+      (should-not (mevedel-memory-decision-status workspace original-id))
+      (should-not (gethash key mevedel-memory-decision--operations))
+      ;; The restored bytes still authenticate through the native public verb.
+      (should (eq 'applied
+                  (plist-get (mevedel-memory-decision-apply
+                              workspace (plist-get (plist-get accepted :prepared) :id) original-id)
+                             :status)))
+      (should-not (file-exists-p path)))))
 
 (mevedel-deftest mevedel-memory-pass--apply-async ()
   ,test
@@ -560,20 +591,33 @@ the public verb, not this helper, constructs and drives the operation."
 (mevedel-deftest mevedel-memory-pass--pending-items ()
   ,test
   (test)
-  :doc "64 authenticated terminal proposals select no pending identities and require only one discovery child"
+  :doc "terminal proposals across a full production batch and another pass require only one discovery child"
   (let ((mevedel-test-application-items 16))
     (mevedel-test-application-fixture
      (let ((start (symbol-function 'mevedel-journal-worker-start)) (children 0)
            (bundles (list accepted)))
-        ;; Keep the native 16-note admission bound: four real passes, not a
-       ;; widened request limit or fabricated public status.  Each version is
-       ;; distinct, so a preceding pending review does not suppress its capture.
-       (dotimes (n 3)
-         (push (car (mevedel-test-memory-history-create workspace 1 16 (+ 101 n) t)) bundles))
-        (should (= 64 (apply #'+ (mapcar (lambda (bundle) (length (plist-get bundle :proposals))) bundles))))
-        (dolist (bundle bundles)
-          (dolist (item (plist-get bundle :proposals))
-            (mevedel-test-application-decide workspace bundle item 'rejected)))
+       ;; Keep the native 16-note admission bound and cross the eight-record
+       ;; decision-read bound twice.  One changed version adds a second pass;
+       ;; the other fifteen unchanged, already captured versions stay excluded.
+       (should (= 16 mevedel-memory-notes--max-notes (length (plist-get accepted :proposals))))
+       (push (car (mevedel-test-memory-history-create workspace 1 1 101 t)) bundles)
+       (should (= 1 (length (plist-get (car bundles) :proposals))))
+       (should (= 17 (apply #'+ (mapcar (lambda (bundle) (length (plist-get bundle :proposals))) bundles))))
+       (let* ((last-bundle (car bundles))
+              (last-item (car (plist-get last-bundle :proposals))))
+         (dolist (bundle bundles)
+           (dolist (item (plist-get bundle :proposals))
+             (unless (eq item last-item)
+               (mevedel-test-application-decide workspace bundle item 'rejected))))
+         ;; Negative control: selection must not simply return an empty roster
+         ;; beside terminal history, including the extra pass beyond a full batch.
+         (mevedel-test-memory-history-owned workspace
+           (let ((items (plist-get (mevedel-memory-decision-pending workspace) :items)))
+             (should (= 1 (length items)))
+             (should (equal (plist-get last-item :id) (plist-get (car items) :proposal)))
+             (should (equal (plist-get (plist-get last-bundle :prepared) :id)
+                            (plist-get (car items) :pass)))))
+         (mevedel-test-application-decide workspace last-bundle last-item 'rejected))
         (mevedel-test-memory-history-owned workspace
           (should-not (plist-get (mevedel-memory-decision-pending workspace) :items)))
         (cl-letf (((symbol-function 'mevedel-journal-worker-start)
