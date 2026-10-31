@@ -9,6 +9,7 @@
 (require 'cl-lib)
 (require 'mevedel-execution-process)
 (require 'mevedel-transport)
+(require 'mevedel-utilities)
 (require 'tramp-sh)
 (require 'helpers
          (file-name-concat
@@ -521,7 +522,7 @@
     (let* ((root (make-temp-file "mevedel-process-eof-" t))
            (spool (file-name-concat root "output"))
            (gate (file-name-concat root "exit"))
-           result raced
+           result raced watchdog-failure started
            (child (mevedel-execution-process-create
                    :workdir root :spool-path spool
                    :terminal-function (lambda (_child value) (setq result value)))))
@@ -532,16 +533,23 @@
                         (when (eq process (mevedel-execution-process--child-process child))
                           (setq raced t)
                           (write-region "" nil gate nil 'silent)
-                          (test-mevedel-execution-process--wait-for-exit process))
+                          (condition-case failure
+                              (test-mevedel-execution-process--wait-for-exit process)
+                            (ert-test-failed (setq watchdog-failure failure))))
                         (funcall send-eof process))))
             (write-region "" nil spool nil 'silent)
-            (should (eq child
-                        (mevedel-execution-process-start
-                         child :name "mevedel-test-process-eof"
-                         :command (list "sh" "-c"
-                                        "while [ ! -f \"$1\" ]; do sleep 0.01; done; printf done; exit \"$2\""
-                                        "mevedel-test" gate (number-to-string status))
-                         :coding 'utf-8-unix)))
+            (setq started
+                  (mevedel-execution-process-start
+                   child :name "mevedel-test-process-eof"
+                   :command (list "sh" "-c"
+                                  "while [ ! -f \"$1\" ]; do sleep 0.01; done; printf done; exit \"$2\""
+                                  "mevedel-test" gate (number-to-string status))
+                   :coding 'utf-8-unix))
+            ;; Start catches process errors, including ERT watchdog failures.
+            ;; Re-signal outside that catch before checking its return value.
+            (when watchdog-failure
+              (signal (car watchdog-failure) (cdr watchdog-failure)))
+            (should (eq child started))
             (test-mevedel-execution-process--wait (lambda () result))
             (should raced)
             (should (equal status (plist-get result :exit-code)))
@@ -549,6 +557,20 @@
             (should (equal "done" (plist-get result :output))))
         (mevedel-execution-process-release child)
         (delete-directory root t))))
+  :doc "re-signals the EOF watchdog outside the production start error handler"
+  (let* ((test (cl-find-if
+                (lambda (test)
+                  (equal (ert-test-documentation test)
+                         "preserves the exit code when a child exits before stdin EOF"))
+                (ert-select-tests "\\`mevedel-execution-process-start/test" t)))
+         (result
+          (cl-letf (((symbol-function 'test-mevedel-execution-process--wait-for-exit)
+                     (lambda (&rest _)
+                       (ert-fail "Child did not exit without timer delivery"))))
+            (ert-run-test test))))
+    (should (ert-test-failed-p result))
+    (should (equal '(ert-test-failed "Child did not exit without timer delivery")
+                   (ert-test-failed-condition result))))
   :doc "drains filter output when the watchdog observes exit first"
   (let* ((root (make-temp-file "mevedel-process-watchdog-" t))
          (spool (file-name-concat root "output"))
