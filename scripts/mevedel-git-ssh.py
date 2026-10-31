@@ -188,15 +188,21 @@ def url_destination(url):
             return None
         destination = f"{user}@{host}" if at else host
     else:
-        # scp-like [user@]host:path, where no '/' precedes the first ':'.
-        colon = url.find(":")
-        if colon <= 0 or "/" in url[:colon] or "://" in url:
+        # scp-like [user@]host:path, where no '/' precedes the first ':'
+        # outside an optional [bracketed] host such as [::1]:path.
+        if "://" in url:
             return None
-        destination, port = url[:colon], None
-        if destination.startswith("["):
-            if not destination.endswith("]"):
+        port = None
+        if url.startswith("["):
+            close = url.find("]")
+            if close < 0 or url[close + 1:close + 2] != ":" or "/" in url[:close]:
                 return None
-            destination = destination[1:-1]
+            destination = url[1:close]
+        else:
+            colon = url.find(":")
+            if colon <= 0 or "/" in url[:colon]:
+                return None
+            destination = url[:colon]
     if not _valid_destination(destination) or destination.endswith("@") \
        or destination.startswith("@"):
         return None

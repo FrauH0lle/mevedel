@@ -155,7 +155,7 @@ class UrlTests(unittest.TestCase):
     URLS = ["ssh://git@example.com:2222/a/b.git", "ssh://example.com/x",
             "git+ssh://u@host/x", "ssh+git://host:22/x", "git@example.com:org/r.git",
             "alias:repo", "ex:~/r", "ssh://[::1]/x", "ssh://u@[::1]:2200/x",
-            "[host]:path", "ssh://a@b@host/x"]
+            "[host]:path", "[::1]:r", "ssh://a@b@host/x"]
 
     def test_matches_what_git_passes_to_ssh(self):
         """Ground truth: run real Git with a recording ssh for every URL."""
