@@ -455,6 +455,26 @@ compositor with locking disabled and verify its frame delivery separately.
 OS pointer/hover automation remains outside this command. It is opt-in locally,
 not part of hosted CI or the ordinary `check` script.
 
+For full native geometry coverage in an unattended run, prefer an owned,
+unlocked virtual KWin with a presenting OpenGL compositor (`KWIN_COMPOSE=O2`),
+private HOME/XDG roots and a private DBus session. `QT_QUICK_BACKEND=software`
+can isolate Qt Quick without replacing the OpenGL compositor. The maintained
+runner does not launch KWin, but it selects an existing private compositor
+through the ordinary display environment:
+
+```sh
+WAYLAND_DISPLAY=/absolute/private/runtime/kwin-socket \
+  eask run script graphical-check -- --grammar-dir /path/to/tree-sitter
+```
+
+Use that compositor's absolute socket path: the runner replaces XDG_RUNTIME_DIR
+in the child. A locked or non-presenting desktop can refuse every native frame
+growth request. The frame-growth test first tries a plain control frame and
+reports an explicit compositor-refusal skip if that resize fails; it still
+asserts exact sizes when the control succeeds. The graphical command continues
+to reject skips, so refusal is visible as incomplete coverage, never a green
+result. Rerun on the presenting private compositor to get full coverage.
+
 The batch-safe runner regression tests are included in the normal suite:
 
 ```bash

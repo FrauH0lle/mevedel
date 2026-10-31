@@ -40,6 +40,43 @@
                (should (= body-height (window-body-height nil t)))
                (should (= body-width (window-body-width nil t))))))))))
 
+(defun mevedel-view-geometry-test--require-frame-resize (&optional timeout)
+  "Skip if a plain control frame cannot grow within TIMEOUT seconds or five."
+  (let ((frame (make-frame '((width . 80) (height . 30))))
+        (frame-resize-pixelwise t)
+        (unread-command-events nil))
+    (unwind-protect
+        (with-selected-frame frame
+          (with-temp-buffer
+            (set-window-buffer (selected-window) (current-buffer))
+            (redisplay t)
+            (let ((target (1+ (frame-text-height frame)))
+                  (deadline (+ (float-time) (or timeout 5))))
+              (set-frame-height frame target nil t)
+              (while (and (/= target (frame-text-height frame))
+                          (< (float-time) deadline))
+                (setq unread-command-events nil)
+                (sit-for 0.02)
+                (redisplay t))
+              (unless (= target (frame-text-height frame))
+                (ert-skip (format "Compositor refused plain control-frame resize: requested %d pixels, got %d"
+                                  target (frame-text-height frame))))
+              t)))
+      (when (frame-live-p frame) (delete-frame frame t)))))
+
+(mevedel-deftest mevedel-view-geometry-test--require-frame-resize ()
+  (progn (skip-unless (display-graphic-p)) ,test)
+  (test)
+  :doc "A presenting compositor accepts the plain control-frame resize"
+  (should (mevedel-view-geometry-test--require-frame-resize))
+  :doc "A refused control resize skips with an explicit compositor diagnostic"
+  (cl-letf (((symbol-function 'set-frame-height) #'ignore))
+    (let ((failure (should-error
+                    (mevedel-view-geometry-test--require-frame-resize 0)
+                    :type 'ert-test-skipped)))
+      (should (string-search "Compositor refused plain control-frame resize"
+                             (error-message-string failure))))))
+
 (mevedel-deftest mevedel-view--viewport-at-y
   (:doc "Zero Y, exact placement, and unchanged viewports work on native displays.")
   (mevedel-view-geometry-test--with-window
@@ -119,6 +156,8 @@
 (mevedel-deftest mevedel-view-geometry-window-size-roundtrip ()
   (progn
     (skip-unless (display-graphic-p))
+    (when (eq ,change 'frame-grow)
+      (mevedel-view-geometry-test--require-frame-resize))
     (save-window-excursion
       (delete-other-windows)
       (mevedel-view-test--with-buffers
