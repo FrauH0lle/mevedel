@@ -136,7 +136,9 @@
   (let ((old-mtime (file-attribute-modification-time (file-attributes path)))
         (arrival (file-name-concat shared "later-arrival.md"))
         (recent (file-name-concat shared "recent-handoff.md"))
-        (deadline (+ (float-time) 120))
+        ;; A progress watchdog, not a latency assertion: fifty real notes and
+        ;; their checked writes may share a CPU with other test processes.
+        (deadline (+ (float-time) 600))
         pending-response requests responses buffers offered)
     ;; A headerless handoff below fourteen days is not in the eligible fifty.
     (write-region "# Recent handoff\nTODO: still working.\n" nil recent nil 'silent)

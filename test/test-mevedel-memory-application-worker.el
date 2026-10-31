@@ -58,8 +58,10 @@ REASON defaults to a fixture label."
       (mevedel-journal-claim-settle claim 'cancelled ""))))
 
 (defun mevedel-test-application-wait (predicate)
-  "Drive the real event loop until PREDICATE, with a bounded failure deadline."
-  (let ((deadline (+ (float-time) 30)))
+  "Drive the real event loop until PREDICATE, with a progress watchdog.
+This bounds a hung test, not application latency; multiple real children and
+checked writes must be able to finish under single-CPU contention."
+  (let ((deadline (+ (float-time) 300)))
     (while (and (not (funcall predicate)) (< (float-time) deadline))
       (accept-process-output nil .01)))
   (should (funcall predicate)))
