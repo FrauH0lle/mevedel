@@ -325,6 +325,13 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
           (let* ((stats (ert-run-tests-batch t))
                  (skipped (ert-stats-skipped stats))
                  (unexpected (ert-stats-completed-unexpected stats)))
+            ;; ERT's batch summary names skips but omits their conditions.
+            ;; Keep environmental refusals visible in the retained log.
+            (cl-loop for test across (ert--stats-tests stats)
+                     for result = (ert-test-most-recent-result test)
+                     when (ert-test-skipped-p result)
+                     do (message "Skipped %s:%s" (ert-test-name test)
+                                 (ert-reason-for-test-result result)))
             (with-temp-file (file-name-concat output "summary.json")
               (insert (json-encode
                        `((emacs . ,emacs-version)

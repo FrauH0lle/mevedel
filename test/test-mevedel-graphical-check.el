@@ -104,5 +104,31 @@
              (error-message-string
               (should-error (mevedel-graphical-check--preflight)))))))
 
+(mevedel-deftest mevedel-graphical-check--child
+  (:doc "reports skip reasons and rejects incomplete graphical coverage")
+  (let* ((output (make-temp-file "graphical-skipped-" t))
+         (test (make-ert-test :name 'graphical-environment-refused
+                             :body (lambda () (ert-skip "Compositor refused control resize"))))
+         (stats (ert-run-tests (list 'member test) #'ignore))
+         (mevedel-graphical-check--files nil)
+         status messages)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-graphical-check--preflight) #'ignore)
+                    ((symbol-function 'mevedel-graphical-check--capture) #'ignore)
+                    ((symbol-function 'set-frame-size) #'ignore)
+                    ((symbol-function 'sit-for) #'ignore)
+                    ((symbol-function 'ert-run-tests-batch) (lambda (_) stats))
+                    ((symbol-function 'kill-emacs) (lambda (code) (setq status code))))
+            (mevedel-test--with-captured-messages messages
+              (mevedel-graphical-check--child output)))
+          (should (= 1 status))
+          (should (string-search "Compositor refused control resize" messages))
+          (let ((summary (json-read-file (file-name-concat output "summary.json"))))
+            (should (= 1 (alist-get 'tests summary)))
+            (should (= 1 (alist-get 'skipped summary)))
+            (should (= 0 (alist-get 'unexpected summary)))))
+      (delete-directory output t))))
+
 (provide 'test-mevedel-graphical-check)
 ;;; test-mevedel-graphical-check.el ends here

@@ -262,7 +262,7 @@
          (one-path (file-name-concat root "one"))
          (two-path (file-name-concat root "two"))
          (mevedel-sandbox-mode 'off)
-         one two)
+         one two one-started two-started)
     (unwind-protect
         (progn
           (cl-labels
@@ -279,15 +279,19 @@
                  :artifact-directory (file-name-concat root "artifacts")
                  :read-only-p t :yield-time-ms nil)))
             (start-reader one-path (lambda (value) (setq one value)))
-            (start-reader two-path (lambda (value) (setq two value))))
+            (setq one-started t)
+            (start-reader two-path (lambda (value) (setq two value)))
+            (setq two-started t))
           (test-mevedel-execution-scheduler--wait
            (lambda () (and (file-exists-p one-path)
-                           (file-exists-p two-path)))
-           0.3))
+                           (file-exists-p two-path)))))
+      ;; Both markers must exist before either child is released.  That proves
+      ;; concurrency independently of shell startup latency under worker load.
       (with-temp-file release)
-      (when (or (file-exists-p one-path) (file-exists-p two-path))
+      (when (or one-started two-started)
         (test-mevedel-execution-scheduler--wait
-         (lambda () (and one two))))
+         (lambda () (and (or (not one-started) one)
+                         (or (not two-started) two)))))
       (delete-directory root t)))
   :doc "request abort removes queued exclusive work without spawning it"
   (let* ((root (make-temp-file "mevedel-scheduler-abort-" t))

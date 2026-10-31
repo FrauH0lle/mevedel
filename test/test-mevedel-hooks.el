@@ -1733,41 +1733,58 @@
   (:doc "request cancellation stops a command hook before delayed effects")
   (let* ((root (make-temp-file "mevedel-hooks-command-cancel" t))
          (ready-file (file-name-concat root "ready"))
+         (release-file (file-name-concat root "release"))
          (late-file (file-name-concat root "late"))
          (session (mevedel-hooks-test--session root))
          (request (mevedel-request--create :session session))
-         ;; Short enough that the drain must cancel the slow notice for
-         ;; the assertion below to hold, long enough that it cannot fire
-         ;; before the child has written its ready marker.
-         (mevedel-hooks-slow-threshold 0.3)
+         ;; Inspect cancellation and replay late delivery directly, rather
+         ;; than racing a slow-notice deadline against child startup.
+         (mevedel-hooks-slow-threshold 60)
          (mevedel-hook-rules
           `((PreToolUse
              ((:matcher "Bash"
                :hooks
                ((:type command
                  :command
-                 ,(format "printf ready > %s; sleep 0.2; printf late > %s"
+                 ,(format "printf '%%s' \"$$\" > %s; while [ ! -e %s ]; do sleep 0.01; done; printf late > %s"
                           (shell-quote-argument ready-file)
+                          (shell-quote-argument release-file)
                           (shell-quote-argument late-file))
-                 :timeout 5)))))))
-         callback-called messages)
+                 :timeout 30)))))))
+         callback-called messages slow-timer pid)
     (unwind-protect
         (progn
           (skip-unless (not (eq system-type 'windows-nt)))
           (mevedel-test--with-captured-messages messages
-            (mevedel-hooks-run-event
-             'PreToolUse '(:tool-name "Bash")
-             (lambda (_) (setq callback-called t))
-             session nil request)
-            (let ((deadline (+ (float-time) 2)))
-              (while (and (not (file-exists-p ready-file))
-                          (< (float-time) deadline))
-                (accept-process-output nil 0.01)))
-            (should (file-exists-p ready-file))
+            (cl-letf* ((schedule (symbol-function 'run-at-time))
+                       ((symbol-function 'run-at-time)
+                        (lambda (seconds repeat function &rest args)
+                          (let ((timer (apply schedule seconds repeat function args)))
+                            (when (eql seconds mevedel-hooks-slow-threshold)
+                              (setq slow-timer timer))
+                            timer))))
+              (mevedel-hooks-run-event
+               'PreToolUse '(:tool-name "Bash")
+               (lambda (_) (setq callback-called t))
+               session nil request))
+            (mevedel-test--await 5 "hook child writes ready pid"
+              (when-let* ((attributes (file-attributes ready-file)))
+                (> (file-attribute-size attributes) 0)))
+            (setq pid (string-to-number
+                       (with-temp-buffer
+                         (insert-file-contents ready-file)
+                         (buffer-string))))
+            (should (> pid 0))
+            (should (memq slow-timer (default-toplevel-value 'timer-list)))
             (mevedel-request-drain-cancellers request)
-            (let ((deadline (+ (float-time) 0.5)))
-              (while (< (float-time) deadline)
-                (accept-process-output nil 0.01))))
+            (mevedel-test--await 5 "cancelled hook child exits"
+              (let ((attributes (process-attributes pid)))
+                (or (null attributes) (equal "Z" (alist-get 'state attributes)))))
+            (should-not (memq slow-timer (default-toplevel-value 'timer-list)))
+            ;; Even a notice already dequeued when cancellation happened must
+            ;; be fenced.  No wall-clock sleep is needed to deliver it.
+            (apply (timer--function slow-timer) (timer--args slow-timer))
+            (with-temp-file release-file))
           (should-not (file-exists-p late-file))
           ;; The caller's continuation belongs to the torn-down request
           ;; and never runs, but the handler still settles: one log entry

@@ -54,6 +54,8 @@ tool_batches = []
 hook_acknowledgement = True
 after_hook_tool = None
 prompt_acknowledgement = True
+prompt_receipt_release = None
+prompt_receipt_marker = None
 compact_before_batch = None
 compact_acknowledgement = True
 crash_after_tool = False
@@ -127,6 +129,8 @@ for line in sys.stdin:
                 compact_before_batch = params.get("_meta", {}).get("compactBeforeBatch")
                 compact_acknowledgement = params.get("_meta", {}).get("compactAcknowledgement", hook_acknowledgement)
                 prompt_acknowledgement = params.get("_meta", {}).get("promptAcknowledgement", True)
+                prompt_receipt_release = params.get("_meta", {}).get("promptReceiptRelease")
+                prompt_receipt_marker = params.get("_meta", {}).get("promptReceiptMarker")
                 compaction_events = params.get("_meta", {}).get("compactionEvents", [])
                 compaction_before_batch = params.get("_meta", {}).get("compactionBeforeBatch")
                 late_announcement = params.get("_meta", {}).get("lateAnnouncement", False)
@@ -242,8 +246,15 @@ for line in sys.stdin:
                 if prompt_acknowledgement == "late":
                     # Written while the test keeps Emacs from reading, so the
                     # receipt races a tool call the test reads first.
-                    time.sleep(0.2)
+                    assert prompt_receipt_release and prompt_receipt_marker
+                    deadline = time.monotonic() + 10
+                    while not os.path.exists(prompt_receipt_release):
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("Receipt release marker unavailable")
+                        time.sleep(0.01)
                     print(json.dumps(receipt), flush=True)
+                    with open(prompt_receipt_marker, "w", encoding="utf-8") as marker:
+                        marker.write("written")
             elif prompt == "wait-silent":
                 pending = request_id
             elif prompt.startswith("refresh-race"):

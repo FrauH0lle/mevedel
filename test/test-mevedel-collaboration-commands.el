@@ -120,7 +120,8 @@
         (with-tramp-suspended-timers
           (mevedel-collaboration--schedule-publish room))
         (mevedel-collaboration--schedule-publish room)
-        (with-timeout (1 (ert-fail "Publication never ran"))
+        ;; Rearming/one delivery is the contract, not one-second publication.
+        (with-timeout (5 (ert-fail "Publication never ran"))
           (while (zerop publishes) (accept-process-output nil 0.02)))
         (should (= 1 publishes))))))
 

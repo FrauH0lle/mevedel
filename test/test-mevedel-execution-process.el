@@ -9,12 +9,44 @@
 (require 'cl-lib)
 (require 'mevedel-execution-process)
 (require 'mevedel-transport)
+(require 'mevedel-utilities)
 (require 'tramp-sh)
 (require 'helpers
          (file-name-concat
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-execution-test-helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-execution-test-helpers"))
+
+(defun test-mevedel-execution-process--wait-for-exit (process &optional timeout)
+  "Wait for PROCESS exit without timers, bounded by TIMEOUT seconds or five."
+  (let ((deadline (time-add nil (or timeout 5))))
+    (while (and (process-live-p process) (time-less-p nil deadline))
+      (accept-process-output process 0.01 nil 1))
+    (when (process-live-p process)
+      (ert-fail "Child did not exit without timer delivery"))))
+
+(mevedel-deftest test-mevedel-execution-process--wait-for-exit
+  (:doc "a non-exiting child reaches the clock deadline with timers suppressed")
+  (let ((process (make-process :name "mevedel-test-non-exiting" :noquery t
+                               :command '("sh" "-c" "exec sleep 30")
+                               :connection-type 'pipe))
+        ran timer)
+    (unwind-protect
+        (progn
+          (setq timer (run-at-time 0 nil (lambda () (setq ran t))))
+          (let ((failure (should-error
+                          (test-mevedel-execution-process--wait-for-exit process 0.02)
+                          :type 'ert-test-failed)))
+            (should (string-search "Child did not exit without timer delivery"
+                                   (error-message-string failure))))
+          (should-not ran))
+      (when timer (cancel-timer timer))
+      (delete-process process))))
 
 (defun test-mevedel-execution-process--wait (predicate)
   "Wait until PREDICATE returns non-nil."
@@ -195,12 +227,15 @@
                    :workdir remote-root :spool-path spool
                    :terminal-function
                    (lambda (_child value) (setq result value))))
-            (mevedel-execution-process-start
-             child :name "mevedel-test-process-reused-group"
-             :command
-             '("sh" "-c"
-               "ps -o pgid= -p $$ | tr -d ' ' > group.pid; trap '' TERM; sleep 30 & wait")
-             :coding 'utf-8-unix :timeout 0.05)
+            (test-mevedel-execution--timeout-after-ready
+             pid-file
+             (lambda ()
+               (mevedel-execution-process-start
+                child :name "mevedel-test-process-reused-group"
+                :command
+                '("sh" "-c"
+                  "ps -o pgid= -p $$ | tr -d ' ' > group.pid; trap '' TERM; sleep 30 & wait")
+                :coding 'utf-8-unix :timeout 0.05)))
             (test-mevedel-execution-process--wait (lambda () result))
             (setq group-id
                   (string-to-number
@@ -281,28 +316,33 @@
          (original-signal-process (symbol-function 'signal-process))
          (mevedel-execution-process--child-kill-delay 0.02)
          (mevedel-execution-process--remote-control-timeout 0.02)
-         child result group-id started-at)
+         child result group-id settlement-budget)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (cl-letf
+          (cl-letf*
               (((symbol-function 'mevedel-execution-process--start-stop)
-                #'ignore))
+                #'ignore)
+               (schedule (symbol-function 'mevedel-transport-run-at-time))
+               ((symbol-function 'mevedel-transport-run-at-time)
+                (lambda (seconds function &rest args)
+                  (when (eq function #'mevedel-execution-process--settle-timed-out)
+                    (setq settlement-budget seconds))
+                  (apply schedule seconds function args))))
             (write-region "" nil spool nil 'silent)
             (setq child
                   (mevedel-execution-process-create
                    :workdir remote-root :spool-path spool
                    :terminal-function
                    (lambda (_child value) (setq result value))))
-            (mevedel-execution-process-start
-             child :name "mevedel-test-process-wedged"
-             :command
-             '("sh" "-c"
-               "ps -o pgid= -p $$ | tr -d ' ' > group.pid; sleep 30")
-             :coding 'utf-8-unix :timeout 0.05)
-            ;; The bound covers the escalation, not the launch: opening the
-            ;; transport is a real remote round trip whose cost belongs to
-            ;; the host, not to this child's settlement budget.
-            (setq started-at (float-time))
+            (test-mevedel-execution--timeout-after-ready
+             pid-file
+             (lambda ()
+               (mevedel-execution-process-start
+                child :name "mevedel-test-process-wedged"
+                :command
+                '("sh" "-c"
+                  "ps -o pgid= -p $$ | tr -d ' ' > group.pid; sleep 30")
+                :coding 'utf-8-unix :timeout 0.05)))
             (test-mevedel-execution-process--wait (lambda () result))
             (setq group-id
                   (string-to-number
@@ -310,7 +350,8 @@
                     (with-temp-buffer
                       (insert-file-contents pid-file)
                       (buffer-string)))))
-            (should (< (- (float-time) started-at) 1.0))
+            ;; Check the actual escalation budget, not host scheduling latency.
+            (should (< (abs (- settlement-budget 0.12)) 0.000001))
             (should (plist-get result :timed-out-p))
             (should (eq 'unknown (plist-get result :termination)))))
       (when child (mevedel-execution-process-release child))
@@ -417,9 +458,7 @@
             ;; Observe the exit only from the simulated remote command: no
             ;; sentinel, and a wait that runs neither timers nor sentinels.
             (set-process-sentinel process #'ignore)
-            (with-timeout (5 (ert-fail "Child did not exit"))
-              (while (process-live-p process)
-                (accept-process-output process 0.01 nil 1)))
+            (test-mevedel-execution-process--wait-for-exit process)
             (mevedel-transport--handler-advice
              (lambda ()
                (let (timer-list timer-idle-list)
@@ -483,7 +522,7 @@
     (let* ((root (make-temp-file "mevedel-process-eof-" t))
            (spool (file-name-concat root "output"))
            (gate (file-name-concat root "exit"))
-           result raced
+           result raced watchdog-failure started
            (child (mevedel-execution-process-create
                    :workdir root :spool-path spool
                    :terminal-function (lambda (_child value) (setq result value)))))
@@ -494,18 +533,23 @@
                         (when (eq process (mevedel-execution-process--child-process child))
                           (setq raced t)
                           (write-region "" nil gate nil 'silent)
-                          (with-timeout (5 (ert-fail "Child did not exit before EOF"))
-                            (while (process-live-p process)
-                              (accept-process-output process 0.01 nil 1))))
+                          (condition-case failure
+                              (test-mevedel-execution-process--wait-for-exit process)
+                            (ert-test-failed (setq watchdog-failure failure))))
                         (funcall send-eof process))))
             (write-region "" nil spool nil 'silent)
-            (should (eq child
-                        (mevedel-execution-process-start
-                         child :name "mevedel-test-process-eof"
-                         :command (list "sh" "-c"
-                                        "while [ ! -f \"$1\" ]; do sleep 0.01; done; printf done; exit \"$2\""
-                                        "mevedel-test" gate (number-to-string status))
-                         :coding 'utf-8-unix)))
+            (setq started
+                  (mevedel-execution-process-start
+                   child :name "mevedel-test-process-eof"
+                   :command (list "sh" "-c"
+                                  "while [ ! -f \"$1\" ]; do sleep 0.01; done; printf done; exit \"$2\""
+                                  "mevedel-test" gate (number-to-string status))
+                   :coding 'utf-8-unix))
+            ;; Start catches process errors, including ERT watchdog failures.
+            ;; Re-signal outside that catch before checking its return value.
+            (when watchdog-failure
+              (signal (car watchdog-failure) (cdr watchdog-failure)))
+            (should (eq child started))
             (test-mevedel-execution-process--wait (lambda () result))
             (should raced)
             (should (equal status (plist-get result :exit-code)))
@@ -513,6 +557,20 @@
             (should (equal "done" (plist-get result :output))))
         (mevedel-execution-process-release child)
         (delete-directory root t))))
+  :doc "re-signals the EOF watchdog outside the production start error handler"
+  (let* ((test (cl-find-if
+                (lambda (test)
+                  (equal (ert-test-documentation test)
+                         "preserves the exit code when a child exits before stdin EOF"))
+                (ert-select-tests "\\`mevedel-execution-process-start/test" t)))
+         (result
+          (cl-letf (((symbol-function 'test-mevedel-execution-process--wait-for-exit)
+                     (lambda (&rest _)
+                       (ert-fail "Child did not exit without timer delivery"))))
+            (ert-run-test test))))
+    (should (ert-test-failed-p result))
+    (should (equal '(ert-test-failed "Child did not exit without timer delivery")
+                   (ert-test-failed-condition result))))
   :doc "drains filter output when the watchdog observes exit first"
   (let* ((root (make-temp-file "mevedel-process-watchdog-" t))
          (spool (file-name-concat root "output"))

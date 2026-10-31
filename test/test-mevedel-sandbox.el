@@ -182,20 +182,32 @@
          (exec-path (list root))
          (mevedel-sandbox--probe-cache nil)
          (mevedel-sandbox-probe-timeout 0.05)
-         result started)
+         (clock 100.0)
+         waits result)
     (skip-unless (eq system-type 'gnu/linux))
     (unwind-protect
         (progn
           (with-temp-file executable
-            (insert "#!/bin/sh\nexec /bin/sleep 5\n"))
+            (insert "#!/bin/sh\nexec /bin/sleep 30\n"))
           (set-file-modes executable #o700)
-          (setq started (float-time))
-          (setq result (mevedel-sandbox-probe))
+          ;; The probe's isolated wait suppresses timers, including any Lisp
+          ;; watchdog.  Advance its clock through the requested wait instead,
+          ;; and prove both the configured budget and deadline termination.
+          (cl-letf (((symbol-function 'float-time) (lambda (&optional _) clock))
+                    ((symbol-function 'accept-process-output)
+                     (lambda (process seconds &optional _milliseconds just-this-one)
+                       (when (process-live-p process)
+                         (when waits (error "Probe waited beyond its deadline"))
+                         (push (list seconds just-this-one) waits)
+                         (setq clock (+ clock seconds))))))
+            (setq result (mevedel-sandbox-probe)))
+          (should (= 1 (length waits)))
+          (should (< (abs (- 0.05 (caar waits))) 0.000001))
+          (should (equal 1 (cadar waits)))
           (should-not (plist-get result :available))
           (should (string-match-p "timed out" (plist-get result :reason)))
           ;; A probe that never finished proves nothing about the backend.
-          (should (plist-get result :retry-on-execution))
-          (should (< (- (float-time) started) 0.5)))
+          (should (plist-get result :retry-on-execution)))
       (delete-directory root t)))
   :doc "isolated wait:
 `mevedel-sandbox-probe' runs no timers while it waits for the candidate"

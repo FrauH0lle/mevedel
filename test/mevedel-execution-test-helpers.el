@@ -12,6 +12,7 @@
 (require 'mevedel-execution-target)
 (require 'mevedel-session-durability)
 (require 'mevedel-structs)
+(require 'mevedel-transport)
 (require 'subr-x)
 
 ;; `helpers'
@@ -71,6 +72,21 @@ local test roots model file workspaces so they retain PID-lock authority."
   (with-timeout ((or timeout 5) (error "Timed out"))
     (while (not (funcall predicate))
       (accept-process-output nil 0.02))))
+
+(defun test-mevedel-execution--timeout-after-ready (path thunk)
+  "Call THUNK, arming child timeouts only after PATH contains a ready marker.
+Keep the requested timeout duration: these tests exercise termination, not
+whether the host can start a shell within that duration."
+  (let ((schedule (symbol-function 'mevedel-transport-run-at-time)))
+    (cl-letf (((symbol-function 'mevedel-transport-run-at-time)
+               (lambda (seconds function &rest args)
+                 (when (eq function #'mevedel-execution-process--time-out)
+                   (test-mevedel-execution--wait
+                    (lambda ()
+                      (when-let* ((attributes (file-attributes path)))
+                        (> (file-attribute-size attributes) 0)))))
+                 (apply schedule seconds function args))))
+      (funcall thunk))))
 
 (defun test-mevedel-execution--stop-all (session owner ids)
   "Stop IDS owned by OWNER in SESSION and wait for every settlement."
