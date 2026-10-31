@@ -124,5 +124,71 @@
                 (should (= table (car (mevedel-view-table--visible-stale (selected-window)))))))
           (mevedel-view--cancel-realign-timer))))))
 
+(mevedel-deftest mevedel-view-table--layout
+  (:doc "cached redraws track actual face and source fontification changes")
+  (progn
+    (skip-unless (display-graphic-p))
+    (let ((height (face-attribute 'mevedel-view-table-header :height nil)))
+      (unwind-protect
+          (mevedel-test--with-displayed-buffer
+            (mevedel-view-mode)
+            (let ((inhibit-read-only t)
+                  (source (copy-sequence "| Header text | Other |\n|---|---|\n| cell | value |\n"))
+                  (window (selected-window))
+                  (render (symbol-function 'mevedel-view-table--render-source))
+                  (calls 0))
+              ,prepare
+              (cl-letf (((symbol-function 'mevedel-view-table--render-source)
+                         (lambda (&rest arguments)
+                           (cl-incf calls)
+                           (apply render arguments))))
+                (cl-labels ((redraw ()
+                              (erase-buffer)
+                              (insert source)
+                              (mevedel-view-table-decorate (point-min) (point-max) nil)
+                              (mevedel-view-table-rerender window)
+                              (redisplay t)))
+                  (redraw)
+                  (should (= calls 1))
+                  (let ((before (buffer-string))
+                        (before-layout (mevedel-view-table--layout
+                                        (string-trim-right source) window 0)))
+                    (redraw)
+                    (should (= calls 1))
+                    (should (equal-including-properties before (buffer-string)))
+                    ,change
+                    (redraw)
+                    (should (= calls 2))
+                    (let ((fresh (mevedel-view-table--render-source
+                                  (string-trim-right source) window 0)))
+                      (should-not (equal-including-properties
+                                   before-layout fresh))
+                      (should (equal (string-trim-right (buffer-string))
+                                     (substring-no-properties fresh)))
+                      (dotimes (position (length fresh))
+                        (dolist (property '(face font-lock-face display))
+                          (should (equal (get-text-property position property fresh)
+                                         (get-text-property (1+ position) property)))))))))))
+        (set-face-attribute 'mevedel-view-table-header nil :height height))))
+  (prepare change)
+  nil (set-face-attribute 'mevedel-view-table-header nil :height 3.0)
+  nil (put-text-property (string-match "cell" source) (+ 4 (string-match "cell" source))
+                        'font-lock-face '(:height 2.0 :weight bold) source)
+  (put-text-property (string-match "cell" source) (+ 4 (string-match "cell" source))
+                     'font-lock-face (list :height 1.0) source)
+  (let* ((position (string-match "cell" source))
+         (face (get-text-property position 'font-lock-face source)))
+    ;; Keep the comparison snapshot independent of the deliberately mutated
+    ;; face value that the rendered cell originally shared with SOURCE.
+    (setq before-layout (copy-sequence before-layout))
+    (let ((cell (string-match "cell" before-layout)))
+      (put-text-property cell (+ cell 4) 'font-lock-face
+                         (list :height 1.0) before-layout))
+    (setf (plist-get face :height) 2.0)
+    (maphash (lambda (key _rendered)
+               (should (= 1.0 (plist-get (get-text-property position 'font-lock-face (car key))
+                                         :height))))
+             mevedel-view-table--layout-cache)))
+
 (provide 'test-mevedel-view-table-graphical)
 ;;; test-mevedel-view-table-graphical.el ends here

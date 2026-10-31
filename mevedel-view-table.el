@@ -966,15 +966,47 @@ layout instead of showing raw source until the next idle pass.")
 ;; A view rebuild re-invokes `mevedel-view-mode' on the live buffer.
 (put 'mevedel-view-table--layout-cache 'permanent-local t)
 
+(defvar mevedel-view-table--font-generation 0
+  "Generation of named face and fontset definitions used by table layouts.")
+
+(defconst mevedel-view-table--font-setters
+  '(internal-set-lisp-face-attribute internal-copy-lisp-face
+    internal-make-lisp-face set-fontset-font clear-face-cache)
+  "Emacs operations that invalidate resolved fonts, including inherited faces.")
+
+(defun mevedel-view-table--fonts-changed (&rest _arguments)
+  "Invalidate cached font resolutions after a face or fontset change."
+  (cl-incf mevedel-view-table--font-generation))
+
+;; A generation is cheaper than resolving every named source face per redraw.
+;; Include low-level setters so copying/resetting faces also invalidates layouts.
+(dolist (setter mevedel-view-table--font-setters)
+  (advice-add setter :after #'mevedel-view-table--fonts-changed))
+
+(define-hash-table-test 'mevedel-view-table--layout-equal
+  #'equal-including-properties #'sxhash-equal-including-properties)
+
+(defun mevedel-view-table-unload-function ()
+  "Remove the table cache's font invalidation observers."
+  (dolist (setter mevedel-view-table--font-setters)
+    (advice-remove setter #'mevedel-view-table--fonts-changed))
+  nil)
+
 (defun mevedel-view-table--layout-key (source window inset)
   "Return the view's layout cache key of SOURCE in WINDOW at INSET, or nil.
-The key holds every layout input: the source, the window's pixel width,
-the `line-prefix' inset, the frame font size and the buffer's face
-remapping, which text scaling changes.  Other buffers render a table
-once and cache nothing."
+Include SOURCE's rendering properties, geometry, frame identity/font, face
+generation and buffer remapping, but not transient projection handles.
+Other buffers render a table once and cache nothing."
   (when (and (window-live-p window) (derived-mode-p 'mevedel-view-mode))
-    (let ((frame (window-frame window)))
-      (list source (window-body-width window t) inset
+    (let ((frame (window-frame window))
+          (content (copy-sequence source)))
+      ;; These projection handles change when another turn is appended, but
+      ;; do not affect layout.  Reattach the current handles after insertion.
+      (remove-text-properties 0 (length content)
+                              '(mevedel-view-source nil mevedel-view-source-key nil)
+                              content)
+      (list content (window-body-width window t) inset
+            frame (frame-parameter frame 'font) mevedel-view-table--font-generation
             (frame-char-width frame) (frame-char-height frame)
             face-remapping-alist))))
 
@@ -983,15 +1015,30 @@ once and cache nothing."
   (let ((key (mevedel-view-table--layout-key source window inset)))
     (or (and key mevedel-view-table--layout-cache
              (gethash key mevedel-view-table--layout-cache))
-        (let ((rendered (mevedel-view-table--render-source source window inset)))
+        (let ((rendered (mevedel-view-table--render-source
+                         (if key (car key) source) window inset)))
           (when key
             (unless mevedel-view-table--layout-cache
               (setq mevedel-view-table--layout-cache
-                    (make-hash-table :test #'equal)))
+                    (make-hash-table :test 'mevedel-view-table--layout-equal)))
             (when (>= (hash-table-count mevedel-view-table--layout-cache)
                       mevedel-view-table--layout-cache-limit)
               (clrhash mevedel-view-table--layout-cache))
-            (puthash key rendered mevedel-view-table--layout-cache))
+            ;; Snapshot mutable key inputs; a caller can re-fontify SOURCE or
+            ;; change remapping in place before asking for the next layout.
+            (let ((content (copy-sequence (car key))))
+              (dolist (property '(face font-lock-face composition invisible))
+                (let ((position 0))
+                  (while (< position (length content))
+                    (let ((next (next-single-property-change
+                                 position property content (length content)))
+                          (value (get-text-property position property content)))
+                      (when (or (consp value) (vectorp value))
+                        (put-text-property position next property
+                                           (copy-tree value t) content))
+                      (setq position next)))))
+              (puthash (cons content (copy-tree (cdr key)))
+                       rendered mevedel-view-table--layout-cache)))
           rendered))))
 
 (defun mevedel-view-table--cached-layout-p (source window inset)
@@ -1000,18 +1047,20 @@ once and cache nothing."
               (key (mevedel-view-table--layout-key source window inset)))
     (gethash key cache)))
 
-(defun mevedel-view-table--render-region (start end source &optional window)
+(defun mevedel-view-table--render-region (start end source &optional window prepared)
   "Replace START..END with SOURCE rendered as an aligned table.
 The rendered text retains SOURCE and the displaying window's pixel
 width as text properties, and carries the view's own properties from
 START across the rewrite.  WINDOW, when live, is the window the
-layout targets; otherwise a window showing the buffer is used."
+layout targets; otherwise a window showing the buffer is used.
+PREPARED, when non-nil, is an already cached rendering, avoiding a second
+lookup."
   (let* ((window (if (and window (window-live-p window))
                      window
                    (get-buffer-window (current-buffer) t)))
          (width (and window (window-body-width window t)))
          (inset (mevedel-view-table--inset-at start))
-         (rendered (mevedel-view-table--layout source window inset))
+         (rendered (or prepared (mevedel-view-table--layout source window inset)))
          (carried (mevedel-view--selected-text-properties
                    start mevedel-view-table--carried-properties))
          (inhibit-read-only t)
@@ -1057,14 +1106,15 @@ Tables in an unfinished streamed response remain raw until terminal projection."
                      (get-buffer-window (current-buffer) t))))
     (dolist (table (mevedel-view-table--find-tables start end avoid-ranges))
       (let* ((beg (car table)) (end (cdr table))
-             (source (mevedel-view--markdown-source beg end)))
+             (source (mevedel-view--markdown-source beg end))
+             (prepared (and window
+                            (mevedel-view-table--cached-layout-p
+                             source window (mevedel-view-table--inset-at beg)))))
         (cond
          ((not (derived-mode-p 'mevedel-view-mode))
           (mevedel-view-table--render-region beg end source))
-         ((and window
-               (mevedel-view-table--cached-layout-p
-                source window (mevedel-view-table--inset-at beg)))
-          (mevedel-view-table--render-region beg end source window))
+         (prepared
+          (mevedel-view-table--render-region beg end source window prepared))
          (t
         (add-text-properties
          beg end
