@@ -203,15 +203,22 @@
                        (push 'member log)
                        (let ((until (time-add nil 0.03)))
                          (while (time-less-p nil until))))
-                second (mevedel--run-periodic-timer 1 busy)
-                first (mevedel--run-periodic-timer 1 busy))
+                second (mevedel--run-periodic-timer
+                        1 (lambda ()
+                            (mevedel--ui-timer-cancel second)
+                            (funcall busy)))
+                first (mevedel--run-periodic-timer
+                       1 (lambda ()
+                           (mevedel--ui-timer-cancel first)
+                           (funcall busy))))
           (timer-set-time first (time-subtract nil 2) 1)
           (timer-set-time second (time-subtract nil 2) 1)
           (mevedel--coalesced-timer-arm)
           ;; Ripe, but sorted after the host timer in this timer pass.
           (setq ordinary (run-at-time (time-subtract nil 1) nil
                                       (lambda () (push 'ordinary log))))
-          (let ((deadline (time-add nil 1)))
+          ;; Only callback ordering is measured; delivery has a watchdog.
+          (let ((deadline (time-add nil 5)))
             (while (and (< (length log) 3) (time-less-p nil deadline))
               (accept-process-output nil 0.05)))
           (should (equal '(member ordinary member) (reverse log))))
@@ -225,19 +232,22 @@
         (process (make-process :name "mevedel-coalesced-wait"
                                :command '("cat") :noquery t
                                :connection-type 'pipe))
-        (waiter-calls 0) sibling-ran waiter sibling)
+        (waiter-calls 0) (sibling-calls 0) sibling-ran waiter sibling)
     (unwind-protect
         (progn
           ;; Members run newest first; the waiter goes ahead of its sibling.
           (setq sibling (mevedel--run-periodic-timer
-                         1 (lambda () (setq sibling-ran t)))
+                         1 (lambda ()
+                             (cl-incf sibling-calls)
+                             (setq sibling-ran t)
+                             (mevedel--ui-timer-cancel sibling)))
                 waiter
                 (mevedel--run-periodic-timer
                  1 (lambda ()
                      (cl-incf waiter-calls)
                      ;; Due again during its own wait: must not re-enter.
                      (timer-set-time waiter (time-subtract nil 1) 1)
-                     (let ((deadline (time-add nil 1)))
+                     (let ((deadline (time-add nil 5)))
                        (while (and (not sibling-ran)
                                    (time-less-p nil deadline))
                          (accept-process-output process 0.01))))))
@@ -246,7 +256,8 @@
           (mevedel--coalesced-timer-tick)
           (should sibling-ran)
           (should (= 1 waiter-calls))
-          (should (time-less-p nil (timer--time sibling)))
+          (should (= 1 sibling-calls))
+          (should-not (mevedel--ui-timer-pending-p sibling))
           ;; The waiter is still due and the host timer is armed for it.
           (should (mevedel--ui-timer-pending-p mevedel--coalesced-timer))
           (should (equal (timer--time waiter)
@@ -271,7 +282,7 @@
                         1 (lambda ()
                             (cl-incf waiter-calls)
                             (timer-set-time waiter (time-subtract nil 1) 1)
-                            (let ((deadline (time-add nil 1)))
+                            (let ((deadline (time-add nil 5)))
                               (while (and (not sibling-ran)
                                           (time-less-p nil deadline))
                                 (sleep-for 0.01)))
@@ -280,7 +291,7 @@
           (timer-set-time waiter (time-subtract nil 2) 1)
           (timer-set-time sibling (time-subtract nil 1) 1)
           (mevedel--coalesced-timer-arm)
-          (let ((deadline (time-add nil 2)))
+          (let ((deadline (time-add nil 10)))
             (while (and (not finished) (time-less-p nil deadline))
               (sleep-for 0.01)))
           (should finished)
