@@ -1080,6 +1080,62 @@ user's keys.  BROKER, when non-nil, is reachable through `GIT_SSH_COMMAND'."
              "--setenv" "GIT_SSH_VARIANT" "ssh"
              "--setenv" "MEVEDEL_GIT_SSH_SOCKET" (plist-get broker :socket))))))
 
+(defconst mevedel-sandbox--runtime-parent "/run/user/"
+  "Parent of the per-user runtime directories on systemd and elogind hosts.")
+
+(defun mevedel-sandbox--runtime-arguments (workdir roots)
+  "Return Bubblewrap arguments hiding per-user runtime directories.
+A runtime directory holds sockets that act with the user's full authority
+outside confinement: the session bus (whose systemd manager starts commands
+on request), the systemd user manager, gpg-agent, keyrings, an Emacs server,
+audio servers and container APIs.  A socket on a read-only mount still
+accepts connections, so each directory is replaced by an empty private tmpfs.
+
+WORKDIR selects the target.  Its `/run/user' is masked; a local target also
+masks `XDG_RUNTIME_DIR' when that lies elsewhere.  ROOTS inside a masked
+directory are bound back writable, and the local Wayland socket named by
+`WAYLAND_DISPLAY' is bound back so graphical commands keep their display."
+  (let* ((remote (file-remote-p workdir))
+         (candidates
+          (cons mevedel-sandbox--runtime-parent
+                (when-let* (((not remote))
+                            (runtime (getenv "XDG_RUNTIME_DIR"))
+                            ((file-name-absolute-p runtime))
+                            ((file-directory-p runtime)))
+                  (list (file-name-as-directory (file-truename runtime))))))
+         (existing (cl-remove-if-not
+                    (lambda (directory)
+                      (file-directory-p (concat remote directory)))
+                    (delete-dups candidates)))
+         ;; A directory inside another mask is already hidden.
+         (masks (cl-remove-if
+                 (lambda (directory)
+                   (cl-some (lambda (other)
+                              (and (not (equal other directory))
+                                   (string-prefix-p other directory)))
+                            existing))
+                 existing))
+         (masked-p (lambda (path)
+                     (cl-some (lambda (mask) (string-prefix-p mask path))
+                              masks))))
+    (append
+     (cl-mapcan (lambda (mask) (list "--tmpfs" (directory-file-name mask)))
+                masks)
+     (cl-mapcan (lambda (root)
+                  (when (funcall masked-p (file-local-name root))
+                    (list "--bind" root root)))
+                roots)
+     (when-let* (((not remote))
+                 (display (getenv "WAYLAND_DISPLAY"))
+                 (socket (if (file-name-absolute-p display)
+                             display
+                           (when-let* ((runtime (getenv "XDG_RUNTIME_DIR")))
+                             (file-name-concat runtime display))))
+                 ((file-exists-p socket))
+                 (socket (file-truename socket))
+                 ((funcall masked-p socket)))
+       (list "--ro-bind" socket socket)))))
+
 (defun mevedel-sandbox--refused-facts (sandbox reason)
   "Return facts for a child refused by SANDBOX for REASON."
   (list :sandbox sandbox :filesystem 'unavailable :network 'unavailable
@@ -1226,6 +1282,9 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                    (cl-mapcan
                     (lambda (root) (list "--bind" root root))
                     roots)
+                   ;; After the roots, which it must hide when they contain
+                   ;; it; grants and protected masks still apply beneath it.
+                   (mevedel-sandbox--runtime-arguments canonical-workdir roots)
                    (plist-get plan :arguments)
                    ;; Local tool servers carry the owning turn's authority.
                    ;; Without a socket root no server can exist to mask.

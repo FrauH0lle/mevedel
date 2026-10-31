@@ -976,6 +976,27 @@ Git's stdio descriptors to the host's ssh and allows only `git-upload-pack` and
 starts. Teardown stops it with its ssh children. The
 [execution manual](tools/execution.md#git-over-ssh) gives the model contract.
 
+Confinement also hides per-user runtime directories, because their sockets act
+with the user's full authority outside the sandbox and a read-only mount does
+not stop a connection. `/run/user` on the execution target, and locally an
+`XDG_RUNTIME_DIR` outside it, are replaced by an empty private tmpfs. This
+hides the session D-Bus (whose systemd manager would run `systemd-run --user`
+commands on the host), the systemd user manager, gpg-agent and its ssh socket,
+the GNOME keyring and KWallet, an Emacs server, PipeWire and PulseAudio,
+accessibility, portal and podman sockets, and the X authority cookie stored
+there. Inside, the runtime directory is writable, private and discarded on
+exit. The following are bound back on top of the tmpfs: writable roots and
+explicit filesystem grants beneath it, the Git SSH broker directory, and,
+locally, the Wayland socket named by `WAYLAND_DISPLAY`, so graphical checks
+keep their display. The compositor therefore remains reachable, and its own
+protocol policy governs what a client may do. Still reachable are system
+sockets outside the runtime directory, such as the system D-Bus at
+`/run/dbus/system_bus_socket`, where polkit decides each action, and any
+path-based X11 socket under `/tmp/.X11-unix`. Abstract sockets, including
+Xwayland's, are reachable only with a network grant, because network
+isolation separates the abstract namespace. A remote target's
+`XDG_RUNTIME_DIR` outside `/run/user` is not masked.
+
 An explicitly approved write grant for a character or block device mounts
 only that device node with device access enabled. Its source is opened and
 identity-checked before mounting; the mounted node is checked again and its
