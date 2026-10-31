@@ -151,16 +151,18 @@
   (attempts 0) acknowledged-p success-p scheduled-p waiting-p)
 
 (defun mevedel-session-publication-busy-p (session)
-  "Return non-nil when SESSION owns accepted asynchronous publication work."
+  "Return non-nil when SESSION owns accepted asynchronous publication work.
+Finalization alone is excluded: an acknowledgement may stage a new artifact
+after adoption.  Dispatch and notifications separately respect finishing."
   (or (mevedel-session-publication-job session)
       (mevedel-session-publication-preparation-token session)
       (mevedel-session-publication-preparations session)))
 
 (defvar mevedel-session-publication-gate-open-functions nil
   "Abnormal hook run with SESSION when its gate opens between preparations.
-It runs before the next queued preparation starts, with no job, preparation
-token or synchronous publication in flight, so work deferred while the gate
-was held gets a turn even when producers keep the queue non-empty.  A
+It runs before the next queued preparation starts, with no job, finalization,
+preparation token or synchronous publication in flight, so deferred work gets
+a turn even when producers keep the queue non-empty.  A
 function that mutates the session queues behind the waiting preparations.
 Errors are reported and do not stop the queue.")
 
@@ -169,6 +171,7 @@ Errors are reported and do not stop the queue.")
   (let* ((thunk
           (lambda ()
             (unless (or (mevedel-session-publication-job session)
+                        (mevedel-session-publication-finishing-p session)
                         (mevedel-session-publication-preparation-token session)
                         (mevedel-session-publication-active-p session))
               (condition-case err
@@ -178,6 +181,7 @@ Errors are reported and do not stop the queue.")
                  (display-warning 'mevedel (error-message-string err) :warning))))
             ;; The hook may have started work; recheck the gate.
             (unless (or (mevedel-session-publication-job session)
+                        (mevedel-session-publication-finishing-p session)
                         (mevedel-session-publication-preparation-token session))
               (if (mevedel-session-publication-active-p session)
                   (mevedel-session-publication--schedule session)
@@ -239,6 +243,7 @@ TOKEN authorizes only the preparation currently running for this session."
       ;; A nested transport frame, or a synchronous publication that owns the
       ;; gate on this stack, cannot yield the authority a queued advance needs.
       (when (or (mevedel-transport-busy-p (mevedel-session-save-path session))
+                (mevedel-session-publication-finishing-p session)
                 (mevedel-session-publication-preparation-token session)
                 (and (mevedel-session-publication-active-p session)
                      (not (mevedel-session-publication-job session))))
@@ -321,6 +326,7 @@ until acknowledgement."
                    (mevedel-session-publication-active-p session) t)
              (mevedel-session-publication--advance-soon job)))))
     (if (or (mevedel-session-publication-busy-p session)
+            (mevedel-session-publication-finishing-p session)
             (mevedel-session-publication-active-p session))
         (progn
           (setf (mevedel-session-publication-preparations session)
@@ -358,71 +364,79 @@ ABANDONED explicitly discards recovery instead of retaining a failed checkpoint.
       (setf (mevedel-session-publication--job-acknowledged-p job) t
             (mevedel-session-publication--job-success-p job) success
             (mevedel-session-publication--job-phase job) 'done
+            (mevedel-session-publication-finishing-p session) t
             (mevedel-session-publication-job session) nil
             (mevedel-session-publication-active-p session) nil)
-      ;; The frozen work is recovery state before anyone is told it failed.
-      (when retained
-        (let ((recovery (delete-dups
-                         (append
-                          (mevedel-session-publication-uncommitted-batches session)
-                          (list retained)))))
-          (setf (mevedel-session-publication-uncommitted-batches session) nil)
-          (mevedel-session-publication--record-pending
-           session recovery (or err '(error "Session publication failed")))))
-      ;; Arbitrary producer callbacks neither inherit this transaction's
-      ;; observations nor receive its explicit preparation ownership token.
+      ;; An ACK may stage an artifact after adoption, so ordinary publication
+      ;; ownership is released.  Dispatch and arbitrary mailbox callbacks must
+      ;; still wait until finalization unwinds, including any yielding cleanup.
       (unwind-protect
-          (let ((mevedel-session-durability--transaction-clock nil)
-                (mevedel-session-durability--asserted-directories nil)
-                (mevedel-session-durability--commit-riders nil)
-                (mevedel-session-durability--final-commit nil)
-                (mevedel-session-durability-async-process-function nil)
-                (mevedel-session-recovery--mutation-cache nil))
-            (condition-case callback-error
-                (funcall (mevedel-session-publication--job-acknowledge job) success err)
-              ((error quit)
-               (display-warning
-                'mevedel (format "Publication acknowledgement failed: %s"
-                                 (error-message-string callback-error)) :warning))))
-        (condition-case cleanup
-            (if success
-                (progn
-                  (setf (mevedel-session-publication-uncommitted-batches session)
-                        (cl-set-difference
-                         (mevedel-session-publication-uncommitted-batches session)
-                         (mevedel-session-publication--job-batches job) :test #'eq))
-                  (mevedel-session-publication--delete-batches
-                   (mevedel-session-publication--job-batches job))
-                  ;; A selector may have replaced or dropped the staged batch.
-                  (when-let* ((original (mevedel-session-publication--job-original job)))
-                    (mevedel-session-publication--delete-batch original)))
-              (when (and (mevedel-session-publication--job-batch job)
-                         (not retained))
-                (mevedel-session-publication--delete-batch
-                 (mevedel-session-publication--job-batch job)))
-              ;; A pruned original is no longer part of the transaction, unless
-              ;; the retained batch lives in its directory.
-              (when-let* ((original (mevedel-session-publication--job-original job))
-                          ((not (equal (plist-get original :directory)
-                                       (plist-get retained :directory)))))
-                (mevedel-session-publication--delete-batch original)))
-          ((error quit)
-           (display-warning 'mevedel
-                            (format "Session publication cleanup failed: %s"
-                                    (error-message-string cleanup)) :warning)))
-        (condition-case cleanup
-            (mevedel-session-checkpoint-release-proofs session)
-          ((error quit)
-           (display-warning 'mevedel (error-message-string cleanup) :warning)))
-        (when (mevedel-session-publication-preparations session)
-          (mevedel-session-publication--schedule session))
-        (when (and (not (mevedel-session-publication-busy-p session))
-                   (plist-get (mevedel-session-lease session) :release-pending))
-          (condition-case cleanup
-              (mevedel-session-durability-lease-release
-               (mevedel-session-save-path session) session)
-            ((error quit)
-             (display-warning 'mevedel (error-message-string cleanup) :warning))))))))
+          (progn
+            ;; The frozen work is recovery state before anyone is told it failed.
+            (when retained
+              (let ((recovery (delete-dups
+                               (append
+                                (mevedel-session-publication-uncommitted-batches session)
+                                (list retained)))))
+                (setf (mevedel-session-publication-uncommitted-batches session) nil)
+                (mevedel-session-publication--record-pending
+                 session recovery (or err '(error "Session publication failed")))))
+            ;; Arbitrary producer callbacks inherit no transaction observations
+            ;; or explicit preparation ownership token.
+            (unwind-protect
+                (let ((mevedel-session-durability--transaction-clock nil)
+                      (mevedel-session-durability--asserted-directories nil)
+                      (mevedel-session-durability--commit-riders nil)
+                      (mevedel-session-durability--final-commit nil)
+                      (mevedel-session-durability-async-process-function nil)
+                      (mevedel-session-recovery--mutation-cache nil))
+                  (condition-case callback-error
+                      (funcall (mevedel-session-publication--job-acknowledge job) success err)
+                    ((error quit)
+                     (display-warning
+                      'mevedel (format "Publication acknowledgement failed: %s"
+                                       (error-message-string callback-error)) :warning))))
+              (condition-case cleanup
+                  (if success
+                      (progn
+                        (setf (mevedel-session-publication-uncommitted-batches session)
+                              (cl-set-difference
+                               (mevedel-session-publication-uncommitted-batches session)
+                               (mevedel-session-publication--job-batches job) :test #'eq))
+                        (mevedel-session-publication--delete-batches
+                         (mevedel-session-publication--job-batches job))
+                        ;; A selector may have replaced or dropped the staged batch.
+                        (when-let* ((original (mevedel-session-publication--job-original job)))
+                          (mevedel-session-publication--delete-batch original)))
+                    (when (and (mevedel-session-publication--job-batch job)
+                               (not retained))
+                      (mevedel-session-publication--delete-batch
+                       (mevedel-session-publication--job-batch job)))
+                    ;; A pruned original is no longer part of the transaction,
+                    ;; unless the retained batch lives in its directory.
+                    (when-let* ((original (mevedel-session-publication--job-original job))
+                                ((not (equal (plist-get original :directory)
+                                             (plist-get retained :directory)))))
+                      (mevedel-session-publication--delete-batch original)))
+                ((error quit)
+                 (display-warning 'mevedel
+                                  (format "Session publication cleanup failed: %s"
+                                          (error-message-string cleanup)) :warning)))
+              (condition-case cleanup
+                  (mevedel-session-checkpoint-release-proofs session)
+                ((error quit)
+                 (display-warning 'mevedel (error-message-string cleanup) :warning)))
+              (when (and (not (mevedel-session-publication-busy-p session))
+                         (plist-get (mevedel-session-lease session) :release-pending))
+                (condition-case cleanup
+                    (mevedel-session-durability-lease-release
+                     (mevedel-session-save-path session) session)
+                  ((error quit)
+                   (display-warning 'mevedel (error-message-string cleanup) :warning))))))
+        (setf (mevedel-session-publication-finishing-p session) nil)
+        ;; Offer notifications before admitting the successor, not inside this
+        ;; finalizer.  Also wake a last job's offers without waiting for backoff.
+        (mevedel-session-publication--schedule session)))))
 
 (defun mevedel-session-publication--job-failed (job err)
   "Roll JOB back after a definitive pre-head failure ERR.

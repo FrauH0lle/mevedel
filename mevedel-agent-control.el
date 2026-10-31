@@ -712,11 +712,12 @@ Return the caller path when suspended, and nil after an immediate release."
 
 (defun mevedel-agent-control--notification-blocked-p (session)
   "Return non-nil while SESSION cannot safely run arbitrary waiter callbacks.
-Only work in flight blocks: a running job or preparation, an active
+Only work in flight blocks: a running or finishing job or preparation, an active
 synchronous publication, or a busy transport.  Queued preparations do not:
 a callback's own mutation queues behind them, and sustained producers would
 otherwise keep the queue non-empty and starve every wake."
   (or (mevedel-session-publication-job session)
+      (mevedel-session-publication-finishing-p session)
       (mevedel-session-publication-preparation-token session)
       (mevedel-session-publication-active-p session)
       (mevedel-transport-busy-p (mevedel-session-save-path session))))

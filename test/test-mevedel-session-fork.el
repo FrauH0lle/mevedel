@@ -37,7 +37,7 @@
 
   :doc "covers every session slot and isolates both clone policies"
   (progn
-    (should (= 101
+    (should (= 102
                (length
                 (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-fork--assert-clone-slot-completeness))
@@ -115,6 +115,7 @@
            :publication-job 'publication-job
            :publication-preparations '(preparation)
            :publication-preparation-token 'preparation-token
+           :publication-finishing-p t
            :publication-stopping-p t
            :mail-batch '(("/root" nil monitor ignore))
            :mail-notifications '((notification . ignore))
@@ -192,6 +193,7 @@
                      (mevedel-session-publication-job candidate)
                      (mevedel-session-publication-preparations candidate)
                      (mevedel-session-publication-preparation-token candidate)
+                     (mevedel-session-publication-finishing-p candidate)
                      (mevedel-session-publication-stopping-p candidate)
                      (mevedel-session-mail-batch candidate)
                      (mevedel-session-mail-notifications candidate)

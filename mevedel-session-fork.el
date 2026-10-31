@@ -267,7 +267,8 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     hook-context-pending execution-state audit-session pending-publication
     publication publication-queue publication-uncommitted-batches
     checkpoint-state publication-active-p publication-job publication-preparations
-    publication-preparation-token publication-stopping-p mail-batch mail-notifications
+    publication-preparation-token publication-finishing-p publication-stopping-p
+    mail-batch mail-notifications
     mail-notification-timer mail-notification-delay control-transfer control-transfer-drains root-buffer
     lease
     lease-renewal-timer save-path session-id created-at updated-at
@@ -395,6 +396,7 @@ The identity and timestamp keywords describe the new materialized child."
            :publication-job nil
            :publication-preparations nil
            :publication-preparation-token nil
+           :publication-finishing-p nil
            :publication-stopping-p nil
            :mail-batch nil
            :mail-notifications nil

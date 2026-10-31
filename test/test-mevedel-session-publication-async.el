@@ -9,6 +9,8 @@
 ;;; Code:
 
 (require 'mevedel-agent-control)
+(require 'mevedel-session-durability)
+(require 'mevedel-session-publication)
 (require 'mevedel-transport)
 (require 'mevedel-session-publication-test-helpers
          (file-name-concat (file-name-directory
@@ -1383,6 +1385,111 @@ QUEUED adds a second completion while the first job is unresolved."
          (should-not (mevedel-session-mail-notification-timer session))
          (should-not (mevedel-session-publication-busy-p session))
          (should (= 3 (length (test-mevedel-publication-async--restored-mail session)))))))))
+
+(mevedel-deftest mevedel-session-publication--job-complete/finishing (:quiet t)
+  ,test
+  (test)
+  :doc "yielding acknowledgement and cleanup keep wakes and successors outside finalization"
+  (dolist (phase '(ack cleanup))
+    (dolist (cancel '(nil t))
+      (test-mevedel-publication-async--fixture
+       (lambda (session _buffer)
+         (let ((complete (symbol-function 'mevedel-session-publication--job-complete))
+               (deliver (symbol-function 'mevedel-agent-control--deliver-mail))
+               (delete (symbol-function 'mevedel-session-publication--delete-batches))
+               finishing injected yielded observations acknowledgements premature-gates diagnostics)
+           (let ((mevedel-session-publication-gate-open-functions
+                  (cons (lambda (_session) (when finishing (push t premature-gates)))
+                        mevedel-session-publication-gate-open-functions)))
+             (cl-labels
+                 ((yield-once ()
+                    (when (and (not injected)
+                               (mevedel-session-publication-preparations session))
+                      (setq injected t)
+                      ;; Force both dispatch paths due now, then wait until a
+                      ;; later timer ran.  No wall-clock delay is the oracle.
+                      (cancel-timer (mevedel-session-mail-notification-timer session))
+                      (setf (mevedel-session-mail-notification-timer session)
+                            (run-at-time 0 nil #'mevedel-agent-control--flush-notifications session))
+                      (mevedel-session-publication--schedule session)
+                      (run-at-time 0 nil (lambda () (setq yielded t)))
+                      (test-mevedel-publication-async--wait (lambda () yielded))
+                      (when cancel (signal 'quit nil)))))
+               (mevedel-test--with-captured-diagnostics diagnostics
+                 (cl-letf (((symbol-function 'mevedel-session-publication--job-complete)
+                            (lambda (&rest args)
+                              (let ((previous finishing))
+                                (setq finishing t)
+                                (unwind-protect (apply complete args)
+                                  (setq finishing previous)))))
+                           ((symbol-function 'mevedel-agent-control--deliver-mail)
+                            (lambda (&rest args)
+                              (prog1 (apply deliver args)
+                                (when (eq phase 'ack) (yield-once)))))
+                           ((symbol-function 'mevedel-session-publication--delete-batches)
+                            (lambda (&rest args)
+                              (when (eq phase 'cleanup) (yield-once))
+                              (apply delete args))))
+                   (mevedel-agent-control-wait
+                    session
+                    (lambda (reason)
+                      (push (list reason finishing
+                                  (length (mevedel-session-publication-preparations session)))
+                            observations)) 10000)
+                   (dolist (id '("finish-first" "finish-second"))
+                     (test-mevedel-publication-async--send
+                      session id (lambda (ok err) (push (list ok err) acknowledgements))))
+                   (test-mevedel-publication-async--wait
+                    (lambda () (and (= 2 (length acknowledgements)) observations)))))))
+           (should injected)
+           (should yielded)
+           (should-not premature-gates)
+           (should (equal '((mailbox nil 1)) observations))
+           (should (equal '((t nil) (t nil)) acknowledgements))
+           (should (= 2 (length (test-mevedel-publication-async--restored-mail session))))
+           (should-not (mevedel-session-publication-finishing-p session))
+           (should-not (mevedel-session-publication-busy-p session))
+           (if cancel
+               (should (string-match-p
+                        (if (eq phase 'ack)
+                            "Publication acknowledgement failed: Quit"
+                          "Session publication cleanup failed: Quit") diagnostics))
+             (should (equal "" diagnostics))))))))
+
+  :doc "an acknowledgement's first successor queues until finalization returns"
+  (test-mevedel-publication-async--fixture
+   (lambda (session _buffer)
+     (let ((complete (symbol-function 'mevedel-session-publication--job-complete))
+           (admit (symbol-function 'mevedel-session-durability-admit-async))
+           finishing premature-admissions queued yielded acknowledgements)
+       (cl-letf (((symbol-function 'mevedel-session-publication--job-complete)
+                  (lambda (&rest args)
+                    (let ((previous finishing))
+                      (setq finishing t)
+                      (unwind-protect (apply complete args)
+                        (setq finishing previous)))))
+                 ((symbol-function 'mevedel-session-durability-admit-async)
+                  (lambda (&rest args)
+                    (when finishing (push t premature-admissions))
+                    (apply admit args))))
+         (test-mevedel-publication-async--send
+          session "ack-parent"
+          (lambda (ok err)
+            (push (list ok err) acknowledgements)
+            (test-mevedel-publication-async--send
+             session "ack-child" (lambda (success error) (push (list success error) acknowledgements)))
+            (setq queued (and (not (mevedel-session-publication-job session))
+                              (= 1 (length (mevedel-session-publication-preparations session)))))
+            (run-at-time 0 nil (lambda () (setq yielded t)))
+            (test-mevedel-publication-async--wait (lambda () yielded))))
+         (test-mevedel-publication-async--wait (lambda () (= 2 (length acknowledgements)))))
+       (should queued)
+       (should yielded)
+       (should-not premature-admissions)
+       (should (equal '((t nil) (t nil)) acknowledgements))
+       (should-not (mevedel-session-publication-finishing-p session))
+       (should-not (mevedel-session-publication-busy-p session))
+       (should (= 2 (length (test-mevedel-publication-async--restored-mail session))))))))
 
 (mevedel-deftest mevedel-agent-control--notification-blocked-p/async (:quiet t)
   ,test

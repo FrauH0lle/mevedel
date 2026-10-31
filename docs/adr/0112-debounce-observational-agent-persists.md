@@ -71,6 +71,12 @@ queued preparations, before the next one starts, and from a timer that starts
 at 50 ms and doubles up to 500 ms while work stays in flight. Both run only
 while the root buffer is live and the session is not stopping. Every callback starts
 with fresh transaction observations, including an immediate notification.
+Job finalization retains a separate dispatch/notification exclusion through
+acknowledgement and cleanup, including any event-loop yield. Ordinary publication
+ownership is already released so an acknowledgement may stage a new artifact;
+that does not open the gate to a successor or an arbitrary mailbox callback.
+After finalization returns, the next scheduled gate opening offers notifications
+ahead of the successor, without waiting for the entire preparation queue to empty.
 Temporary stopping retains actual suppressed offers without a timer, so a
 vetoed close re-arms the same FIFO once rather than inventing another wake.
 An idle close schedules nothing. A close that proceeds cancels the timer and
@@ -229,6 +235,13 @@ transactional journal.
 
 All revisions belong to ADR 0112:
 
+- **2026-10-31 finishing ownership correction:** review reproduced a mailbox
+  wake during the first job's cleanup with a successor still queued. Clearing
+  the job and active-publication slots before acknowledgement did not mean the
+  finishing save had unwound. A separate transient finishing exclusion now
+  blocks notification timers and preparation dispatch until cleanup returns;
+  callback/cleanup cancellation releases it too. This retains the gate-open
+  starvation fix rather than restoring queue-wide notification blocking.
 - **2026-10-31 fallback mailbox coalescing:** file-backed and remote sessions
   previously rewrote the entire sidecar for every background Monitor batch.
   They now collect arrivals before mutation in the existing preparation gate

@@ -1491,7 +1491,12 @@ The warm-local mailbox append is one session-owned publication job that holds
 `publication-active-p` from acceptance to acknowledgement, so renewal timers
 stay quiet and cooperative transfer stays blocked. Its phases are admission,
 freeze, reservation, generation, head commit, adoption, acknowledgement and
-cleanup. Each target phase is a pinned control program launched without
+cleanup. Finalization keeps a separate dispatch/notification exclusion until
+acknowledgement and cleanup return, even though authoritative adoption has
+already released ordinary publication ownership. This lets an acknowledgement
+stage an artifact without admitting a successor or running a mailbox wake
+inside a yielding finalizer. The next gate-open opportunity offers notifications
+before starting the successor. Each target phase is a pinned control program launched without
 waiting; its result is stored by the sentinel and the next phase is scheduled
 from a timer through the idle transport, never from the sentinel. The
 transaction's clock, asserted-directory and recovery cells are job-owned and
