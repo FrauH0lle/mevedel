@@ -941,6 +941,14 @@ serializes that program against other users of the same lock. Journal and memory
 mutation use this separate boundary. Each operation reports `ok`, `conflict`,
 `absent`, `mismatch`, `failed` or `skipped`, so a caller reproduces the
 per-operation nil-versus-signal contract of the single-operation wrappers.
+A synchronous remote program's command line crosses TRAMP's pty, where the
+shell-quoted program script alone is about 17 KB. When the target has `gzip`,
+the script travels gzip-compressed and base64-wrapped, about 4 KB, behind a
+short bootstrap that decodes it and runs it in place, failing the whole
+program if decoding fails. Measured on a local mock target, this cut a
+one-operation program from about 37 ms to 12 ms. A target without `gzip`,
+and every local program, receives the script inline; pipe carriers already
+send it on stdin.
 For two to 32 independent unbounded reads, the same control program can carry
 regular files together in a GNU tar stream. It keeps every proved parent
 descriptor open, refuses symlink leaves, and disables inherited `TAR_OPTIONS`.
