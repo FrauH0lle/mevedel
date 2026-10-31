@@ -11,6 +11,10 @@
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-journal-cleanup)
 (require 'mevedel-journal-gc)
+(require 'mevedel-journal-expiry-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-journal-expiry-test-support"))
 (require 'mevedel-journal-store)
 (require 'mevedel-memory-cycle)
 (require 'mevedel-memory-decision)
@@ -38,9 +42,9 @@
                   (delete-directory root t)))
   (cl-labels
       ((reserve ()
-         ;; Prepare the metadata before the intentionally short-lived claim.
+         ;; Prepare metadata while the authentic reservation is still live.
          (let ((cohort (mevedel-memory-notes-cohort workspace nil)))
-           (setq reserved (mevedel-journal-claim-acquire key 3))
+           (setq reserved (mevedel-journal-claim-acquire key 120))
            (should reserved)
            (mevedel-memory-cycle-admit workspace reserved (lambda () cohort))
            (should (equal reserved (mevedel-memory-cycle-inflight-claim workspace)))
@@ -48,11 +52,13 @@
                         (file-name-concat (mevedel-memory-store--directory workspace (plist-get reserved :owner))
                                           "prepared.el")))
            (should (mevedel-journal-claim-settle reserved 'cancelled ""))
-           (setq unreferenced (mevedel-journal-claim-acquire key 3))
+           (setq unreferenced (mevedel-journal-claim-acquire key 120))
            (should unreferenced)
            (should (mevedel-journal-claim-settle unreferenced 'cancelled ""))
-           ;; Local fixture clocks and the target native clock share the host.
-           (sleep-for (max 0 (- (+ (plist-get unreferenced :expires-at) 0.05) (float-time))))))
+           ;; The same cleanup without clock advancement must retain both.
+           (mevedel-journal-cleanup-expired workspace t)
+           (should (mevedel-journal-claim-outcome reserved))
+           (should (mevedel-journal-claim-outcome unreferenced))))
        (collect ()
          (mevedel-journal-cleanup-expired workspace t)
          ;; This control proves that cleanup reached actual expired-claim GC.
@@ -94,21 +100,27 @@
   :doc "a pre-preparation reservation survives ordinary GC, then releases its sole proof"
   (progn
     (reserve)
-    (collect)
+    (mevedel-test-journal-with-expired-claims (list reserved unreferenced)
+      (collect))
     (should (eq 'cancelled (plist-get (mevedel-journal-claim-outcome reserved) :status)))
     (let ((cycle (recover)))
       (should (eq 'paused (plist-get cycle :status)))
       (should (eq 'cancelled (plist-get cycle :error)))
       (should-not (plist-get cycle :inflight)))
     (should (mevedel-journal-claim-settle successor 'completed ""))
-    (mevedel-journal-cleanup-expired workspace t)
+    (mevedel-test-journal-with-expired-claims (list reserved)
+      (mevedel-journal-cleanup-expired workspace t))
     (should-not (mevedel-journal-claim-outcome reserved))
     (should (equal "A temporary finding.\n" (mevedel-session-control-fs-read-file path))))
   :doc "without the cycle reference, GC destroys the predecessor and recovery refuses it"
   (progn
     (reserve)
-    (cl-letf (((symbol-function 'mevedel-memory-cycle-inflight-claim) (lambda (_) nil)))
-      (collect))
+    (let ((entered nil))
+      (mevedel-test-journal-with-expired-claims (list reserved unreferenced)
+        (cl-letf (((symbol-function 'mevedel-memory-cycle-inflight-claim)
+                   (lambda (_) (setq entered t) nil)))
+          (collect)))
+      (should entered))
     (should-not (mevedel-journal-claim-outcome reserved))
     (let ((failure (should-error (recover))))
       (should (string-match-p "predecessor is not fenced" (error-message-string failure))))
