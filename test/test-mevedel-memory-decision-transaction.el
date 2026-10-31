@@ -102,6 +102,83 @@
             (should (mevedel-journal-claim-owned-p claim)))
         (mevedel-journal-claim-settle claim 'cancelled "")))))
 
+(mevedel-deftest mevedel-memory-decision-apply/persistence ()
+  ,test
+  (test)
+  :doc "intent and marker batches refuse directory failures and exclusive-create collisions without deleting notes"
+  (dolist (fault '(directory collision))
+    (dolist (stage '(intent marker))
+      (mevedel-test-decision-transaction
+        (let* ((program (symbol-function 'mevedel-session-control-fs--run-program))
+               (proposal (car proposals))
+               (note (plist-get (cdr (car (plist-get proposal :before))) :path))
+               injected blocker error-text)
+          (cl-letf (((symbol-function 'mevedel-session-control-fs--run-program)
+                     (lambda (operations &rest args)
+                       (when-let* ((create (seq-find
+                                           (lambda (op)
+                                             (and (eq (plist-get op :op) 'create)
+                                                  (string-match-p
+                                                   (if (eq stage 'intent) "/writes/[^/]+\\.el\\'" "/pending/[^/]+\\.pin\\'")
+                                                   (plist-get op :path)))) operations))
+                                   ((not injected)))
+                         (setq injected t)
+                         ;; Exercise the real carrier's failure, not a stubbed
+                         ;; exception that could miss the combined operations.
+                         (should (= 2 (length operations)))
+                         (should (eq 'make-directory (plist-get (car operations) :op)))
+                         (setq blocker (if (eq fault 'directory)
+                                           (directory-file-name (file-name-directory (plist-get create :path)))
+                                         (plist-get create :path)))
+                         (if (eq fault 'directory)
+                             (when (file-directory-p blocker) (delete-directory blocker))
+                           (make-directory (file-name-directory blocker) t))
+                         (write-region "Foreign state" nil blocker nil 'silent))
+                       (apply program operations args))))
+            (setq error-text
+                  (error-message-string
+                   (should-error (mevedel-memory-decision-apply workspace pass (plist-get proposal :id))))))
+          (should injected)
+          (if (eq fault 'collision)
+            (should (equal (if (eq stage 'intent) "Memory write intent already exists"
+                             "Memory root marker already exists") error-text))
+            (should (string-match-p "Portable control operation failed" error-text))
+            (should (string-match-p (regexp-quote blocker) error-text)))
+          (should (equal "Foreign state" (mevedel-session-control-fs-read-file blocker)))
+          (should (file-exists-p note))
+          (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))))))
+  :doc "changed intent and marker bytes after persistence are refused before forward deletion"
+  (dolist (stage '(intent marker))
+    (mevedel-test-decision-transaction
+      (let* ((program (symbol-function 'mevedel-session-control-fs--run-program))
+             (proposal (car proposals))
+             (note (plist-get (cdr (car (plist-get proposal :before))) :path))
+             injected changed error-text)
+        (cl-letf (((symbol-function 'mevedel-session-control-fs--run-program)
+                   (lambda (operations &rest args)
+                     (prog1 (apply program operations args)
+                       (when-let* ((create (seq-find
+                                           (lambda (op)
+                                             (and (eq (plist-get op :op) 'create)
+                                                  (string-match-p
+                                                   (if (eq stage 'intent) "/writes/[^/]+\\.el\\'" "/pending/[^/]+\\.pin\\'")
+                                                   (plist-get op :path)))) operations))
+                                   ((not injected)))
+                         (setq injected t changed (plist-get create :path))
+                         (should (= 2 (length operations)))
+                         (write-region "\n" nil changed t 'silent))))))
+          (setq error-text
+                (error-message-string
+                 (should-error (mevedel-memory-decision-apply workspace pass (plist-get proposal :id))))))
+        (should injected)
+        (if (eq stage 'intent)
+            (should (equal "Memory write intent changed" error-text))
+          (should (string-match-p "Portable control operation failed" error-text))
+          (should (string-match-p (regexp-quote changed) error-text)))
+        (should (string-suffix-p "\n" (mevedel-session-control-fs-read-file changed)))
+        (should (file-exists-p note))
+        (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))))))
+
 (mevedel-deftest mevedel-memory-decision-inspect/transaction ()
   ,test
   (test)

@@ -277,7 +277,7 @@ ACCEPTED must be authenticated in the caller's current owned phase."
          (id (plist-get claim :owner))
          (data (list :id id :claim (mevedel-journal-claim--record claim) :target-claim (mevedel-journal-claim--record target)
                      :pass (plist-get (plist-get accepted :prepared) :id) :proposal (plist-get proposal :id)
-                     :source-hash (plist-get (mevedel-journal-claim-outcome (plist-get (plist-get accepted :prepared) :claim)) :payload)
+                     :source-hash (plist-get accepted :hash)
                      :changes changes :before before :after (mevedel-memory-write--after before changes) :reverse-of reverse-of))
          (text (mevedel-memory-store--print data))
          (hash (secure-hash 'sha256 text))
@@ -292,10 +292,20 @@ ACCEPTED must be authenticated in the caller's current owned phase."
     (mevedel-tool-patch--assert-buffers-unmodified changes)
     (mevedel-memory-store--assert-owned claim)
     (mevedel-memory-store--assert-owned target)
-    (mevedel-session-control-fs-make-directory (file-name-directory path) t)
-    (unless (mevedel-session-control-fs-create-file path text) (error "Memory write intent already exists"))
-    (mevedel-session-control-fs-make-directory (file-name-directory pin) t)
-    (unless (mevedel-session-control-fs-create-file pin hash) (error "Memory root marker already exists"))
+    ;; The owned claim directories already establish each parent.  Keep the
+    ;; workspace intent and original-target marker in separate programs: they
+    ;; may live on different hosts, and the intent must precede its marker.
+    (dolist (record (list (list path text "Memory write intent already exists")
+                         (list pin hash "Memory root marker already exists")))
+      (let* ((results (mevedel-session-control-fs-run-program
+                       (list (list :op 'make-directory :path (file-name-directory (car record)) :optional t)
+                             (list :op 'create :path (car record) :content (cadr record)))))
+             (directory (car results))
+             (created (cadr results)))
+        (unless (memq (plist-get directory :status) '(ok conflict))
+          (mevedel-session-control-fs-program-value directory))
+        (when (eq (plist-get created :status) 'conflict) (error "%s" (caddr record)))
+        (mevedel-session-control-fs-program-value created)))
     ;; These are the exact bytes just created under both owned claims, bound
     ;; to the bundle authenticated in this owned phase.  Running reverifies them.
     intent))
