@@ -2113,6 +2113,9 @@ CAPTURE, when non-nil, is called with the stub's arguments."
   (should (equal "/run" (mevedel-collapse-leading-slashes "///run")))
   (should (equal "/a//b" (mevedel-collapse-leading-slashes "/a//b")))
   (should (equal "/ssh:host:/run/user" (mevedel-collapse-leading-slashes "/ssh:host://run/user")))
+  (should (equal "/-::/run" (mevedel-collapse-leading-slashes "/-::/run")))
+  (should (equal "/-::/run/user/1000" (mevedel-collapse-leading-slashes "/-:://run/user/1000")))
+  (should (equal "/ssh::/run/user" (mevedel-collapse-leading-slashes "/ssh:://run/user")))
   (should (equal "/" (mevedel-expand-file-name "//")))
   (should (equal "/home/x" (mevedel-expand-file-name "//home/x"))))
 

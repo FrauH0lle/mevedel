@@ -157,10 +157,11 @@ path policy must compare one spelling, or `//run/user' escapes a check
 written for `/run/user'.  A remote PATH keeps its method prefix."
   (if (not (stringp path))
       path
-    (let ((prefix (or (file-remote-p path) "")))
-      (concat prefix
-              (replace-regexp-in-string
-               "\\`//+" "/" (substring path (length prefix)) t t)))))
+    ;; Split the authored spelling: `file-remote-p' returns the expanded
+    ;; prefix, whose length differs for shorthand such as `/-::'.
+    (let* ((local (file-local-name path))
+           (prefix (substring path 0 (- (length path) (length local)))))
+      (concat prefix (replace-regexp-in-string "\\`//+" "/" local t t)))))
 
 (defun mevedel-expand-file-name (name &optional directory)
   "Return NAME expanded in DIRECTORY with a single leading slash.
