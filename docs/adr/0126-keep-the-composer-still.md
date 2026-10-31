@@ -7,7 +7,8 @@ Status: accepted
 The view keeps the user's active surface at its screen position. Zone reconciliation
 and its enclosing full-render transaction
 choose one viewport anchor per window: point inside a surviving visited
-interaction card takes priority; otherwise a previously visible composer keeps
+interaction card or status row (background work, tasks, notices) takes
+priority; otherwise a previously visible composer keeps
 its position only when that window's caret is in the composer. A history reader
 keeps its reading position even if the composer is still visible. Logical
 positions are restored before applying
@@ -30,7 +31,7 @@ and its character tail. After logical restoration, they apply this policy:
 
 | Window context before mutation | Viewport policy | Discriminating case |
 | --- | --- | --- |
-| Point visits a surviving interaction card | Retain the visited row, then fill only newly created blank pixels | Shrinking a visited card below point must not leave a newly empty viewport |
+| Point visits a surviving interaction card or status row | Retain the visited row, then fill only newly created blank pixels | Shrinking a visited card below point must not leave a newly empty viewport; collapsing a background row must not move a mid-window composer to the last page |
 | Caret in visible composer, saved logical start survives | Retain the composer position and pre-existing blank space, except when growth overflows the window | Shorter status text must not erase intentional blank space; oversized incoming growth fills the last page |
 | Saved logical start removed or truncated | Fill the last page, bypassing the character-tail guard | Ask submission can expose longer history lines and increase the tail despite losing rows |
 | Caret in transcript history, saved logical start survives | Retain the reading viewport through growth and shrinkage below it | A focus click into history must not move it when deferred rendering catches up |
@@ -215,6 +216,17 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Status rows are visits too (2026-10-31).** Collapsing an expanded
+  background row while the composer sat mid-window moved the composer to the
+  bottom (graphical reproduction: composer at body pixel 400 moved to 600).
+  Point on a status row was neither a composer, history-reader nor visited-card
+  anchor, so the shrinking character tail clamped the window to its last page.
+  Status rows are rows a user visits deliberately, like interaction cards, so
+  they now take the visited-row policy: the row keeps its screen position and
+  only newly created blank space is filled, which returns the composer to its
+  row. A full redraw under a visited `[Manage]` row no longer moves that row.
+  Only windows whose point is in a managed row pay for the row measurement.
 
 - **Size round trips retain their blank-space baseline (2026-10-26).** A live
   focus trace showed focus returning to one frame repeatedly invoking window

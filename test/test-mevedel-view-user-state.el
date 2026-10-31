@@ -407,8 +407,7 @@ REGION promises that THUNK replaces only that text."
   (let ((last-nonmenu-event nil))
     (call-interactively (key-binding (kbd "RET")))))
 
-(mevedel-deftest mevedel-view-user-state/collapse-background-row
-    (:expected-result :failed)
+(mevedel-deftest mevedel-view-user-state/collapse-background-row ()
   (progn
     (skip-unless (display-graphic-p))
     (mevedel-view-user-state-test--with-view
@@ -436,6 +435,38 @@ REGION promises that THUNK replaces only that text."
   nil)
 
 (defun mevedel-view-user-state-test--wheel (direction)
+  "Scroll the selected window one notch in DIRECTION through the command loop."
+  (mevedel-view-user-state-test--deliver-wheel direction))
+
+(mevedel-deftest mevedel-view-user-state/status-visit ()
+  (mevedel-view-user-state-test--with-view
+    (mevedel-view-test--insert-composer-draft
+     mevedel-view-user-state-test--draft 4)
+    (goto-char (point-min))
+    (search-forward "[Manage]")
+    (backward-char (length "[Manage]"))
+    (unless noninteractive (redisplay t))
+    (let ((y (mevedel-view--position-screen-y (point) (selected-window))))
+      (should y)
+      ,action
+      (unless noninteractive (redisplay t))
+      (should (looking-at-p (regexp-quote "[Manage]")))
+      (should (equal y (mevedel-view--position-screen-y (point) (selected-window))))
+      (should (equal mevedel-view-user-state-test--draft (mevedel-view--input-text)))))
+  (action)
+  :doc "a background row arriving above a visited [Manage] row keeps that row still"
+  (progn
+    (setq agents (list (list :path "/root/arriving" :status 'running
+                             :started-at 990.0)))
+    (mevedel-view--render-status)
+    ;; A visited panel keeps its rows and only counts new work.
+    (should (string-search "1 agent" (buffer-string))))
+  :doc "a streamed full rerender keeps a visited [Manage] row still"
+  (progn
+    (mevedel-view-user-state-test--add-chunk data-buf "Arrived meanwhile.\n")
+    (mevedel-view--full-rerender)))
+
+(defun mevedel-view-user-state-test--deliver-wheel (direction)
   "Scroll the selected window one notch in DIRECTION through the command loop."
   (let* ((window (selected-window))
          (event (list direction (posn-at-point (window-start window) window)))

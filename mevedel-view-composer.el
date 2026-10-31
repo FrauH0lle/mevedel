@@ -537,6 +537,7 @@
                   (anchor &optional strict))
 (declare-function mevedel-view-zone-position-anchor "mevedel-view-zone"
                   (position &optional window))
+(declare-function mevedel-view-zone-visit-anchor "mevedel-view-zone" (position))
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-fork-preflight
@@ -1744,10 +1745,7 @@ found without scanning the rest of the buffer."
                     (with-current-buffer mevedel-view--pww-current-buffer
 		      (let* ((wp (window-point w))
                              (ws (window-start w))
-                             (visit (and (eq (get-text-property
-                                              wp 'mevedel-view-zone-namespace)
-                                             'interaction)
-                                         (mevedel-view-zone-position-anchor wp)))
+                             (visit (mevedel-view-zone-visit-anchor wp))
                              (visit-y (and visit (mevedel-view--position-screen-y wp w))))
                         (list w
 			      wp
@@ -1925,7 +1923,8 @@ what the user sees and edits:
 - every displaying window's point and viewport, under the composer
   policy: a window editing the visible composer keeps its screen row, a
   history reader keeps its reading position, a window visiting an
-  interaction card keeps that row, and a lost start fills the last page.
+  interaction card or status row keeps that row, and a lost start fills
+  the last page.
 
 REGION, a cons (START . END), promises that THUNK replaces only that text.
 Anchors inside it are then resolved locally instead of scanning the
