@@ -102,6 +102,12 @@ Resolve a relative Wayland socket before replacing XDG_RUNTIME_DIR."
                (created nil)
                (status 0))
     (setq command-line-args-left nil)
+    ;; SIGTERM/SIGHUP end batch Emacs through `kill-emacs', which runs this
+    ;; hook but skips the `unwind-protect' below.
+    (add-hook 'kill-emacs-hook
+              (lambda ()
+                (when (and process (process-live-p process)) (delete-process process))
+                (when (file-exists-p temporary) (delete-directory temporary t))))
     (unwind-protect
         (condition-case err
             (progn

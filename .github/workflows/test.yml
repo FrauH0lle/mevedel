@@ -102,6 +102,7 @@ jobs:
         python3 test/test_run_tests.py
         python3 -m unittest test/test_check.py
         python3 -m unittest test/test_check_standards.py
+        python3 -m unittest test/test_graphical_check_private_kwin.py
 
     - name: Check execution spool worker
       run: python3 -m unittest test/test_execution_spool.py

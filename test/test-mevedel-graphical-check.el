@@ -110,6 +110,56 @@
               (should-not (process-live-p process)))
           (when (process-live-p process) (delete-process process)))))))
 
+(mevedel-deftest mevedel-graphical-check-run
+  (:doc "removes its child and private state when the batch parent gets SIGTERM")
+  (let* ((root (make-temp-file "graphical-sigterm-" t))
+         (tmp (file-name-concat root "tmp"))
+         (bin (file-name-concat root "bin"))
+         (pid-file (file-name-concat root "child.pid"))
+         (process-environment (copy-sequence process-environment))
+         parent child)
+    (unwind-protect
+        (progn
+          (make-directory tmp)
+          (make-directory bin)
+          ;; Stand-in for the graphical child: record its PID, then hang.
+          (with-temp-file (file-name-concat bin "emacs")
+            (insert (format "#!/bin/sh\necho $$ > %s\nexec sleep 300\n"
+                            (shell-quote-argument pid-file))))
+          (set-file-modes (file-name-concat bin "emacs") #o755)
+          (setenv "TMPDIR" tmp)
+          (setenv "DISPLAY" ":graphical-sigterm-test")
+          (setenv "XAUTHORITY" "/dev/null")
+          (setenv "WAYLAND_DISPLAY" nil)
+          (setq parent
+                (make-process
+                 :name "graphical-sigterm-test" :noquery t :buffer nil
+                 :connection-type 'pipe :sentinel #'ignore
+                 :command (list (expand-file-name invocation-name invocation-directory)
+                                "-Q" "--batch" "-l"
+                                (file-name-concat mevedel-graphical-check--root
+                                                  "test" "graphical-check.el")
+                                "--eval" (format "(setq invocation-directory %S)"
+                                                 (file-name-as-directory bin))
+                                "--funcall" "mevedel-graphical-check-run" "--"
+                                "--output" (file-name-concat root "out")
+                                "--timeout" "60")))
+          (mevedel-test--await 20 "stand-in graphical child"
+            (and (file-exists-p pid-file)
+                 (setq child (with-temp-buffer
+                               (insert-file-contents pid-file)
+                               (string-to-number (buffer-string))))
+                 (> child 0)))
+          (should (directory-files tmp nil "\\`mevedel-graphical-"))
+          (signal-process parent 'SIGTERM)
+          (mevedel-test--await 20 "batch parent exit" (not (process-live-p parent)))
+          (mevedel-test--await 5 "stand-in child exit"
+            (not (process-attributes child)))
+          (should-not (directory-files tmp nil "\\`mevedel-graphical-")))
+      (when (and parent (process-live-p parent)) (delete-process parent))
+      (when (and child (process-attributes child)) (signal-process child 'SIGKILL))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-graphical-check--preflight
   (:doc "does not let a batch frame masquerade as graphical coverage")
   (when noninteractive

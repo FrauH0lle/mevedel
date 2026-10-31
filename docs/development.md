@@ -472,7 +472,9 @@ Eask, then starts a **separate graphical `emacs -Q`**. It never loads checkout
 code into the running editor. The child has temporary HOME, all XDG roots
 (including runtime), and native cache; JIT native compilation is disabled to
 avoid fresh-cache background compilation. The parent removes this private
-state on success, failure, or timeout. Existing output directories are rejected.
+state on success, failure, timeout, or SIGTERM/SIGHUP (through
+`kill-emacs-hook`, since a signal skips `unwind-protect`). Existing output
+directories are rejected.
 
 Prerequisites are a graphical Emacs build with Cairo PNG/PDF frame export,
 SVG image support, DejaVu Sans and DejaVu Sans Mono, and an accessible active
@@ -527,9 +529,28 @@ not part of hosted CI or the ordinary `check` script.
 For full native geometry coverage in an unattended run, prefer an owned,
 unlocked virtual KWin with a presenting OpenGL compositor (`KWIN_COMPOSE=O2`),
 private HOME/XDG roots and a private DBus session. `QT_QUICK_BACKEND=software`
-can isolate Qt Quick without replacing the OpenGL compositor. The maintained
-runner does not launch KWin, but it selects an existing private compositor
-through the ordinary display environment:
+can isolate Qt Quick without replacing the OpenGL compositor.
+`scripts/graphical-check-private-kwin.py` starts exactly that session
+(`kwin_wayland --virtual`, 2560×2160, no lock screen, under `dbus-run-session`)
+and runs the graphical check as its session client against KWin's absolute
+socket. Arguments after `--` go to the graphical check unchanged; the exit
+status is the check's:
+
+```sh
+python3 scripts/graphical-check-private-kwin.py -- --grammar-dir /path/to/tree-sitter
+# Whole-session deadline (default 900s; exit status 124 when exceeded):
+python3 scripts/graphical-check-private-kwin.py --session-timeout 600 -- --grammar-dir /path/to/tree-sitter
+```
+
+It needs Linux, `kwin_wayland`, `dbus-run-session` and Eask in the user's npm
+cache (it runs `npx --offline`). The runner is a child subreaper: on success,
+failure, deadline, SIGTERM, SIGHUP or SIGINT it terminates every descendant
+(DBus, KWin, Xwayland, Eask, Emacs), detached ones included, escalates to
+SIGKILL after five seconds, and removes its private directory. Only SIGKILL of
+the runner itself escapes this cleanup.
+
+An already running private compositor can also be selected through the
+ordinary display environment:
 
 ```sh
 WAYLAND_DISPLAY=/absolute/private/runtime/kwin-socket \
@@ -549,7 +570,13 @@ The batch-safe runner regression tests are included in the normal suite:
 ```bash
 npx @emacs-eask/cli clean elc
 npx @emacs-eask/cli test ert test/test-mevedel-graphical-check.el
+python3 -m unittest test/test_graphical_check_private_kwin.py
 ```
+
+The private-KWin tests replace `dbus-run-session` and `kwin_wayland` with
+stand-ins that leave stray (including `setsid`-detached) processes, then check
+argument forwarding, the private environment and cleanup after success, a
+client killed before reporting, the session deadline and SIGTERM.
 
 ### Instruction edit benchmark
 
