@@ -62,7 +62,9 @@ Key features:
 
 - A Linux host.  Portable session storage needs procfs, GNU `stat`, and
   `bash`, and refuses to run anywhere else; CI covers Linux only.  On a
-  remote target, `gzip` is optional and makes each storage round trip cheaper.
+  remote target, optional compression makes each storage round trip cheaper
+  when `gzip` is available both locally and on the target; otherwise the
+  program script travels inline.
 - Emacs version 31.1 or higher
 - [gptel](https://github.com/karthink/gptel) 0.9.9.6 or higher
 - [acp.el](https://github.com/xenodium/acp.el) 0.15.2 or higher for external agent connections
