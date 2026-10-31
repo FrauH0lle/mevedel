@@ -76,8 +76,8 @@
         (delete-directory other t)))))
 
 (mevedel-deftest mevedel-telemetry--lag-observer-call
-  ;; Scale the stalls, threshold and sampler interval together; retain the
-  ;; same threshold crossings without spending half a second on each append.
+  ;; Keep 100 ms between the accounting stall and its recording threshold,
+  ;; without spending half a second on each append.
   (:vars ((mevedel-native--load-state "unavailable in observer tests")
           (mevedel-telemetry-lag-threshold .1)
           (mevedel-telemetry--lag-interval .02)
@@ -95,7 +95,7 @@
            (run (symbol-function 'mevedel-session-control-fs-run-program))
            (mevedel-telemetry--lag-thread (and (eq clock 'native-clock) main-thread))
            (mevedel-telemetry--lag-timer (and (eq clock 'fallback) mevedel-telemetry--lag-timer))
-           (slow (lambda () (let ((end (+ (float-time) .12))) (while (< (float-time) end))))))
+           (slow (lambda () (let ((end (+ (float-time) .2))) (while (< (float-time) end))))))
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
                      (lambda (operations &optional lock)
@@ -109,7 +109,7 @@
                                 (mevedel-telemetry--lag-tick)))
                              (funcall run operations lock))
                          (funcall run operations lock)))))
-            (setq mevedel-telemetry--lag-due (- (float-time) .15))
+            (setq mevedel-telemetry--lag-due (- (float-time) .2))
             (mevedel-telemetry--lag-tick)
             (should (= 1 (length (test-mevedel-telemetry-lag-observer--rows root))))
             (mevedel-telemetry--lag-tick)
@@ -133,7 +133,7 @@
             (let ((row (car (last (test-mevedel-telemetry-lag-observer--rows root)))))
               (should (eq 'event-loop-lag (plist-get row :event)))
               (should (stringp (plist-get row :timer-callback)))
-              (should (>= (plist-get row :timer-ms) 100)))
+              (should (>= (plist-get row :timer-ms) 150)))
             (should-not (plist-get (cdr handle) :until)))
         (mevedel-telemetry--lag-stop)
         (delete-directory root t)))))
@@ -157,7 +157,7 @@
            (timer (timer-create))
            (run (symbol-function 'mevedel-session-control-fs-run-program))
            (observe (symbol-function 'mevedel-telemetry--lag-observer-call))
-           (slow (lambda () (let ((end (+ (float-time) .12))) (while (< (float-time) end)))))
+           (slow (lambda () (let ((end (+ (float-time) .2))) (while (< (float-time) end)))))
            injected)
       (unwind-protect
           (cl-letf (((symbol-function 'mevedel-telemetry--lag-observer-call)
@@ -224,7 +224,9 @@
                                         (format "/mevedelmock:observer-ownership:%s/" root)
                                       root))))
               (mevedel-transport-install)
-              (mevedel-telemetry-memory-pass-start workspace "owned-transport")
+              ;; Installing the make-process replacement can cold-compile its
+              ;; native trampoline.  That is test setup, not diagnostic IO;
+              ;; finish it before starting the measured watcher interval.
               (cl-letf (((symbol-function 'mevedel-telemetry--lag-dispatched-in-observer-p)
                          (lambda ()
                            ;; Recreate the old same-level classification with
@@ -280,6 +282,7 @@
                                    (while (and (not sentinel-ran) (< (float-time) deadline))
                                      (accept-process-output sentinel-process .01)))))
                              process))))
+                (mevedel-telemetry-memory-pass-start workspace "owned-transport")
                 (mevedel-telemetry-record-workspace workspace 'memory-consolidation-fired))
               (should (= 1 injections))
               (should (eq (eq scenario 'sentinel) sentinel-ran))
@@ -326,8 +329,8 @@
           (let ((mevedel-telemetry--lag-observer-start (float-time))
                 (mevedel-telemetry--lag-observer-level 0))
             (mevedel-transport-call-as-remote-operation
-             (lambda () (let ((end (+ (float-time) .12))) (while (< (float-time) end))))))
-          (should (>= mevedel-telemetry--lag-late .1))
+             (lambda () (let ((end (+ (float-time) .2))) (while (< (float-time) end))))))
+          (should (>= mevedel-telemetry--lag-late .15))
           (mevedel-telemetry--lag-tick)
           (should (= 1 (length (test-mevedel-telemetry-lag-observer--rows root))))
           ;; Within this thread's own diagnostic scope, an exhausted or missing
@@ -338,7 +341,7 @@
                 (mevedel-telemetry--lag-dispatch-scan-limit 0)
                 (mevedel-telemetry--lag-late 0))
             (mevedel-transport-call-as-remote-operation
-             (lambda () (let ((end (+ (float-time) .12))) (while (< (float-time) end)))))
+             (lambda () (let ((end (+ (float-time) .2))) (while (< (float-time) end)))))
             (should (< mevedel-telemetry--lag-late .04))))
       (mevedel-telemetry--lag-stop)
       (delete-directory root t))))
@@ -373,7 +376,7 @@
                     (mevedel-transport-call-as-remote-operation
                      (lambda ()
                        (when (not done) (finish-worker))
-                       (let ((end (+ (float-time) .12))) (while (< (float-time) end)))))))
+                       (let ((end (+ (float-time) .2))) (while (< (float-time) end)))))))
         (unwind-protect
             (progn
               (mevedel-telemetry-memory-pass-start workspace "crossed-thread")
@@ -415,7 +418,7 @@
                 (should (= before mevedel-telemetry--lag-observer-seconds)))
               (should (= 0 mevedel-telemetry--lag-observer-count))
               (should-not mevedel-telemetry--lag-observer-start)
-              (should (>= mevedel-telemetry--lag-late .1))
+              (should (>= mevedel-telemetry--lag-late .15))
               (mevedel-telemetry--lag-tick)
               (should (= 1 (length (test-mevedel-telemetry-lag-observer--rows root)))))
           (setq release t)
