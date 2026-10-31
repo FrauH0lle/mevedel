@@ -189,6 +189,10 @@ K continues the current Read in its original buffer, pipeline context and
 Read state rather than waiting here: a wait would re-enter the event loop
 from gptel's process callbacks, where quitting is inhibited.  A helper that
 could not run, and any error K raises, settle the Read as an error."
+  ;; Converters (pdfinfo, pdftoppm, ImageMagick) open READ-PATHS by name, not
+  ;; through a pin.  They are safe against a swapped symlink only because they
+  ;; run under the same confinement as any process that could swap it, which
+  ;; masks protected trees by canonical path -- like Grep and Glob.
   (let ((values (mapcar (lambda (symbol) (and (boundp symbol) (symbol-value symbol)))
                         mevedel-tool-fs-read--continuation-variables)))
     (mevedel-start-helper-capturing-output

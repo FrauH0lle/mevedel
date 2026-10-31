@@ -139,19 +139,17 @@ Signal `mevedel-pin-refused' when the helper refuses or does not answer."
       (signal 'mevedel-pin-refused (list (plist-get reply :error))))
      (t reply))))
 
-(defun mevedel-pin--acquire (path op &optional create)
-  "Pin PATH with helper OP; return (PINNED-NAME . RELEASE-FUNCTION).
-CREATE asks a directory pin to make missing components first."
+(defun mevedel-pin--acquire (path)
+  "Pin existing file PATH; return (PINNED-NAME . RELEASE-FUNCTION)."
   (let* ((prefix (mevedel-pin--prefix path))
          (reply (mevedel-pin--request
-                 prefix (list :op op
+                 prefix (list :op "file"
                               :path (directory-file-name
                                      (mevedel-collapse-leading-slashes
-                                      (file-local-name path)))
-                              :create (if create t :false))))
+                                      (file-local-name path))))))
          (pin (plist-get reply :pin))
          (name (concat prefix (plist-get reply :path))))
-    (mevedel-pin--flush name (equal op "dir"))
+    (mevedel-pin--flush name)
     (cons name
           (lambda ()
             (ignore-errors
@@ -160,7 +158,7 @@ CREATE asks a directory pin to make missing components first."
 (defun mevedel-pin-call-with-file (path function)
   "Call FUNCTION while opens of PATH resolve to its pinned inode.
 PATH must be the authorized canonical path of an existing file."
-  (let* ((pin (mevedel-pin--acquire path "file"))
+  (let* ((pin (mevedel-pin--acquire path))
          (mevedel-pin--redirects (cons (cons path (car pin)) mevedel-pin--redirects)))
     (unwind-protect (funcall function)
       (funcall (cdr pin)))))
@@ -192,45 +190,40 @@ is set.  Return (PATH LENGTH)."
           (list path (- end-marker start)))
       (set-marker end-marker nil))))
 
-(defun mevedel-pin-call-with-directory (directory function &optional create)
-  "Call FUNCTION with the pinned name of DIRECTORY.
-CREATE makes missing components through the helper, never via a symlink."
-  (let ((pin (mevedel-pin--acquire directory "dir" create)))
-    (unwind-protect (funcall function (file-name-as-directory (car pin)))
-      (funcall (cdr pin)))))
+(defun mevedel-pin--encode (content coding)
+  "Return CONTENT as the bytes `write-region' would write with CODING."
+  (if (eq coding 'no-conversion)
+      (if (multibyte-string-p content)
+          (encode-coding-string content 'no-conversion)
+        content)
+    (encode-coding-string content (or coding 'utf-8-unix))))
 
 (defun mevedel-pin-write-file-atomically (path content &optional coding mode)
-  "Replace PATH with CONTENT through its pinned parent directory.
+  "Replace PATH with CONTENT through descriptors the helper holds.
 Like `mevedel--write-file-atomically': CODING and MODE apply to the new
-file, which is written beside PATH and renamed over it.  The rename replaces
-a symlink planted at PATH instead of following it."
-  (let ((name (file-name-nondirectory path)))
-    (mevedel-pin-call-with-directory
-     (file-name-directory path)
-     (lambda (directory)
-       (let ((temporary (make-temp-file (concat directory ".mevedel-write-"))))
-         (unwind-protect
-             (progn
-               (with-temp-buffer
-                 (when (eq coding 'no-conversion)
-                   (set-buffer-multibyte nil))
-                 (insert content)
-                 (let ((coding-system-for-write (or coding 'utf-8-unix)))
-                   (write-region (point-min) (point-max) temporary nil 'silent)))
-               (set-file-modes temporary (or mode (default-file-modes)))
-               (rename-file temporary (concat directory name) t))
-           (when (file-exists-p temporary)
-             (delete-file temporary)))))
-     t)
-    (mevedel-pin--flush path)
-    (mevedel-pin--flush (file-name-directory path) t)))
+file.  The helper walks PATH's directory without following symlinks,
+creating missing components, creates a temporary file there with
+O_CREAT|O_EXCL|O_NOFOLLOW, writes and fchmods that descriptor, and renames
+it over PATH within the pinned directory.  Nothing is reopened by name, so
+neither a swapped directory nor a symlink planted at the temporary name can
+redirect the bytes; a symlink planted at PATH is replaced, not followed."
+  (mevedel-pin--request
+   (mevedel-pin--prefix path)
+   (list :op "write"
+         :path (directory-file-name
+                (mevedel-collapse-leading-slashes (file-local-name path)))
+         :mode (or mode (default-file-modes))
+         :data (base64-encode-string (mevedel-pin--encode content coding) t)))
+  (mevedel-pin--flush path)
+  (mevedel-pin--flush (file-name-directory path) t))
 
 (defun mevedel-pin-delete-file (path)
-  "Delete PATH through its pinned parent directory, never through a symlink."
-  (mevedel-pin-call-with-directory
-   (file-name-directory path)
-   (lambda (directory)
-     (delete-file (concat directory (file-name-nondirectory path)))))
+  "Delete PATH within its pinned parent directory, never through a symlink."
+  (mevedel-pin--request
+   (mevedel-pin--prefix path)
+   (list :op "unlink"
+         :path (directory-file-name
+                (mevedel-collapse-leading-slashes (file-local-name path)))))
   (mevedel-pin--flush path)
   (mevedel-pin--flush (file-name-directory path) t))
 

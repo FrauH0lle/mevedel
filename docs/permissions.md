@@ -315,9 +315,14 @@ from the root with `O_NOFOLLOW`, refuses any symlink component and holds a
 descriptor that Emacs reads or writes through, so a directory a confined
 process swaps for a symlink after authorization, or a dangling link it
 resolves later, refuses the operation instead of reaching a protected tree.
-Missing parent directories are created by the helper, and writes go to a
-temporary file in the pinned directory that is renamed over the target, which
-replaces a planted final symlink instead of following it. One helper serves
+The helper also performs every write itself, without reopening anything by
+name: it creates missing parent directories with `mkdirat`, creates a
+temporary file with `O_CREAT|O_EXCL|O_NOFOLLOW`, writes and `fchmod`s that
+descriptor, and renames it over the target within the pinned directory.
+Emacs encodes the content and sends the bytes. A symlink planted at the
+temporary name therefore cannot receive the content or mode, and a planted
+final symlink is replaced instead of followed. Deletion uses `unlinkat` in the
+pinned directory. One helper serves
 each execution target; the first use costs about 11 ms locally and each later
 pin about 0.1 ms. Grep, Glob and media converters run under the same
 confinement as the commands that could swap paths, where protected trees are
@@ -1215,6 +1220,10 @@ Signals, timeouts, and ordinary command failures are returned once and never
 replayed. `required` refuses an unavailable backend, while `off` selects direct
 execution deliberately. Direct execution reports `filesystem: unrestricted`
 and `network: unrestricted`; refused attempts report unavailable boundaries.
+With confinement off, Grep, Glob and Read's media converters (pdfinfo,
+pdftoppm, ImageMagick) are not protected against a path component swapped
+for a symlink after authorization, because they open paths by name; direct
+execution already grants the user's host authority.
 A pre-marker failure retains its launcher error, diagnostics, or exit code.
 The next independent invocation reprobes the backend, so a transient launch
 failure does not disable confinement permanently. Bash and batch-Eval results append their active

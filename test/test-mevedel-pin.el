@@ -247,7 +247,98 @@ handler.  Return (:queued QUEUED :result RESULT)."
                                  (buffer-string))))
        (should (file-exists-p (file-name-concat ws "plain-new")))))))
 
-(mevedel-deftest mevedel-pin-call-with-directory ()
+(defconst test-mevedel-pin--swapper
+  "import ctypes, os, struct, sys
+watch, target = sys.argv[1], sys.argv[2]
+libc = ctypes.CDLL(None, use_errno=True)
+fd = libc.inotify_init()
+libc.inotify_add_watch(fd, watch.encode(), 0x100)
+print('WATCHING', flush=True)
+while True:
+    buf = os.read(fd, 65536); i = 0
+    while i < len(buf):
+        _, _, _, ln = struct.unpack_from('iIII', buf, i)
+        name = buf[i+16:i+16+ln].rstrip(b'\\0').decode(); i += 16 + ln
+        if name.startswith('.mevedel-write-'):
+            path = os.path.join(watch, name)
+            try:
+                os.unlink(path); os.symlink(target, path)
+            except OSError:
+                pass
+"
+  "Swap each new mevedel temporary write file for a symlink to a decoy.")
+
+(defun test-mevedel-pin--decoy-state (decoy)
+  "Return DECOY's content and mode."
+  (list (with-temp-buffer (insert-file-contents decoy) (buffer-string))
+        (file-modes decoy)))
+
+(defun test-mevedel-pin--patch-burst (session ws prefix count)
+  "Run COUNT ApplyPatch Adds and Updates in SESSION of PREFIX files below WS/a."
+  (dotimes (i count)
+    (let ((added (file-name-concat ws (format "a/%s-add-%d" prefix i)))
+          (updated (file-name-concat ws (format "a/%s-up-%d" prefix i))))
+      (test-mevedel-pin--run session "ApplyPatch"
+                             (list :patch (test-mevedel-pin--patch "Add" added "+INJECTED\n")))
+      (write-region "LINE\n" nil updated nil 'silent)
+      (test-mevedel-pin--run session "ApplyPatch"
+                             (list :patch (test-mevedel-pin--patch
+                                           "Update" updated "@@\n-LINE\n+INJECTED\n"))))))
+
+(mevedel-deftest mevedel-pin-write-race ()
+  ,test
+  (test)
+  :doc "a temporary write file swapped for a symlink cannot redirect Add or Update"
+  (test-mevedel-pin--call-with-trees
+   (lambda (trees)
+     (let* ((ws (plist-get trees :ws))
+            (session (plist-get trees :session))
+            (home (file-name-concat (plist-get trees :outside) "home"))
+            (decoy (file-name-concat home "authorized_keys")))
+       (make-directory home)
+       (write-region "DECOY-ORIG\n" nil decoy nil 'silent)
+       (set-file-modes decoy #o600)
+       ;; Deterministic: plant the link the moment a temporary file appears.
+       (let ((plant (lambda (name)
+                      (when (string-match-p "\\.mevedel-write-" name)
+                        (delete-file name)
+                        (make-symbolic-link decoy name))
+                      name)))
+         (advice-add 'make-temp-file :filter-return plant)
+         (unwind-protect (test-mevedel-pin--patch-burst session ws "planted" 3)
+           (advice-remove 'make-temp-file plant)))
+       (should (equal (list "DECOY-ORIG\n" #o600) (test-mevedel-pin--decoy-state decoy)))
+       ;; Concurrent: an inotify swapper outside Emacs, as a confined process could run.
+       (when-let* ((python (executable-find "python3")))
+         (let* ((script (file-name-concat (plist-get trees :outside) "swapper.py"))
+                (output (generate-new-buffer " *pin-swapper*"))
+                swapper)
+           (write-region test-mevedel-pin--swapper nil script nil 'silent)
+           (unwind-protect
+               (progn
+                 (setq swapper (make-process
+                                :name "pin-swapper" :buffer output :noquery t
+                                :command (list python "-I" script
+                                               (file-name-concat ws "a") decoy)))
+                 (let ((deadline (+ (float-time) 5)))
+                   (while (and (not (with-current-buffer output
+                                      (string-search "WATCHING" (buffer-string))))
+                               (< (float-time) deadline))
+                     (accept-process-output swapper 0.05)))
+                 (test-mevedel-pin--patch-burst session ws "raced" 60))
+             (when (process-live-p swapper) (delete-process swapper))
+             (kill-buffer output)))
+         (should (equal (list "DECOY-ORIG\n" #o600) (test-mevedel-pin--decoy-state decoy))))
+       ;; Negative control: undisturbed writes land in the workspace.
+       (test-mevedel-pin--patch-burst session ws "plain" 1)
+       (should (equal "INJECTED\n" (with-temp-buffer
+                                     (insert-file-contents (file-name-concat ws "a/plain-add-0"))
+                                     (buffer-string))))
+       (should (equal "INJECTED\n" (with-temp-buffer
+                                     (insert-file-contents (file-name-concat ws "a/plain-up-0"))
+                                     (buffer-string))))))))
+
+(mevedel-deftest mevedel-pin-confined-search ()
   ,test
   (test)
   :doc "confined Grep through a directory swapped for a protected link finds no decoy"

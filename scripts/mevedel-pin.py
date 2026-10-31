@@ -10,16 +10,23 @@ descriptor open.  Emacs then opens or writes through /proc/PID/fd/N, which
 names the pinned inode whatever happens to the path afterwards.
 
 Protocol: one JSON object per line on stdin, one answer per line on stdout.
-  {"id": I, "op": "file", "path": P}              pin an existing file or directory
-  {"id": I, "op": "dir", "path": P, "create": B}  pin a directory, creating missing
-                                                  components with mkdirat when B
-  {"id": I, "op": "release", "pin": N}            close pin N
+  {"id": I, "op": "file", "path": P}                    pin an existing file
+  {"id": I, "op": "write", "path": P, "mode": M, "data": B64}
+                                                        atomically replace P
+  {"id": I, "op": "unlink", "path": P}                  remove P
+  {"id": I, "op": "release", "pin": N}                  close pin N
+Writes never reopen anything by name: the directory is walked (creating
+missing components with mkdirat), a temporary file is created there with
+O_CREAT|O_EXCL|O_NOFOLLOW, written and fchmodded through its descriptor and
+renamed over the target within the directory descriptor.
 Answers are {"id": I, "ok": true, "pin": N, "path": "/proc/PID/fd/N"} or
 {"id": I, "ok": false, "error": TEXT}.  The helper exits when stdin closes.
 """
 
+import base64
 import json
 import os
+import secrets
 import stat
 import sys
 
@@ -78,6 +85,66 @@ def walk(path, directory=False, create=False):
         raise
 
 
+def split(path):
+    """Return PATH's parent and final component."""
+    parts = components(path)
+    if not parts:
+        raise Refused("path names the root")
+    return "/" + "/".join(parts[:-1]), parts[-1]
+
+
+def write(path, mode, data):
+    """Atomically replace PATH with DATA at MODE through descriptors only."""
+    parent, name = split(path)
+    if not isinstance(mode, int) or not 0 <= mode <= 0o7777:
+        raise Refused("invalid mode")
+    directory = walk(parent, directory=True, create=True)
+    try:
+        temporary = None
+        for _ in range(16):
+            candidate = ".mevedel-write-" + secrets.token_hex(8)
+            try:
+                fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                             | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=directory)
+            except FileExistsError:
+                continue
+            temporary = candidate
+            break
+        if temporary is None:
+            raise Refused("could not create a temporary file")
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fchmod(stream.fileno(), mode)
+                written = os.fstat(stream.fileno())
+            os.rename(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+            temporary = None
+            # A swap of the temporary name can only move the attacker's own
+            # entry into place, never redirect these bytes; report it.
+            placed = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if (placed.st_dev, placed.st_ino) != (written.st_dev, written.st_ino):
+                raise Refused(f"written file was replaced: {path}")
+        finally:
+            if temporary is not None:
+                try:
+                    os.unlink(temporary, dir_fd=directory)
+                except OSError:
+                    pass
+    finally:
+        os.close(directory)
+
+
+def unlink(path):
+    """Remove PATH's final entry without following any symlink."""
+    parent, name = split(path)
+    directory = walk(parent, directory=True)
+    try:
+        os.unlink(name, dir_fd=directory)
+    finally:
+        os.close(directory)
+
+
 def answer(request, pins):
     """Return the answer object for REQUEST."""
     op = request.get("op")
@@ -86,10 +153,19 @@ def answer(request, pins):
         if fd is not None:
             os.close(fd)
         return {"ok": True}
-    if op not in ("file", "dir"):
+    if op == "write":
+        data = request.get("data")
+        if not isinstance(data, str):
+            raise Refused("missing data")
+        write(request.get("path"), request.get("mode"),
+              base64.b64decode(data, validate=True))
+        return {"ok": True}
+    if op == "unlink":
+        unlink(request.get("path"))
+        return {"ok": True}
+    if op != "file":
         raise Refused("unknown operation")
-    fd = walk(request.get("path"), directory=(op == "dir"),
-              create=(op == "dir" and bool(request.get("create"))))
+    fd = walk(request.get("path"))
     pins[fd] = fd
     return {"ok": True, "pin": fd, "path": f"/proc/{os.getpid()}/fd/{fd}"}
 
