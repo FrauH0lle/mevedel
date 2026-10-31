@@ -111,6 +111,8 @@ preservation. Other ignored segments still require scaffolding classification.
 The Emacs view and browser projection normalize their decoded activity and share
 `mevedel-activity-group-partition` in `mevedel-activity-group.el` for run
 boundaries, grouping thresholds, summaries, and running/failure/warning facts.
+Only a tool starts a run; leading messages and completion breadcrumbs remain
+standalone, including after a boundary or scope change.
 A tool/delivery activity run remains mutable until its surrounding
 transcript boundary closes it; substantive reasoning is a standalone,
 initially expanded disclosure and closes the preceding tool run. An individual completed call can still join a
@@ -492,6 +494,15 @@ The shared rule resolves the divergent cases:
   joined Emacs tool runs.
 - Pending browser records join as running tools and count toward the same
   threshold, instead of remaining ungrouped.
+
+Follow-up review reproduced another pre-existing disagreement: after assistant
+prose, a leading completion breadcrumb joined the browser's next tool group but
+stayed standalone in Emacs. Leading mail had the same defect. Preserve the
+standalone presentation by making the shared partitioner start runs only at a
+tool. Messages and completions can join only after that tool; a boundary or scope
+change resets the rule. Agreement cases now cover leading breadcrumb, mail and
+audit combinations, and partition tests cover the boundary/scope reset and
+rebuilding with `nil`.
 
 The shared running fact includes settled transcript tools whose background work
 is still running; the Emacs header animates only calls still in flight. These

@@ -1549,7 +1549,8 @@ transparent rows."
   "Annotate the activity groups among RECORDS with their summaries.
 Keep each original record and ID independently addressable; the browser
 owns only grouping disclosures.  `mevedel-activity-group-partition' decides
-the groups, as it does for the Emacs view."
+the groups, as it does for the Emacs view: non-tool entries before a run's
+first tool retain their standalone presentation."
   (dolist (record records)
     (when (plist-member record :activity)
       (setf (plist-get record :activity) nil)))

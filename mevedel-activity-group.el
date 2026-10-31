@@ -19,6 +19,8 @@
 ;;                owner's own completion mail).  Hidden alone is not
 ;;                transparent.
 ;;   :kind        `tool', `message' or `completion'.
+;;                Only a tool starts a run; leading messages and completions
+;;                stay single after any boundary or scope change.
 ;;   :name        A tool's name, for the summary.
 ;;   :status      A tool's `completed', `running', `failed' or `warning'.
 ;;                In-flight calls enter as running tools.
@@ -146,7 +148,9 @@ still say which call failed without growing past one line."
 Return a list in source order whose elements are either an entry or a
 group.  A run of consecutive members within one scope becomes a group when
 it holds more than THRESHOLD tools; zero disables grouping, and nil groups
-any run with a tool, for rebuilding a group already formed.  Transparent
+any run with a tool, for rebuilding a group already formed.  Only tools
+start runs: messages and completions before the first tool stay single,
+including after a boundary or scope change.  Transparent
 entries between a run's members travel with the group; outside one they
 stay single.
 
@@ -174,11 +178,14 @@ failure count and label."
           ('member
            (unless (or (null run) (equal scope (plist-get entry :scope)))
              (close))
-           (setq scope (plist-get entry :scope)
-                 run (cons entry (append tail run))
-                 tail nil)
-           (when (eq (plist-get entry :kind) 'tool)
-             (setq tools (1+ tools))))
+           (if (or run (eq (plist-get entry :kind) 'tool))
+               (progn
+                 (setq scope (plist-get entry :scope)
+                       run (cons entry (append tail run))
+                       tail nil)
+                 (when (eq (plist-get entry :kind) 'tool)
+                   (setq tools (1+ tools))))
+             (push entry out)))
           ('transparent
            (if run (push entry tail) (push entry out)))
           (_ (close) (push entry out))))

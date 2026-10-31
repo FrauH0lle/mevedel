@@ -66,6 +66,32 @@
                          (mevedel-activity-group-test--tool "Read" nil 3)
                          (mevedel-activity-group-test--tool "Read" nil 4))
                    1))))
+  :doc "leading messages and completions stay single, even when rebuilding a group"
+  (dolist (threshold '(2 nil))
+    (should (equal '(m c [1 2 3])
+                   (mevedel-activity-group-test--shape
+                    (mevedel-activity-group-partition
+                     (list '(:role member :kind message :id m)
+                           '(:role member :kind completion :id c
+                             :completion ("exec" . "completed"))
+                           (mevedel-activity-group-test--tool "Read" nil 1)
+                           (mevedel-activity-group-test--tool "Read" nil 2)
+                           (mevedel-activity-group-test--tool "Read" nil 3))
+                     threshold)))))
+  :doc "boundaries and scope changes reset the tool-first rule"
+  (dolist (separator '((:role boundary :id b)
+                       (:role member :kind message :id b :scope next)))
+    (should (equal '(1 b m [2 3])
+                   (mevedel-activity-group-test--shape
+                    (mevedel-activity-group-partition
+                     (list (mevedel-activity-group-test--tool "Read" nil 1)
+                           separator
+                           '(:role member :kind message :id m :scope next)
+                           (plist-put (mevedel-activity-group-test--tool "Read" nil 2)
+                                      :scope 'next)
+                           (plist-put (mevedel-activity-group-test--tool "Read" nil 3)
+                                      :scope 'next))
+                     1)))))
   :doc "a hidden boundary still splits; transparency is a role, not visibility"
   (should (equal '(1 b 2)
                  (mevedel-activity-group-test--shape
@@ -305,6 +331,24 @@ calls that follow PARTS in a turn without a final response."
 
 (defconst mevedel-activity-group-test--agreement-cases
   '((plain (t1 tool) (t2 tool) (t3 tool))
+    (leading-breadcrumb (x1 text) (c1 crumb) (t1 tool) (t2 tool) (t3 tool))
+    (leading-mail (x1 text) (m1 mail) (t1 tool) (t2 tool) (t3 tool))
+    (leading-mail-breadcrumb (x1 text) (m1 mail) (c1 crumb)
+                             (t1 tool) (t2 tool) (t3 tool))
+    (leading-breadcrumb-mail (x1 text) (c1 crumb) (m1 mail)
+                             (t1 tool) (t2 tool) (t3 tool))
+    (leading-audit-mail (x1 text) (a1 audit) (m1 mail)
+                        (t1 tool) (t2 tool) (t3 tool))
+    (leading-mail-audit (x1 text) (m1 mail) (a1 audit)
+                        (t1 tool) (t2 tool) (t3 tool))
+    (leading-mail-audit-breadcrumb (x1 text) (m1 mail) (a1 audit) (c1 crumb)
+                                   (t1 tool) (t2 tool) (t3 tool))
+    (leading-breadcrumb-audit-mail (x1 text) (c1 crumb) (a1 audit) (m1 mail)
+                                   (t1 tool) (t2 tool) (t3 tool))
+    (leading-hidden-audit-mail (x1 text) (a1 audit provider-tool-batch) (m1 mail)
+                               (t1 tool) (t2 tool) (t3 tool))
+    (mail-after-boundary (t0 tool) (m0 mail) (a1 audit) (m1 mail) (c1 crumb)
+                         (t1 tool) (t2 tool) (t3 tool))
     (merged-audit (t1 tool) (t2 tool) (a1 audit) (t3 tool) (t4 tool))
     (hidden-merged-audit (t1 tool) (t2 tool) (a1 audit provider-tool-batch) (t3 tool))
     (leading-audit (a1 audit) (t1 tool) (t2 tool) (t3 tool))

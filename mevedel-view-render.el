@@ -6807,6 +6807,8 @@ is inserted beside the header.  CONTINUATION-P suppresses that header."
              (push seg request-summary-group))
             ('mailbox
              (flush-thinking)
+             ;; Leading non-tool entries stay standalone, as they do in
+             ;; `mevedel-activity-group-partition' for the browser adapter.
              (if tool-group
                  (push seg tool-group)
                (let ((text (mevedel-view--user-turn-text (list seg) data-buf))
@@ -6834,6 +6836,8 @@ is inserted beside the header.  CONTINUATION-P suppresses that header."
                     (mevedel-view--hook-audit-only-segment-p
                      data-buf (cadr seg) (caddr seg))
                     (not tool-group))
+               ;; This includes leading completion breadcrumbs: only a tool
+               ;; starts a run in `mevedel-activity-group-partition'.
                (flush-thinking)
                (let* ((source (mevedel-view-disclosure-source-range
                                data-buf (cadr seg) (caddr seg)))
