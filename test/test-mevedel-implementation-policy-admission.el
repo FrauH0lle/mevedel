@@ -18,38 +18,41 @@
 (require 'mevedel-presets)
 
 (defmacro mevedel-preparation-test--with-goal (&rest body)
-  "Run BODY with an accepted-policy Goal and distinct baseline selections."
+  "Run BODY with an accepted-policy Goal and distinct baseline selections.
+An initial :file-workspace FORM selects file storage for policy-only cases."
   (declare (indent 0) (debug t))
-  `(mevedel-engine-test--with-session
-     (mevedel-request-end)
-     (mevedel-skills-test--with-model-backends
-       (let* ((policy '(:model-provider "Balanced:balanced-model"
-                       :reasoning-effort nil :permission-mode full-auto))
-              (global-budget (default-value 'mevedel-goal-token-budget))
-              (gptel-use-curl t)
-              (gptel-use-tools nil)
-              (gptel-use-context nil)
-              (mevedel-journal-enabled nil)
-              goal sent)
-         (mevedel-model-set-session-provider
-          session (mevedel-model-resolve-provider "Fast:fast-model") buffer)
-         (mevedel-model-set-session-effort session 'high buffer)
-         (mevedel-permission-mode-set-raw 'ask)
-         (setq-local mevedel-goal-token-budget 4321 mevedel-model-workloads nil)
-         (setq goal (mevedel-goal-create
-                     "Implement accepted outcome" :session session
-                     :implementation-policy policy :token-budget 200))
-         (cl-letf (((symbol-function 'gptel-curl-get-response)
-                    (lambda (fsm) (push fsm sent))))
-           (mevedel-test--with-captured-diagnostics nil ,@body))
-         (should (equal "Fast:fast-model" (mevedel-session-model-provider session)))
-         (should (eq 'high (mevedel-session-reasoning-effort session)))
-         (should (eq 'ask (mevedel-session-permission-mode session)))
-         (should (eq 'fast-model gptel-model))
-         (should (eq (gptel-get-backend "Fast") gptel-backend))
-         (should (eq 'high gptel-reasoning-effort))
-         (should (= 4321 mevedel-goal-token-budget))
-         (should (equal global-budget (default-value 'mevedel-goal-token-budget)))))))
+  (let ((file-workspace (when (eq (car body) :file-workspace)
+                         (pop body) (pop body))))
+    `(mevedel-engine-test--with-session :file-workspace ,file-workspace
+       (mevedel-request-end)
+       (mevedel-skills-test--with-model-backends
+         (let* ((policy '(:model-provider "Balanced:balanced-model"
+                         :reasoning-effort nil :permission-mode full-auto))
+                (global-budget (default-value 'mevedel-goal-token-budget))
+                (gptel-use-curl t)
+                (gptel-use-tools nil)
+                (gptel-use-context nil)
+                (mevedel-journal-enabled nil)
+                goal sent)
+           (mevedel-model-set-session-provider
+            session (mevedel-model-resolve-provider "Fast:fast-model") buffer)
+           (mevedel-model-set-session-effort session 'high buffer)
+           (mevedel-permission-mode-set-raw 'ask)
+           (setq-local mevedel-goal-token-budget 4321 mevedel-model-workloads nil)
+           (setq goal (mevedel-goal-create
+                       "Implement accepted outcome" :session session
+                       :implementation-policy policy :token-budget 200))
+           (cl-letf (((symbol-function 'gptel-curl-get-response)
+                      (lambda (fsm) (push fsm sent))))
+             (mevedel-test--with-captured-diagnostics nil ,@body))
+           (should (equal "Fast:fast-model" (mevedel-session-model-provider session)))
+           (should (eq 'high (mevedel-session-reasoning-effort session)))
+           (should (eq 'ask (mevedel-session-permission-mode session)))
+           (should (eq 'fast-model gptel-model))
+           (should (eq (gptel-get-backend "Fast") gptel-backend))
+           (should (eq 'high gptel-reasoning-effort))
+           (should (= 4321 mevedel-goal-token-budget))
+           (should (equal global-budget (default-value 'mevedel-goal-token-budget))))))))
 
 (defun mevedel-preparation-test--send (&optional hold)
   "Send a real gptel request; HOLD optionally receives its async continuation."
@@ -77,7 +80,9 @@
   (test)
   :doc "held transforms reject changed Goal policy or owner and allow a fresh submission"
   (dolist (change '(pause clear resume replace edit policy))
-    (mevedel-preparation-test--with-goal
+    ;; These permutations invalidate a held request snapshot, not publication.
+    ;; Pause remains the project-backed control for this matrix.
+    (mevedel-preparation-test--with-goal :file-workspace (not (eq change 'pause))
       (when (eq change 'resume) (mevedel-goal-pause))
       (let* (resume
              (fsm (mevedel-preparation-test--send

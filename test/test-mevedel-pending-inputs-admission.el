@@ -19,7 +19,9 @@
 (mevedel-deftest mevedel-pending-inputs--wake-for-event/admission (:quiet t)
   (dolist (implementation '(nil t))
     (dolist (sticky-plan '(nil t))
-      (mevedel-engine-test--with-session
+      ;; Each engine retains a project control.  Wake permission selection is
+      ;; request-local; both storage modes still persist real transcripts.
+      (mevedel-engine-test--with-session :file-workspace (or implementation sticky-plan)
         (mevedel-request-end)
         (let ((gptel--known-backends nil)
               (mevedel-claude-code-directory (file-name-concat root "claude"))
