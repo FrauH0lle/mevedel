@@ -1402,10 +1402,8 @@ a disabled transport cleans immediately instead of dropping work"
                    root (list root) (plist-get availability :executable)
                    (plist-get availability :mount-proc) nil))
             (let* ((command (plist-get prepared :command))
-                   (masks (cl-loop for (flag target)
-                                   on (mevedel-sandbox--runtime-arguments root nil)
-                                   by #'cddr
-                                   when (equal flag "--tmpfs") collect target))
+                   (masks (mapcar #'directory-file-name
+                                  (mevedel-sandbox--runtime-masks root)))
                    (masked (test-mevedel-sandbox--run-confined command))
                    (unmasked (test-mevedel-sandbox--run-confined
                               (test-mevedel-sandbox--without-tmpfs command masks))))
@@ -1467,10 +1465,11 @@ a disabled transport cleans immediately instead of dropping work"
                  (append (list (concat "XDG_RUNTIME_DIR=" runtime)
                                (concat "WAYLAND_DISPLAY=" runtime))
                          process-environment)))
-            (should (equal '("--tmpfs" "/run/user")
-                           (mevedel-sandbox--runtime-arguments
-                            (concat "/mevedelmock:sandbox-runtime:" runtime "/")
-                            nil)))))
+            (let ((remote (concat "/mevedelmock:sandbox-runtime:" runtime "/")))
+              (should (equal '("/run/user/") (mevedel-sandbox--runtime-masks remote)))
+              (should (equal '("--tmpfs" "/run/user")
+                             (mevedel-sandbox--runtime-arguments
+                              remote nil '("/run/user/")))))))
       (delete-directory runtime t)))
   :doc "a confined remote command reaches no runtime socket on its target"
   (let ((root (file-truename (make-temp-file "mevedel-sandbox-runtime-remote-" t))))
@@ -1510,6 +1509,106 @@ a disabled transport cleans immediately instead of dropping work"
                   (should (file-exists-p (file-name-concat root "written"))))
               (when prepared (mevedel-sandbox-cleanup prepared)))))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-sandbox--check-runtime-grants ()
+  ,test
+  (test)
+  :doc "runtime-directory grants are refused; admitted, one would reopen the bus"
+  (let* ((mevedel-sandbox--probe-cache nil)
+         (availability (mevedel-sandbox-probe))
+         (runtime (format "/run/user/%d" (user-uid)))
+         (bus (concat runtime "/bus")))
+    (unless (plist-get availability :available)
+      (ert-skip (plist-get availability :reason)))
+    (unless (file-exists-p bus)
+      (ert-skip "No host session bus to protect"))
+    (let ((root (file-truename (make-temp-file "mevedel-sandbox-runtime-grant-" t)))
+          (process-environment (cons "WAYLAND_DISPLAY" process-environment)))
+      (unwind-protect
+          (cl-flet ((prepare (path)
+                      (mevedel-sandbox--confined-preparation
+                       (list "sh" "-c" "test -S \"$1\"" "probe" bus)
+                       root (list root) (plist-get availability :executable)
+                       (plist-get availability :mount-proc)
+                       (list :file-system
+                             (list (list :path path :access 'read :recursive t))))))
+            ;; At, below and above the masked directory.
+            (dolist (path (list runtime (concat runtime "/gnupg") "/run"))
+              (when (file-directory-p path)
+                (should-error (prepare path) :type 'mevedel-sandbox-policy-error)))
+            ;; Negative control: the admitted grant brings the bus back.
+            (cl-letf (((symbol-function 'mevedel-sandbox--check-runtime-grants)
+                       #'ignore))
+              (let ((prepared (prepare runtime)))
+                (unwind-protect
+                    (should (zerop (car (test-mevedel-sandbox--run-confined
+                                         (plist-get prepared :command)))))
+                  (mevedel-sandbox-cleanup prepared)))))
+        (delete-directory root t)))))
+
+(mevedel-deftest mevedel-sandbox--socket-arguments ()
+  ,test
+  (test)
+  :doc "a host socket in a masked shared directory is unreachable; unmasked it is reachable"
+  (let* ((mevedel-sandbox--probe-cache nil)
+         (availability (mevedel-sandbox-probe))
+         (python (executable-find "python3")))
+    (unless (plist-get availability :available)
+      (ert-skip (plist-get availability :reason)))
+    (unless python (ert-skip "python3 is unavailable"))
+    (let* ((shared (file-truename (make-temp-file "mevedel-sandbox-host-sockets-" t)))
+           (socket (file-name-concat shared "X0"))
+           (root (file-truename (make-temp-file "mevedel-sandbox-socket-root-" t)))
+           (server (make-network-process :name "host-control" :family 'local
+                                         :server t :noquery t :service socket))
+           (mevedel-sandbox--socket-directories (list shared))
+           prepared)
+      (unwind-protect
+          (progn
+            (setq prepared
+                  (mevedel-sandbox--confined-preparation
+                   (list python "-c"
+                         (concat "import socket, sys; "
+                                 "socket.socket(socket.AF_UNIX).connect(sys.argv[1])")
+                         socket)
+                   root (list root) (plist-get availability :executable)
+                   (plist-get availability :mount-proc) nil))
+            (let ((command (plist-get prepared :command)))
+              (should-not (zerop (car (test-mevedel-sandbox--run-confined command))))
+              ;; Negative control: the same command without the directory mask.
+              (should (zerop (car (test-mevedel-sandbox--run-confined
+                                   (test-mevedel-sandbox--without-tmpfs
+                                    command (list shared))))))))
+        (when prepared (mevedel-sandbox-cleanup prepared))
+        (delete-process server)
+        (delete-directory shared t)
+        (delete-directory root t))))
+  :doc "shared X11 and ICE socket directories are empty inside confinement"
+  (let* ((mevedel-sandbox--probe-cache nil)
+         (availability (mevedel-sandbox-probe))
+         (directories (cl-remove-if-not #'file-directory-p
+                                        mevedel-sandbox--socket-directories)))
+    (unless (plist-get availability :available)
+      (ert-skip (plist-get availability :reason)))
+    (unless directories
+      (ert-skip "No shared socket directory on this host"))
+    (let ((root (file-truename (make-temp-file "mevedel-sandbox-x11-" t)))
+          prepared)
+      (unwind-protect
+          (progn
+            (setq prepared
+                  (mevedel-sandbox--confined-preparation
+                   (append (list "sh" "-c" "for d; do ls -A \"$d\"; done" "probe")
+                           directories)
+                   root (list root) (plist-get availability :executable)
+                   (plist-get availability :mount-proc) nil))
+            (let ((result (test-mevedel-sandbox--run-confined
+                           (plist-get prepared :command))))
+              (should (zerop (car result)))
+              (should (string-match-p "\\`MEVEDEL_SANDBOX_STARTED_[^\n]*\n\\'"
+                                      (cdr result)))))
+        (when prepared (mevedel-sandbox-cleanup prepared))
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-sandbox--confined-preparation ()
   ,test

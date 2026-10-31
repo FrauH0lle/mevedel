@@ -999,17 +999,35 @@ commands on the host), the systemd user manager, gpg-agent and its ssh socket,
 the GNOME keyring and KWallet, an Emacs server, PipeWire and PulseAudio,
 accessibility, portal and podman sockets, and the X authority cookie stored
 there. Inside, the runtime directory is writable, private and discarded on
-exit. The following are bound back on top of the tmpfs: writable roots and
-explicit filesystem grants beneath it, the Git SSH broker directory, and,
-locally, the Wayland socket named by `WAYLAND_DISPLAY`, so graphical checks
-keep their display. The compositor therefore remains reachable, and its own
-protocol policy governs what a client may do. Still reachable are system
-sockets outside the runtime directory, such as the system D-Bus at
-`/run/dbus/system_bus_socket`, where polkit decides each action, and any
-path-based X11 socket under `/tmp/.X11-unix`. Abstract sockets, including
-Xwayland's, are reachable only with a network grant, because network
-isolation separates the abstract namespace. A remote target's
-`XDG_RUNTIME_DIR` outside `/run/user` is not masked.
+exit. Writable roots beneath it, the Git SSH broker directory and, locally,
+the Wayland socket named by `WAYLAND_DISPLAY` are bound back on top of the
+tmpfs, so graphical checks keep their display. The compositor therefore
+remains reachable, and its own protocol policy governs what a client may do.
+Grant mounts follow the mask, so a filesystem grant at, below or above a
+masked directory (for example `/run/user/UID`, its `gnupg/` or `/run`) would
+bring the sockets back; confined preparation refuses such a grant, and only
+a full escalation reaches those services. `/tmp/.X11-unix` and `/tmp/.ICE-unix`
+are also replaced by empty tmpfs mounts: an X server accepts input injection
+and the ICE session manager controls the desktop session.
+
+Socket masking is path-based, so other host sockets remain reachable:
+
+- The system D-Bus at `/run/dbus/system_bus_socket`. polkit gates each action;
+  those allowed without authentication are essentially logind power
+  operations for the active session.
+- systemd's local SSH socket `/run/ssh-unix-local/socket`, which still requires
+  SSH authentication; the ssh-agent and `~/.ssh` are hidden.
+- The system manager's Varlink socket `/run/systemd/io.systemd.Manager`, whose
+  privileged methods are permission-checked.
+- Sockets other programs place elsewhere in shared temporary space or in
+  writable roots, such as a Codex app-server control socket under
+  `/tmp/codex-daemon-UID/` and Qt single-instance or login-manager sockets in
+  `/tmp`. The temporary directory stays shared because commands, native tools
+  and batch Eval exchange files through it.
+- Abstract sockets, including Xwayland's, only with a network grant: network
+  isolation separates the abstract namespace.
+
+A remote target's `XDG_RUNTIME_DIR` outside `/run/user` is not masked.
 
 An explicitly approved write grant for a character or block device mounts
 only that device node with device access enabled. Its source is opened and
