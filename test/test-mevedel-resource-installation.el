@@ -95,7 +95,10 @@
                                                        :file_path :path)
                                                    address)
                                              options))
-                                      (deadline (+ (float-time) 10))
+                                      ;; Progress watchdog, not a latency assertion:
+                                      ;; allow the helper's 20 s timeout to settle
+                                      ;; even under full-suite contention.
+                                      (deadline (+ (float-time) 60))
                                       done result)
                                  (funcall
                                   (pcase operation
@@ -106,7 +109,9 @@
                                   args)
                                  (while (and (not done) (< (float-time) deadline))
                                    (accept-process-output nil 0.01))
-                                 (should done)
+                                 (unless done
+                                   (ert-fail (format "No callback for %s %s %S"
+                                                     operation address options)))
                                  (let ((text (plist-get result :result)))
                                    (should (stringp text))
                                    (when attempt
