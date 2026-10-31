@@ -299,7 +299,7 @@
 			 (setq seen-active (mevedel-journal-cleanup-active-p workspace))
 			 (let ((load-path (cons compiled load-path)))
                            (apply start args)))))
-	      (should (mevedel-journal-worker-supported-p workspace))
+	      (should (mevedel-journal-worker-local-p workspace))
 	      (setf (mevedel-workspace-journal-cleanup-at workspace) (float-time))
 	      (puthash key '(:status waiting) mevedel-memory-pass--drains)
 	      (mevedel-journal-cleanup-schedule workspace t)

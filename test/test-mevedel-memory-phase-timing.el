@@ -129,16 +129,16 @@
             ((symbol-function 'mevedel-telemetry--monotonic-now) (lambda () now))
             ((symbol-function 'mevedel-telemetry-record-workspace)
              (lambda (_workspace event &rest props) (push (cons event props) events)))
-            ((symbol-function 'mevedel-journal-worker-supported-p) (lambda (_) t))
+            ((symbol-function 'mevedel-journal-worker-local-p) (lambda (_ &optional _roots) t))
             ((symbol-function 'mevedel-journal-cleanup-schedule) #'ignore)
             ((symbol-function 'mevedel-journal-worker-start)
-             (lambda (_workspace operation cb &optional _context payload _owner)
+             (cl-function (lambda (_workspace operation payload cb &key ((:owner _owner)))
                (setq storage-callback cb
                      storage-reply
                      (pcase operation
                        ('memory-prepare (list :prepared (mevedel-memory-pass--prepare workspace payload)))
                        ('memory-publish (mevedel-memory-pass--publish workspace payload))
-                       ('memory-recover (list :ok t :operation-id (plist-get payload :operation-id)))))))
+                       ('memory-recover (list :ok t :operation-id (plist-get payload :operation-id))))))))
             ((symbol-function 'mevedel-memory-review-request)
              (lambda (_scope _entries cb &rest _) (setq review-callback cb) (list :cancel #'ignore))))
     (setq state (mevedel-memory-pass-start workspace (lambda (reply) (setq result reply)) :memory-only t))
