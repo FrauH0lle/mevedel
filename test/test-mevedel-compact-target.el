@@ -709,6 +709,8 @@
   :doc "cold batched inspection shows one marker and preserves the parent draft"
   (test-mevedel-compact--with-persisted-agent
       (agent-buffer invocation session canonical-path parent-buffer)
+    (setq-local mevedel--session session)
+    (mevedel-transcript-enable-gptel-mode)
     (test-mevedel-compact--insert-agent-task
      invocation "inspect" "Keep this task.")
     (insert (propertize "Old response.\n" 'gptel 'response))
@@ -749,25 +751,42 @@
         (when (buffer-live-p cold) (kill-buffer cold))
         (when (buffer-live-p parent-view) (kill-buffer parent-view)))))
 
-  :doc "literal summary examples in the task do not imply compaction"
+  :doc "fully tagged task examples do not imply compaction in live or saved views"
   (test-mevedel-compact--with-persisted-agent
       (agent-buffer invocation session canonical-path parent-buffer)
+    (setq-local mevedel--session session)
+    (mevedel-transcript-enable-gptel-mode)
     (test-mevedel-compact--insert-agent-task
      invocation "inspect"
-     "Literal example:\n#+begin_summary\nKeep this example.\n#+end_summary\n")
+     "Literal example:\n#+begin_summary mevedel-role=compaction-summary\nKeep this example.\n#+end_summary\n")
     (insert (propertize
              "#+begin_reasoning\n#+begin_summary mevedel-role=compaction-summary\nReasoning example.\n#+end_summary\n#+end_reasoning\n"
              'gptel 'ignore))
     (insert (propertize "Agent response.\n" 'gptel 'response))
-    (let ((view (mevedel-view--ensure-agent-transcript-view
-                 "/root/explorer"
-                 (list :session session :buffer agent-buffer :live-buffer t)
-                 nil)))
+    (should (mevedel-agent-conversation-save invocation))
+    (let ((cold (generate-new-buffer " *cold-literal-agent*")))
       (unwind-protect
-          (with-current-buffer view
-            (should-not (string-search "conversation compacted" (buffer-string)))
-            (should (string-search "Keep this example." (buffer-string))))
-        (kill-buffer view)))))
+          (progn
+            (with-current-buffer cold
+              (insert (mevedel-session-artifacts-read-artifact
+                       session (file-relative-name
+                                canonical-path (mevedel-session-save-path session)))))
+            (dolist (source (list agent-buffer cold))
+              (let ((view (mevedel-view--ensure-agent-transcript-view
+                           "/root/explorer"
+                           (list :session session :buffer source
+                                 :live-buffer (eq source agent-buffer))
+                           nil)))
+                (unwind-protect
+                    (with-current-buffer view
+                      (save-window-excursion
+                        (switch-to-buffer view)
+                        (while mevedel-view-render--batch
+                          (mevedel-view-render--batch-step view mevedel-view-render--batch)))
+                      (should-not (string-search "conversation compacted" (buffer-string)))
+                      (should (string-search "Keep this example." (buffer-string))))
+                  (kill-buffer view)))))
+        (kill-buffer cold)))))
 
 (mevedel-deftest mevedel-compact-target-main-target ()
   ,test

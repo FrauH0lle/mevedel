@@ -603,6 +603,8 @@ Agent inspection shows the same compacted-conversation separator, retaining
 the task anchor and hiding the model-visible summary in both live and saved
 transcripts. Summary discovery runs only during full-history preparation;
 ordinary streaming does not rescan history for it.
+Only producer-owned ignored wrappers establish an agent summary's ownership;
+literal tagged summary examples in task text remain visible.
 
 Continuation after compaction resets gptel's stream insertion state at the end
 of the new transcript. Response, reasoning, and tool output therefore follow

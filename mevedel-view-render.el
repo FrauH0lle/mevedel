@@ -190,8 +190,6 @@
 		  "mevedel-transcript" (open-regexp close-tag limit))
 (declare-function mevedel-transcript--mailbox-open-at-point
                   "mevedel-transcript" (kind limit))
-(declare-function mevedel-transcript--org-block-depths-before
-                  "mevedel-transcript" (pos &optional start tool-depth summary-depth))
 (declare-function mevedel-transcript--org-tool-block-parts
 		  "mevedel-transcript" (start end))
 (declare-function mevedel-transcript--overlay-range
@@ -8604,25 +8602,18 @@ Call after restoring properties.  This does not mutate the view."
       (when (and (not summary-source)
                  (buffer-local-value 'mevedel-view--agent-transcript-p view-buf))
         (save-excursion
-          (goto-char scan-start)
-          (while (and (not summary-source)
-                      (re-search-forward
-                       "^#\\+begin_summary mevedel-role=compaction-summary[ \t]*$" nil t))
-            (let* ((begin (match-beginning 0))
-                   (end (mevedel-transcript--skip-leading-summary-block begin))
-                   (property (get-text-property begin 'gptel)))
-              (when (and (> end begin)
-                         (or (and (eq property 'ignore)
-                                  (not (eq (get-text-property (1- begin) 'gptel)
-                                           'ignore)))
-                             ;; GPTEL_BOUNDS does not retain ignored wrappers.
-                             ;; Do not mistake a quoted marker in a block for
-                             ;; the persisted, explicitly tagged summary.
-                             (and (null property)
-                                  (equal '(0 . 0)
-                                         (mevedel-transcript--org-block-depths-before
-                                          begin)))))
-                (setq summary-source (cons begin end)))))))
+          ;; Walk producer-owned runs, not task text.  gptel persists ignored
+          ;; wrappers in GPTEL_BOUNDS.  The role tag alone grants no ownership.
+          (let ((position scan-start))
+            (while (and (not summary-source) (< position (point-max)))
+              (when (eq (get-text-property position 'gptel) 'ignore)
+                (goto-char position)
+                (when (looking-at "#\\+begin_summary mevedel-role=compaction-summary[ \t]*$")
+                  (let ((end (mevedel-transcript--skip-leading-summary-block position)))
+                    (when (> end position)
+                      (setq summary-source (cons position end))))))
+              (setq position (next-single-property-change
+                              position 'gptel nil (point-max)))))))
       (let ((summary-audits
              (and summary-source
                   (mevedel-view--summary-hook-audits
