@@ -405,11 +405,14 @@ command's conservative classification.  Other text is unchanged."
     (let* ((marker mevedel-permission--shell-syntax-marker)
            (masked (mevedel-permission--mask-shell-syntax command))
            (unsafe (format "%c-%c" marker (+ marker 255)))
+           ;; Plain text matches one character per repetition: a nested
+           ;; `+' inside the `*' backtracks exponentially when no blank
+           ;; follows the value, as before a `;'.
            (assignment
             (concat "\\([A-Za-z_][A-Za-z0-9_]*\\)="
                     "\\(?:'[^']*'"
                     "\\|\"[^\"\\\\$`" unsafe "]*\""
-                    "\\|[^ \t'\"\\\\$`" unsafe "]+\\)*"
+                    "\\|[^ \t'\"\\\\$`" unsafe "]\\)*"
                     "[ \t]+"))
            (separators (mapcar (lambda (char) (+ marker char))
                                '(?\; ?| ?\n ?&)))

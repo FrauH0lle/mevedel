@@ -167,7 +167,13 @@
                     command '("A")))))
   :doc "leaves commands unchanged without names or a string"
   (should (equal "A=1 cmd" (mevedel-permission-rules-strip-safe-assignments "A=1 cmd" nil)))
-  (should-not (mevedel-permission-rules-strip-safe-assignments nil '("A"))))
+  (should-not (mevedel-permission-rules-strip-safe-assignments nil '("A")))
+  :doc "scans a long assignment ending at a separator in linear time"
+  (let* ((command (concat "S=/" (make-string 24 ?a) "; ls"))
+         (start (float-time))
+         (result (mevedel-permission-rules-strip-safe-assignments command '("A"))))
+    (should (equal command result))
+    (should (< (- (float-time) start) 0.2))))
 
 (mevedel-deftest mevedel-permission-rules-find ()
   ,test
