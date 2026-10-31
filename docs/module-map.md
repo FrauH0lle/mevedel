@@ -144,6 +144,7 @@ Chat / view
   mevedel-view-control-transfer.el cooperative transfer polling, presentation, and commands
   mevedel-view-disclosure.el  source-backed transcript disclosure state and actions
   mevedel-view-prepare.el     deferred large-tool parsing, source validation, job lifecycle
+  mevedel-activity-group.el   activity-group rule shared by the view and browser
   mevedel-view-render.el      transcript projection, source mapping, live navigation
   mevedel-view-segments.el    historical session segment projection and navigation
   mevedel-view-stream.el      request progress, view animation timer, streaming redraws

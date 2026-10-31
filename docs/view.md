@@ -849,7 +849,9 @@ activity is never rewritten. The search stops at turn-closing chrome, so a
 directive response without its own heading never takes a rule from the user
 turn before it. Activity that ends a turn is closed by the turn's rule.
 
-Runs of more than `mevedel-view-tool-group-collapse-threshold` (default 3)
+`mevedel-activity-group.el` alone decides which activity folds, for this view
+and the browser projection alike. Runs of more than
+`mevedel-view-tool-group-collapse-threshold` (default 3; zero disables)
 plain tool rows fold into one grouped activity row such as
 `Searched 5 patterns, read 1 file, ran 5 commands`; tools
 without a verb mapping — MCP tools included — appear as `NAME ×N`. A summary
@@ -878,8 +880,11 @@ open, so it does not fold later when the reader moves on. Grouping therefore
 does not hide or move text the reader is inspecting. An explicit group fold wins over
 its children's states. Rows that demand individual presentation — agent
 handles, compound tools, rows carrying hook audits, rows their renderer wants expanded or
-compact, and coalesced rows — never fold into a group; they split the run
-around themselves. Substantive thinking also splits surrounding tool runs:
+compact, and coalescing rows — never fold into a group; they split the run
+around themselves. A standalone hook audit row splits the run the same way.
+Hidden rows such as routine polls, the transcript's own completion delivery
+and request summaries, which render after the activity they close, neither
+join nor split it. In-flight calls join the trailing run as running members. Substantive thinking also splits surrounding tool runs:
 it renders as a standalone **Thinking...** disclosure, expanded by default,
 so collapsing either neighboring group never hides it. Explicit manual
 collapse and expansion survive streaming chunks, tool completion, settlement,
