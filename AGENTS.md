@@ -54,7 +54,8 @@ For interactive commands, see [README.md](README.md#usage).
 - Put ordinary investigations, reports, working notes, drafts, and handoffs in
   `work://shared/`, not `.scratch/`. This applies to full reports as well as short
   summaries and takes precedence over general scratch-storage guidance in the
-  backlog and agent docs.
+  backlog and agent docs. The [shared-note lifecycle](docs/memory-notes.md) owns
+  authoring, extraction and disposal details.
 - Use Markdown for notes, one topic per file; search first and update relevant
   existing material. Use a descriptive first heading and source/task attribution
   in prose; there is no note header or lifecycle label to maintain. Keep actionable

@@ -990,7 +990,7 @@ durable plans for the parent and retained agents. `work://shared/` maps to
 workspace-owned, untracked `.mevedel/shared/` for temporary working notes and
 handoffs across sessions, with agent-chosen filenames and folders. Memory
 consolidation extracts their lasting knowledge and removes them
-([shared working-note lifecycle](memory.md#shared-working-note-lifecycle)).
+([shared working-note lifecycle](memory-notes.md#shared-working-note-lifecycle)).
 See [`address-to-resource.md`](address-to-resource.md) and
 [`ADR 0104`](adr/0104-keep-resource-addresses-closed-and-capability-neutral.md).
 
@@ -1042,8 +1042,9 @@ retrieving the memory manual before mutations. Buddy receives no saving
 procedure. Unchanged indexes do not rewrite this section at midnight. Durable memory bodies live in linked topic files under the
 same root, using `user`, `feedback`, `project`, or `reference`
 frontmatter. `MEMORY.md` should contain one-line links only.
-LLM-writable. See [`memory.md`](memory.md) for the full layout, save
-policy, staleness rules, and the `/remember` consolidation command and cockpit.
+LLM-writable. See [curated memory](memory-curated.md) for the full layout, save
+policy and staleness rules, and the [review contract](memory-review.md) for the
+`/remember` consolidation command and cockpit.
 
 Completed saved root turns, digest publication and workspace activation offer
 automatic consolidation. A disposable workspace timing cache keeps the hot check

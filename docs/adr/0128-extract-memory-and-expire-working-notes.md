@@ -1,15 +1,16 @@
 # Extract memory and expire working notes
 
-Status: Proposed
+Status: Accepted
 
 ## Scope and decision status
 
-This records the lifecycle implemented on the `note-lifecycle` branch after the
+This records the lifecycle implemented after the
 user's 2026-10-29 scope decisions. It separates shared notes from the journal
 publication and durable-memory transaction protocol in
-[ADR 0117](0117-publish-journal-results-from-fenced-outcomes.md). Status remains
-Proposed pending user review and cutover; no live cleanup or migration has been
-performed. The runtime has no header codec, kind/status policy or note undo.
+[ADR 0117](0117-publish-journal-results-from-fenced-outcomes.md). Finite daily cohorts
+(`0dba3ac4`), headerless permanent disposal (`2028fe48`) and admission-derived
+deletions (`569c37db`) are implemented on `master`. The runtime has no header
+codec, kind/status policy or note undo.
 
 ## Context
 
@@ -205,24 +206,24 @@ version gate. Session serialization is unchanged; its migrator is not involved.
 
 ### What this supersedes in ADR 0117
 
-ADR 0117's **Current decision** replaces the old paragraphs beginning **“Explicit
-backlog drain coordinates”** (progress-qualified catch-up and 48-batch ceiling),
-**“Acceptance converts a condense”** (identical-condense normalization), and
-**“Shared working files are not journal input”** through the note lifecycle end
-(three dispositions, open-item/anchor/numeric/source-marker guards and system trash).
+ADR 0117's [Current decision](0117-publish-journal-results-from-fenced-outcomes.md#current-decision)
+now points here for shared-note review cadence (formerly progress-qualified
+catch-up and a 48-batch ceiling), identical-condense normalization, and the shared-note
+lifecycle (formerly three dispositions, open-item/anchor/numeric/source-marker guards
+and system trash).
 The separate journal, ownership, exact-write, durable rollback and recovery
 decisions remain.
 Ordinary history retention remains distinct from disposable-file age and does
 not make note reversal available.
 
 The following **Decision history** choices are replaced, retaining why each
-was tried: **“2026-10-29: Catch-up follows fresh arrivals; identical condensation
-is retention”**, **“2026-10-29: Preserve numeric paragraphs structurally instead of
-keeping whole notes”**, **“2026-10-28: Progress guards automatic catch-up; the cap is
-a ceiling”**, and the system-trash alternative in **“Size alone no longer blocks
-every shared-file cleanup path.”** The complete-note/chunk and attachment
-reference-scan rationale remains. The failure behind **“Shared files left the journal for
-a consolidation-owned lifecycle”** still supports direct note review; its
+was tried: [catch-up and identical condensation](0117-publish-journal-results-from-fenced-outcomes.md#2026-10-29-catch-up-follows-fresh-arrivals-identical-condensation-is-retention),
+[numeric preservation](0117-publish-journal-results-from-fenced-outcomes.md#2026-10-29-preserve-numeric-paragraphs-structurally-instead-of-keeping-whole-notes),
+[progress-qualified catch-up and its cap](0117-publish-journal-results-from-fenced-outcomes.md#2026-10-28-progress-guards-automatic-catch-up-the-cap-is-a-ceiling),
+and the system-trash alternative in **“Size alone no longer blocks every shared-file
+cleanup path.”** The complete-note/chunk and attachment reference-scan rationale
+remains. The failure behind **“Shared files left the journal for a consolidation-owned
+lifecycle”** still supports direct note review; its
 three-disposition remedy is replaced, not the separation from journal capture.
 
 ## Decision history

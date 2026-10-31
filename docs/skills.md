@@ -211,7 +211,8 @@ review and opens the proposals cockpit. `M-x mevedel-remember` does the same;
 a prefix argument asks for focus. In manual mode, proposals wait for explicit
 decisions through the captured-state application checks. The table provides
 full body/diff/evidence inspection, accept/reject, and checked recovery or
-reversal. See [memory](memory.md).
+reversal. See the [review contract and cockpit](memory-review.md) and
+[application and recovery](memory-recovery.md).
 
 Raw skill names come from frontmatter `name` when valid, otherwise the
 containing directory name. Raw names must match `[a-z0-9-]+`; visible
@@ -966,4 +967,4 @@ permissions and review. It does not expire files by age or reorganize folders.
 It is an explicit, conservative cleanup within a conversation. Automatic
 cleanup belongs to memory consolidation, which extracts lasting knowledge from
 quiet shared files and prefers deleting them afterwards; see
-[Shared working-note lifecycle](memory.md#shared-working-note-lifecycle).
+[Shared working-note lifecycle](memory-notes.md#shared-working-note-lifecycle).

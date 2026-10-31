@@ -1,5 +1,9 @@
 # Module layer map
 
+Memory and journal modules below implement the [curated-memory](memory-curated.md),
+[review](memory-review.md), [decision/application/recovery](memory-recovery.md),
+[shared-note lifecycle](memory-notes.md) and [journal](memory-journal.md) contracts.
+
 ```
 Entry point
   mevedel.el                  foundational data, command autoloads, install/uninstall, directives

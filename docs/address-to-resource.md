@@ -236,7 +236,7 @@ Shared Markdown notes (`.md`, case-insensitive) are ordinary authored files.
 ApplyPatch neither adds nor validates note headers. One setting,
 `mevedel-working-note-max-age-days` (default 14, nil disables disposal), controls
 modification-age readiness for every note and attachment.
-See the [note-authoring contract](memory.md#shared-working-note-lifecycle).
+See the [note-authoring contract](memory-notes.md#shared-working-note-lifecycle).
 
 Memory consolidation reviews a finite daily cohort of age-ready shared notes,
 extracts qualifying lasting knowledge and proposes deletion through ID-only
@@ -247,7 +247,7 @@ trash is used. Reversing an extraction does not restore deleted notes.
 Age-ready empty folders can be pruned,
 but the shared root remains. These safety outcomes appear in capture/application
 observations, not as current guarantees from an age-readiness listing.
-See [Shared working-note lifecycle](memory.md#shared-working-note-lifecycle).
+See [Shared working-note lifecycle](memory-notes.md#shared-working-note-lifecycle).
 `/clean-work [focus]` remains an explicit, interactive cleanup through normal
 ApplyPatch permissions and review; `/learn` handles requested promotion.
 

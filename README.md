@@ -1457,12 +1457,12 @@ frontmatter that classifies them as user, feedback, project, or reference
 memories. The native `/remember [focus]` command reviews journal evidence and
 memory, then presents proposals for cleanup or promotion in the memory cockpit.
 Use `/remember drain`, `M-x mevedel-remember-drain`, or `D` in that cockpit to
-review a backlog in successive bounded batches; `k` stops it. Auto mode catches
-up at later idle opportunities, capped by
-`mevedel-memory-consolidation-max-batches-per-day` (default 8 general batches per
-rolling 24 hours). Each batch is a separate normal-sized request, so catch-up
-can cost up to eight such requests per day instead of one; explicit drain is
-uncapped.
+review a backlog in successive bounded batches; `k` stops it. Automatic review
+admits one daily finite cohort of age-ready shared-note versions and services it
+in bounded batches. Later arrivals and changed versions wait for the next cohort.
+Explicit review or drain can bypass daily timing, not capture or mutation safety.
+Propose mode leaves decisions for approval; auto applies memory extraction before
+permanently deleting the exact reviewed notes through checked decisions.
 Memory roots are independent of session sidecars. See the [memory guide](docs/memory.md)
 for automatic review modes, proposal decisions, and journal recovery.
 
@@ -1542,7 +1542,8 @@ The maintained detail docs live in [`docs/`](docs/):
   rewind, fork, locking, and cleanup.
 - [`docs/compaction.md`](docs/compaction.md) — manual and automatic compaction,
   summaries, and segment rotation.
-- [`docs/memory.md`](docs/memory.md) — memory layout and durable-memory rules.
+- [`docs/memory.md`](docs/memory.md) — overview of the curated-memory, review,
+  application/recovery, shared-note and journal contracts.
 - [`docs/buddy.md`](docs/buddy.md) — unasked review of recent edits, the
   guidance command, and note lifecycle.
 - [`docs/reminders.md`](docs/reminders.md) — system-reminder injection.

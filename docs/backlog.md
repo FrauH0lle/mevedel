@@ -70,13 +70,6 @@ extracted 4 of 4 planted lessons without promoting routine notes. Remaining:
 Managed Bash commands run until they exit or are stopped. `145c66a` removed
 `mevedel-bash-timeout` (120 s default) and the model-facing `timeout_seconds`,
 so only a native `timeout` the model writes itself bounds a command. A
-### Memory and docs upkeep (retro 2026-10-30)
-
-- Split `docs/memory.md` (about 1,700 lines) by subsystem: journal, review
-  contract, note lifecycle, recovery; reach each from the documentation map.
-- Mark ADR 0117 sections superseded by ADR 0128 with one pointer instead of
-  keeping their full text inline.
-
 ## Agents
 
 - After compaction, a retained agent can resume its original assignment

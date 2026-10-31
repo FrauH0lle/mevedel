@@ -274,18 +274,9 @@ Target-sensitive recovery retains its conservative uncertain-scope preflight.
 Explicit inspection and decision commands retain synchronous authentication and
 processing; display responsiveness does not establish nonblocking manual actions.
 
-Explicit backlog drain coordinates successive bounded general reviews through
-the same claim and settlement owner; it yields between batches and waits while
-local consolidation, application or cleanup runs; other sessions' turns do not
-stop it, and notes they use wait. Automatic shared-note review has one
-target-clock daily cycle, due inclusively 24 hours after the preceding cycle's
-admission. It freezes a bounded eligible path/version cohort under existing
-ownership and services that finite cohort through ordinary bounded passes in
-propose or auto mode. Manual mode requires a request. Empty cohorts start no
-note inference; independent journal reviews and explicit allow-empty memory
-reviews retain their ordinary behavior. New arrivals and changed versions wait
-for the next cohort. General `/remember` participates for one bounded pass,
-including when its allow-empty option is set; a focused review excludes notes.
+The shared-note review-cadence, finite-cohort and explicit-drain text is
+superseded by [ADR 0128, One daily review, bounded batches](0128-extract-memory-and-expire-working-notes.md#one-daily-review-bounded-batches).
+The implementation-specific ownership and recovery boundaries remain below.
 
 `mevedel-memory-cycle.el` owns the private metadata-only
 `.mevedel/state/shared-notes/cycle.el` record per actual workspace journal, bound
@@ -316,10 +307,7 @@ retains its original cohort when resumed. Pausing grants no permanent exemption.
 Pre-admission contention preserves
 the opportunity, with nonzero busy retries and fresh owned admission.
 
-Applied-progress catch-up, capture-history ranking and the rolling successful-
-batch cap are removed. Explicit drain can bypass cycle time and journal
-timing/count thresholds, never age, current-use, unsaved-buffer, pending/recovery
-or mutation checks. The independent journal-only minimum-hours, minimum-digests
+The independent journal-only minimum-hours, minimum-digests
 and sparse-digest policy remain. Only journal-bearing general reviews advance
 that review clock, including through retirement metadata; a note-only cycle
 does not postpone journal work. Accepted outcomes, confirmed application counts
@@ -407,67 +395,26 @@ hides expired entries before removing bytes, and deletes complete dependency
 groups. Later mutations finish accepted expiry before pinning new evidence.
 Curated memory is outside journal expiry. Public retrieval uses `memory://journal/`.
 
-Shared working files are not journal input. They are untracked, machine-local
-and temporary. Only Markdown notes (`.md`, case-insensitive) enter model review;
-other files are attachments even when readable text. Every note and attachment
-uses one modification-age threshold, fourteen days by default, controlled by
-`mevedel-working-note-max-age-days`. There is no note header or label policy.
-The target clock and actual mtime determine age, inclusively at the boundary;
-future mtimes wait. Reads do not reset age. Exact-version
-pending/recovery holds remain; prior retention/rejection/reversal outcomes do
-not start an additional seven-day reconsideration clock. Local observed use
-retains its independent 24-hour access window. Shared-directory Read generates
-bounded age and first-heading rows, explicitly reporting only
-age-readiness with capture/application safety checks pending. The model emits
-ordinary qualifying extraction proposals citing the note ID in evidence, with no
-Notes section or per-note acknowledgement. After successful validation the store
-generates a deletion proposal for every admitted note. Every citing extraction is a disposal
-dependency and must be applied first. Notes are disposable working material,
-not an open-work tracker: deletion needs no inventory of unfinished tasks,
-resolution quotes, source markers, anchors or numeric-retention transformations.
-There is no keep or condense path. Qualifying memory may be empty; task owners
-record actionable open work in the tracker or backlog.
+Shared files remain separate from journal input; their format, discovery and
+modification-age eligibility text is superseded by [ADR 0128, Note format and write
+boundary](0128-extract-memory-and-expire-working-notes.md#note-format-and-write-boundary),
+[Generated discovery](0128-extract-memory-and-expire-working-notes.md#generated-discovery)
+and [Eligibility, not completion proof](0128-extract-memory-and-expire-working-notes.md#eligibility-not-completion-proof).
 
-Permanent memory or instruction citations must be repaired through checked
-updates/removals. Complete current configured memory and applicable instruction
-scope is freshly scanned before note deletion, including indexes, new files and
-roots, captured instruction targets and their absent companions. Any remaining
-citation, unknown scope, unsaved draft, active use or renewed modification age
-holds the note without deciding it. These checks repeat after preparatory IO
-at the mutation boundary; a same-byte touch after capture resets age too.
-Reversing an extraction never restores deleted temporary notes.
-Fourteen-day-old attachments no surviving text, memory or instructions reference
-and age-ready empty folders receive structured decisions without inference.
-Attachment capture preserves complete permanent-scope evidence and omissions;
-application freshly scans all surviving shared text, including readable scripts
-and JSON, rather than trusting mtimes to identify changed referrers. Named
-containing-folder references hold; generic root navigation does not. Unknown
-scope, active use and unsaved drafts hold without a terminal decision. Target,
-scope and use checks repeat at final write admission. This housekeeping
-authority remains separate from model output.
+The note extraction, dependency, citation-check and attachment-housekeeping text
+is superseded by [ADR 0128, Review contract: extract
+memory, then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete).
 
-Failed/rejected reviews create no deletion proposals or writes. Invalid memory
-or instruction output and ambiguous reply structure reject the whole review;
-there is no note-output parser or note-format counter. A successful accepted pass
-proves an attempt for each admitted version in the frozen daily cohort, not that
-every generated disposal was applied. This finite
-attempt set replaces capture-history ranking and progress-based catch-up.
-Accepted reviews
-and decisions are the processing record. Note decisions reuse checked intents
-through a shared-notes target whose coordination stays outside the cleaned
-folder. Deletion is permanent for notes and attachments, without undo copies,
-quota accounting, system trash or restoration. Fresh references, active use,
-unsaved buffers and changed reviewed bytes still hold deletion. Oversized
-UTF-8 notes within a configured upper bound are reviewed alone in sequential
-chunks with a compact running summary, retaining whole-file before-state and
-invalidating that summary if the file changes. Attachment reference scanning
-streams large text rather than making size alone an incomplete scan.
-Auto mode applies them
-without prompts, holding any whose file an open session uses.
+The shared-file disposal text, including removal of note undo, quota and trash,
+is superseded by [ADR 0128, Permanent disposal, not an undo store](0128-extract-memory-and-expire-working-notes.md#permanent-disposal-not-an-undo-store);
+the durable-memory transaction and recovery protocol above remains separate.
 
-The [memory manual](../memory.md) owns configuration, limits, scheduling, proposal
-syntax, commands, inspection, and recovery procedures. Control-program mechanics
-remain in [ADR 0101](0101-carry-control-operations-as-one-pinned-program.md).
+The memory manual owns operational details: [review](../memory-review.md) covers
+configuration, limits, scheduling, proposal syntax, commands and inspection;
+[decisions and recovery](../memory-recovery.md) covers checked application and
+reversal; [journal](../memory-journal.md) covers capture and retention; and
+[shared working notes](../memory-notes.md) covers their lifecycle. Control-program
+mechanics remain in [ADR 0101](0101-carry-control-operations-as-one-pinned-program.md).
 
 ## Rationale, alternatives, and consequences
 
@@ -536,163 +483,60 @@ the unbounded cache probe. Discovery is an observation, not mutation authority.
 
 ### 2026-10-29: Freeze one daily note cohort independently of journal cadence
 
-The earlier progress/cap policy below tried to distinguish useful cleanup from
-repeated unchanged reviews and to catch up a roughly 250-note backlog that could
-otherwise take weeks at sixteen notes per daily review. It still coupled service
-to successful deletion: an invalid acknowledgement or a held first batch could
-stop later useful work, while fresh arrivals could keep extending a productive
-chain. A larger cap bounded successful admissions, not the finite work offered
-for that day, and could not establish cost or capacity.
-
-The replacement freezes a metadata-only eligible cohort once per target-clock
-day and authenticates completed attempts through accepted pass identities.
-Zero deletions and per-note format failures do not repeat the same version or
-prevent later members being attempted; later arrivals and changed versions wait
-for the next cohort. A durable cycle record supports checked resumption, not
-write authority. Cancellation, failed requests, recovery and local-use safety
-remain real stops. Explicit drain can bypass timing and digest-count thresholds,
-not safety. Automatic journal-only admission and its journal-bearing successful-
-review clock remain independent.
-The previous rolling ceiling, progress qualification and fresh-arrival chain
-are historical choices, not alternate runtime modes.
+Progress-qualified catch-up could stall a roughly 250-note backlog on a held
+first batch, while fresh arrivals could extend a productive chain indefinitely;
+the larger cap bounded neither finite work nor cost. This scheduling contract is
+superseded by [ADR 0128, One daily review, bounded batches](0128-extract-memory-and-expire-working-notes.md#one-daily-review-bounded-batches),
+which separates attempted versions from confirmed deletion and journal cadence.
 
 ### 2026-10-29: Extract knowledge and acknowledge deletion, not task resolution
 
-The conservative open-item, authenticated-quote and measurement guards below
-responded to real loss observations, but turned temporary notes into a task
-tracker: a replay retained nearly all reviewed notes instead of extracting the
-few qualifying durable lessons and disposing of working material. The accepted
-direction in [ADR 0128](0128-extract-memory-and-expire-working-notes.md) separates
-those responsibilities. Notes now have delete-only acknowledgements; keep,
-condense, semantic resolution inventories, quote accumulators and preservation
-counters are removed. The earlier rationale remains in this history.
-
-This does not weaken mutation authority or permit dangling permanent citations.
-All citing extractions must apply; current complete memory/instruction scope is
-rechecked after approval and preparation, with nonterminal holds on citations
-or incomplete observations. Instructions now replaces the complete exact
-captured file, including known absence, because append-only updates could not
-repair an old citation. Checked before-state, ownership, rollback, buffers and
-dependent reversal remain the disposal boundary, not semantic task completion.
+Loss guards had turned temporary notes into a task tracker and retained nearly
+every reviewed note. Semantic resolution and the interim delete-acknowledgement
+contract are superseded by [ADR 0128, Review contract: extract memory, then
+delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete),
+which retains extraction and citation checks without model-written dispositions.
 
 ### 2026-10-29: Plain temporary files replace headers and undo
 
-Later the same day, the split seven/fourteen-day age policy and the header
-codec were removed. One fourteen-day mtime setting covers every note and
-attachment; editing resets age, so activity needs no labels models may omit.
-Discovery shows age and first heading only. No header migration is needed.
-Undo, blob capture, quota and note restoration were removed as disproportionate
-for ephemeral files. Extraction dependencies and unchanged-file, active-use and
-unsaved-buffer checks remain. Reversing memory extraction never restores notes.
+Labels could be omitted and undo machinery was disproportionate for temporary
+files. Header and undo policy are superseded by [ADR 0128, Note format and write
+boundary](0128-extract-memory-and-expire-working-notes.md#note-format-and-write-boundary)
+and [Permanent disposal, not an undo store](0128-extract-memory-and-expire-working-notes.md#permanent-disposal-not-an-undo-store).
 
 ### 2026-10-29: Metadata and modification age replace quiet-hour readiness
 
-The next lifecycle direction is recorded in
-[ADR 0128](0128-extract-memory-and-expire-working-notes.md). Its first slices
-replace arbitrary UTF-8 admission and 24-hour quiet readiness with Markdown-only
-notes and seven/fourteen-day modification ages, and remove retention-specific
-seven-day reconsideration branches. Metadata is supplied in the visible tool
-transaction, defaulting to scratch/open; real handoffs are explicitly labelled.
-External unmanaged Markdown keeps the longer fourteen-day margin. Discovery
-shares the age calculation but does not pretend to certify application safety.
-The former quiet setting also controlled local resource-use protection; that
-protection remains as a separate 24-hour observation window. The longer
-modification margins make disposable scratch distinct from genuine open handoffs
-without turning missing metadata or prior retention decisions into immortality.
-Explicit drains exclude exact versions already attempted by their authenticated
-accepted passes, including malformed note acknowledgements and housekeeping;
-otherwise removing retention timers would repeatedly select unchanged keeps
-forever. This local attempt set grants no service credit or write authority.
-Delete-only acknowledgements and finite-cohort scheduling subsequently replaced
-the earlier disposition and catch-up contracts below. Private payload retention
-remains a separate boundary; this history does not promise a new purge deadline.
+Quiet-hour readiness gave idle handoffs too little margin, while retention
+timers and missing labels could preserve notes indefinitely. The split ages,
+metadata and reconsideration branches are superseded by [ADR 0128, Eligibility,
+not completion proof](0128-extract-memory-and-expire-working-notes.md#eligibility-not-completion-proof);
+local observed use remains a separate protection, not an age reset.
 
 ### 2026-10-29: Catch-up follows fresh arrivals; identical condensation is retention
 
-The catch-up policy in this entry was superseded by the daily frozen cohort
-above; no-op condensation was removed with delete-only acknowledgements. The
-failure observations and unchanged-state diagnostic rationale remain historical
-evidence.
-
-The acceptance rerun on source `42a3f1e9` exposed two gaps after the progress
-guard from `d6e43b3a`. The continuation check still required the last capture's
-remaining count to be positive before authenticating progress. A note arriving
-after capture is absent from that count, so a productive final batch could
-strand steady new arrivals behind the ordinary 24-hour gate. A progress-qualified
-completion then offered fresh owned admission regardless of the frozen remainder.
-That admission enforced the rolling-day ceiling and then-current quiet-period,
-suppression, in-use and capture checks. Empty opportunities retained the offer
-without inference, and pre-admission cleanup or claim contention did not erase
-it; a failed or zero-progress batch ended it. This extended the
-bounded opportunities introduced in `2d2b0991`, not the size or write authority
-of any request, and avoided another folder scan inside completion.
-
-The same rerun accepted a condensation whose canonical final-newline bytes
-equalled the original. It created a mutation with identical before/after states;
-the native classifier correctly observed before-state, but settlement called it
-unavailable and incorrectly inferred an interruption. The redundant write also
-advanced mtime, delaying readiness. Acceptance then classified this as an unchanged
-keep, with normal suppression and no note filesystem write. Genuine byte changes
-retained ordinary checked application and undo. The diagnostic for observed
-unchanged targets no longer claims an interruption that may never have occurred.
+The `42a3f1e9` rerun stranded fresh arrivals behind the old remainder gate and
+accepted an identical condensation that reset mtime and falsely suggested an
+interruption. Catch-up is superseded by [ADR 0128, One daily review, bounded
+batches](0128-extract-memory-and-expire-working-notes.md#one-daily-review-bounded-batches);
+condensation normalization is superseded by [Review contract: extract memory,
+then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete).
+The unchanged-target diagnostic remains part of the transaction protocol above.
 
 ### 2026-10-29: Preserve numeric paragraphs structurally instead of keeping whole notes
 
-The generic numeric detector closed a vocabulary gap for cold-result counts and
-ratios, but matched replays of the structural reply contract still applied only
-unchanged keeps. Protecting measurements by blocking disposal retained completed
-background alongside the evidence. Numeric-only losses now produce condenses
-that retain the missing whole paragraphs verbatim, rather than keeps. The model
-can discard unrelated completed prose without having to reproduce every measured
-paragraph in its output. Other delete guards still retain their keep behavior.
-This changes retention mechanics, not semantic resolution proof or undo authority.
-Generated preservation can exceed the model body limit; the private record bound
-accounts for duplicated escaped before/after bytes of a large captured note.
-Useful cleanup and semantic preservation require independent applied-outcome
-grading; a preservation flag alone is not service evidence.
-
-Integration with canonical no-op normalization exposed a regenerated preservation
-body identical to the captured note and accepted-only or held proposals counted
-as preservation applications. Unchanged keeps now drop `:guard-preserved` before
-identity generation. The preserved-condense metric uses existing confirmed-write
-notifications with nonempty changed paths, not accepted flags or terminal-status
-returns. Synchronous and asynchronous jobs include their earlier pending writes;
-propose-only, held, stale, unavailable, rolled-back and already decided proposals
-do not earn credit. Confirmed writes keep their count if cancellation follows.
-Classification metadata does not authorize application or add target reads, and
-later deferred retries do not rewrite a completed pass's telemetry.
-The synchronous pending boundary catches quit so confirmed accounting reaches
-completion while later writes, retry scheduling and catch-up stay stopped. Its
-interrupted fallback reports confirmed writes and one unapplied sweep; it does
-not reconstruct every terminal or failed outcome observed before interruption.
+Numeric-loss guards retained completed background, and generated preservation
+could be byte-identical while accepted or held proposals falsely earned write
+credit. Numeric condensation and its preservation counters are superseded by
+[ADR 0128, Review contract: extract memory, then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete).
+Confirmed-write accounting and cancellation remain independent transaction facts.
 
 ### 2026-10-28: Progress guards automatic catch-up; the cap is a ceiling
 
-This progress/cap policy was superseded by the daily finite-cohort scheduler
-above. Its original spending concern and distinction between accepted proposals
-and actual effects remain relevant; neither the old cap nor progress observation
-is retained as a second scheduling path.
-
-The 2026-10-24 catch-up change in `2d2b0991` used an eight-batch rolling-day
-cap to bound unattended spend while draining large ready backlogs. Successful
-publication alone could rearm catch-up even when every disposition was
-rejected, deferred or left unchanged without suppression. Repeated successful
-reviews could therefore spend the entire allowance without reducing ready work.
-
-Catch-up then required authenticated applied note dispositions from that batch,
-including keep only when it actually suppressed the reviewed version. This
-distinguished useful retention from a no-op without trusting proposal or
-application totals. Zero progress ended the chain and restored ordinary clock
-admission. The default ceiling rose from eight to 48 to allow productive
-backlogs to drain, while remaining a rolling-day spend backstop; zero disabled
-automatic review. It bounded successful batches, not provider calls or billing.
-Explicit general reviews needed progress to seed unattended catch-up, but a failed
-progress observation only recorded its class in telemetry and prevented catch-up;
-it did not change the review result. Explicit drain skipped this scheduling-only
-observation and retained its continuation behavior. Empty-directory pruning
-removed no note content and did not qualify as progress. Claims, freshness,
-recovery, cancellation and idempotent application were unchanged; the
-observation granted only a later scheduling opportunity, never write authority.
+The eight-batch cap from `2d2b0991` could be spent on reviews without effects;
+progress qualification and a later 48-batch ceiling tried to limit that waste.
+Both scheduling guards are superseded by [ADR 0128, One daily review, bounded
+batches](0128-extract-memory-and-expire-working-notes.md#one-daily-review-bounded-batches).
+Accepted proposals still do not establish writes, cost or service capacity.
 
 - **Display collection and retry admission gained separate ownership.** On
   2026-10-27, an authentic four-pass, 32-note fixture spent seconds opening and
@@ -724,13 +568,10 @@ observation granted only a later scheduling opportunity, never write authority.
   limits. Scanning now streams with filename overlap. Useful oversized notes
   can receive bounded chunk review while very large copies remain explicitly
   blocked for manual splitting or relocation. Attachments above the undo quota
-  initially used verified system trash instead of permanent deletion or an
-  unbounded blob exception; remote and unknown platform trash remained
-  fail-closed. On 2026-10-29 this alternative was removed to keep one private undo
-  path for all shared files. Quota pressure or unavailable accounting then held
-  the original rather than creating an external retained copy. Later that day,
-  undo itself was dropped because temporary files do not justify recovery
-  machinery. Streaming and bounded oversized-note review remain useful.
+  initially used verified system trash to avoid unbounded blobs; that alternative
+  and the subsequent private-undo path are superseded as disproportionate for
+  temporary files by [ADR 0128, Permanent disposal, not an undo store](0128-extract-memory-and-expire-working-notes.md#permanent-disposal-not-an-undo-store).
+  Streaming and bounded oversized-note review remain useful.
 
 - **Shared files left the journal for a consolidation-owned lifecycle.**
   Capture read shared files before session files within one 32-KiB bound in
@@ -742,8 +583,9 @@ observation granted only a later scheduling opportunity, never write authority.
   had grown it to 57 MB over 66 commits, mostly lab output, although the user
   does not exchange shared files between machines. The user asked for notes
   to be extracted reliably and then removed, automatically and without prompts
-  in `auto`. Consolidation now reads complete note versions and records their
-  dispositions as decisions; session-local notes stay in capture.
+  in `auto`. The direct-review separation remains; its disposition contract is
+  superseded by [ADR 0128, Review contract: extract memory, then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete).
+  Session-local notes stay in capture.
 
 - **Remote journal work ran one target program per check.** A September 23
   capture of a remote session found 117 control programs, about 12 s of
@@ -1344,46 +1186,19 @@ moved: one 900-second native drain admitted nothing. The gate was also too weak
 in the other direction: an old handoff that an idle session had just read was
 not protected at all.
 
-A note is now in use while a session whose buffer is live, including its
-sub-agents, named that file through a `work://shared/` tool within the quiet
-period. The resource layer records the fact; the notes module decides. Capture
-leaves in-use notes for later, automatic application holds only those
-decisions and rechecks at the mutation boundary, and the retry runs once any
-held file is free. Other sessions' turns no longer stop the drain. The user
-chose this lease over transcript mentions, accepting that shell access by
-ordinary path, accesses before an editor restart and other clients' sessions
-are not observed; the quiet period still protects recently changed files.
+The workspace-wide gate and shared quiet-period setting are superseded by
+[ADR 0128, Eligibility, not completion proof](0128-extract-memory-and-expire-working-notes.md#eligibility-not-completion-proof):
+exact-file local use protects a note independently of modification age, with
+shell reads, prior restarts and other clients remaining unobserved.
 
 ### 2026-10-28: account for open items before deleting a note
 
-Audited reviews deleted notes whose unresolved findings, unverified leads or
-acceptance limits had no later resolution or record, and a held proposal
-named two unresolved findings while proposing deletion. Each of the last three
-native reviews made no tool call. The prompt already said that unresolved
-findings are continuing use, so another sentence would not suffice; "delete
-when future usefulness is uncertain" also invited the inverted reading.
-
-A delete disposition now lists `open-items` and, per item, a `resolved-by`
-quote of the workspace text establishing its resolution or record. The
-investigation records the text each workspace Read delivered; acceptance turns
-a delete whose quotes are missing or absent from those reads into keep, with
-the reason, as it already did for a cited note. Requiring only that the cited
-file had been read was not enough: in a real-model evaluation on the audited
-preimages, a reviewer deleted a note whose acceptance limits were unrecorded,
-citing a decision record it had read that does not mention them. Truncated
-Reads now name the continuation offset; earlier, reviewers read only the first
-8 KiB of the backlog and the decision record and never saw the relevant entries.
-
-A model can still omit an open item or quote text that discusses rather than
-resolves it; that remains model quality. In seven real reviews per round
-(Codex `gpt-6-luna`, medium, one note each, against private copies with and
-without the backlog repairs), the last round made no unsupported deletion:
-acceptance kept two over-claimed deletes, and the others condensed to dated
-open items. The negative control, an old failed review later resolved in
-ADR 0126, was also kept rather than deleted, so over-retention remains; one
-reply per round still failed the output format and is retried by a later
-review. Old completed history and historical failures with quoted later
-resolution remain deletable.
+Audited reviews deleted unrecorded findings and acceptance limits, sometimes
+citing a read decision record that did not mention them. Open-item inventories
+and authenticated resolution quotes reduced unsupported deletion but also kept
+resolved negative controls; those semantic guards are superseded by [ADR 0128,
+Review contract: extract memory, then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete).
+Read continuation offsets remain useful independently of note disposal.
 
 ### 2026-10-28: reduce note admission and retained-history overhead
 
@@ -1471,40 +1286,18 @@ input latency; external engines still lack native provider-call boundaries.
 
 ### 2026-10-28: accept unambiguous reply shapes instead of discarding reviews
 
-After the open-item contract landed, three of five production reviews were
-rejected whole: one reply ended without `## No action`, two were "Note
-disposition fields are incomplete". No reply text was retained, so real
-multi-note reviews of copied notes reproduced them. The parser required
-exactly three fields on keep and condense, but reviewers usefully list open
-items there too; they also wrote header-only deletes without `---`, four-dash
-separators, and three-backtick closes for four-backtick openers. One
-malformed block discarded every other valid disposition.
+Three of five production reviews failed whole, including two with incomplete
+note disposition fields. The note-specific grammar and its real-review disposal
+results are superseded by [ADR 0128, Review contract: extract memory, then
+delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete),
+which removes model-written note output entirely.
 
-Keep and condense now accept validated `open-items` and are recorded with
-them. A delete still requires `open-items`; a missing `resolved-by` means no
-evidence, so acceptance keeps any delete that lists an open item. Empty-body
-blocks may omit the separator or close with any backtick-only line, a section
-heading or the next opener; separators may have three or more dashes; a
-trailing `## No action` may be absent. A non-empty body still ends only at its
-exact fence, so code blocks in condensed notes stay intact, and an unterminated
-non-empty body, prose between blocks and every field check still reject the
-reply. These rules accept stated grammar variants; they never rewrite a reply.
+Ordinary memory/instruction proposals retain the applicable grammar fixes:
+empty-body blocks may omit the separator, a trailing `## No action` may be
+absent, and non-empty bodies still require their exact fence. Prose between
+blocks and unterminated non-empty bodies still reject the whole reply.
 Rejected replies are retained, newest eight, under
 `.mevedel/state/diagnostics/rejected-replies/`.
-
-Matched real reviews (Codex `gpt-6-luna`, medium; the same twelve copied real
-notes, ten admitted per review; eight reviews each):
-
-- Scenario: committed 081ffce9; metric: rejected replies; value: 3 of 8.
-- Scenario: this change; metric: rejected replies; value: 0 of 8; 15 accepted
-  deletes, each quote-checked, and no delete downgraded.
-- Replaying all ten retained real rejected replies: seven now parse; two with
-  prose between blocks and one unterminated condensed body remain rejected.
-
-Eight reviews per condition are a small sample, not a failure-rate estimate.
-One candidate review deleted the audit folder's README, whose ownership section
-calls itself historical, while the other seven kept it: deletion judgment
-remains model quality.
 
 ### 2026-10-28: carry recovery continuity across adjacent application claims
 
@@ -1575,40 +1368,11 @@ the matched measure of their net benefit.
 
 ### 2026-10-28: name residual details that reviewers miss
 
-The first production batch after the recovery change condensed two audit notes
-too vaguely: concrete residual costs (wrapped-draft Backspace, C-k/yank/
-transpose) became "remaining exact-path editing costs", and an explicitly
-retained, unexplained rise in exact-repair timings was dropped. Both were
-reversed natively. Both residuals were in fact recorded in ADR 0126, so the best
-disposition was a delete quoting that record; the reviewer had searched only the
-backlog. Replaying those five notes in one review showed the same failure class
-at the committed prompt, and more: reviewers deleted the performance note with
-no open items, reasoning that work assigned to another owner was not this
-note's concern. The quote check cannot catch an item that is never listed.
-
-The prompt now says that work assigned elsewhere and observations retained
-without an established cause are open items wherever they appear in a note,
-that decision records hold measurements and residual costs, and that a
-condensed body keeps each item's concrete operations, values with baselines and
-conditions. A deterministic list of marker lines was measured and rejected: it
-flagged a mean of 15 lines per real note, 48 of 147 notes over 12, mostly
-provenance wording.
-
-Real reviews (Codex `gpt-6-luna`, medium) of the five audited preimages in one
-review, scored on the two affected notes; a disposition is bad when it loses
-the residual details or deletes without listing open items:
-
-- Scenario: committed b0493f9c; metric: bad dispositions; value: 19 of 28
-  (14 reviews); performance-note deletes without open items: 10 of 14.
-- Scenario: this change; metric: bad dispositions; value: 12 of 26
-  (13 reviews; one provider reply was malformed JSON); deletes without open
-  items: 2 of 13; deletes quoting ADR 0126: 5.
-- Scenario: all five notes; metric: deletes per reviewed note; value: 46% at
-  b0493f9c, 35% after; condensations rose from 24% to 45%.
-
-Condensed bodies still lose concrete residual details in about a third of the
-reviews: recall of residual detail remains model quality, bounded by the
-condensation's undo window, not a guarantee.
+Condensation lost concrete editing costs and unexplained timing changes;
+quote checks missed findings the reviewer never listed, while a marker-line
+detector mostly flagged provenance. The residual-detail preservation contract
+is superseded by [ADR 0128, Review contract: extract memory, then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete):
+temporary notes no longer carry the obligation to preserve open work.
 
 ### 2026-10-28: let reviews read Git history
 
@@ -1619,50 +1383,22 @@ reviewers could never establish their resolution and kept them indefinitely.
 The user approved a bounded read-only Git tool. `log` searches commit messages,
 `show` prints a commit's message, changed files and whether the current HEAD
 contains it; the containment line names the commit so a quote cannot vouch for
-another one. Output is recorded as `GIT-HISTORY` evidence and checked like
-other quotes. Real replies also misused the format in unambiguous ways: a
-`resolved-by` entry that is not `PATH: QUOTE` now counts as no evidence
-instead of rejecting the whole reply, note dispositions may repeat a header
-line with an identical value, and sections may appear in any order. Omitted
-action sections remain an error: treating them as empty let a reply truncated
-after its first section pass when no notes were admitted.
+another one. Some Git quotes nevertheless described remaining handoffs rather
+than completion. Resolution quotes and note-disposition grammar are superseded
+by [ADR 0128, Review contract: extract memory, then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete);
+the bounded Git tool remains available for material source-history claims.
 
-The run14 deletion of a completed final review with no open items was judged
-defensible: its typing variance was bounded by a later probe in the same note,
-and its limits were scope disclaimers without a next step.
-
-Real reviews (Codex `gpt-6-luna`, medium) of run14's seven preimages in one
-review, eight reviews per condition, with full workspace Git history:
-
-- Scenario: committed d85e986d; metric: failed reviews; value: 1 of 8;
-  deletes: 30 of 49 dispositions; composer2-progress Git-quoted deletes: 0 of 7.
-- Scenario: this change; metric: failed reviews; value: 0 of 8; deletes: 39 of
-  56; composer2-progress Git-quoted deletes: 3 of 8, one quoting
-  "Commit d46b1d6f... contained in current HEAD: yes".
-- Git-quoted tmp-git-leak deletes quote commit 1889fb64, whose message records
-  the unproven-producer caveat.
-
-Some Git-quoted deletes cite a commit that records a handoff as remaining with
-its owner rather than completed; that is a durable record, but weak evidence.
-Distinguishing those remains model quality.
+Ordinary proposal sections may appear in any order. Omitted action sections
+remain an error: treating them as empty let a reply truncated after its first
+section pass when no notes were admitted.
 
 ### 2026-10-28: retire resolved items in chunk summaries
 
-Run17 kept a 118 KB browser-review note, reviewed in sequential chunks, for three
-open items that later sections of the same note had resolved (fixes 95920e3,
-bf8f9b5 and corrected screenshot assertions). The final review sees only the
-running summary, and the chunk guidance said to carry unresolved work forward
-but never to retire it, so early items arrived stale. The guidance now has a
-later chunk mark an earlier item RESOLVED with the note's own words and any
-commit or file named, and the review prompt treats such items as not open.
-
-Real reviews of that note (Codex `gpt-6-luna`, medium; four each): committed
-d78ca3d4 deleted it once, condensed it twice and kept it once; this change
-deleted it four times with no open items. Every finding in the note is marked
-fixed with a commit that is an ancestor of HEAD (28 checked), decided, or a
-status record; the two handoffs without an inline fix were confirmed separately
-(the Goal-clear fix is recorded in the note; mailbox notices in 8e67a05a), so
-deletion is correct for this note. Four reviews are a small sample.
+Run17 retained a 118 KB note because early open items survived in its running
+summary after later chunks resolved them. The resolved-item inventory and its
+deletion criterion are superseded by [ADR 0128, Review contract: extract memory,
+then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete);
+bounded chunk review now carries qualifying lessons, attribution and uncertainty.
 
 ### 2026-10-28: summarize long notes as notes, not as journal digests
 
@@ -1671,12 +1407,12 @@ summaries used the journal digest format, whose system prompt makes "nothing
 noteworthy" a successful outcome. For a 58 KB findings note the summary after
 its first chunk was Done/Learned/Surprised/Unfinished all `- none`; the final
 summary held three lessons and nothing open, although the note states that its
-installation timeout "remains unresolved". Run20 deleted the note. Chunk
-summaries now use the continuation format, which preserves unresolved work,
-with guidance that the source is a note: open items with their location,
-values and conditions go under Open Questions & Risks (RESOLVED ones shortened
-to a line), findings, measurements and lessons under Work & Evidence and
-Critical Context. Both formats resolve to the same configured model.
+installation timeout "remains unresolved". Run20 deleted the note. The
+open-item summary prescription is superseded by [ADR 0128, Review contract:
+extract memory, then delete](0128-extract-memory-and-expire-working-notes.md#review-contract-extract-memory-then-delete);
+the useful distinction remains that chunk summaries preserve potentially
+qualifying note evidence rather than applying the journal's selective digest
+filter before the final review.
 
 The new, heading-rich condensed bodies exposed a parser bug from the earlier
 reply-shape change: a body starting with a Markdown heading was taken for the
@@ -1684,16 +1420,3 @@ next section, emptying the condensation. Headings now close only a header-only
 block without a separator. A JSON array value spread over several lines is
 joined until it parses. A shorter closing fence remains an error, as the
 existing contract requires.
-
-Real chunked reviews of the run20 note (Codex `gpt-6-luna`, medium):
-
-- Scenario: committed 457a1275; metric: reviews listing the unresolved
-  installation timeout as open; value: 1 of 4; three deleted it with no open
-  items.
-- Scenario: this change (12 KiB target); value: 4 of 4 completed reviews (two
-  condense, two keep); two of six replies failed to parse (a shorter closing
-  fence, a multi-line array, the latter now accepted). An earlier 16 KiB
-  target overflowed once in six.
-
-No maintained record of that timeout was found, so keep or condense is the
-correct outcome. More open items mean more retention of long notes.

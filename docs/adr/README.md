@@ -182,4 +182,4 @@ to the decision bearing that ID.
   shows one open question and one line for each other question.
 
 - [ADR 0128: Extract memory and expire working notes](0128-extract-memory-and-expire-working-notes.md)
-  is Proposed; it separates disposable note review from unfinished-work tracking.
+  is Accepted; it separates disposable note review from unfinished-work tracking.

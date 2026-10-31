@@ -365,7 +365,7 @@ cancellation releases the fence and leaves the machine retryable.
   Terminal events and pass results retain `:output-bytes` (cumulative reply,
   reasoning, and normalized tool-call bytes), `:output-estimated-tokens` (the cumulative
   client estimate), and `:result-bytes` (current-round reply bytes, final at DONE),
-  separately from provider token counts. See the [accounting limits](memory.md#request-limits-and-settlement)
+  separately from provider token counts. See the [accounting limits](memory-review.md#request-limits-and-settlement)
   for raw and in-flight tool arguments excluded from these counters.
   `:reasoning-bytes`, `:reply-bytes`, and `:tool-call-bytes` break down accounted
   output into cumulative reasoning, replies across all rounds, and normalized

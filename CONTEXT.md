@@ -2,6 +2,10 @@
 
 This glossary captures the domain language for mevedel. Keep it focused on user-facing concepts and durable workflow terms, not implementation details.
 
+Memory terms below are defined operationally in the [curated-memory](docs/memory-curated.md),
+[review](docs/memory-review.md), [decision/application/recovery](docs/memory-recovery.md),
+[shared-note lifecycle](docs/memory-notes.md) and [journal](docs/memory-journal.md) contracts.
+
 ## Product domain
 
 - **mevedel** — An Emacs Lisp package for visual AI-assisted programming workflows inside Emacs.

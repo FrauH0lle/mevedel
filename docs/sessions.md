@@ -2840,7 +2840,7 @@ counts as processing. Processed notes retire once references end, regardless of
 age. Resolved review/decision history has its own default 14-day window after the
 latest terminal decision and expires as a complete dependency group. Bounded
 coordination cleanup runs even when recall age filtering is disabled; capture
-coverage survives. See [memory](memory.md) for the
+coverage survives. See [journal](memory-journal.md#journal-recall-and-retention) for the
 retention and human inspection contract.
 
 Pending journal capture pins under a session's `.journal-pins/` prevent that
@@ -2863,7 +2863,7 @@ queued/active processing and timers and starts no inference. Accepted digest
 outcomes recover on the next processing opportunity before replacement
 inference. Completed root turns, session opening, and idle maintenance also
 queue abandoned-checkpoint recovery before processing, so work sealed at exit is
-processed when a session next opens. See [memory](memory.md#digest-generation).
+processed when a session next opens. See [memory](memory-journal.md#digest-generation).
 It repairs unready captures and seals frozen completed work under temporary source
 authority, without resuming a conversation or retaining authority during inference.
 Live or foreign PID holders, unreadable locks, live portable leases, publishing
