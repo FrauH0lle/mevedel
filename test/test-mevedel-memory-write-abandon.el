@@ -13,6 +13,9 @@
 (require 'mevedel-journal-claim)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-workspace-identity)
+(require 'mevedel-journal-expiry-test-support
+         (file-name-concat (file-name-directory (or buffer-file-name load-file-name))
+                           "mevedel-journal-expiry-test-support"))
 
 (defvar mevedel-test-abandon-memory nil
   "Non-nil selects a two-file curated-memory intent instead of one note.")
@@ -185,44 +188,38 @@
         (should (eq 'cancelled (plist-get (mevedel-journal-claim-outcome claim) :status))))))
 
   :doc "original target expiry after outside assertion rejects native marker deletion"
-  (let ((acquire (symbol-function 'mevedel-journal-claim-acquire)))
-    (cl-letf (((symbol-function 'mevedel-journal-claim-acquire)
-               (lambda (directory seconds &optional deadline)
-                 (funcall acquire directory (if (string-suffix-p "/state/shared-notes/claims" directory) 5 seconds) deadline))))
-      (mevedel-test-abandon-fixture
-        (let ((run (symbol-function 'mevedel-session-control-fs-run-program))
-              injected owned-before-wait deadline-crossed)
-          (should (<= (- (plist-get target :expires-at)
-                         (mevedel-session-control-fs-target-time (plist-get target :directory))) 5))
-          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
-                     (lambda (program &optional directory)
-                       (when (and (not injected)
-                                  (seq-some (lambda (op) (and (eq (plist-get op :op) 'delete-file)
-                                                             (equal pin (plist-get op :path)))) program))
-                         (setq injected t)
-                         (setq owned-before-wait
-                               (mevedel-journal-claim-owned-p target))
-                         (let ((deadline (+ (float-time) 10)))
-                           (while (and (< (float-time) deadline)
-                                       (< (mevedel-session-control-fs-target-time (plist-get target :directory))
-                                          (plist-get target :expires-at)))
-                             (sleep-for .05)))
-                         (setq deadline-crossed
-                               (>= (mevedel-session-control-fs-target-time
-                                    (plist-get target :directory))
-                                   (plist-get target :expires-at))))
-                       (funcall run program directory))))
-            (should-error (mevedel-memory-write--abandon workspace claim target intent)))
-          (should injected)
-          (should owned-before-wait)
-          (should deadline-crossed)
-          (should (file-exists-p pin))
-          (should (equal (make-string 100 ?x) (mevedel-session-control-fs-read-file path)))
-          (should-not (mevedel-journal-claim-outcome target))
-          (let ((outcome (mevedel-journal-claim-outcome claim)))
-            (should (eq 'cancelled (plist-get outcome :status)))
-            (should (equal "" (plist-get outcome :payload))))
-          (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))))))
+  (mevedel-test-abandon-fixture
+    (let ((run (symbol-function 'mevedel-session-control-fs-run-program))
+          injected owned-before-expiry deadline-crossed)
+      (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                 (lambda (program &optional directory)
+                   (if (and (not injected)
+                            (seq-some (lambda (op) (and (eq (plist-get op :op) 'delete-file)
+                                                       (equal pin (plist-get op :path)))) program))
+                       (progn
+                         (setq injected t
+                               owned-before-expiry (mevedel-journal-claim-owned-p target))
+                         ;; Shift only after the outer ownership assertion.
+                         ;; The helper proves the real native guard accepts
+                         ;; this deadline before the shifted guard rejects it.
+                         (mevedel-test-journal-with-expired-claims (list target)
+                           (setq deadline-crossed
+                                 (>= (mevedel-session-control-fs-target-time
+                                      (plist-get target :directory))
+                                     (plist-get target :expires-at)))
+                           (funcall run program directory)))
+                     (funcall run program directory)))))
+        (should-error (mevedel-memory-write--abandon workspace claim target intent)))
+      (should injected)
+      (should owned-before-expiry)
+      (should deadline-crossed)
+      (should (file-exists-p pin))
+      (should (equal (make-string 100 ?x) (mevedel-session-control-fs-read-file path)))
+      (should-not (mevedel-journal-claim-outcome target))
+      (let ((outcome (mevedel-journal-claim-outcome claim)))
+        (should (eq 'cancelled (plist-get outcome :status)))
+        (should (equal "" (plist-get outcome :payload))))
+      (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))))
 
   :doc "late child in authentic empty-directory intent fails native listing proof and preserves pending evidence"
   (let ((mevedel-test-abandon-directory t))
