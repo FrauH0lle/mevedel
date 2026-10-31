@@ -1311,7 +1311,7 @@ temporary directory and /tmp, and any root containing them, stay restricted:
 other programs put their sockets there."
   (let ((shared (delete-dups
                  (mapcar (lambda (directory)
-                           (file-name-as-directory (file-truename directory)))
+                           (file-name-as-directory (mevedel-file-truename directory)))
                          (delq nil (list temporary-root temporary-file-directory
                                          "/tmp/"))))))
     (delete-dups

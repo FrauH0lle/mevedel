@@ -147,7 +147,11 @@ write grants are allowed; /tmp, roots containing it and read grants are not"
   (let ((process-environment (cons "WAYLAND_DISPLAY" process-environment))
         (temporary-file-directory "/tmp/"))
     (should (equal '("/work/")
-                   (mevedel-sandbox--socket-allow-list '("/tmp/" "/work/") nil nil nil))))
+                   (mevedel-sandbox--socket-allow-list '("/tmp/" "/work/") nil nil nil)))
+    ;; Linux resolves a leading // as /, so //srv/tmp still lies in /srv.
+    (should (equal '("/work/")
+                   (mevedel-sandbox--socket-allow-list
+                    '("/srv/" "/work/") "//srv/tmp/" nil nil))))
   :doc "real Bubblewrap: host sockets in shared /tmp and the system bus are
 unreachable; workspace and write-granted sockets stay reachable"
   (test-mevedel-sandbox-landlock--with-launcher
