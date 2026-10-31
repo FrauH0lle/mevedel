@@ -31,6 +31,7 @@
 (declare-function mevedel-journal-worker-start "mevedel-journal-worker"
                   (workspace operation payload callback &rest keys))
 (declare-function mevedel-journal-worker-local-p "mevedel-journal-worker" (workspace &optional roots))
+(declare-function mevedel-journal-worker-cancel "mevedel-journal-worker" (process))
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-mutation-authority
@@ -596,7 +597,7 @@ cancellation never publishes or calls CALLBACK."
       (cancel ()
         (setq settled t)
         (when timer (cancel-timer timer))
-        (when (and process (process-live-p process)) (delete-process process)))
+        (when process (mevedel-journal-worker-cancel process)))
       (finish (result)
         (unless settled
           (let* ((owned (and mevedel-journal-enabled (buffer-live-p buffer)

@@ -775,7 +775,7 @@ here are diagnostic only."
       (plist-put state :timer nil)
       (when-let* ((worker (plist-get state :worker)))
         (plist-put state :worker nil)
-        (when (process-live-p worker) (delete-process worker)))
+        (mevedel-journal-worker-cancel worker))
       (condition-case err
           (when (eq (plist-get result :outcome) 'success)
             (setq failure-class 'publication)

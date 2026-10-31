@@ -429,7 +429,7 @@ coalesce; a forced request received during cleanup runs after that batch."
                     (remhash root mevedel-journal-cleanup--active))
                   (when (eq job (gethash root mevedel-journal-cleanup--pending))
                     (remhash root mevedel-journal-cleanup--pending))
-                  (when (and worker (process-live-p worker)) (delete-process worker))
+                  (when worker (mevedel-journal-worker-cancel worker))
                   (when (and (cdr job) (not (gethash root mevedel-journal-cleanup--pending)))
                     (mevedel-journal-cleanup-schedule workspace t)))))
             (cancel ()

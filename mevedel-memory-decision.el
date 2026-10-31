@@ -1205,8 +1205,8 @@ expiry only after freshly observing CLAIM's original target-clock deadline."
               ;; it stays tracked until the original deadline's final fencing
               ;; attempt.  Persistent inability to prove a fence stays visible.
               (when fenced
-                (when-let* ((worker (plist-get job :worker)) ((process-live-p worker)))
-                  (delete-process worker)))
+                (when-let* ((worker (plist-get job :worker)))
+                  (mevedel-journal-worker-cancel worker)))
             ((error quit)
              (when (eq (car err) 'quit) (setq cancelled t))
              (setq failure (concat failure "; " (error-message-string err)))))
@@ -1244,8 +1244,8 @@ expiry only after freshly observing CLAIM's original target-clock deadline."
           ;; durable outcome before deleting any still-live child.
           (mevedel-memory-decision--operation-fence (plist-get job :claim))
           (plist-put job :unsettled nil)
-          (when-let* ((worker (plist-get job :worker)) ((process-live-p worker)))
-            (delete-process worker)))
+          (when-let* ((worker (plist-get job :worker)))
+            (mevedel-journal-worker-cancel worker)))
       ((error quit)
        (plist-put job :cleanup-error (error-message-string err))
        (display-warning 'mevedel
@@ -1533,8 +1533,8 @@ An unproved fence leaves the original deadline and tracked child intact."
        (plist-put job :unsettled t)
        (signal (car err) (cdr err)))))
   (when (timerp (plist-get job :timer)) (cancel-timer (plist-get job :timer)))
-  (when-let* ((worker (plist-get job :worker)) ((process-live-p worker)))
-    (delete-process worker)))
+  (when-let* ((worker (plist-get job :worker)))
+    (mevedel-journal-worker-cancel worker)))
 
 (defun mevedel-memory-decision--recovery-deadline (workspace job)
   "Finish or retire publication recovery JOB at WORKSPACE's original deadline."

@@ -102,8 +102,8 @@ Return the child process.  CALLBACK receives (:ok t :count N :more BOOL
 or (:error MESSAGE). Capture preparation returns bounded frozen evidence.
 Launch failure signals without calling CALLBACK.  Completion is delivered once
 through idle transport, never in the sentinel or before this function returns.
-Deleting a live process cancels delivery; owners must first fence mutation
-claims."
+Explicit cancellation through `mevedel-journal-worker-cancel' drops delivery;
+owners must first fence mutation claims.  Unsolicited signals report errors."
   (unless (and (mevedel-journal-worker-local-p workspace)
                (assq operation mevedel-journal-worker--operations))
     (error "Unsupported journal worker operation"))
@@ -145,7 +145,7 @@ claims."
                    (lambda (child _event)
                      (when (and (not queued) (memq (process-status child) '(exit signal)))
                        (setq queued t)
-                       (if (eq (process-status child) 'signal)
+                       (if (process-get child 'mevedel-journal-worker-cancelled)
                            (progn
                              (setq done t mevedel-journal-worker--processes
                                    (delq child mevedel-journal-worker--processes))
@@ -169,7 +169,7 @@ claims."
                                             (delq child mevedel-journal-worker--processes))
                                       (unwind-protect
                                           (when (file-directory-p directory) (delete-directory directory t))
-                                        (when (and (not aborted) (eq (process-status child) 'exit)
+                                        (when (and (not aborted)
                                                    (not (process-get child 'mevedel-journal-worker-cancelled)))
                                           (funcall callback result))))))
                                 (fallback () (mevedel-transport-run-at-time 0 #'deliver)))
@@ -192,9 +192,20 @@ claims."
        ;; fence before deletion.  Never preempt that authority in this helper.
        (setq aborted t returned t)
        (unless (and process owner)
-         (when (and process (process-live-p process)) (delete-process process))
+         (when process (mevedel-journal-worker-cancel process))
          (when (file-directory-p directory) (delete-directory directory t)))
        (signal (car err) (cdr err))))))
+
+(defun mevedel-journal-worker-cancel (process)
+  "Cancel PROCESS and any queued delivery, then discard its exchange files.
+Owners must fence mutation claims before calling this function.  Cancellation
+is explicit: an unsolicited process signal remains a deferred error reply."
+  (process-put process 'mevedel-journal-worker-cancelled t)
+  (when (process-live-p process) (delete-process process))
+  (when-let* ((directory (process-get process 'mevedel-journal-worker-directory))
+              ((file-directory-p directory)))
+    (delete-directory directory t))
+  (setq mevedel-journal-worker--processes (delq process mevedel-journal-worker--processes)))
 
 (defun mevedel-journal-worker-stop-all ()
   "Stop this editor's maintenance children without waiting for storage work."
@@ -203,12 +214,7 @@ claims."
         (mevedel-memory-pass--inhibit-scheduling t)
         (mevedel-journal-worker--stopping t))
     (dolist (process (copy-sequence mevedel-journal-worker--processes))
-      (process-put process 'mevedel-journal-worker-cancelled t)
-      (delete-process process)
-      (when-let* ((directory (process-get process 'mevedel-journal-worker-directory))
-                  ((file-directory-p directory)))
-        (delete-directory directory t))
-      (setq mevedel-journal-worker--processes (delq process mevedel-journal-worker--processes)))))
+      (mevedel-journal-worker-cancel process))))
 
 (defun mevedel-journal-worker--run (request reply)
   "Execute private REQUEST in a batch child, writing a bounded REPLY."

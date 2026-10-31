@@ -118,7 +118,7 @@ RECOVER requests abandoned-capture recovery before this processing opportunity."
     (maphash (lambda (_key process) (push process workers)) mevedel-journal-process--workers)
     (clrhash mevedel-journal-process--workers)
     (dolist (process workers)
-      (when (process-live-p process) (delete-process process))))
+      (mevedel-journal-worker-cancel process)))
   (maphash (lambda (_key state) (mevedel-journal-process-cancel (plist-get state :workspace)))
            mevedel-journal-process--running))
 

@@ -135,8 +135,11 @@ public child entry and reply bound; requests carry frozen data, never a callable
 or load path. Launch failure signals without a callback. Successful completion
 is delivered once through idle transport (with a timer fallback if transport is
 disabled or cancelled), never in the sentinel or before launch returns.
-Cancelling a live child drops its reply; display cancellation neither fences nor
-settles a mutation claim. Mechanical locality checks belong to the launcher;
+Explicit launcher cancellation drops live or queued replies. Unsolicited signals
+and nonzero exits deliver an error once, allowing owners to retire failed jobs;
+process status alone cannot establish cancellation intent. Display cancellation
+neither fences nor settles a mutation claim. Mechanical locality checks belong
+to the launcher;
 domain admission and the intentionally different editor-side alternatives stay
 with owners. This removes duplicate process/codec lifecycle code without adding
 an in-editor adapter or changing storage authority.
@@ -463,6 +466,17 @@ longer than ordinary recall when evidence or recovery still needs it; the recall
 limit is not an erasure guarantee.
 
 ## Decision history
+
+### 2026-10-31: distinguish child cancellation from failure
+
+The shared maintenance launcher initially treated every process signal as
+cancellation. A real SIGTERM review probe showed that this suppressed the error
+callback and stranded the digest scheduler's worker registration, preventing
+later opportunities. Owners now explicitly cancel through the launcher after
+their existing exact-token fences. Cancellation drops live or queued replies;
+unsolicited signals use the same deferred, once-only error path as nonzero exits.
+The launcher and scheduler regressions exercise real children, including a new
+scheduling opportunity after failure or cancellation.
 
 ### 2026-10-31: own proposal decisions and explicit serial continuity
 

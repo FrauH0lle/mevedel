@@ -32,7 +32,7 @@
     (when-let* ((timer (plist-get job :timer))) (cancel-timer timer))
     (remhash session mevedel-session-collection--jobs)
     (when-let* ((worker (plist-get job :worker)))
-      (when (process-live-p worker) (delete-process worker)))
+      (mevedel-journal-worker-cancel worker))
     (when (buffer-live-p (plist-get job :buffer))
       (with-current-buffer (plist-get job :buffer)
         (remove-hook 'kill-buffer-hook #'mevedel-session-collection--on-kill t)))))

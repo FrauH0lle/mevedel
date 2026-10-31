@@ -88,7 +88,7 @@
           (let ((inhibit-quit t))
             (when (timerp (plist-get job :timer)) (cancel-timer (plist-get job :timer)))
             (plist-put job :timer nil)
-            (when-let* ((child (plist-get job :worker)) ((process-live-p child))) (delete-process child))
+            (when-let* ((child (plist-get job :worker))) (mevedel-journal-worker-cancel child))
             (plist-put job :worker nil))
           (setq mevedel-memory-list--job nil))
       ((error quit)

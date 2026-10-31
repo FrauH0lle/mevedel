@@ -9,6 +9,7 @@
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-journal-worker)
+(require 'mevedel-journal-process)
 (require 'mevedel-journal-claim)
 (require 'mevedel-workspace-identity)
 (require 'mevedel-transport)
@@ -103,18 +104,23 @@
          (should (= calls 1))))))
   :doc "cancelling a live child or queued completion drops late delivery"
   (dolist (queued '(nil t))
-    (mevedel-test-launcher--with-workspace
-     (lambda (workspace)
-       (let (child called)
-         (let ((mevedel-transport--depth 1))
-           (setq child (mevedel-journal-worker-start workspace 'recovery nil (lambda (_) (setq called t))))
-           (if queued
-               (progn
-                 (mevedel-test-launcher--wait (lambda () (gethash child mevedel-transport--pending)))
-                 (mevedel-journal-worker-stop-all))
-             (delete-process child)))
-         (mevedel-test-launcher--wait (lambda () (not mevedel-journal-worker--processes)))
-         (should-not called)))))
+    (dolist (all '(nil t))
+      (mevedel-test-launcher--with-workspace
+       (lambda (workspace)
+         (let (child directory called)
+           (mevedel-transport-call-as-remote-operation
+            (lambda ()
+              (setq child (mevedel-journal-worker-start workspace 'recovery nil (lambda (_) (setq called t)))
+                    directory (process-get child 'mevedel-journal-worker-directory))
+              (if queued
+                  (mevedel-test-launcher--wait (lambda () (gethash child mevedel-transport--pending)))
+                (should (process-live-p child)))
+              (if all (mevedel-journal-worker-stop-all) (mevedel-journal-worker-cancel child))
+              (should-not (file-exists-p directory))
+              (should-not mevedel-journal-worker--processes)))
+           (mevedel-test-launcher--wait (lambda () (zerop (hash-table-count mevedel-transport--pending))))
+           (accept-process-output nil .02)
+           (should-not called))))))
   :doc "closed child requests reject extra fields and non-table callables"
   (dolist (fault '(:function :load-path :operation))
     (mevedel-test-launcher--with-workspace
@@ -139,25 +145,49 @@
          (should (string-match-p (if (eq fault :operation) "Unknown journal worker operation" "Unsupported journal worker request field")
                                  (plist-get result :error)))
          (should-not (file-exists-p marker))))))
-  :doc "oversized replies and nonzero process exits report errors once"
-  (dolist (fault '(oversize exit))
+  :doc "oversized replies, nonzero exits and unsolicited SIGTERM report deferred errors once"
+  (dolist (fault '(oversize exit signal))
     (mevedel-test-launcher--with-workspace
      (lambda (workspace)
-       (let ((spawn (symbol-function 'make-process)) result injected (calls 0))
+       (let ((spawn (symbol-function 'make-process)) result injected inside returned child (calls 0))
          (cl-letf (((symbol-function 'make-process)
                     (lambda (&rest args)
                       (let* ((command (plist-get args :command))
                              (reply (nth 2 (read (car (last command)))))
-                             (program (if (eq fault 'exit) '(kill-emacs 17)
-                                        `(with-temp-file ,reply (insert (make-string 4097 ?x))))))
+                             (sentinel (plist-get args :sentinel))
+                             (program (pcase fault
+                                        ('exit '(kill-emacs 17))
+                                        (_ `(with-temp-file ,reply (insert (make-string 4097 ?x)))))))
                         (setq injected t)
+                        (setq args (plist-put args :sentinel
+                                              (lambda (process event)
+                                                (setq inside t)
+                                                (unwind-protect
+                                                    (progn (funcall sentinel process event)
+                                                           (funcall sentinel process event))
+                                                  (setq inside nil)))))
                         (apply spawn (plist-put args :command
-                                                (list (car command) "--batch" "-Q" "--eval" (prin1-to-string program))))))))
-           (mevedel-journal-worker-start workspace 'recovery nil
-                                         (lambda (reply) (setq result reply) (cl-incf calls))))
+                                                (if (eq fault 'signal) '("sh" "-c" "kill -TERM $$")
+                                                  (list (car command) "--batch" "-Q" "--eval" (prin1-to-string program)))))))))
+           (mevedel-transport-call-as-remote-operation
+            (lambda ()
+              (setq child (mevedel-journal-worker-start
+                           workspace 'recovery nil
+                           (lambda (reply)
+                             (should returned)
+                             (should-not inside)
+                             (setq result reply)
+                             (cl-incf calls)))
+                    returned t)
+              (mevedel-test-launcher--wait (lambda () (not (process-live-p child))))
+              (should (eq (process-status child) (if (eq fault 'signal) 'signal 'exit)))
+              (should (zerop calls)))))
          (mevedel-test-launcher--wait (lambda () result))
          (should injected)
          (should (string-match-p "Journal worker exited with status" (plist-get result :error)))
+         (should-not (file-exists-p (process-get child 'mevedel-journal-worker-directory)))
+         (should-not mevedel-journal-worker--processes)
+         (accept-process-output nil .02)
          (should (= calls 1))))))
   :doc "display scanning and cancellation do not settle a mutation claim"
   (mevedel-test-launcher--with-workspace
@@ -174,10 +204,69 @@
              (should-not (plist-get result :error))
              (should (mevedel-journal-claim-owned-p claim))
              (setq child (mevedel-journal-worker-start workspace 'memory-display payload #'ignore))
-             (delete-process child)
+             (mevedel-journal-worker-cancel child)
              (mevedel-test-launcher--wait (lambda () (not mevedel-journal-worker--processes)))
              (should (mevedel-journal-claim-owned-p claim)))
          (mevedel-journal-claim-settle claim 'cancelled ""))))))
+
+(mevedel-deftest mevedel-journal-process-schedule/launcher-retirement ()
+  ,test
+  (test)
+  :doc "failed or explicitly cancelled children release scheduling for a new opportunity"
+  (dolist (ending '(signal exit cancel-live cancel-queued))
+    (mevedel-test-launcher--with-workspace
+     (lambda (workspace)
+       (let ((mevedel-journal-enabled t)
+             (mevedel-journal-process--inhibit-scheduling nil)
+             (mevedel-journal-process--workers (make-hash-table :test #'equal))
+             (mevedel-journal-process--running (make-hash-table :test #'equal))
+             (mevedel-journal-process--pending (make-hash-table :test #'equal))
+             (mevedel-journal-process--recover-requested (make-hash-table :test #'equal))
+             (spawn (symbol-function 'make-process)) (launches 0) child directory warning)
+         (unwind-protect
+             (progn
+               (mevedel-test--with-captured-diagnostics warning
+                 (cl-letf (((symbol-function 'make-process)
+                            (lambda (&rest args)
+                              (cl-incf launches)
+                              (when (= launches 1)
+                                (setq args
+                                      (plist-put args :command
+                                                 (if (eq ending 'signal) '("sh" "-c" "kill -TERM $$")
+                                                   (list (car (plist-get args :command)) "--batch" "-Q" "--eval"
+                                                       (prin1-to-string
+                                                        (pcase ending
+                                                          ('cancel-live '(sleep-for 20))
+                                                          (_ '(kill-emacs 17)))))))))
+                              (let ((process (apply spawn args)))
+                                (when (= launches 1) (setq child process))
+                                process))))
+                   (mevedel-journal-process-schedule workspace)
+                   (mevedel-test-launcher--wait (lambda () (= launches 1)))
+                   (setq directory (process-get child 'mevedel-journal-worker-directory))
+                   (when (memq ending '(cancel-live cancel-queued))
+                     (mevedel-transport-call-as-remote-operation
+                      (lambda ()
+                        (if (eq ending 'cancel-queued)
+                            (mevedel-test-launcher--wait (lambda () (gethash child mevedel-transport--pending)))
+                          (should (process-live-p child)))
+                        (mevedel-journal-process-stop-all)
+                        (should-not (file-exists-p directory)))))
+                   (mevedel-test-launcher--wait
+                    (lambda () (and (zerop (hash-table-count mevedel-journal-process--workers))
+                                    (not mevedel-journal-worker--processes))))
+                   (should-not (file-exists-p directory))
+                   (when (eq ending 'signal) (should (eq (process-status child) 'signal)))
+                   (mevedel-journal-process-schedule workspace)
+                   (mevedel-test-launcher--wait
+                    (lambda () (and (= launches 2)
+                                    (zerop (hash-table-count mevedel-journal-process--workers))
+                                    (not mevedel-journal-worker--processes))))))
+               (if (memq ending '(signal exit))
+                   (should (equal warning
+                                  (format "Journal worker exited with status %s\n" (if (eq ending 'signal) 15 17))))
+                 (should (string-empty-p warning))))
+           (mevedel-journal-process-stop-all)))))))
 
 (provide 'test-mevedel-journal-worker-launcher)
 ;;; test-mevedel-journal-worker-launcher.el ends here

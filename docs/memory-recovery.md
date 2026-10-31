@@ -264,7 +264,8 @@ operation table selects public owner entries and bounded replies. Launch failure
 signals to the owner without a callback. After a successful launch, completion
 arrives once through idle transport, never in the process sentinel or before
 launch returns; disabled or cancelled transport uses a deferred timer fallback.
-Stopping a live child drops its reply. The operation owner still checks identity
+Explicit launcher cancellation drops live or queued replies; unsolicited signals
+and nonzero exits deliver an error once. The operation owner still checks identity
 and fences mutation claims before cancellation; display cancellation has no
 mutation claim to settle. Native editor recovery remains an owner policy, not
 another launcher adapter.
