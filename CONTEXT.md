@@ -150,6 +150,7 @@ Memory terms below are defined operationally in the [curated-memory](docs/memory
 - **compaction target** — A model-visible transcript whose context pressure is managed independently through conversation compaction; currently either a main session segment or a persisted sub-agent transcript.
 - **view buffer** — The compact, user-facing mevedel buffer with status, interaction, and input zones.
 - **view disclosure** — A collapsible view-buffer element consisting of a visible disclosure header and an optional expanded disclosure body. Avoid “handler,” which refers to executable tool behavior.
+- **activity group** — A collapsible summary of consecutive routine tool calls, agent messages, and the transcript owner's background completions within one transcript scope; its members remain individually inspectable. Notices, individual-presentation rows, and scope boundaries end a group. _Avoid_: tool group, collapsed tools
 - **status strip** — The mevedel-owned clickable header-line chrome in a view buffer that routes status items to session cockpit surfaces.
 - **data buffer** — The authoritative gptel/org transcript buffer backing a view buffer.
 - **agent transcript view** — A read-only projection of a sub-agent transcript,
