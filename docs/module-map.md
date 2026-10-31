@@ -45,9 +45,9 @@ Data model
   mevedel-memory-notes.el     shared working-note capture, housekeeping, and checked permanent disposal
   mevedel-memory-store.el     private pass evidence, accepted proposals, and review publication
   mevedel-memory-cleanup.el   completed-review retention dependencies and expiry candidates
-  mevedel-memory-decision.el  immutable decisions, application, activation recovery, and rejection evidence
+  mevedel-memory-decision.el  owned proposal transactions, publication, inspection, and recovery
   mevedel-memory-apply.el     complete topic/index and instruction transaction preparation
-  mevedel-memory-write.el     durable before/after intents, shared-root ownership, and checked rollback
+  mevedel-memory-write.el     private decision intents, shared-root ownership, and checked rollback
   mevedel-memory-library.el   current topic inventory and structured user deletion
   mevedel-memory-list.el      candidates/memories/history cockpit, diffs, decisions, recovery
   mevedel-hooks.el            project/user/skill/agent hook loading + runner
