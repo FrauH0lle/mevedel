@@ -14,7 +14,8 @@
           "helpers"))
 (require 'graphical-check
          (file-name-concat
-          (file-name-directory (or load-file-name buffer-file-name))
+          (file-name-directory
+           (or load-file-name buffer-file-name byte-compile-current-file))
           "graphical-check"))
 
 (mevedel-deftest mevedel-graphical-check--options ()
@@ -110,54 +111,100 @@
               (should-not (process-live-p process)))
           (when (process-live-p process) (delete-process process)))))))
 
+(defconst test-mevedel-graphical-check--orphan-owner
+  "import ctypes, os, signal, subprocess, sys, time
+# Adopt orphans, so the stand-in child's fate after its parent exits is
+# observable here rather than racing init or systemd.  A dead child is a
+# zombie (Z) or gone; a child that survived its parent is still running.
+ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)
+pid_file, tmp = sys.argv[1], sys.argv[2]
+parent = subprocess.Popen(sys.argv[3:], stdin=subprocess.DEVNULL,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+child = None
+try:
+    deadline = time.monotonic() + 20
+    while child is None and time.monotonic() < deadline:
+        try:
+            child = int(open(pid_file).read())
+        except (OSError, ValueError):
+            time.sleep(0.02)
+    print('before', sum(n.startswith('mevedel-graphical-') for n in os.listdir(tmp)))
+    parent.send_signal(signal.SIGTERM)
+    parent.wait(20)
+    state = 'never started'
+    if child is not None:
+        # SIGKILL was sent before the parent exited; allow only for the
+        # kernel to finish killing it, never for a survivor to stop itself.
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                stat = open(f'/proc/{child}/stat').read()
+                state = 'running ' + stat[stat.rindex(')') + 2]
+            except OSError:
+                state = 'dead'
+            if state in ('dead', 'running Z', 'running X') \\
+               or time.monotonic() > deadline:
+                break
+            time.sleep(0.02)
+        if state in ('running Z', 'running X'):
+            state = 'dead'
+    print('child', state)
+finally:
+    parent.kill()
+    if child:
+        try:
+            os.kill(child, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            if os.waitpid(-1, os.WNOHANG)[0] == 0:
+                time.sleep(0.02)
+        except ChildProcessError:
+            break
+"
+  "Run argv[3:] as a child subreaper; report the stand-in child after SIGTERM.")
+
 (mevedel-deftest mevedel-graphical-check-run
-  (:doc "removes its child and private state when the batch parent gets SIGTERM")
+  (:doc "reaps its child and removes private state when the batch parent gets SIGTERM")
   (let* ((root (make-temp-file "graphical-sigterm-" t))
          (tmp (file-name-concat root "tmp"))
          (bin (file-name-concat root "bin"))
          (pid-file (file-name-concat root "child.pid"))
-         (process-environment (copy-sequence process-environment))
-         parent child)
+         (process-environment (copy-sequence process-environment)))
     (unwind-protect
         (progn
+          (skip-unless (and (eq system-type 'gnu/linux) (executable-find "python3")))
           (make-directory tmp)
           (make-directory bin)
-          ;; Stand-in for the graphical child: record its PID, then hang.
+          ;; Stand-in for a hung graphical child: record its PID, then hang,
+          ;; ignoring the SIGHUP batch Emacs sends its processes on exit.
           (with-temp-file (file-name-concat bin "emacs")
-            (insert (format "#!/bin/sh\necho $$ > %s\nexec sleep 300\n"
+            (insert (format "#!/bin/sh\ntrap '' HUP\necho $$ > %s\nexec sleep 300\n"
                             (shell-quote-argument pid-file))))
           (set-file-modes (file-name-concat bin "emacs") #o755)
           (setenv "TMPDIR" tmp)
           (setenv "DISPLAY" ":graphical-sigterm-test")
           (setenv "XAUTHORITY" "/dev/null")
           (setenv "WAYLAND_DISPLAY" nil)
-          (setq parent
-                (make-process
-                 :name "graphical-sigterm-test" :noquery t :buffer nil
-                 :connection-type 'pipe :sentinel #'ignore
-                 :command (list (expand-file-name invocation-name invocation-directory)
-                                "-Q" "--batch" "-l"
-                                (file-name-concat mevedel-graphical-check--root
-                                                  "test" "graphical-check.el")
-                                "--eval" (format "(setq invocation-directory %S)"
-                                                 (file-name-as-directory bin))
-                                "--funcall" "mevedel-graphical-check-run" "--"
-                                "--output" (file-name-concat root "out")
-                                "--timeout" "60")))
-          (mevedel-test--await 20 "stand-in graphical child"
-            (and (file-exists-p pid-file)
-                 (setq child (with-temp-buffer
-                               (insert-file-contents pid-file)
-                               (string-to-number (buffer-string))))
-                 (> child 0)))
-          (should (directory-files tmp nil "\\`mevedel-graphical-"))
-          (signal-process parent 'SIGTERM)
-          (mevedel-test--await 20 "batch parent exit" (not (process-live-p parent)))
-          (mevedel-test--await 5 "stand-in child exit"
-            (not (process-attributes child)))
+          (should
+           (equal
+            ;; Private state existed, and the child died with its parent.
+            "before 1\nchild dead\n"
+            (with-temp-buffer
+              (call-process
+               "python3" nil t nil "-I" "-c" test-mevedel-graphical-check--orphan-owner
+               pid-file tmp
+               (expand-file-name invocation-name invocation-directory)
+               "-Q" "--batch" "-l"
+               (file-name-concat mevedel-graphical-check--root "test" "graphical-check.el")
+               "--eval" (format "(setq invocation-directory %S)"
+                                (file-name-as-directory bin))
+               "--funcall" "mevedel-graphical-check-run" "--"
+               "--output" (file-name-concat root "out") "--timeout" "60")
+              (buffer-string))))
           (should-not (directory-files tmp nil "\\`mevedel-graphical-")))
-      (when (and parent (process-live-p parent)) (delete-process parent))
-      (when (and child (process-attributes child)) (signal-process child 'SIGKILL))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-graphical-check--preflight
