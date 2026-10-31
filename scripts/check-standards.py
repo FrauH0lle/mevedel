@@ -240,9 +240,9 @@ def test_inventory(root, sources):
 def test_integrity_errors(root, names):
     """Reject duplicate literal names and tracked tests using untracked fixtures.
 
-    Fixture references include explicit test/fixtures paths and literal fixture
-    suffixes, so split file-name-concat arguments and fixture-directory variables
-    work too.  This checks source literals, not dynamically computed filenames.
+    Fixture references include explicit test/fixtures paths and literal path
+    constructors rooted in fixture directories.  Unrelated basename strings
+    are not references.  This does not evaluate dynamically computed filenames.
     """
     sources = [(name, (root / name).read_text()) for name in names
                if name.startswith('test/') and name.endswith('.el')]
@@ -251,8 +251,9 @@ def test_integrity_errors(root, names):
     # absent from a clean checkout.  Deleted indexed fixtures are absent too.
     fixtures = {path.relative_to(root).as_posix()
                 for path in (root / 'test/fixtures').rglob('*') if path.is_file()}
+    candidates = fixtures | {name for name in tracked if name.startswith('test/fixtures/')}
     suffixes = {}
-    for fixture in fixtures:
+    for fixture in candidates:
         relative = fixture.removeprefix('test/fixtures/')
         parts = Path(relative).parts
         for suffix in (fixture, 'fixtures/' + relative,
@@ -270,12 +271,17 @@ def test_integrity_errors(root, names):
         if name not in tracked:
             continue
         reported = set()
-        for item in data['strings']:
+        references = [({**item, 'path': False}) for item in data['strings']]
+        references.extend({**item, 'path': True} for item in data['paths'])
+        for item in references:
             literal = item['value']
-            targets = set(suffixes.get(literal, ()))
+            targets = set(suffixes.get(literal, ())) if item['path'] else set()
             # Also diagnose references to fixtures missing from disk entirely.
             targets.update(re.findall(r'(?<![\w/])test/fixtures/[^\s"\'()]+', literal))
             for target in sorted(targets):
+                if ((root / target).is_dir() or
+                        any(candidate.startswith(target + '/') for candidate in candidates)):
+                    continue
                 if target in reported:
                     continue
                 if target not in tracked or target not in fixtures:

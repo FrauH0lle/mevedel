@@ -239,10 +239,33 @@ class StandardsTests(unittest.TestCase):
         self.git('add', 'test/fixtures/helper.c')
         self.check(0)
         (self.root / 'test/fixtures/helper.c').unlink()
-        self.write('test/test-fixture.el', library('test-fixture').replace(
-            "(provide 'test-fixture)", '(defconst test-fixture-path "test/fixtures/helper.c")'))
         _, errors = self.check(1)
         self.assertIn('missing test fixture test/fixtures/helper.c', errors)
+
+    def test_unrelated_basename_is_not_a_fixture_reference(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '(file-name-extension "other.c")\n'
+            '(file-name-concat temporary-file-directory "other.c")\n'
+            '(let ((root "fixtures"))\n'
+            '  (let ((root temporary-file-directory)) (file-name-concat root "other.c")))'))
+        self.commit()
+        self.write('test/fixtures/other.c', 'int main(void) { return 0; }\n')
+        self.assertEqual(standards.test_integrity_errors(
+            self.root, standards.inventory(self.root)), [])
+
+    def test_fixture_directory_bindings_keep_nested_path_context(self):
+        self.write('test/test-fixture.el', library('test-fixture').replace(
+            "(provide 'test-fixture)",
+            '(let* ((root (file-name-concat "test" "fixtures"))\n'
+            '       (nested (file-name-concat root "nested")))\n'
+            '  (expand-file-name "helper.py" nested))'))
+        self.commit()
+        self.write('test/fixtures/nested/helper.py', 'print("fixture")\n')
+        self.write('test/fixtures/other/helper.py', 'print("unrelated")\n')
+        errors = standards.test_integrity_errors(self.root, standards.inventory(self.root))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('untracked test fixture test/fixtures/nested/helper.py', errors[0])
 
     def test_ignored_fixture_and_directory_variable(self):
         self.write('test/test-fixture.el', library('test-fixture').replace(
