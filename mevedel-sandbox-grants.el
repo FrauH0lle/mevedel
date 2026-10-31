@@ -104,6 +104,12 @@ the base read-only filesystem already allows them."
                    (signal 'mevedel-sandbox-policy-error
                            (list (format "Workspace-relative filesystem grant is no longer contained: %S"
                                          path))))
+                 ;; A quoted name escapes spelling-based protection and
+                 ;; would otherwise be dropped silently as an exact read.
+                 (when (and (stringp path) (file-name-quoted-p path))
+                   (signal 'mevedel-sandbox-policy-error
+                           (list (format "Quoted filesystem grant paths are not supported: %S"
+                                         path))))
                  (unless (and (stringp path)
                               (file-name-absolute-p path)
                               (file-exists-p path))

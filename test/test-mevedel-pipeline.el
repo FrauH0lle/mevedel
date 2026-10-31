@@ -592,7 +592,7 @@ cover, so the permission step's warning about it is captured here."
 		   (mevedel-pipeline--step-normalize-paths
 		    ctx (lambda (c) (setq updated c)) #'ignore)
 		   (should (eq args (plist-get updated :args))))
-		 :doc "precomputes the canonical path of a read-access argument only"
+		 :doc "canonicalizes an ordinary `path-or-resource' symlink and maps read access only"
 		 (let* ((root (file-name-as-directory
 		               (make-temp-file "mevedel-normalize-read-" t)))
 		        (target (file-name-concat root "target.png"))
@@ -610,7 +610,10 @@ cover, so the permission step's warning about it is captured here."
 		                         :args (list (if access (append spec '(:access read)) spec)))
 		                  :args (list :source link))
 		            (lambda (c) (setq updated c)) #'ignore)
-		           (should (equal (and access (list (cons link (file-truename target))))
+		           (should (equal (file-truename target)
+		                          (plist-get (plist-get updated :args) :source)))
+		           (should (equal (and access (list (cons (file-truename target)
+		                                                  (file-truename target))))
 		                          (plist-get updated :canonical-path-map)))))
 		     (delete-directory root t)))
 		 :doc "uses the session target before authorization"
