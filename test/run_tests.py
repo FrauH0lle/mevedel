@@ -9,28 +9,71 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 import time
+
+import affected_tests
 
 ROOT = Path(__file__).resolve().parent.parent
 REPORTS = ROOT / '.scratch/test-suite-performance'
 EASK = ['eask'] if shutil.which('eask') else ['npx', '--offline', '@emacs-eask/cli']
 
 
-def partition_tests(names, weights, jobs):
-    """Balance known durations, assigning every discovered case exactly once."""
+def partition_tests(names, weights, jobs, files=None):
+    """Balance known durations, assigning every discovered case exactly once.
+
+    Cases stay together so per-worker fixtures are built once: a whole file
+    (FILES maps names to defining files), else a whole deftest (names differing
+    only by a final @N), else contiguous runs of its cases.  A unit is split only
+    when it alone exceeds one worker's share of the total.  Within a unit, cases
+    keep inventory order; units are placed longest first on the least loaded
+    worker.  Cases without a timing have unknown cost, so they are dealt
+    round-robin afterwards, least loaded worker first: a new deftest spreads
+    evenly instead of landing on one worker.  Timings below a millisecond
+    count one millisecond."""
     if jobs < 1 or not names or len(names) != len(set(names)):
         raise ValueError('Expected unique tests and at least one worker')
     if any(not math.isfinite(value) or value < 0 for value in weights.values()):
         raise ValueError('Durations must be finite and nonnegative')
-    groups = [[] for _ in range(min(jobs, len(names)))]
+    measured = [name for name in names if name in weights]
+    unmeasured = [name for name in names if name not in weights]
+    cost = {name: max(weights[name], 0.001) for name in measured}
+    share = sum(cost.values()) / min(jobs, len(names))
+    units = []
+
+    def split(cases, keys):
+        if sum(cost[name] for name in cases) <= share:
+            units.append(cases)
+        elif keys:
+            parts = {}
+            for name in cases:
+                parts.setdefault(keys[0](name), []).append(name)
+            for part in parts.values():
+                split(part, keys[1:])
+        else:
+            chunk = []
+            for name in cases:
+                if chunk and sum(cost[item] for item in chunk) + cost[name] > share:
+                    units.append(chunk)
+                    chunk = []
+                chunk.append(name)
+            units.append(chunk)
+
+    if measured:
+        split(measured, [lambda name: (files or {}).get(name, ''),
+                         lambda name: re.sub(r'@[0-9]+\Z', '', name)])
+    groups = [[] for _ in range(min(jobs, len(units) + len(unmeasured)))]
     totals = [0.0] * len(groups)
-    for name in sorted(names, key=lambda item: (-weights.get(item, 0.01), item)):
+    for unit in sorted(units, key=lambda item: (-sum(cost[name] for name in item), item[0])):
         worker = min(range(len(groups)), key=lambda i: (totals[i], len(groups[i])))
-        groups[worker].append(name)
-        totals[worker] += weights.get(name, 0.01)
+        groups[worker].extend(unit)
+        totals[worker] += sum(cost[name] for name in unit)
+    order = sorted(range(len(groups)), key=lambda i: (totals[i], len(groups[i]), i))
+    for index, name in enumerate(unmeasured):
+        groups[order[index % len(order)]].append(name)
     return groups
 
 
@@ -111,6 +154,9 @@ def main():
     parser.add_argument('--durations', type=Path, default=REPORTS / 'latest-durations.csv')
     parser.add_argument('--output', type=Path, default=REPORTS / datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
     parser.add_argument('files', nargs='*', help='test files or quoted glob patterns (default: all)')
+    parser.add_argument('--affected', nargs='?', const='master', metavar='REV',
+                        help='fast tier: test files for changes since the merge base with '
+                             'REV (default master), including uncommitted and untracked files')
     lane = parser.add_mutually_exclusive_group()
     lane.add_argument('--fresh-files', action='store_true',
                       help='run each selected file in its own fresh Emacs')
@@ -121,11 +167,27 @@ def main():
         parser.error('--jobs must be positive')
     if args.replay and args.files:
         parser.error('--replay uses its saved file roster; do not pass files')
+    if args.affected and (args.files or args.replay):
+        parser.error('--affected selects its own files; do not pass files or --replay')
     try:
         replay = read_replay(args.replay) if args.replay else None
-        files = replay['files'] if replay else select_files(args.files)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+        if args.affected:
+            changed = affected_tests.changed_files(ROOT, args.affected)
+            selected, notes = affected_tests.select(ROOT, changed)
+            for note in notes[:20]:
+                print(note, flush=True)
+            if len(notes) > 20:
+                print(f'... {len(notes) - 20} more changed files', flush=True)
+            files = select_files(sorted(set(selected) | set(affected_tests.SMOKE))
+                                 if selected is not None else [])
+            print(f'Affected tier: {len(changed)} changed files; '
+                  + ('full suite' if selected is None
+                     else f'{len(selected)} affected test files plus the smoke set'), flush=True)
+        else:
+            files = replay['files'] if replay else select_files(args.files)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
         parser.error(str(exc))
+    complete = set(files) == set(select_files([]))
     # Provisioned acceptance cases share target roots; keep their run serial.
     if any(value and key.startswith(('MEVEDEL_TEST_SSH_', 'MEVEDEL_TEST_PODMAN_',
                                      'MEVEDEL_TEST_DOCKER_'))
@@ -161,13 +223,15 @@ def main():
         if code:
             print(f'Discovery failed (exit {code}); see {output / "inventory.log"}', file=sys.stderr)
             return code if code > 0 else 1
-        names = json.loads((output / 'inventory.json').read_text())
+        discovered = json.loads((output / 'inventory.json').read_text())
+        names = discovered['inventory']
+        defining = dict(zip(names, discovered['files']))
     if not args.fresh_files and not replay:
         weights = {}
         if args.durations.exists():
             with args.durations.open() as stream:
                 weights = {row['test']: float(row['seconds']) for row in csv.DictReader(stream)}
-        groups = partition_tests(names, weights, args.jobs)
+        groups = partition_tests(names, weights, args.jobs, defining)
     jobs = min(args.jobs, len(groups))
     mode = 'fresh-files' if args.fresh_files else 'replay' if replay else 'partitioned'
     print(f'{len(files)} files; {available_cpus} CPUs available; '
@@ -236,7 +300,7 @@ def main():
                    skipped=sum(row['status'] == 'ert-test-skipped' for row in rows))
     (output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
     write_durations(output / 'durations.csv', rows, seconds)
-    if not failed and not args.files and not args.fresh_files and not replay:
+    if not failed and complete and not args.fresh_files and not replay:
         REPORTS.mkdir(parents=True, exist_ok=True)
         write_durations(REPORTS / 'latest-durations.csv', rows, seconds)
     print(f'{seconds:.2f}s; {len(rows)}/{expected_count if expected_count is not None else "?"} results; '
