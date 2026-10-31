@@ -723,7 +723,6 @@ head and the unreadable observation are injected only while the job runs."
        (should-not (string-match-p
                     "typed during the job"
                     (mevedel-session-artifacts-read-artifact session relative t))))))
-  :doc "supersedes a pending debounced save and declines when not applicable"
   :doc "a property-only change after the freeze stays dirty and the next save serializes it"
   (test-mevedel-agent-conversation-publication--with-agent
    (lambda (session _parent child inv)

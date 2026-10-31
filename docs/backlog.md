@@ -10,7 +10,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Inbox
 
-- Consider making mevedel's data buffers hidden
 - Donwload button in browser/lobby/files beside the files
   - Also drag-n-drop of files for upload
 - Make system prompt/role a bit more general so mevedel can also be used for writing for example
