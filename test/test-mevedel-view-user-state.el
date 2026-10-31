@@ -286,6 +286,117 @@ Return (COMPOSER . READER)."
 
 
 ;;
+;;; Region promises and request progress geometry
+
+(defvar mevedel-view-user-state-test--region-checks nil
+  "Region checks: (PREFIX-DIFFERENCE SUFFIX-DIFFERENCE), nil when unchanged.")
+
+(defun mevedel-view-user-state-test--difference (old new)
+  "Return nil when strings OLD and NEW are equal with properties.
+Otherwise describe their first difference.  Ignore `fontified': jit-lock
+sets it when geometry queries fontify text, which replaces nothing."
+  (setq old (copy-sequence old) new (copy-sequence new))
+  (remove-text-properties 0 (length old) '(fontified nil) old)
+  (remove-text-properties 0 (length new) '(fontified nil) new)
+  (unless (equal-including-properties old new)
+    (let ((i 0) (limit (min (length old) (length new))))
+      (while (and (< i limit)
+                  (eq (aref old i) (aref new i))
+                  (equal (text-properties-at i old) (text-properties-at i new)))
+        (setq i (1+ i)))
+      (list :at i :lengths (list (length old) (length new))
+            :old (substring old i (min (length old) (+ i 30)))
+            :old-properties (and (< i (length old)) (text-properties-at i old))
+            :new (substring new i (min (length new) (+ i 30)))
+            :new-properties (and (< i (length new)) (text-properties-at i new))))))
+
+(defun mevedel-view-user-state-test--validating-region (original thunk &optional region)
+  "Call ORIGINAL with THUNK and REGION, checking text outside REGION.
+Text and properties before and after REGION must be identical afterwards:
+REGION promises that THUNK replaces only that text."
+  (if (not region)
+      (funcall original thunk region)
+    (let* ((start (copy-marker (car region)))
+           (end (copy-marker (cdr region) t))
+           (before (buffer-substring (point-min) start))
+           (after (buffer-substring end (point-max))))
+      (prog1 (funcall original thunk region)
+        (push (list (mevedel-view-user-state-test--difference
+                     before (buffer-substring (point-min) start))
+                    (mevedel-view-user-state-test--difference
+                     after (buffer-substring end (point-max))))
+              mevedel-view-user-state-test--region-checks)
+        (set-marker start nil)
+        (set-marker end nil)))))
+
+(mevedel-deftest mevedel-view-user-state/region ()
+  (mevedel-view-user-state-test--with-view
+    ,setup
+    (let ((windows (mevedel-view-user-state-test--arrange))
+          (mevedel-view-user-state-test--region-checks nil))
+      (unwind-protect
+          (progn
+            (advice-add 'mevedel-view-call-preserving-user-view-state :around
+                        #'mevedel-view-user-state-test--validating-region)
+            (mevedel-view-user-state-test--preserves windows
+              ,action))
+        (advice-remove 'mevedel-view-call-preserving-user-view-state
+                       #'mevedel-view-user-state-test--validating-region))
+      ;; The writer used the region path, and kept its promise.
+      (should mevedel-view-user-state-test--region-checks)
+      (dolist (check mevedel-view-user-state-test--region-checks)
+        (should (equal check '(nil nil))))))
+  (setup action)
+  :doc "negative control: a write outside the promised region is detected"
+  nil
+  (let ((at (save-excursion
+              (goto-char (point-min)) (search-forward "Line 5 ") (point)))
+        (inhibit-read-only t))
+    (mevedel-view-call-preserving-user-view-state
+     (lambda () (save-excursion (goto-char (point-min)) (insert "outside ")))
+     (cons at (1+ at)))
+    (should (car (car mevedel-view-user-state-test--region-checks)))
+    ;; Undo it with a kept promise, leaving only valid records.
+    (setq mevedel-view-user-state-test--region-checks nil)
+    (mevedel-view-call-preserving-user-view-state
+     (lambda () (save-excursion (goto-char (point-min)) (delete-char 8)))
+     (cons (point-min) (+ (point-min) 8))))
+  :doc "a background elapsed tick replaces only its row"
+  nil
+  (progn
+    (setq clock 1001.0)
+    (mevedel-view-execution-tick)
+    (should (string-search "2m 33s" (buffer-string))))
+  :doc "a semantic rail tick replaces only the rail"
+  (progn
+    (mevedel-view--start-spinner "Working...")
+    (setq mevedel-view--spinner-start-time (seconds-to-time 988.0)
+          mevedel-view--spinner-last-second 1000)
+    (mevedel-view--ensure-request-progress))
+  (progn
+    (setq clock 1001.0)
+    (mevedel-view--spinner-tick)
+    (should (string-search "13s" (buffer-string)))))
+
+(mevedel-deftest mevedel-view-user-state/request-progress-width ()
+  (mevedel-view-user-state-test--with-view
+    (mevedel-view--start-spinner "Thinking about a fairly long status label")
+    (let* ((windows (mevedel-view-user-state-test--arrange))
+           (rail (mevedel-view-user-state-test--rail)))
+      ;; A narrower window now shows the view: the rail must refit and can
+      ;; rewrap, while every window keeps the user's state.
+      (with-selected-window (car windows) (split-window-right))
+      (mevedel-view-user-state-test--preserves windows
+        ,action
+        (should-not (equal rail (mevedel-view-user-state-test--rail))))))
+  (action)
+  :doc "a status update refits the rail to a narrower window"
+  (mevedel-view--update-spinner "Running another fairly long status label" 'request)
+  :doc "stopping progress refits the idle rail to a narrower window"
+  (mevedel-view--stop-spinner))
+
+
+;;
 ;;; Inbox reproductions (graphical)
 
 (defun mevedel-view-user-state-test--activate-row (text)

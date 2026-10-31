@@ -4,6 +4,12 @@
 
 ;; Owns editable composer geometry, prompt submission, root dispatch, and
 ;; fork/send coordination with the authoritative gptel data buffer.
+;;
+;; It also owns user view-state preservation.  Asynchronous view writers
+;; call `mevedel-view-call-preserving-user-view-state'; the partial
+;; preservers it composes (window state, composer text, composer point) are
+;; private building blocks for it and for the draft command transaction,
+;; table splices and `mevedel-view-call-preserving-window-configuration'.
 
 ;;; Code:
 
@@ -1907,18 +1913,30 @@ caller's buffer, not in a displayed view."
   `(mevedel-view--call-with-render-boundaries-advancing
     (lambda () ,@body)))
 
-(defun mevedel-view--call-preserving-user-view-state (thunk &optional region)
-  "Call THUNK without moving the user's live view cursor.
-Async redraws may insert, delete, or reconcile view-owned text while the
-user is typing in the composer or browsing transcript history.  Preserve
-all displayed windows plus the editable composer text around THUNK.
-REGION, a cons (START . END), promises that THUNK replaces only that
-transcript text; see `mevedel-view--call-preserving-window-state'."
+(defun mevedel-view-call-preserving-user-view-state (thunk &optional region)
+  "Call THUNK, a view write the user did not command; return its value.
+This is the entry every asynchronous view writer uses: timers, process
+output, stream chunks, deferred and batched renders.  Around THUNK it keeps
+what the user sees and edits:
+
+- the composer's text and properties, even when no window shows the view;
+- point and mark, by offset inside the composer and by semantic anchor in
+  the transcript and managed chrome;
+- every displaying window's point and viewport, under the composer
+  policy: a window editing the visible composer keeps its screen row, a
+  history reader keeps its reading position, a window visiting an
+  interaction card keeps that row, and a lost start fills the last page.
+
+REGION, a cons (START . END), promises that THUNK replaces only that text.
+Anchors inside it are then resolved locally instead of scanning the
+buffer, so frequent small writers stay cheap.
+
+Command-driven writes use the draft command transaction instead, table
+splices map positions by cell, and zone reconciliation applies the same
+policy itself; `mevedel-view-call-preserving-window-configuration'
+additionally restores frame layout."
   (prog1 (mevedel-view--call-preserving-window-state
-          (lambda ()
-            (mevedel-view--call-preserving-input-text
-             (lambda ()
-               (mevedel-view--call-preserving-input-point thunk))))
+          (lambda () (mevedel-view--call-preserving-input-text thunk))
           nil region)
     (mevedel-view--sanitize-undo)))
 

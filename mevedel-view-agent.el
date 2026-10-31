@@ -139,10 +139,6 @@
 (defvar mevedel-view-mode-map)
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--call-preserving-input-point "mevedel-view-composer" (thunk))
-(declare-function mevedel-view--call-preserving-input-text "mevedel-view-composer" (thunk))
-(declare-function mevedel-view--call-preserving-window-state "mevedel-view-composer"
-                  (thunk &optional positions-preserved region))
 (declare-function mevedel-view--composer-anchors "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--position-screen-y
@@ -151,6 +147,8 @@
                   "mevedel-view-composer" (anchors))
 (declare-function mevedel-view--transcript-gptel-send-blocked
                   "mevedel-view-composer" (&optional arg))
+(declare-function mevedel-view-call-preserving-user-view-state
+                  "mevedel-view-composer" (thunk &optional region))
 (defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-disclosure'
@@ -1364,24 +1362,20 @@ Return non-nil on success."
   "Rediscover and refresh AGENT-PATH's handles with projection ownership held."
   (let ((start-time (float-time))
         stale-p)
-    (mevedel-view--call-preserving-window-state
+    (mevedel-view-call-preserving-user-view-state
      (lambda ()
-       (mevedel-view--call-preserving-input-point
-       (lambda ()
-         (mevedel-view--call-preserving-input-text
-          (lambda ()
-            (let ((inhibit-read-only t)
-                  (inhibit-modification-hooks t))
-              (pcase-let ((`(,points . ,stale)
-                           (mevedel-view--agent-handle-refresh-points agent-path)))
-                (setq stale-p (or stale
-                                  (and (null points)
-                                       (mevedel-view--agent-source-present-p
-                                        agent-path))))
-                (dolist (point points)
-                  (unless (mevedel-view--refresh-agent-handle-at point agent-path)
-                    (setq stale-p t))))
-              (mevedel-view--render-agent-status))))))))
+       (let ((inhibit-read-only t)
+             (inhibit-modification-hooks t))
+         (pcase-let ((`(,points . ,stale)
+                      (mevedel-view--agent-handle-refresh-points agent-path)))
+           (setq stale-p (or stale
+                             (and (null points)
+                                  (mevedel-view--agent-source-present-p
+                                   agent-path))))
+           (dolist (point points)
+             (unless (mevedel-view--refresh-agent-handle-at point agent-path)
+               (setq stale-p t))))
+         (mevedel-view--render-agent-status))))
     (mevedel-view--debug-log
      'agent-refresh
      :agent-path agent-path

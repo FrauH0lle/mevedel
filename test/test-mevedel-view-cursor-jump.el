@@ -88,7 +88,7 @@
                 (should (= 4 (- (point) (mevedel-view--input-start)))))))))))
   (action)
   :doc "no-op user-state preservation keeps the Ask focus"
-  (mevedel-view--call-preserving-user-view-state #'ignore)
+  (mevedel-view-call-preserving-user-view-state #'ignore)
   :doc "agent refresh keeps the Ask focus"
   (mevedel-view-agent--refresh-owned "/root/pair-merge")
   :doc "agent status redraw keeps the Ask focus"
