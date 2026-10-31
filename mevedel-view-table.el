@@ -956,6 +956,50 @@ surrounding transcript properties."
   "(CHARS-TICK WIDTH . END) for `mevedel-view-table--last-stale-end'.
 Table rendering resets it: it can update a table's width without changing text.")
 
+(defconst mevedel-view-table--layout-cache-limit 64
+  "Most table layouts one view retains before starting over.")
+
+(defvar-local mevedel-view-table--layout-cache nil
+  "Rendered table strings keyed by `mevedel-view-table--layout-key'.
+A view redraw reinserts raw Markdown; a table laid out before reuses its
+layout instead of showing raw source until the next idle pass.")
+;; A view rebuild re-invokes `mevedel-view-mode' on the live buffer.
+(put 'mevedel-view-table--layout-cache 'permanent-local t)
+
+(defun mevedel-view-table--layout-key (source window inset)
+  "Return the view's layout cache key of SOURCE in WINDOW at INSET, or nil.
+The key holds every layout input: the source, the window's pixel width,
+the `line-prefix' inset, the frame font size and the buffer's face
+remapping, which text scaling changes.  Other buffers render a table
+once and cache nothing."
+  (when (and (window-live-p window) (derived-mode-p 'mevedel-view-mode))
+    (let ((frame (window-frame window)))
+      (list source (window-body-width window t) inset
+            (frame-char-width frame) (frame-char-height frame)
+            face-remapping-alist))))
+
+(defun mevedel-view-table--layout (source window inset)
+  "Return SOURCE laid out for WINDOW at INSET, reusing a cached layout."
+  (let ((key (mevedel-view-table--layout-key source window inset)))
+    (or (and key mevedel-view-table--layout-cache
+             (gethash key mevedel-view-table--layout-cache))
+        (let ((rendered (mevedel-view-table--render-source source window inset)))
+          (when key
+            (unless mevedel-view-table--layout-cache
+              (setq mevedel-view-table--layout-cache
+                    (make-hash-table :test #'equal)))
+            (when (>= (hash-table-count mevedel-view-table--layout-cache)
+                      mevedel-view-table--layout-cache-limit)
+              (clrhash mevedel-view-table--layout-cache))
+            (puthash key rendered mevedel-view-table--layout-cache))
+          rendered))))
+
+(defun mevedel-view-table--cached-layout-p (source window inset)
+  "Return non-nil when SOURCE already has a layout for WINDOW at INSET."
+  (when-let* ((cache mevedel-view-table--layout-cache)
+              (key (mevedel-view-table--layout-key source window inset)))
+    (gethash key cache)))
+
 (defun mevedel-view-table--render-region (start end source &optional window)
   "Replace START..END with SOURCE rendered as an aligned table.
 The rendered text retains SOURCE and the displaying window's pixel
@@ -967,7 +1011,7 @@ layout targets; otherwise a window showing the buffer is used."
                    (get-buffer-window (current-buffer) t)))
          (width (and window (window-body-width window t)))
          (inset (mevedel-view-table--inset-at start))
-         (rendered (mevedel-view-table--render-source source window inset))
+         (rendered (mevedel-view-table--layout source window inset))
          (carried (mevedel-view--selected-text-properties
                    start mevedel-view-table--carried-properties))
          (inhibit-read-only t)
@@ -1004,14 +1048,24 @@ layout targets; otherwise a window showing the buffer is used."
 
 (defun mevedel-view-table-decorate (start end avoid-ranges)
   "Discover Markdown pipe tables between START and END.
-Views retain source and defer formatting until idle.  Other buffers render
+Views retain source and defer formatting until idle, unless the view
+already laid out the same table for its window.  Other buffers render
 immediately.  Tables overlapping AVOID-RANGES or exempt text stay raw.
 Tables in an unfinished streamed response remain raw until terminal projection."
-  (dolist (table (mevedel-view-table--find-tables start end avoid-ranges))
-    (let* ((beg (car table)) (end (cdr table))
-           (source (mevedel-view--markdown-source beg end)))
-      (if (not (derived-mode-p 'mevedel-view-mode))
-          (mevedel-view-table--render-region beg end source)
+  (let ((window (and mevedel-view-table--layout-cache
+                     (not mevedel-view-table--streaming-p)
+                     (get-buffer-window (current-buffer) t))))
+    (dolist (table (mevedel-view-table--find-tables start end avoid-ranges))
+      (let* ((beg (car table)) (end (cdr table))
+             (source (mevedel-view--markdown-source beg end)))
+        (cond
+         ((not (derived-mode-p 'mevedel-view-mode))
+          (mevedel-view-table--render-region beg end source))
+         ((and window
+               (mevedel-view-table--cached-layout-p
+                source window (mevedel-view-table--inset-at beg)))
+          (mevedel-view-table--render-region beg end source window))
+         (t
         (add-text-properties
          beg end
          (list 'mevedel-view-table-source source
@@ -1020,7 +1074,8 @@ Tables in an unfinished streamed response remain raw until terminal projection."
                'mevedel-view-no-linkify t
                'rear-nonsticky
                (mevedel-view-table--rear-nonsticky
-                (list 'rear-nonsticky (get-text-property beg 'rear-nonsticky)))))))))
+                (list 'rear-nonsticky
+                      (get-text-property beg 'rear-nonsticky)))))))))))
 
 (defun mevedel-view-table--last-stale-end (width)
   "Return the end of the last settled table run lacking layout WIDTH, or nil.

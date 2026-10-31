@@ -365,7 +365,11 @@ Projection ownership also inhibits redisplay through queued work. Disclosure
 expansion rolls back failed replacement. Reader preservation includes both
 selection endpoints, neighboring managed zones, and table cells across wrapping.
 Views defer table formatting until visible and idle, processing one complete
-table per callback. Interactive visibility reuses Emacs's current window boundary,
+table per callback. Redraws reinsert raw table source, so a table once laid out
+returned to raw Markdown after every full, settle or disclosure render until the
+next idle pass. A bounded per-view layout cache now reapplies a known layout
+during the redraw; only first layouts are deferred, keeping transcript opening
+as fast as before. Interactive visibility reuses Emacs's current window boundary,
 including variable-height rows; changed display state requests recomputation.
 Semantic marker relocation replaces whole-table text diffing. Restored expanded
 audit disclosures use their ordinary toggle renderer, preserving the single

@@ -4,8 +4,11 @@
 ;;; Code:
 (require 'helpers (file-name-concat (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-view)
+;; Bare `mevedel-view-mode' buffers skip view setup, which loads these.
+(require 'mevedel-view-composer)
 (require 'mevedel-view-markdown)
 (require 'mevedel-view-render)
+(require 'mevedel-view-stream)
 
 (mevedel-deftest mevedel-view--realign-markdown/composer ()
                  ,test
@@ -72,6 +75,39 @@
                           (should (= y (mevedel-view-test--composer-screen-y window)))
                           (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
                           (should (= (point) (+ (mevedel-view--input-start) 4)))))))))
+
+(mevedel-deftest mevedel-view-table-decorate/layout-cache ()
+  ,test
+  (test)
+  :doc "a redraw keeps a laid-out table rendered; a new table still waits for idle"
+  (save-window-excursion
+    (mevedel-view-test--with-buffers
+      (let ((draft "> draft\nsecond line"))
+        (mevedel-view-test--insert-data
+         data-buf "| First | Second |\n|---|---|\n| target | other |\n" 'response)
+        (with-current-buffer view-buf
+          (set-window-buffer (selected-window) view-buf)
+          (unwind-protect
+              (progn
+                (mevedel-view-test--insert-composer-draft draft 4)
+                (mevedel-view--full-rerender)
+                (should (string-search "| First | Second |" (buffer-string)))
+                (mevedel-view--realign-markdown)
+                (should (string-search "│ target │" (buffer-string)))
+                ;; Redraws reinsert raw source; the table stays rendered.
+                (mevedel-view--full-rerender)
+                (should (string-search "│ target │" (buffer-string)))
+                (should-not (string-search "| First | Second |" (buffer-string)))
+                (should (equal draft (mevedel-view--input-text)))
+                (should (= (point) (+ (mevedel-view--input-start) 4)))
+                ;; A table never laid out keeps the deferred first layout.
+                (mevedel-view-test--insert-data
+                 data-buf "\n| Other | Table |\n|---|---|\n| a | b |\n" 'response)
+                (mevedel-view--full-rerender)
+                (should (string-search "│ target │" (buffer-string)))
+                (should (string-search "| Other | Table |" (buffer-string)))
+                (should (equal draft (mevedel-view--input-text))))
+            (mevedel-view--cancel-realign-timer)))))))
 
 (mevedel-deftest mevedel-view-table-rerender/deferred ()
                  ,test
