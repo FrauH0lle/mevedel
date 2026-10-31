@@ -1394,13 +1394,24 @@ owner; omitted means the root transcript."
               ;; A displayed audit follows the row before it: the view
               ;; attaches it to a preceding tool, which then needs individual
               ;; presentation, and otherwise shows it as a row of its own.
-              (when (and records (eq (car segment) 'ignored)
-                         (mevedel-collaboration--activity-separator-p start end))
-                (plist-put (car records)
-                           (if (equal (plist-get (car records) :kind) "tool")
+              ;; Deferred request summaries are transparent here too, including
+              ;; the failure row emitted alongside a failed summary.
+              ;; Own completion mail still fixes an audit's source position.
+              (when-let* (((eq (car segment) 'ignored))
+                          ((mevedel-collaboration--activity-separator-p start end))
+                          (previous
+                           (cl-find-if
+                            (lambda (record)
+                              (not (and (eq (plist-get record :activity-role)
+                                            'transparent)
+                                        (member (plist-get record :kind)
+                                                '("request-summary" "assistant")))))
+                            records)))
+                (plist-put previous
+                           (if (equal (plist-get previous :kind) "tool")
                                :activity-role
                              :activity-break-after)
-                           (if (equal (plist-get (car records) :kind) "tool")
+                           (if (equal (plist-get previous :kind) "tool")
                                'boundary
                              t))))
              ((eq (car segment) 'mailbox)

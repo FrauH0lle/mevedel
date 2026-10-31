@@ -504,6 +504,13 @@ change resets the rule. Agreement cases now cover leading breadcrumb, mail and
 audit combinations, and partition tests cover the boundary/scope reset and
 rebuilding with `nil`.
 
+Re-review also found that a deferred request summary could shield the preceding
+tool from a displayed audit in the browser. Audit association now looks past
+deferred transparent summaries, including multiple summaries and their failure
+rows, to the preceding effective activity row, matching Emacs's deferred-summary
+handling. Other transparent records, such as own-completion mail, retain their
+source ordering for audit association.
+
 The shared running fact includes settled transcript tools whose background work
 is still running; the Emacs header animates only calls still in flight. These
 are distinct presentation needs, not different partition rules. A threshold of
