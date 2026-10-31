@@ -1562,13 +1562,16 @@ Record geometry only on size changes, not on ordinary redisplays."
 (defun mevedel-view--preserve-text-scale-blanks (function &rest arguments)
   "Call text-scale FUNCTION with ARGUMENTS, repairing only new view blanks.
 Capture before the face remapping changes, including programmatic calls and
-the anonymous repeat-map commands used by `text-scale-adjust'."
+the anonymous repeat-map commands used by `text-scale-adjust'.  Scaling
+changes the remapped columns a directive prompt fits without resizing any
+window, so refit the prompt before measuring the blanks again."
   (if (not (derived-mode-p 'mevedel-view-mode))
       (apply function arguments)
     (let ((blanks (mapcar (lambda (window)
                             (cons window (or (mevedel-view--window-blank-pixels window) 0)))
                           (get-buffer-window-list (current-buffer) nil t))))
       (prog1 (apply function arguments)
+        (mevedel-view--refit-input-prompt)
         (pcase-dolist (`(,window . ,blank) blanks)
           (when (and (window-live-p window)
                      (eq (window-buffer window) (current-buffer)))

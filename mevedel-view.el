@@ -796,6 +796,15 @@ the editable composer body.
   ;; Copying a rendered table yields its canonical pipe Markdown.
   (setq-local filter-buffer-substring-function
               #'mevedel-view--buffer-substring-filter)
+  ;; Panel text yanked into the composer becomes the user's draft, not zone
+  ;; text that a later zone redraw would delete as stale or an interaction
+  ;; card that a window on the draft would be taken to visit.
+  (setq-local yank-excluded-properties
+              (if (eq yank-excluded-properties t)
+                  t
+                (append mevedel-view-zone-owned-properties
+                        '(mevedel-view-interaction-id)
+                        yank-excluded-properties)))
   ;; Keep the composer where it is: when it reaches the window bottom,
   ;; scroll one line instead of recentering (which jumped about half a
   ;; window when a status row appeared or the draft grew by a line).

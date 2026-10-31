@@ -62,6 +62,16 @@
   '(status interaction progress directive-inspector)
   "Fixed names of fragment-backed view zones.")
 
+(defconst mevedel-view-zone-owned-properties
+  '(mevedel-view-zone-key mevedel-view-zone-region mevedel-view-zone-namespace
+    mevedel-view-zone-id mevedel-view-zone-section mevedel-view-zone-navigatable
+    mevedel-view-zone-entry mevedel-view-zone-collapsible
+    mevedel-view-zone-collapse-key mevedel-view-zone-collapsed
+    mevedel-view-zone-activate mevedel-view-zone-anchor)
+  "Text properties that tie managed zone text to its region.
+Text yanked from a zone must not keep them: stale-text cleanup deletes
+zone text its live region does not own, even inside the composer.")
+
 
 ;;
 ;;; Region and key helpers
