@@ -1,7 +1,7 @@
 ;;; mevedel-engine-test-support.el --- Admitted engine fixture -*- lexical-binding: t -*-
 
 ;;; Commentary:
-;; Real published sessions for external request and transport tests.
+;; Real durable sessions for external request and transport tests.
 
 ;;; Code:
 
@@ -55,57 +55,72 @@ fixture; a survivor would fire inside a later test."
                 (append timer-list timer-idle-list nil)))
 
 (defmacro mevedel-engine-test--with-session (&rest body)
-  "Run BODY in a temporary published session with an admitted request.
+  "Run BODY in a temporary durable session with an admitted request.
+An initial :file-workspace FORM selects real file-workspace storage when
+FORM is non-nil; otherwise use project publication.  Use file workspaces
+only when the assertions do not depend on portable publication or leases.
 Fail when BODY leaves a timer the fixture does not own."
   (declare (indent 0) (debug t))
-  `(let* ((timers (append timer-list timer-idle-list nil))
-          ;; Fixture peers need no grace period for descendant cleanup.
-          (acp--shutdown-grace-period 0)
-          (root (make-temp-file "mevedel-mcp-tools-" t))
-          (workspace (test-mevedel-session-persistence--make-workspace root))
-          (session (mevedel-session-create "mcp-tools" workspace))
-          (buffer (generate-new-buffer " *mcp-tools*"))
-          done)
-     (unwind-protect
-         (prog1
-             (with-current-buffer buffer
-               (mevedel-chat-prepare-transcript-buffer)
-               (setq-local mevedel--session session mevedel--workspace workspace
-                           default-directory (file-name-as-directory root))
-               (setf (mevedel-session-permission-mode session) 'full-auto)
-               (mevedel-session-set-root-buffer session buffer)
-               (mevedel-session-artifacts-ensure-files session buffer)
-               (let ((request (mevedel-request-begin session)))
-                 ;; These fixtures exercise turn engines; provider readiness has
-                 ;; its own real HTTP/CLI and pre-commit lifecycle tests.
-                 (cl-letf (((symbol-function 'mevedel-readiness-assert) #'ignore)) ,@body)))
-           (setq done t))
-       (let ((leaked (unwind-protect
-                         (mevedel-engine-test--release session buffer timers)
-                       (delete-directory root t))))
-         ;; Cancel even after a failure so leaks cannot fire in later tests.
-         (mapc #'cancel-timer leaked)
-         (when (and done leaked)
-           (error "Fixture left timers: %S"
-                  (mapcar (lambda (timer)
-                            (let ((function (timer--function timer)))
-                              (if (symbolp function) function 'lambda)))
-                          leaked)))))))
+  (let ((file-workspace (when (eq (car body) :file-workspace)
+                         (pop body) (pop body))))
+    `(let* ((timers (append timer-list timer-idle-list nil))
+            ;; Fixture peers need no grace period for descendant cleanup.
+            (acp--shutdown-grace-period 0)
+            (file-workspace-p ,file-workspace)
+            (root (make-temp-file "mevedel-mcp-tools-" t))
+            (workspace (if file-workspace-p
+                           (test-mevedel-session-persistence--make-file-workspace root)
+                         (test-mevedel-session-persistence--make-workspace root)))
+            (session (mevedel-session-create "mcp-tools" workspace))
+            (buffer (generate-new-buffer " *mcp-tools*"))
+            done)
+       (unwind-protect
+           (prog1
+               (with-current-buffer buffer
+                 (mevedel-chat-prepare-transcript-buffer)
+                 (setq-local mevedel--session session mevedel--workspace workspace
+                             default-directory (file-name-as-directory root))
+                 (setf (mevedel-session-permission-mode session) 'full-auto)
+                 (mevedel-session-set-root-buffer session buffer)
+                 (mevedel-session-artifacts-ensure-files session buffer)
+                 (should (eq (if file-workspace-p 'file 'project)
+                             (mevedel-workspace-type workspace)))
+                 (should (eq (if file-workspace-p 'pid-lock 'portable)
+                             (mevedel-session-authority-mode session)))
+                 (let ((request (mevedel-request-begin session)))
+                   ;; These fixtures exercise turn engines; provider readiness has
+                   ;; its own real HTTP/CLI and pre-commit lifecycle tests.
+                   (cl-letf (((symbol-function 'mevedel-readiness-assert) #'ignore)) ,@body)))
+             (setq done t))
+         (let ((leaked (unwind-protect
+                           (mevedel-engine-test--release session buffer timers)
+                         (delete-directory root t))))
+           ;; Cancel even after a failure so leaks cannot fire in later tests.
+           (mapc #'cancel-timer leaked)
+           (when (and done leaked)
+             (error "Fixture left timers: %S"
+                    (mapcar (lambda (timer)
+                              (let ((function (timer--function timer)))
+                                (if (symbolp function) function 'lambda)))
+                            leaked))))))))
 
 (defmacro mevedel-engine-test--with-claude-session (&rest body)
   "Run BODY in `mevedel-engine-test--with-session' on Claude Code's sonnet.
 Claude's backend is registered in an otherwise empty catalog and keeps its
 state under the fixture root.  Like `mevedel-engine-test--claude-launch',
-the installation probe is skipped: fixture launches need no Claude runtime."
+the installation probe is skipped: fixture launches need no Claude runtime.
+An initial :file-workspace FORM is forwarded to the session fixture."
   (declare (indent 0) (debug t))
-  `(mevedel-engine-test--with-session
-     (let ((gptel--known-backends nil)
-           (mevedel-claude-code-directory (file-name-concat root "claude")))
-       (cl-letf (((symbol-function 'mevedel-claude-code-unavailable-reason) #'ignore))
-         (mevedel-claude-code-register)
-         (mevedel-model-set-session-provider
-          session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
-         ,@body))))
+  (let ((file-workspace (when (eq (car body) :file-workspace)
+                         (pop body) (pop body))))
+    `(mevedel-engine-test--with-session :file-workspace ,file-workspace
+       (let ((gptel--known-backends nil)
+             (mevedel-claude-code-directory (file-name-concat root "claude")))
+         (cl-letf (((symbol-function 'mevedel-claude-code-unavailable-reason) #'ignore))
+           (mevedel-claude-code-register)
+           (mevedel-model-set-session-provider
+            session (mevedel-model-resolve-provider "Claude Code:sonnet") buffer)
+           ,@body)))))
 
 (defun mevedel-engine-test--session-info (model)
   "Return the capabilities Claude's adapter reports for MODEL."
