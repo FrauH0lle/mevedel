@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-agent-control)
+(require 'mevedel-transport)
 (require 'mevedel-session-publication-test-helpers
          (file-name-concat (file-name-directory
                             (or load-file-name buffer-file-name))
@@ -804,6 +806,36 @@ LATCH-FIRST starts the latch writer, rather than the root checkpoint, mid-job."
   :doc "a latch change requested during reservation cannot resurrect rolled-back mail"
   (test-mevedel-publication-async--interleaving t t))
 
+(mevedel-deftest mevedel-session-publication--schedule/async (:quiet t)
+  ,test
+  (test)
+  :doc "the gate-open hook runs before the next queued preparation and a failing hook does not stop it"
+  (test-mevedel-publication-async--fixture
+   (lambda (session _buffer)
+     (let (log diagnostics)
+       (let ((mevedel-session-publication-gate-open-functions
+              (list (lambda (owner)
+                      (push (list 'hook (eq owner session)
+                                  (mevedel-session-publication-preparation-token owner)
+                                  (mevedel-session-publication-job owner)
+                                  (length (mevedel-session-publication-preparations owner)))
+                            log))
+                    (lambda (_owner) (error "Injected gate hook failure")))))
+         ;; A running preparation keeps the gate closed: no hook, no start.
+         (setf (mevedel-session-publication-preparation-token session) '(in-flight))
+         (should (mevedel-session-publication-defer
+                  session (lambda (_token) (push 'queued log))))
+         (accept-process-output nil 0.05)
+         (should-not log)
+         (setf (mevedel-session-publication-preparation-token session) nil)
+         (mevedel-test--with-captured-diagnostics diagnostics
+           (mevedel-session-publication--schedule session)
+           (test-mevedel-publication-async--wait (lambda () (memq 'queued log)))))
+       ;; The hook saw the open gate with the successor still queued.
+       (should (equal '((hook t nil nil 1) queued) (reverse log)))
+       (should (string-match-p "Injected gate hook failure" diagnostics))
+       (should-not (mevedel-session-publication-busy-p session))))))
+
 (mevedel-deftest mevedel-session-publication-barrier/async (:quiet t)
   ,test
   (test)
@@ -1222,17 +1254,23 @@ QUEUED adds a second completion while the first job is unresolved."
            (test-mevedel-publication-async--send
             session id (lambda (ok err) (push (list id ok err) acknowledgements))))
          (test-mevedel-publication-async--wait (lambda () continuation))
+         ;; The first wake ran when the gate opened before the second job.
+         (should (equal '(mailbox) reasons))
+         (should (= offers 1))
+         (should-not (mevedel-session-mail-notifications session))
+         ;; Reoffered while that job is in flight, it waits in the FIFO.
+         (mevedel-agent-control--deliver-mail
+          session "/root" (car (test-mevedel-publication-async--mail session)))
          (should (= 1 (length (mevedel-session-mail-notifications session))))
          (should (mevedel-session-mail-notification-timer session))
-         (should-not reasons)
          (if uninstall
              (progn (mevedel-uninstall) (should-not mevedel-transport--enabled-p))
            (mevedel-transport-cancel-pending))
          (funcall continuation)
          (test-mevedel-publication-async--wait
-          (lambda () (and (= 2 (length acknowledgements)) (= offers 2))))
+          (lambda () (and (= 2 (length acknowledgements)) (= offers 3))))
          (accept-process-output nil 0.1)
-         (should (= offers 2))
+         (should (= offers 3))
          (should (equal '(mailbox) reasons))
          (should (equal '(("cancel-notify-one" t nil) ("cancel-notify-two" t nil))
                         (reverse acknowledgements)))
@@ -1289,14 +1327,13 @@ QUEUED adds a second completion while the first job is unresolved."
         (should (equal 0 status))
         (should (equal "" (buffer-string))))))
 
-  :doc "notifications stay coalesced through successive busy jobs and wake once in FIFO order"
+  :doc "successive busy jobs offer each notification at the next gate opening in FIFO order"
   (test-mevedel-publication-async--fixture
    (lambda (session _buffer)
      (let ((admit (symbol-function 'mevedel-session-durability-admit-async))
-           (queue (symbol-function 'mevedel-agent-control--queue-notification))
+           (notify (symbol-function 'mevedel-agent-control-notify))
            (wake (symbol-function 'mevedel-agent-control--wake))
-           (flush (symbol-function 'mevedel-agent-control--flush-notifications))
-           (admissions 0) (flushes 0) continuation delivering offers acknowledgements)
+           (admissions 0) continuation delivering offers acknowledgements)
        (cl-letf (((symbol-function 'mevedel-session-durability-admit-async)
                   (lambda (owner callback)
                     (cl-incf admissions)
@@ -1304,9 +1341,9 @@ QUEUED adds a second completion while the first job is unresolved."
                              (lambda (ok err)
                                (if (= admissions 1) (funcall callback ok err)
                                  (setq continuation (lambda () (funcall callback ok err))))))))
-                 ((symbol-function 'mevedel-agent-control--queue-notification)
+                 ((symbol-function 'mevedel-agent-control-notify)
                   (lambda (owner key function)
-                    (funcall queue owner key
+                    (funcall notify owner key
                              (lambda ()
                                (let ((previous delivering))
                                  (setq delivering (cadr key))
@@ -1314,35 +1351,24 @@ QUEUED adds a second completion while the first job is unresolved."
                                    (setq delivering previous)))))))
                  ((symbol-function 'mevedel-agent-control--wake)
                   (lambda (&rest arguments)
+                    ;; Queued successors may wait, but nothing runs in flight.
                     (should-not (mevedel-session-publication-preparation-token session))
-                    (should-not (mevedel-session-publication-busy-p session))
+                    (should-not (mevedel-session-publication-job session))
+                    (should-not (mevedel-session-publication-active-p session))
                     (push delivering offers)
-                    (apply wake arguments)))
-                 ((symbol-function 'mevedel-agent-control--flush-notifications)
-                  (lambda (owner) (cl-incf flushes) (funcall flush owner))))
+                    (apply wake arguments))))
          (dolist (id '("fifo-one" "fifo-two" "fifo-three"))
            (test-mevedel-publication-async--send
             session id (lambda (ok err) (push (list id ok err) acknowledgements))))
          (dotimes (stage 2)
+           ;; The next job is held in admission, so the queue stayed busy
+           ;; throughout; the earlier notification still ran when the gate
+           ;; opened, before that job started.
            (test-mevedel-publication-async--wait (lambda () continuation))
            (should (= (1+ stage) (length acknowledgements)))
-           (should (= (1+ stage) (length (mevedel-session-mail-notifications session))))
-           ;; Reoffering the same committed record must neither duplicate its
-           ;; pending notification nor create another polling timer.
-           (let ((timer (mevedel-session-mail-notification-timer session)))
-             (mevedel-agent-control--deliver-mail
-              session "/root" (car (test-mevedel-publication-async--mail session)))
-             (should (eq timer (mevedel-session-mail-notification-timer session)))
-             (should (= (1+ stage) (length (mevedel-session-mail-notifications session)))))
-           (let ((target (+ flushes 2)))
-             (test-mevedel-publication-async--wait (lambda () (>= flushes target))))
-           (should-not offers)
-           (should (<= 0.05 (mevedel-session-mail-notification-delay session) 0.5))
-           (should (= 1 (cl-count-if
-                         (lambda (timer)
-                           (and (eq (timer--function timer)
-                                    'mevedel-agent-control--flush-notifications)
-                                (eq (car (timer--args timer)) session))) timer-list)))
+           (should (= (1+ stage) (length offers)))
+           (should-not (mevedel-session-mail-notifications session))
+           (should-not (mevedel-session-mail-notification-timer session))
            (let ((resume continuation))
              (setq continuation nil)
              (funcall resume)))
@@ -1370,7 +1396,20 @@ QUEUED adds a second completion while the first job is unresolved."
      (setf (mevedel-session-publication-active-p session) nil)
      (cl-letf (((symbol-function 'mevedel-transport-busy-p) (lambda (_) t)))
        (should (mevedel-agent-control--notification-blocked-p session)))
-     (should-not (mevedel-agent-control--notification-blocked-p session)))))
+     (should-not (mevedel-agent-control--notification-blocked-p session))))
+  :doc "work in flight blocks notifications but queued preparations alone do not"
+  (test-mevedel-publication-async--fixture
+   (lambda (session _buffer)
+     (unwind-protect
+         (progn
+           (setf (mevedel-session-publication-preparations session)
+                 (list (cons #'ignore nil)))
+           (should (mevedel-session-publication-busy-p session))
+           (should-not (mevedel-agent-control--notification-blocked-p session))
+           (setf (mevedel-session-publication-preparation-token session) '(running))
+           (should (mevedel-agent-control--notification-blocked-p session)))
+       (setf (mevedel-session-publication-preparation-token session) nil
+             (mevedel-session-publication-preparations session) nil)))))
 
 (mevedel-deftest mevedel-agent-control--queue-notification/async (:quiet t)
   ,test

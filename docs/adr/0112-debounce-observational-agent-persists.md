@@ -58,9 +58,12 @@ one coalesced FIFO of pending notifications and at most one timer. A
 notification runs at once only when the publication gate is idle (no job,
 preparation or active publication), the transport is idle, and nothing is
 already pending; otherwise it joins the FIFO, so a later acknowledgement never
-overtakes an earlier one. The timer starts at 50 ms and doubles up to 500 ms
-while the gate or transport stays busy, then flushes in order, and only while
-the root buffer is live and the session is not stopping. Every callback starts
+overtakes an earlier one. The FIFO flushes in order whenever no work is in
+flight; queued preparations do not hold it back, because a callback's own
+mutation queues behind them. It flushes each time the gate opens between
+queued preparations, before the next one starts, and from a timer that starts
+at 50 ms and doubles up to 500 ms while work stays in flight. Both run only
+while the root buffer is live and the session is not stopping. Every callback starts
 with fresh transaction observations, including an immediate notification.
 Temporary stopping retains actual suppressed offers without a timer, so a
 vetoed close re-arms the same FIFO once rather than inventing another wake.
@@ -220,6 +223,23 @@ transactional journal.
 
 All revisions belong to ADR 0112:
 
+- **2026-10-31 gate-open notification turn:** notifications used to wait until
+  publication was entirely idle, queued preparations included, and only the
+  backoff timer could flush them. Sustained background producers keep that
+  queue non-empty, and the next job starts in the same timer pass that opens
+  the gate, so the timer almost never found it open. A batch harness drove real
+  Monitor processes through the production sink into a warm local portable
+  session (40 s per run, no model reads). With one monitor at one line per
+  0.65 s, the first root wake offer came after 0.4 s. Three monitors at that
+  rate and ten at one line per 2 s each produced no wake offer at all, with
+  the notifier blocked in 99% of 50 ms samples. Every monitor was far below
+  its own 100 events/minute flood limit, and the same queue carries agent MAIL
+  and RESULT wakes. With queued preparations no longer blocking and a flush at
+  each gate opening, the first offer came after 0.5 s in both starving cases
+  (177 and 203 offers), with p99 timer lateness 2-36 ms. Immediate notification still
+  defers while preparations are queued: a producer's acknowledgement runs
+  inside the completing job, and arbitrary waiter code must not drain the queue
+  from there.
 - **2026-10-20 asynchronous automatic transcript checkpoints:** a live trace
   of the 30-second checkpoint on a 1.6 MB session still blocked the editor
   for 280-314 ms after mailbox delivery became asynchronous. The auto-save

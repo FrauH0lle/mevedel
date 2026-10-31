@@ -709,8 +709,13 @@ Return the caller path when suspended, and nil after an immediate release."
   (mevedel-agent-control--wake session "/root" 'user))
 
 (defun mevedel-agent-control--notification-blocked-p (session)
-  "Return non-nil while SESSION cannot safely run arbitrary waiter callbacks."
-  (or (mevedel-session-publication-busy-p session)
+  "Return non-nil while SESSION cannot safely run arbitrary waiter callbacks.
+Only work in flight blocks: a running job or preparation, an active
+synchronous publication, or a busy transport.  Queued preparations do not:
+a callback's own mutation queues behind them, and sustained producers would
+otherwise keep the queue non-empty and starve every wake."
+  (or (mevedel-session-publication-job session)
+      (mevedel-session-publication-preparation-token session)
       (mevedel-session-publication-active-p session)
       (mevedel-transport-busy-p (mevedel-session-save-path session))))
 
@@ -783,6 +788,10 @@ never become mutation preparations or inherit transaction observations.
 Stopping sessions retain offers without a timer, for a vetoed close to reoffer
 or teardown to discard.  A callback failure is diagnostic only."
   (if (or (mevedel-session-publication-stopping-p session)
+          ;; Queued work also defers an immediate call: a producer's
+          ;; acknowledgement runs inside the completing job, and arbitrary
+          ;; callbacks must not drain the queue from there.
+          (mevedel-session-publication-busy-p session)
           (mevedel-agent-control--notification-blocked-p session)
           (mevedel-session-mail-notifications session))
       (mevedel-agent-control--queue-notification session key function)
@@ -798,6 +807,20 @@ or teardown to discard.  A callback failure is diagnostic only."
          (display-warning
           'mevedel (format "Mailbox notification failed: %s"
                            (error-message-string err)) :warning))))))
+
+(defun mevedel-agent-control--offer-at-gate-open (session)
+  "Flush SESSION's pending notifications while its gate is open between jobs.
+Runs from `mevedel-session-publication-gate-open-functions', before the next
+queued preparation starts.  A producer that keeps publication busy leaves no
+other moment the backoff timer could reliably find, so without this turn its
+own mail would never wake an idle model."
+  (when (mevedel-session-mail-notifications session)
+    (when-let* ((timer (mevedel-session-mail-notification-timer session)))
+      (cancel-timer timer))
+    (mevedel-agent-control--flush-notifications session)))
+
+(add-hook 'mevedel-session-publication-gate-open-functions
+          #'mevedel-agent-control--offer-at-gate-open)
 
 (defun mevedel-agent-control-reoffer-mail (session)
   "Re-arm SESSION's held notifications after a vetoed close reopens admissions.

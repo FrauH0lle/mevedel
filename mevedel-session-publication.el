@@ -156,10 +156,27 @@
       (mevedel-session-publication-preparation-token session)
       (mevedel-session-publication-preparations session)))
 
+(defvar mevedel-session-publication-gate-open-functions nil
+  "Abnormal hook run with SESSION when its gate opens between preparations.
+It runs before the next queued preparation starts, with no job, preparation
+token or synchronous publication in flight, so work deferred while the gate
+was held gets a turn even when producers keep the queue non-empty.  A
+function that mutates the session queues behind the waiting preparations.
+Errors are reported and do not stop the queue.")
+
 (defun mevedel-session-publication--schedule (session)
   "Schedule SESSION's next preparation outside the current callback."
   (let* ((thunk
           (lambda ()
+            (unless (or (mevedel-session-publication-job session)
+                        (mevedel-session-publication-preparation-token session)
+                        (mevedel-session-publication-active-p session))
+              (condition-case err
+                  (run-hook-with-args
+                   'mevedel-session-publication-gate-open-functions session)
+                ((error quit)
+                 (display-warning 'mevedel (error-message-string err) :warning))))
+            ;; The hook may have started work; recheck the gate.
             (unless (or (mevedel-session-publication-job session)
                         (mevedel-session-publication-preparation-token session))
               (if (mevedel-session-publication-active-p session)

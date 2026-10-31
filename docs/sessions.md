@@ -1706,9 +1706,18 @@ one coalesced first-in-first-out set of pending notifications and at most one
 timer. A notification runs at once only when the publication gate is idle (no
 job, preparation or active publication), the transport is idle and nothing is
 already pending; otherwise it joins the set, so a later acknowledgement cannot
-overtake an earlier one. The timer starts at 50 ms and doubles up to 500 ms
-while the gate or transport stays busy, then flushes the set in order, only
-while the root buffer is live and the session is not stopping. A waiter
+overtake an earlier one. The set flushes in order whenever no work is in
+flight (no job, running preparation, active publication or transport
+operation); queued preparations do not hold it back, since a callback's own
+mutation queues behind them. Two triggers flush it: each time the gate opens
+between queued preparations, before the next one starts
+(`mevedel-session-publication-gate-open-functions`), and a timer that starts
+at 50 ms and doubles up to 500 ms while work stays in flight. Both run only
+while the root buffer is live and the session is not stopping. The gate-open
+turn exists because sustained producers keep the queue non-empty: ten
+monitors each emitting one line every two seconds kept publication busy for
+99% of samples, and the timer alone offered no root wake in 40 seconds. A
+waiter
 callback can resume tool code and gated operations, so it runs with no token
 and fresh transaction observations, and defers or drains like any other
 caller. A failing notification warns and does not stop the rest. Temporary
