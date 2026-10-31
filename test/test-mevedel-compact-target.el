@@ -7,6 +7,7 @@
 (require 'cl-lib)
 (require 'gptel-request)
 (require 'mevedel)
+(require 'mevedel-agent-conversation)
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-exec)
 (require 'mevedel-agent-runtime)
@@ -654,7 +655,51 @@
                (lambda (value &optional _face) (setq status value))))
       (mevedel-compact-target--agent-complete (list :invocation invocation) t))
     (should (equal '(:type status :summary "waiting") activity))
-    (should (equal " Calling Agent..." status))))
+    (should (equal " Calling Agent..." status)))
+
+  :doc "rebuilds an open live agent view from the rewritten transcript"
+  (test-mevedel-compact--with-persisted-agent
+      (agent-buffer invocation session canonical-path parent-buffer)
+    (test-mevedel-compact--insert-agent-task
+     invocation "inspect" "Keep this task.")
+    (let ((start (point)))
+      (insert "Old response.\n")
+      (put-text-property start (point) 'gptel 'response))
+    (should (mevedel-agent-conversation-save invocation))
+    (let ((view (mevedel-view--ensure-agent-transcript-view
+                 "/root/explorer"
+                 (list :session session :buffer agent-buffer :live-buffer t)
+                 nil)))
+      (unwind-protect
+          (progn
+            (with-current-buffer agent-buffer
+              (let ((start (point-max)))
+                (goto-char start)
+                (insert "Streaming before compaction.\n")
+                (put-text-property start (point) 'gptel 'response)))
+            (with-current-buffer view
+              (mevedel-view-render-live-update agent-buffer))
+            (with-current-buffer agent-buffer
+              (mevedel-compact-target--agent-apply
+               (mevedel-compact-target-agent-target invocation)
+               "## Goal\n- Continue" "Recent tail.\n" nil nil)
+              (cl-letf (((symbol-function 'gptel--update-status) #'ignore))
+                (mevedel-compact-target--agent-complete
+                 (list :invocation invocation) t))
+              (let ((start (point-max)))
+                (goto-char start)
+                (insert "Output after compaction.\n")
+                (put-text-property start (point) 'gptel 'response)))
+            (with-current-buffer view
+              (mevedel-view-render-live-update agent-buffer)
+              (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+                (should (= 1 (mevedel-view-test--count-substring
+                              "Keep this task." text)))
+                (should-not (string-search "begin_summary" text))
+                (should-not (string-search "Old response." text))
+                (should (string-search "Recent tail." text))
+                (should (string-search "Output after compaction." text)))))
+        (kill-buffer view)))))
 
 (mevedel-deftest mevedel-compact-target-main-target ()
   ,test

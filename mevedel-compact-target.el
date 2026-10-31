@@ -101,6 +101,8 @@
 (declare-function mevedel-session-artifacts-artifact-present-p
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-content-start
+                  "mevedel-session-artifacts" (buffer))
 (declare-function mevedel-session-artifacts-publish-text
                   "mevedel-session-artifacts"
                   (session path content &optional coding))
@@ -165,6 +167,11 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
+
+;; `mevedel-view-agent'
+(declare-function mevedel-view-agent-live-transcript-start
+                  "mevedel-view-agent" (invocation))
+(autoload 'mevedel-view-agent-live-transcript-start "mevedel-view-agent")
 
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-disclosure-compaction-tool-states
@@ -501,10 +508,13 @@ AUTO is non-nil for automatic compaction."
           (mevedel-view--stop-spinner))))))
 
 (defun mevedel-compact-target--agent-complete (target _auto)
-  "Restore ordinary continuation status for agent TARGET."
+  "Restore ordinary continuation status for agent TARGET.
+Open transcript views of the agent are rebuilt: compaction rewrote the
+buffer under their live projection, as main compaction does for its view."
   (mevedel-agent-conversation-record-activity
    (plist-get target :invocation)
    '(:type status :summary "waiting"))
+  (mevedel-view-agent-live-transcript-start (plist-get target :invocation))
   (gptel--update-status " Calling Agent..." 'font-lock-escape-face))
 
 (defun mevedel-compact-target-main-target ()

@@ -595,6 +595,10 @@ separator in its place, while the summary remains model-visible for
 future requests. Expanded tool rows surviving in the preserved tail
 remain expanded after the view rebuild; rows archived with the old segment
 do not transfer their disclosure state into the successor.
+Agent compaction rewrites the agent's conversation buffer in place, so its
+completion also rebuilds every open transcript view of that agent and
+re-anchors live streaming to the preserved tail. A view left on its old
+projection would otherwise treat the rewritten buffer as the in-flight turn.
 
 Continuation after compaction resets gptel's stream insertion state at the end
 of the new transcript. Response, reasoning, and tool output therefore follow
