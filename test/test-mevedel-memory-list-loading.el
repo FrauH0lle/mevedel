@@ -150,7 +150,7 @@
         (should-not (overlay-buffer notice))))))
 
 (mevedel-deftest mevedel-memory-list--visible
-    (:vars* ((root (make-temp-file "mevedel-memory-visible-" t))
+    (:vars* ((root (mevedel-test-memory-history-root 'memory-list--visible))
 	     (memory (file-name-concat root "memory"))
 	     (workspace (mevedel-workspace--create :root root :type 'project))
 	     (context (mevedel-cockpit-workspace-context workspace))
@@ -160,10 +160,13 @@
 			 (mevedel-memory-decision-stop-recovery)
 			 (delete-directory root t)))
   (save-window-excursion
-    (make-directory memory)
     (mevedel-workspace-identity-ensure root)
-    (write-region "Current topic.\n" nil (file-name-concat memory "topic.md") nil 'silent)
-    (mevedel-test-memory-history-create workspace 1 1 512 t)
+    (mevedel-test-memory-history-build
+     'memory-list--visible root
+     (lambda ()
+       (make-directory memory)
+       (write-region "Current topic.\n" nil (file-name-concat memory "topic.md") nil 'silent)
+       (mevedel-test-memory-history-create workspace 1 1 512 t)))
     ,test)
   (test)
   :doc "a prior observation without alerts opens Memories at once without collecting history"

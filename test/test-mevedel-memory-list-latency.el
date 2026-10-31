@@ -179,7 +179,7 @@
         (should (= 1 (seq-count (lambda (row) (eq 'applied (plist-get row :status))) rows))))))))
 
 (mevedel-deftest mevedel-memory-list-reuse
-    (:vars* ((root (make-temp-file "mevedel-history-reuse-" t))
+    (:vars* ((root (mevedel-test-memory-history-root 'memory-list-reuse))
              (workspace (mevedel-workspace--create :root root :type 'project))
              (mevedel-memory-dirs nil)
              (mevedel-journal-cleanup--inhibit-scheduling t)
@@ -188,7 +188,8 @@
      :after-each ((delete-directory root t)))
   (progn
     (mevedel-workspace-identity-ensure root)
-    (mevedel-test-memory-history-create workspace 2 2 64)
+    (mevedel-test-memory-history-build
+     'memory-list-reuse root (lambda () (mevedel-test-memory-history-create workspace 2 2 64)))
     (cl-labels ((scan (&optional previous)
                   (mevedel-journal-worker--write
                    request (list :root root :client (mevedel-workspace-identity-client)
@@ -769,7 +770,7 @@
         (should mevedel-memory-list--snapshot)))))
 
 (mevedel-deftest mevedel-memory-list-refresh
-    (:vars* ((root (make-temp-file "mevedel-cockpit-selection-" t))
+    (:vars* ((root (mevedel-test-memory-history-root 'memory-list-refresh))
              (workspace (mevedel-workspace--create :root root :type 'project))
              (memory (file-name-concat root "memory"))
              (mevedel-memory-dirs (list memory))
@@ -780,12 +781,15 @@
                   (mevedel-memory-decision-stop-recovery)
                   (delete-directory root t)))
   (progn
-    (make-directory memory)
-    (dolist (file '("first.md" "second.md"))
-      (write-region "A current topic.\n" nil (file-name-concat memory file) nil 'silent))
     (mevedel-workspace-identity-ensure root)
-    (mevedel-test-memory-history-create workspace 1 2 512)
-    (mevedel-test-memory-history-create workspace 1 2 512 t)
+    (mevedel-test-memory-history-build
+     'memory-list-refresh root
+     (lambda ()
+       (make-directory memory)
+       (dolist (file '("first.md" "second.md"))
+         (write-region "A current topic.\n" nil (file-name-concat memory file) nil 'silent))
+       (mevedel-test-memory-history-create workspace 1 2 512)
+       (mevedel-test-memory-history-create workspace 1 2 512 t)))
     (save-window-excursion
       (with-current-buffer (mevedel-memory-list-open context)
         (mevedel-test-memory-list-await)
