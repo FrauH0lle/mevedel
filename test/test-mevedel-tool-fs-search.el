@@ -161,16 +161,17 @@
                            :address "artifact://remote")))))))
       (delete-directory root t))))
 
-(defun test-mevedel-tool-fs-search--await-callback (fn args)
-  "Call async tool handler FN with ARGS and return its callback result."
+(defun test-mevedel-tool-fs-search--await-callback (fn args &optional gc-snapshot)
+  "Call async tool handler FN with ARGS and return its callback result.
+GC-SNAPSHOT optionally supplies the GC count and seconds as a cons."
   (let* ((done nil)
          result
          (started (float-time))
          ;; A completion watchdog, not a search latency assertion.  Let the
          ;; tool's own timeout settle and report its result before failing here.
          (deadline (+ started mevedel-tool-fs-search-timeout 10))
-         (gc-count gcs-done)
-         (gc-seconds gc-elapsed)
+         (gc-snapshot (or gc-snapshot (lambda () (cons gcs-done gc-elapsed))))
+         (gc-start (funcall gc-snapshot))
          handler-returned)
     (funcall fn
              (lambda (value)
@@ -182,19 +183,20 @@
                 (< (float-time) deadline))
       (accept-process-output nil 0.01))
     (unless done
-      (ert-fail
+      (let ((gc-end (funcall gc-snapshot)))
+        (ert-fail
        (format
         (concat "Timed out waiting for tool callback: elapsed-seconds=%.3f"
                 " handler-return-seconds=%.3f gc-count-delta=%d gc-seconds-delta=%.3f"
                 " processes(max=10,name-max=80)=%S")
         (- (float-time) started) (- handler-returned started)
-        (- gcs-done gc-count) (- gc-elapsed gc-seconds)
+        (- (car gc-end) (car gc-start)) (- (cdr gc-end) (cdr gc-start))
         (mapcar
          (lambda (process)
            (let ((name (process-name process)))
              (list (substring name 0 (min 80 (length name)))
                    (process-status process))))
-         (seq-take (seq-filter #'process-live-p (process-list)) 10)))))
+         (seq-take (seq-filter #'process-live-p (process-list)) 10))))))
     (should (and (proper-list-p result)
                  (plist-member result :result)))
     (plist-get result :result)))
@@ -205,8 +207,8 @@
   :doc "outwaits the tool timeout with bounded failure-only diagnostics and safe late delivery"
   (let ((clock 100.0)
         (mevedel-tool-fs-search-timeout 20)
-        (gcs-done 10)
-        (gc-elapsed 2.0)
+        (gc-count 10)
+        (gc-seconds 2.0)
         (waits 0)
         (process-inspections 0)
         pending)
@@ -216,20 +218,22 @@
                  (should-not process)
                  (should (= seconds 0.01))
                  (cl-incf waits)
-                 (setq clock 130.0 gcs-done 12 gc-elapsed 2.75)))
+                 (setq clock 130.0 gc-count 12 gc-seconds 2.75)))
               ((symbol-function 'process-list)
                (lambda () (cl-incf process-inspections) (number-sequence 0 12)))
               ((symbol-function 'process-live-p) (lambda (process) (> process 0)))
               ((symbol-function 'process-name)
                (lambda (process) (format "process-%d-%s" process (make-string 100 ?x))))
               ((symbol-function 'process-status) (lambda (_) 'run)))
+      ;; Actual GC must not mutate the diagnostic scenario's synthetic counts.
+      (garbage-collect)
       (let ((failure
              (should-error
               (test-mevedel-tool-fs-search--await-callback
                (lambda (callback args)
                  (should (eq args 'arguments))
                  (setq pending callback clock 101.25))
-               'arguments)
+               'arguments (lambda () (cons gc-count gc-seconds)))
               :type 'ert-test-failed)))
         (should
          (equal
