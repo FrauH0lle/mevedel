@@ -31,7 +31,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   My earlier suggestion that the memory directory had been treated as a workspace was incorrect: this scaffolding is created for **writable roots**, which can include the memory directory.
   ```
 - The cursor has the tendency to jump to the "  [Manage]" row of "background work" on updates/redraws even though it was on the composer or elsewhere
-- We meed to add this as a development guideline: The user should not get surprised, e.g. cursor jumps, windows opening, etc.
 - Why is the memory collection (cockpit -> Candidates or Memories) so slow? 5s or more? Especially for already included memories, what work is there to be done?
 - auto update plugins? Or at least notifications?
 - Maybe add edit/rewind/fork in browser?
