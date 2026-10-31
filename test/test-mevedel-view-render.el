@@ -3998,7 +3998,7 @@
             (should (= calls 2))
             (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
             (should (= (point) (+ 3 (mevedel-view--input-start)))))))))
-  :doc "a single coalescing row groups within its own tool run"
+  :doc "a coalescing row needs individual presentation and splits its tool run"
   (dolist (mixed '(nil t))
     (mevedel-view-test--with-buffers
       (let ((mevedel-view-tool-group-collapse-threshold 1)
@@ -4027,13 +4027,14 @@
           (with-current-buffer view-buf
             (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 4)
             (mevedel-view--full-rerender)
-            (should (text-property-any
-                     (point-min) mevedel-view--input-marker
-                     'mevedel-view-type 'tool-group))
+            (should-not (text-property-any
+                         (point-min) mevedel-view--input-marker
+                         'mevedel-view-type 'tool-group))
+            (should (string-search "PollBoundary: latest" (buffer-string)))
+            (should (string-search "f0.el" (buffer-string)))
+            (should (string-search "f2.el" (buffer-string)))
             (when mixed
-              (should (string-search "Consider it." (buffer-string)))
-              (should (string-search "f2.el" (buffer-string)))
-              (should-not (string-search "f0.el" (buffer-string))))
+              (should (string-search "Consider it." (buffer-string))))
             (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
             (should (= (point) (+ 4 (mevedel-view--input-start)))))))))
 
@@ -4146,7 +4147,7 @@
                                              :render-data)))))
           (should (equal original call)))))))
 
-(mevedel-deftest mevedel-view--render-tool-group ()
+(mevedel-deftest mevedel-view--render-tool-activity/rows ()
   ,test
   (test)
   :doc "fallback one-liner buttonizes existing file paths"
@@ -4170,7 +4171,7 @@
                 (erase-buffer)
                 (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
                            (lambda (&rest _) nil)))
-                  (mevedel-view--render-tool-group
+                  (mevedel-view--render-tool-activity
                    (list (list 'tool 1 (with-current-buffer data-buf (point-max))))
                    data-buf)))
               (goto-char (point-min))
@@ -4201,7 +4202,7 @@
               (erase-buffer)
               (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
                          (lambda (&rest _) nil)))
-                (mevedel-view--render-tool-group
+                (mevedel-view--render-tool-activity
                  (list (list 'tool 1 (with-current-buffer data-buf (point-max))))
                  data-buf)))
             (goto-char (point-min))
@@ -4231,7 +4232,7 @@
       (with-current-buffer view-buf
         (let ((inhibit-read-only t))
           (goto-char mevedel-view--input-marker)
-          (mevedel-view--render-tool-group
+          (mevedel-view--render-tool-activity
            (list (list 'tool (car source) (cdr source))) data-buf))
         (goto-char (point-min))
         (search-forward "CacheStateTool: cached")
@@ -4245,7 +4246,7 @@
         (let ((inhibit-read-only t))
           (delete-region (point-min) mevedel-view--input-marker)
           (goto-char mevedel-view--input-marker)
-          (mevedel-view--render-tool-group
+          (mevedel-view--render-tool-activity
            (list (list 'tool (car source) (cdr source))) data-buf))
         (goto-char (point-min))
         (search-forward "CacheStateTool: cached")
@@ -4436,7 +4437,7 @@
                 (goto-char mevedel-view--input-marker)
                 (set-marker-insertion-type mevedel-view--input-marker t)
                 (unwind-protect
-                    (mevedel-view--render-tool-group (list segment) data-buf)
+                    (mevedel-view--render-tool-activity (list segment) data-buf)
                   (set-marker-insertion-type mevedel-view--input-marker nil))))))
         (render-tool
          (insert-tool
@@ -4543,7 +4544,7 @@
       (with-current-buffer view-buf
         (let ((inhibit-read-only t))
           (goto-char mevedel-view--input-marker)
-          (mevedel-view--render-tool-group
+          (mevedel-view--render-tool-activity
            (nreverse segments) data-buf))
         (let ((visible (buffer-substring-no-properties
                         (point-min) mevedel-view--input-marker)))
@@ -5962,20 +5963,26 @@
   ,test
   (test)
   :doc "a note-class sandbox disclosure leaves the group unmarked"
-  (should-not
-   (plist-get
-    (mevedel-view--tool-group-rendering
-     '((:kind tool
-        :group-child
-        (:tool "Bash" :status success
-         :render-data
-         (:sandbox-summary
-          (:attempt-count 1 :started-count 1 :refused-count 0
-           :sandbox bubblewrap :filesystem workspace-write
-           :network unrestricted :proc fresh
-           :additional-read-count 0 :additional-write-count 1)))))
-     (current-buffer))
-    :status)))
+  (let* ((summary '(:attempt-count 1 :started-count 1 :refused-count 0
+                    :sandbox bubblewrap :filesystem workspace-write
+                    :network unrestricted :proc fresh
+                    :additional-read-count 0 :additional-write-count 1))
+         (rendering
+          (mevedel-view--tool-group-rendering
+           (car (mevedel-activity-group-partition
+                 (list (mevedel-view--activity-group-entry
+                        (list :kind 'tool :count 1
+                              :rendering (list :status 'success
+                                               :group-tool "Bash"
+                                               :sandbox-summary summary)
+                              :group-child
+                              (list :tool "Bash" :status 'success
+                                    :render-data
+                                    (list :sandbox-summary summary)))))
+                 nil))
+           (current-buffer))))
+    (should (equal "Ran 1 command" (plist-get rendering :header)))
+    (should-not (plist-get rendering :status))))
 
 (mevedel-deftest mevedel-view--insert-child-calls ()
   ,test
@@ -8724,61 +8731,6 @@
       (with-current-buffer data-buf
         (should (string-match-p "terminal output" (buffer-string)))))))
 
-(mevedel-deftest mevedel-view--tool-group-header ()
-  ,test
-  (test)
-  :doc "verb map summarizes known tools in first-appearance order"
-  (should (equal "Searched 2 patterns, read 1 file, ran 2 commands"
-                 (mevedel-view--tool-group-header
-                  '((:tool "Grep") (:tool "Grep") (:tool "Read")
-                    (:tool "Bash") (:tool "Bash")))))
-  :doc "unknown tools fall back to name and count without recasing"
-  (should (equal "mcp_linear ×2, read 1 file"
-                 (mevedel-view--tool-group-header
-                  '((:tool "mcp_linear") (:tool "mcp_linear")
-                    (:tool "Read")))))
-  :doc "a single unknown tool shows its bare name"
-  (should (equal "Read 2 files, LspRename"
-                 (mevedel-view--tool-group-header
-                  '((:tool "Read") (:tool "LspRename") (:tool "Read"))))))
-
-(mevedel-deftest mevedel-view--group-completions ()
-  ,test
-  (test)
-  :doc "origin completions are counted by outcome; notice mail adds none"
-  (let* ((crumb (lambda (id owner outcome)
-                  (list :kind 'completion
-                        :rendering
-                        (list :completion-record
-                              (list :type 'execution-breadcrumb
-                                    :execution-id id :owner owner
-                                    :facts (list :outcome outcome))))))
-         (notice (lambda (sender id)
-                   (list :kind 'mailbox
-                         :rendering
-                         (list :mailbox-text
-                               (format (concat "<agent-message type=\"EXECUTION\" "
-                                               "sender=\"%s\" execution_id=\"%s\" "
-                                               "outcome=\"success\" exit_code=\"0\">\n"
-                                               "out\n</agent-message>")
-                                       sender id)))))
-         (children
-          (list '(:tool "Read")
-                (funcall crumb "e1" "/root" 'success)
-                (funcall crumb "e1" "/root" 'success)
-                (funcall crumb "e2" "/root/child" 'failure)
-                (funcall notice "/root" "e9")
-                '(:kind mailbox :rendering
-                  (:mailbox-text "<agent-message sender=\"/root/a\">hi</agent-message>"))))
-         (mevedel-view--agent-path nil)
-         (completions (mevedel-view--group-completions children)))
-    (should (equal '("e1" "e2")
-                   (mapcar (lambda (record) (plist-get record :execution-id))
-                           completions)))
-    (should (string-prefix-p "Read 1 file, 1 command completed, 1 failed"
-                             (mevedel-view--tool-group-header
-                              children completions)))))
-
 (mevedel-deftest mevedel-view--split-completion-entries ()
   ,test
   (test)
@@ -8944,7 +8896,8 @@
       (let* ((header (concat "Read 5 files, searched 3 patterns, ran 2 commands, "
                              "fetched 1 page, queried 4 symbols"))
              (running (list :header header :vtype 'tool-group :pending-count 2))
-             (settled (list :header header :vtype 'tool-group :failed-count 1)))
+             (settled (list :header header :vtype 'tool-group
+                            :failure-label "1 failed")))
         (dolist (rendering (list running settled))
           (let ((fitted (mevedel-view--fit-group-header header rendering))
                 (line (substring-no-properties
@@ -8960,8 +8913,8 @@
     (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 60)))
       (let* ((rendering (list :header (concat "Read 5 files, searched 3 patterns, "
                                               "ran 2 commands, fetched 1 page")
-                              :vtype 'tool-group :status 'error :failed-count 2
-                              :failed-names '("Grep" "WebFetch")))
+                              :vtype 'tool-group :status 'error
+                              :failure-label "2 failed: Grep, WebFetch"))
              (line (substring-no-properties
                     (mevedel-view--rendering-header-line rendering))))
         (should (string-suffix-p "· 2 failed: Grep, WebFetch" line))
@@ -8974,54 +8927,52 @@
                      (mevedel-view--fit-group-header
                       "Read 4 files" '(:vtype tool-group :pending-count 1)))))))
 
-(mevedel-deftest mevedel-view--failed-label ()
+(mevedel-deftest mevedel-view--activity-group-entry ()
   ,test
   (test)
-  :doc "names each failed tool once, in order"
-  (should (equal "3 failed: Grep, Bash"
-                 (mevedel-view--failed-label 3 '("Grep" "Bash" "Grep"))))
-  :doc "a count without names stays bare"
-  (should (equal "1 failed" (mevedel-view--failed-label 1 nil)))
-  :doc "a long list of names ends in an ellipsis within its budget"
-  (let ((label (mevedel-view--failed-label
-                5 '("mcp__server__first_long_tool" "mcp__server__second_long_tool"))))
-    (should (string-suffix-p "…" label))
-    (should (<= (string-width label)
-                (+ (string-width "5 failed: ") mevedel-view--failed-names-width)))))
+  :doc "plain tool rows are members named for the summary, with their status"
+  (let ((entry (mevedel-view--activity-group-entry
+                '(:kind tool :count 1
+                  :rendering (:status error :group-tool "Grep")))))
+    (should (eq 'member (plist-get entry :role)))
+    (should (equal "Grep" (plist-get entry :name)))
+    (should (eq 'failed (plist-get entry :status))))
+  :doc "rows carrying audits, coalescing rows and notices are boundaries"
+  (dolist (entry '((:kind tool :count 1
+                    :rendering (:hook-audits ((:type guest-prompt))))
+                   (:kind tool :count 1 :rendering (:coalesce-key "poll"))
+                   (:kind mailbox :notice-p t)
+                   (:kind hook-audit)))
+    (should (eq 'boundary
+                (plist-get (mevedel-view--activity-group-entry entry) :role))))
+  :doc "messages and own completions are members keyed by their execution"
+  (should (eq 'message (plist-get (mevedel-view--activity-group-entry
+                                   '(:kind mailbox))
+                                  :kind)))
+  (should (equal '(("e1" "/root") . "failed")
+                 (plist-get
+                  (mevedel-view--activity-group-entry
+                   '(:kind completion
+                     :group-child
+                     (:rendering (:completion-record
+                                  (:execution-id "e1" :owner "/root"
+                                   :facts (:outcome failure))))))
+                  :completion))))
 
-(mevedel-deftest mevedel-view--group-failed-names ()
+(mevedel-deftest mevedel-view--pending-activity-entry ()
   ,test
   (test)
-  :doc "names failed tool entries from their grouping name"
-  (should (equal '("Bash" "Tool")
-                 (mevedel-view--group-failed-names
-                  '((:kind tool :rendering (:status error :group-tool "Bash"))
-                    (:kind tool :rendering (:status success :group-tool "Read"))
-                    (:kind tool :rendering (:status failed))
-                    (:kind completion :rendering (:status error)))))))
-
-(mevedel-deftest mevedel-view--pending-failed-names ()
-  ,test
-  (test)
-  :doc "names in-flight calls that finished failed"
-  (should (equal '("Grep")
-                 (mevedel-view--pending-failed-names
-                  '((k1 "Read" "a" (:settled t))
-                    (k2 "Grep" "x" (:settled error))
-                    (k3 "Bash" "ls" nil))))))
-
-(mevedel-deftest mevedel-view--group-failed-count ()
-  ,test
-  (test)
-  :doc "counts failed tool entries only"
-  (should (= 2 (mevedel-view--group-failed-count
-                '((:kind tool :rendering (:status error))
-                  (:kind tool :rendering (:status success))
-                  (:kind tool :rendering (:status failed))
-                  (:kind completion :rendering (:status error))))))
-  :doc "returns nil without failures"
-  (should-not (mevedel-view--group-failed-count
-               '((:kind tool :rendering (:status warning))))))
+  :doc "in-flight calls run; finished ones take their outcome"
+  (should (equal '(running completed failed)
+                 (mapcar (lambda (entry)
+                           (plist-get (mevedel-view--pending-activity-entry entry)
+                                      :status))
+                         '((k1 "Read" "a" nil)
+                           (k2 "Read" "b" (:settled t))
+                           (k3 "Grep" "x" (:settled error))))))
+  (should (equal "Tool" (plist-get (mevedel-view--pending-activity-entry
+                                    '(k4 nil nil nil))
+                                   :name))))
 
 (mevedel-deftest mevedel-view--insert-tool-group ()
   ,test
@@ -9791,13 +9742,13 @@
 (mevedel-deftest mevedel-view--pending-children ()
   ,test
   (test)
-  :doc "counts running calls by tool name like settled children"
+  :doc "running calls become pending children named by their tool"
   (let ((children (mevedel-view--pending-children
                    '(("a" "Read" "x") ("b" "Grep" nil)))))
     (should (equal '(pending pending)
                    (mapcar (lambda (child) (plist-get child :kind)) children)))
-    (should (equal "Read 1 file, searched 1 pattern"
-                   (mevedel-view--tool-group-header children)))))
+    (should (equal '("Read" "Grep")
+                   (mapcar (lambda (child) (plist-get child :tool)) children)))))
 
 (mevedel-deftest mevedel-view--insert-pending-tool-row ()
   ,test
