@@ -487,8 +487,7 @@ REGION promises that THUNK replaces only that text."
     (should done)
     (redisplay t)))
 
-(mevedel-deftest mevedel-view-user-state/scroll-return
-    (:expected-result :failed)
+(mevedel-deftest mevedel-view-user-state/scroll-return ()
   (progn
     (skip-unless (display-graphic-p))
     (let ((scroll-preserve-screen-position t)
@@ -524,6 +523,43 @@ REGION promises that THUNK replaces only that text."
     (setq agents (list (list :path "/root/arriving" :status 'running
                              :started-at 990.0)))
     (mevedel-view--render-status)))
+
+(mevedel-deftest mevedel-view--return-from-scroll ()
+  (mevedel-view-user-state-test--with-view
+    (mevedel-view-test--insert-composer-draft
+     mevedel-view-user-state-test--draft 4)
+    (let* ((transcript (save-excursion
+                         (goto-char (point-min))
+                         (search-forward "Line 20 ")
+                         (point)))
+           (bottom (save-excursion
+                     (goto-char (point-max))
+                     (forward-line (- 1 (window-body-height)))
+                     (point)))
+           (away (save-excursion (goto-char transcript) (line-beginning-position))))
+      (set-window-start nil bottom)
+      (cl-flet ((run (command thunk)
+                  (let ((this-command command))
+                    (run-hooks 'pre-command-hook)
+                    (funcall thunk)
+                    (run-hooks 'post-command-hook))))
+        ;; A scroll displaces point from the draft.
+        (run 'scroll-down-command
+             (lambda () (set-window-start nil away) (goto-char transcript)))
+        (should (= 4 (window-parameter nil 'mevedel-view-scroll-return)))
+        ,action)))
+  (action)
+  :doc "a later scroll showing the draft returns point to its offset"
+  (progn
+    (run 'mwheel-scroll (lambda () (set-window-start nil bottom)))
+    (should (= 4 (- (point) (mevedel-view--input-start))))
+    (should-not (window-parameter nil 'mevedel-view-scroll-return)))
+  :doc "a deliberate command cancels the return"
+  (progn
+    (run 'forward-char #'ignore)
+    (run 'mwheel-scroll (lambda () (set-window-start nil bottom)))
+    (should (= transcript (point)))
+    (should-not (window-parameter nil 'mevedel-view-scroll-return))))
 
 (provide 'test-mevedel-view-user-state)
 ;;; test-mevedel-view-user-state.el ends here

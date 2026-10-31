@@ -125,6 +125,16 @@ blank separator above the rail depends on how the text before it ends, so it is
 checked again whenever a transcript writer finishes and redrawn only when it no
 longer fits.
 
+Scrolling away from the composer and back returns point to the draft, as in a
+terminal. Emacs keeps point visible, so a scroll command that hides the
+draft moves point onto transcript or chrome rows, often the background
+`[Manage]` row just above the rail. The view remembers the draft offset per
+window; the next scroll command after which that position is fully visible
+puts point back. Commands carrying the `scroll-command` property and touchpad
+momentum (`pixel-scroll-start-momentum`) count as scrolling; any other command
+in that window is a deliberate move and drops the pending return. Redraws while
+scrolled away keep the reader position as before.
+
 Arriving permission prompts and questions do not move point. They render, the
 rail shows them as pending, and `C-c C-j` visits the next one from the invoking
 window, which returns to its draft position on settlement only if it is still
@@ -216,6 +226,16 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Scrolling back returns to the draft (2026-10-31).** With
+  `scroll-preserve-screen-position` and two-line wheel steps, three wheel
+  notches up from a composer at the window bottom moved point onto background
+  rows, and scrolling back left it there while the composer was visible again;
+  later redraws then preserved that chrome position as a reading position. A
+  graphical command-loop reproduction confirmed both. Point now returns to its
+  draft offset on the first scroll that shows it fully. Other commands cancel the
+  return, so a deliberate move is never undone. The hooks cost one property
+  lookup per command.
 
 - **Status rows are visits too (2026-10-31).** Collapsing an expanded
   background row while the composer sat mid-window moved the composer to the
