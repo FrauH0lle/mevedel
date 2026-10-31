@@ -693,7 +693,10 @@ dispatch uses the shared agent runtime rather than a skill-specific recursion
 or scheduling limit. Model-side inline Skill invocation does not change the
 root request model policy; forked skills and retained agents resolve their own
 workloads. `ListSkills` mirrors the active, enabled,
-model-invocable roster and can query dormant path-scoped skills.
+model-invocable roster and can query dormant path-scoped skills. A query also
+names matching enabled user-only skills on a separate marked line, without
+descriptions, so the model can point the user at `$NAME` instead of concluding
+the skill is missing; `Skill` still rejects them.
 
 ## Review and Verify Commands
 

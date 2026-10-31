@@ -1936,5 +1936,34 @@
       (should-not (buffer-live-p side-data))
       (should-not (mevedel-session-save-path side-session)))))
 
+(mevedel-deftest mevedel-side-conversation/cold-order ()
+  ,test
+  (test)
+  :doc "preserves explicit sandbox policy in the formerly failing case order"
+  (let ((source (file-name-concat
+                 (file-name-directory (locate-library "mevedel"))
+                 "test/test-mevedel-side-conversation.el")))
+    (with-temp-buffer
+      (let ((status
+             (call-process
+              (expand-file-name invocation-name invocation-directory)
+              nil t nil "--batch" "-Q" "--eval"
+              (prin1-to-string
+               `(progn
+                  (setq load-path ',load-path)
+                  (load ,source nil t)
+                  (dolist (name '(mevedel-side-conversation--interrupted-boundary/test
+                                  mevedel-view-send/btw/test@1
+                                  mevedel-view-send/btw/test@13
+                                  mevedel-view-send/btw/test@17))
+                    (let ((result (ert-run-test (ert-get-test name))))
+                      (unless (ert-test-passed-p result)
+                        (signal
+                         (car (ert-test-result-with-condition-condition result))
+                         (cdr (ert-test-result-with-condition-condition result)))))))))))
+        (ert-info ((buffer-string))
+          (should (equal 0 status))
+          (should (equal "" (buffer-string))))))))
+
 (provide 'test-mevedel-side-conversation)
 ;;; test-mevedel-side-conversation.el ends here

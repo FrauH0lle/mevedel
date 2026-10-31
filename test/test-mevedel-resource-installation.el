@@ -13,8 +13,8 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
-(require 'mevedel-tool-fs-search)
 (require 'mevedel-pipeline)
+(require 'mevedel-tool-fs-search)
 
 (mevedel-deftest mevedel-resource-installed-package
   ()

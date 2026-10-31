@@ -7,6 +7,7 @@
 (require 'cl-lib)
 (require 'gptel-request)
 (require 'mevedel)
+(require 'mevedel-agent-conversation)
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-exec)
 (require 'mevedel-agent-runtime)
@@ -764,7 +765,140 @@
                (lambda (value &optional _face) (setq status value))))
       (mevedel-compact-target--agent-complete (list :invocation invocation) t))
     (should (equal '(:type status :summary "waiting") activity))
-    (should (equal " Calling Agent..." status))))
+    (should (equal " Calling Agent..." status)))
+
+  :doc "rebuilds an open live agent view from the rewritten transcript"
+  (test-mevedel-compact--with-persisted-agent
+      (agent-buffer invocation session canonical-path parent-buffer)
+    (test-mevedel-compact--insert-agent-task
+     invocation "inspect" "Keep this task.")
+    (let ((start (point)))
+      (insert "Old response.\n")
+      (put-text-property start (point) 'gptel 'response))
+    (should (mevedel-agent-conversation-save invocation))
+    (let ((view (mevedel-view--ensure-agent-transcript-view
+                 "/root/explorer"
+                 (list :session session :buffer agent-buffer :live-buffer t)
+                 nil)))
+      (unwind-protect
+          (progn
+            (with-current-buffer agent-buffer
+              (let ((start (point-max)))
+                (goto-char start)
+                (insert "Streaming before compaction.\n")
+                (put-text-property start (point) 'gptel 'response)))
+            (with-current-buffer view
+              (mevedel-view-render-live-update agent-buffer))
+            (with-current-buffer agent-buffer
+              (mevedel-compact-target--agent-apply
+               (mevedel-compact-target-agent-target invocation)
+               "## Goal\n- Continue" "Recent tail.\n" nil nil)
+              (cl-letf (((symbol-function 'gptel--update-status) #'ignore))
+                (mevedel-compact-target--agent-complete
+                 (list :invocation invocation) t))
+              (let ((start (point-max)))
+                (goto-char start)
+                (insert "Output after compaction.\n")
+                (put-text-property start (point) 'gptel 'response)))
+            (with-current-buffer view
+              (mevedel-view-render-live-update agent-buffer)
+              (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+                (should (= 1 (mevedel-view-test--count-substring
+                              "--- conversation compacted ---" text)))
+                (should (= 1 (mevedel-view-test--count-substring
+                              "Keep this task." text)))
+                (should-not (string-search "begin_summary" text))
+                (should-not (string-search "Old response." text))
+                (should (string-search "Recent tail." text))
+                (should (string-search "Output after compaction." text)))
+              (mevedel-view--full-rerender)
+              (should (= 1 (mevedel-view-test--count-substring
+                            "--- conversation compacted ---" (buffer-string))))))
+        (kill-buffer view))))
+
+  :doc "cold batched inspection shows one marker and preserves the parent draft"
+  (test-mevedel-compact--with-persisted-agent
+      (agent-buffer invocation session canonical-path parent-buffer)
+    (setq-local mevedel--session session)
+    (mevedel-transcript-enable-gptel-mode)
+    (test-mevedel-compact--insert-agent-task
+     invocation "inspect" "Keep this task.")
+    (insert (propertize "Old response.\n" 'gptel 'response))
+    (should (mevedel-agent-conversation-save invocation))
+    (mevedel-compact-target--agent-apply
+     (mevedel-compact-target-agent-target invocation)
+     "Private summary body." "*** Recent prompt\nRecent tail.\n" nil nil)
+    (let ((cold (generate-new-buffer " *cold-compacted-agent*"))
+          (parent-view (mevedel-view--ensure parent-buffer))
+          view)
+      (unwind-protect
+          (progn
+            (with-current-buffer parent-view
+              (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4))
+            (with-current-buffer cold
+              (insert (mevedel-session-artifacts-read-artifact
+                       session (file-relative-name
+                                canonical-path (mevedel-session-save-path session)))))
+            (setq view (mevedel-view--ensure-agent-transcript-view
+                        "/root/explorer"
+                        (list :session session :buffer cold)
+                        parent-view))
+            (with-current-buffer view
+              (save-window-excursion
+                (switch-to-buffer view)
+                (while mevedel-view-render--batch
+                  (mevedel-view-render--batch-step view mevedel-view-render--batch)))
+              (should (= 1 (mevedel-view-test--count-substring
+                            "--- conversation compacted ---" (buffer-string))))
+              (should (string-search "Keep this task." (buffer-string)))
+              (should (string-search "Recent tail." (buffer-string)))
+              (should-not (string-search "Private summary body." (buffer-string)))
+              (should-not (string-search "begin_summary" (buffer-string))))
+            (with-current-buffer parent-view
+              (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+              (should (= (point) (+ (mevedel-view--input-start) 4)))))
+        (when (buffer-live-p view) (kill-buffer view))
+        (when (buffer-live-p cold) (kill-buffer cold))
+        (when (buffer-live-p parent-buffer)
+          (with-current-buffer parent-buffer (set-buffer-modified-p nil)))
+        (when (buffer-live-p parent-view) (kill-buffer parent-view)))))
+
+  :doc "fully tagged task examples do not imply compaction in live or saved views"
+  (test-mevedel-compact--with-persisted-agent
+      (agent-buffer invocation session canonical-path parent-buffer)
+    (setq-local mevedel--session session)
+    (mevedel-transcript-enable-gptel-mode)
+    (test-mevedel-compact--insert-agent-task
+     invocation "inspect"
+     "Literal example:\n#+begin_summary mevedel-role=compaction-summary\nKeep this example.\n#+end_summary\n")
+    (insert (propertize
+             "#+begin_reasoning\n#+begin_summary mevedel-role=compaction-summary\nReasoning example.\n#+end_summary\n#+end_reasoning\n"
+             'gptel 'ignore))
+    (insert (propertize "Agent response.\n" 'gptel 'response))
+    (should (mevedel-agent-conversation-save invocation))
+    (let ((cold (generate-new-buffer " *cold-literal-agent*")))
+      (unwind-protect
+          (progn
+            (with-current-buffer cold
+              (insert (mevedel-session-artifacts-read-artifact
+                       session (file-relative-name
+                                canonical-path (mevedel-session-save-path session)))))
+            (dolist (source (list agent-buffer cold))
+              (let ((view (mevedel-view--ensure-agent-transcript-view
+                           "/root/explorer"
+                           (list :session session :buffer source
+                                 :live-buffer (eq source agent-buffer))
+                           nil)))
+                (unwind-protect
+                    (with-current-buffer view
+                      (save-window-excursion
+                        (switch-to-buffer view)
+                        (while mevedel-view-render--batch
+                          (mevedel-view-render--batch-step view mevedel-view-render--batch)))
+                      (should-not (string-search "conversation compacted" (buffer-string)))
+                      (should (string-search "Keep this example." (buffer-string))))
+                  (kill-buffer view)))))
+        (kill-buffer cold)))))
 
 (mevedel-deftest mevedel-compact-target-main-target ()
   ,test

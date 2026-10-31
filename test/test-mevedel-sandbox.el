@@ -58,6 +58,43 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(mevedel-deftest mevedel-sandbox/cold-load ()
+  ,test
+  (test)
+  :doc "keeps explicit session and global policies when first loaded in a session"
+  (dolist (mode '(off required))
+    (with-temp-buffer
+      (let ((status
+             (call-process
+              (expand-file-name invocation-name invocation-directory)
+              nil t nil "--batch" "-Q" "--eval"
+              (prin1-to-string
+               `(progn
+                  (setq load-path ',load-path)
+                  (require 'mevedel-structs)
+                  (when (featurep 'mevedel-sandbox)
+                    (error "Sandbox must start unloaded"))
+                  (set-default 'mevedel-sandbox-mode 'best-effort)
+                  (with-temp-buffer
+                    (setq-local mevedel--session
+                                (mevedel-session--create :sandbox-mode ',mode))
+                    (require 'mevedel-sandbox)
+                    (unless (and (eq 'best-effort
+                                     (default-value 'mevedel-sandbox-mode))
+                                 (eq ',mode (mevedel-session-sandbox-mode
+                                             mevedel--session))
+                                 (not (local-variable-p 'mevedel-sandbox-mode)))
+                      (error "Cold loading changed explicit %s policy" ',mode))
+                    (set-default 'mevedel-sandbox-mode ',mode)
+                    (setopt mevedel-sandbox-mode 'best-effort)
+                    (unless (and (eq 'best-effort
+                                     (mevedel-session-sandbox-mode mevedel--session))
+                                 (eq ',mode (default-value 'mevedel-sandbox-mode)))
+                      (error "Explicit customization lost session scoping"))))))))
+        (ert-info ((buffer-string))
+          (should (equal 0 status))
+          (should (equal "" (buffer-string))))))))
+
 (mevedel-deftest mevedel-sandbox-mode--get ()
   ,test
   (test)

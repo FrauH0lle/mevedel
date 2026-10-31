@@ -2423,7 +2423,14 @@ Markdown rendering adds small view-only affordances:
   The rendered region retains the canonical Markdown
   source and the layout's window pixel width as text properties and
   carries the view's own source/read-only/turn properties across the
-  rewrite;
+  rewrite. Each view keeps up to 64 completed layouts, keyed by source including
+  rendering properties (not projection source handles), window pixel width,
+  inset, frame identity/font, named-face
+  and fontset generation, and face remapping. Face/font setters invalidate
+  resolved layouts without resolving source faces on every redraw. A redraw
+  that reinserts a table laid out before applies its layout during the
+  write, so the table never shows raw; a new table still waits for its
+  deferred first layout;
 - rendered `@file` mentions, Markdown file links, and bare file paths
   are clickable open-file buttons, including `:LINE`, `:L<line>`,
   `:#L<line>`, comma-separated line lists, and `#L<line>` targets. A path

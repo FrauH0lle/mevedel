@@ -114,6 +114,8 @@ inside a session updates only that session."
                  best-effort)
           (const :tag "Required -- refuse without Bubblewrap" required)
           (const :tag "Off -- execute directly with disclosure" off))
+  ;; Cold loading must initialize the default, not change the active session.
+  :initialize #'custom-initialize-default
   :set #'mevedel-sandbox-mode--set
   :get #'mevedel-sandbox-mode--get
   :group 'mevedel)

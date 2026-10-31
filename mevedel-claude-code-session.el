@@ -16,12 +16,14 @@
 (require 'mevedel-context-delivery)
 (require 'mevedel-implementation-policy)
 (require 'mevedel-presets)
+(require 'mevedel-reminders)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-shared-conversation)
 (require 'mevedel-skills-core)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-tools)
 (require 'mevedel-transcript)
+(require 'mevedel-turn)
 
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills-request-model-policy "mevedel-skills-invoke" ())
@@ -237,7 +239,13 @@ An omitted policy resolves through the common request model resolver."
        (when (functionp system-prompt)
          (setq system-prompt (funcall system-prompt)))
        (mevedel-claude-code-context-selected
-        (lambda (value) (setq selected value) (funcall done)))))
+        (lambda (value)
+          (setq selected value)
+          ;; Edited-file diffs are helper processes, as on gptel's dispatch;
+          ;; prepare them before the prompt collects configured reminders.
+          (when-let* ((cancel (mevedel-reminders-retain-edited-files
+                               request done)))
+            (mevedel-request-push-canceller request cancel))))))
     request))
 
 (provide 'mevedel-claude-code-session)

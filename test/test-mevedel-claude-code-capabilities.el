@@ -8,7 +8,9 @@
 (require 'mevedel-engine-test-support
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "mevedel-engine-test-support"))
+(require 'mevedel-claude-code)
 (require 'mevedel-claude-code-session)
+(require 'mevedel-claude-code-btw)
 (require 'mevedel-menu)
 (require 'mevedel-side-conversation)
 (require 'gptel-transient)
@@ -61,6 +63,35 @@
               (mevedel--send-request)
               (mevedel-test--await 5 "History fixture did not settle"
                 (not (mevedel-turn-busy-p buffer))))
+            ;; Native /btw is supported, unlike durable history operations.
+            (let* ((process-environment (copy-sequence process-environment))
+                   (native-file (file-name-concat root "fixture-session.json"))
+                   (fork-file (file-name-concat root "fixture-fork.json"))
+                   (parent-text (buffer-string))
+                   side-view)
+              (setenv "MEVEDEL_ACP_TEST_HISTORY" root)
+              (with-temp-file native-file (insert "[\"native history\"]"))
+              (unwind-protect
+                  (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                             (mevedel-engine-test--claude-launch
+                              (lambda (&rest _) nil)))
+                            ((symbol-function 'pop-to-buffer)
+                             (lambda (value &rest _) (setq side-view value))))
+                    (mevedel-side-conversation-open)
+                    (mevedel-test--await 10 "Native side did not open" side-view)
+                    (should (buffer-local-value 'mevedel-view--side-conversation-p side-view))
+                    (should (file-exists-p fork-file))
+                    (should (equal parent-text (buffer-string)))
+                    (with-current-buffer side-view (mevedel-side-conversation-close))
+                    (mevedel-test--await 10 "Native side fork was not deleted"
+                      (not mevedel-claude-code-btw--forks))
+                    (should-not (file-exists-p fork-file))
+                    (should (equal "[\"native history\"]"
+                                   (with-temp-buffer
+                                     (insert-file-contents native-file)
+                                     (buffer-string)))))
+                (when (buffer-live-p side-view) (kill-buffer side-view))
+                (mevedel-claude-code-btw-shutdown)))
             (setq view (mevedel-view--ensure buffer))
             (with-current-buffer view (mevedel-view--full-rerender))
             (let ((before (buffer-string))
@@ -76,7 +107,6 @@
                         ((symbol-function 'yes-or-no-p)
                          (lambda (&rest _) (ert-fail "Unsupported operation asked for approval"))))
                 (dolist (command `(mevedel-compact mevedel-rewind mevedel-redo
-                                   mevedel-side-conversation-open
                                    ,(lambda () (mevedel-session-control-transfer-request session))
                                    (lambda () (mevedel-save-session t))))
                   (ert-info ((format "Direct command %S" command))

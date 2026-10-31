@@ -2131,6 +2131,44 @@ description: Yell
           (should-not (string-match-p "internal" received)))
       (delete-directory user-dir t)))
 
+  :doc "a query marks matching user-only skills instead of hiding them"
+  (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (session (mevedel-skills-test--make-session nil user-dir))
+         (user-only (mevedel-skill--create
+                     :name "retro" :description "Retrospective review"
+                     :active-p t :model-invocable-p nil :user-invocable-p t))
+         (disabled (mevedel-skills-test--stateful-skill
+                    :name "retro-old" :description "Old retrospective"
+                    :active-p t :model-invocable-p nil :user-invocable-p t
+                    :workspace (mevedel-session-workspace session)))
+         (hidden (mevedel-skill--create
+                  :name "retro-internal" :description "Internal retrospective"
+                  :active-p t :model-invocable-p nil :user-invocable-p nil))
+         received)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session) (list user-only disabled hidden))
+          (mevedel-skills-set-enabled disabled nil)
+          (with-temp-buffer
+            (setq mevedel--session session)
+            (mevedel-skills--list-handler
+             (lambda (r) (setq received (test-mevedel-skills--handler-result r)))
+             (list :query "retro")))
+          (should (string-match-p "No model-invocable skills match" received))
+          (should (string-match-p "User-only.*\\$retro\\b" received))
+          (should-not (string-match-p "retro-old" received))
+          (should-not (string-match-p "retro-internal" received))
+          ;; The unqueried listing stays the model-invocable roster.
+          (setq received nil)
+          (with-temp-buffer
+            (setq mevedel--session session)
+            (mevedel-skills--list-handler
+             (lambda (r) (setq received (test-mevedel-skills--handler-result r)))
+             nil))
+          (should-not (string-match-p "retro" received)))
+      (delete-directory user-dir t)))
+
   :doc "refreshes session skills before listing"
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
