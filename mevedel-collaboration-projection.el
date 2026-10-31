@@ -98,6 +98,8 @@
                   "mevedel-view-render" (text))
 (declare-function mevedel-view--sandbox-summary-line
                   "mevedel-view-render" (summary))
+(declare-function mevedel-view--scaffolding-only-p
+                  "mevedel-view-render" (data-buf seg-start seg-end))
 (declare-function mevedel-view--tool-call-parse
                   "mevedel-view-render" (data-buf start end &optional raw))
 (declare-function mevedel-view--tool-group-entry-p
@@ -1222,9 +1224,18 @@ owner; omitted means the root transcript."
                                     (gethash :prior-executions completions)))
              (prior-ready (and completions t))
              records user-starts live-reasoning
+             ;; Track audit attachment before splitting breadcrumbs out of their
+             ;; source tool.  Deferred summaries never replace either pointer.
+             activity-tool activity-record activity-scope
              (occurrences (make-hash-table :test #'equal)))
         (cl-labels
-            ((add-execution (completion scope &optional role)
+            ((enter-activity-scope (scope)
+               (unless (equal scope activity-scope)
+                 (setq activity-scope scope
+                       activity-tool nil
+                       activity-record nil)))
+             (add-execution (completion scope &optional role)
+               (enter-activity-scope scope)
                (when-let* ((owner (plist-get completion :owner))
                            (id (plist-get completion :execution-id))
                            ((stringp owner)) ((stringp id))
@@ -1259,7 +1270,10 @@ owner; omitted means the root transcript."
                  (push (mevedel-collaboration--scoped
                         (if role (plist-put record :activity-role role) record)
                         scope)
-                       records)))
+                       records)
+                 ;; A breadcrumb retains ACTIVITY-TOOL as its source owner.
+                 ;; Mailbox callers clear that owner before adding a delivery.
+                 (setq activity-record (car records))))
              (project-segment (segment render-end compute-value occurrence-key
                                        compute-records)
                ;; Return (VALUE . RECORDS) for SEGMENT.  COMPUTE-VALUE reads
@@ -1325,6 +1339,7 @@ owner; omitted means the root transcript."
                  (type (if (and in-reasoning (not (eq (car segment) 'tool)))
                            'reasoning
                          (car segment))))
+            (enter-activity-scope scope)
             (cond
              ((eq (car segment) 'reasoning)
               ;; Structural reasoning is already closed and classified by
@@ -1336,6 +1351,7 @@ owner; omitted means the root transcript."
               (setq live-reasoning nil)))
             (cond
              ((memq type '(user response reasoning))
+              (setq activity-tool nil)
               (let* ((userp (eq type 'user))
                      (kind (pcase type
                              ('user "user")
@@ -1372,49 +1388,45 @@ owner; omitted means the root transcript."
                   (push (mevedel-collaboration--scoped
                          (copy-sequence record) scope)
                         records)
+                  (setq activity-record (car records))
                   (when userp
                     (push (cons start (car records)) user-starts)))))
              ((memq (car segment) '(ignored render-data))
-              (dolist (record
-                       (cdr (project-segment
-                             segment nil
-                             (lambda ()
-                               (cons (mevedel-collaboration--request-summary
-                                      (buffer-substring start end))
-                                     (cons start end)))
-                             #'mevedel-collaboration--request-summary-key
-                             #'mevedel-collaboration--request-summary-records)))
-                ;; The view shows request summaries after the activity they
-                ;; close, so they neither join nor split it.
-                (push (mevedel-collaboration--scoped
-                       (plist-put (copy-sequence record)
-                                  :activity-role 'transparent)
-                       scope)
-                      records))
-              ;; A displayed audit follows the row before it: the view
-              ;; attaches it to a preceding tool, which then needs individual
-              ;; presentation, and otherwise shows it as a row of its own.
-              ;; Deferred request summaries are transparent here too, including
-              ;; the failure row emitted alongside a failed summary.
-              ;; Own completion mail still fixes an audit's source position.
-              (when-let* (((eq (car segment) 'ignored))
-                          ((mevedel-collaboration--activity-separator-p start end))
-                          (previous
-                           (cl-find-if
-                            (lambda (record)
-                              (not (and (eq (plist-get record :activity-role)
-                                            'transparent)
-                                        (member (plist-get record :kind)
-                                                '("request-summary" "assistant")))))
-                            records)))
-                (plist-put previous
-                           (if (equal (plist-get previous :kind) "tool")
-                               :activity-role
-                             :activity-break-after)
-                           (if (equal (plist-get previous :kind) "tool")
-                               'boundary
-                             t))))
+              (let ((summary (project-segment
+                              segment nil
+                              (lambda ()
+                                (cons (mevedel-collaboration--request-summary
+                                       (buffer-substring start end))
+                                      (cons start end)))
+                              #'mevedel-collaboration--request-summary-key
+                              #'mevedel-collaboration--request-summary-records)))
+                (dolist (record (cdr summary))
+                  ;; The view shows request summaries after the activity they
+                  ;; close, so they neither join nor split it.
+                  (push (mevedel-collaboration--scoped
+                         (plist-put (copy-sequence record)
+                                    :activity-role 'transparent)
+                         scope)
+                        records))
+                ;; Substantive ignored text ends source attachment, unlike audit
+                ;; side channels, deferred summaries and tool metadata/glue.
+                (when (and (eq (car segment) 'ignored)
+                           (not (car summary))
+                           (not (mevedel-transcript-audit-buffer-only-p start end))
+                           (not (mevedel-view--scaffolding-only-p data-buffer start end)))
+                  (setq activity-tool nil))
+                ;; Use the source owner, not the latest projected record: splitting
+                ;; a completion out of a tool cannot hide that tool from an audit.
+                (when-let* (((eq (car segment) 'ignored))
+                            ((mevedel-collaboration--activity-separator-p start end))
+                            (previous (or activity-tool activity-record)))
+                  (plist-put previous
+                             (if activity-tool :activity-role :activity-break-after)
+                             (if activity-tool 'boundary t)))))
              ((eq (car segment) 'mailbox)
+              ;; Even hidden or deduplicated mail is a source boundary: the
+              ;; view cannot merge its following audit into the preceding tool.
+              (setq activity-tool nil)
               (when-let* ((completion
                            (car (project-segment
                                  segment nil
@@ -1434,7 +1446,8 @@ owner; omitted means the root transcript."
                                   (mevedel-collaboration--stable-record-id
                                    "agent-notice" (prin1-to-string completion) occurrence)
                                   "agent-notice" :revision 0 (cddr completion))
-                           scope) records)))
+                           scope) records)
+                    (setq activity-record (car records))))
                  ((eq (plist-get completion :type) 'monitor-event)
                     (let* ((text (plist-get completion :text))
                            (key (list "monitor-event" completion))
@@ -1448,7 +1461,8 @@ owner; omitted means the root transcript."
                               :text (mevedel-collaboration--truncate-bytes text 2000)
                               :description (plist-get completion :description))
                              scope)
-                            records)))
+                            records)
+                      (setq activity-record (car records))))
                  ;; The transcript's own completion mail renders nothing in
                  ;; the view; its breadcrumb is the completion line.
                  (t (add-execution
@@ -1456,6 +1470,7 @@ owner; omitted means the root transcript."
                      (and (equal (plist-get completion :owner) own-path)
                           'transparent))))))
              ((eq (car segment) 'tool)
+              (setq activity-tool nil)
               (let ((render-end (gethash end following-render-data)))
                 (dolist (record
                          (cdr (project-segment
@@ -1477,7 +1492,9 @@ owner; omitted means the root transcript."
                                   render-end completions)))))
                   (push (mevedel-collaboration--scoped
                          (copy-sequence record) scope)
-                        records)))))))
+                        records)
+                  (setq activity-tool (or activity-tool (car records))
+                        activity-record (car records))))))))
         (dolist (span breadcrumbs)
           (add-execution (plist-get span :record)
                          (mevedel-collaboration--scope-at

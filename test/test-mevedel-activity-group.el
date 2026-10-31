@@ -268,13 +268,22 @@ PENDING labels in-flight calls, which a group header counts as running."
                             (or (equal label (plist-get record :toolUseId))
                                 (equal label (plist-get record :tool-use-id))
                                 (equal label (plist-get (plist-get record :execution) :id))
-                                (and (stringp (plist-get record :text))
-                                     (string-search label (plist-get record :text)))))
+                                (equal label (plist-get record :text))))
                           labels)))
         (let ((cell (assoc (plist-get activity :id) groups)))
           (if cell (setcdr cell (list (append (cadr cell) (list label)) activity))
             (push (list (plist-get activity :id) (list label) activity) groups)))))
     (mapcar #'cdr (nreverse groups))))
+
+(mevedel-deftest mevedel-activity-group-test--projection-groups ()
+  ,test
+  (test)
+  :doc "mailbox labels match exactly, not a shorter label's prefix"
+  (let ((activity '(:id "group" :summary "Read 3 files, received 1 message")))
+    (should (equal (list (list '("part10") activity))
+                   (mevedel-activity-group-test--projection-groups
+                    (list (list :kind "agent-notice" :text "part10" :activity activity))
+                    '("part1" "part10"))))))
 
 (defun mevedel-activity-group-test--surfaces (parts &optional pending)
   "Render PARTS in both surfaces; return (VIEW-GROUPS PROJECTION-GROUPS).
@@ -331,6 +340,7 @@ calls that follow PARTS in a turn without a final response."
 
 (defconst mevedel-activity-group-test--agreement-cases
   '((plain (t1 tool) (t2 tool) (t3 tool))
+    (prefix-mail-label (part1 tool) (t2 tool) (t3 tool) (part10 mail))
     (leading-breadcrumb (x1 text) (c1 crumb) (t1 tool) (t2 tool) (t3 tool))
     (leading-mail (x1 text) (m1 mail) (t1 tool) (t2 tool) (t3 tool))
     (leading-mail-breadcrumb (x1 text) (m1 mail) (c1 crumb)
@@ -371,6 +381,22 @@ calls that follow PARTS in a turn without a final response."
     (request-summary (t1 tool) (t2 tool) (s1 summary) (t3 tool) (t4 tool))
     (failed-request-summary (t1 tool) (t2 tool) (s1 summary error) (t3 tool) (t4 tool))
     (summary-audit (t1 tool) (t2 tool) (t3 tool) (s1 summary) (a1 audit))
+    (breadcrumb-summary-audit (t1 tool) (t2 tool) (t3 tool)
+                              (c1 crumb) (s1 summary) (a1 audit))
+    (breadcrumbs-summaries-audit (t1 tool) (t2 tool) (t3 tool)
+                                 (c1 crumb) (c2 crumb)
+                                 (s1 summary) (s2 summary error) (a1 audit))
+    (breadcrumb-summary-hidden-audit (t1 tool) (t2 tool) (t3 tool)
+                                     (c1 crumb) (s1 summary)
+                                     (a1 audit provider-tool-batch))
+    (breadcrumb-own-summary-audit (t1 tool) (t2 tool) (t3 tool)
+                                  (c1 crumb) (o1 own "c1") (s1 summary) (a1 audit))
+    (breadcrumb-mail-summary-audit (t1 tool) (t2 tool) (t3 tool)
+                                   (c1 crumb) (m1 mail) (s1 summary) (a1 audit))
+    (breadcrumb-prose-summary-audit (t1 tool) (t2 tool) (t3 tool)
+                                    (c1 crumb) (x1 text) (s1 summary) (a1 audit))
+    (mail-breadcrumb-summary-audit (t1 tool) (t2 tool) (t3 tool)
+                                   (m1 mail) (c1 crumb) (s1 summary) (a1 audit))
     (multiple-summary-audit (t1 tool) (t2 tool) (t3 tool)
                             (s1 summary) (s2 summary) (a1 audit))
     (failed-summary-audit (t1 tool) (t2 tool) (t3 tool) (s1 summary error) (a1 audit))

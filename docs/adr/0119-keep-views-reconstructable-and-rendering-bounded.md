@@ -113,6 +113,8 @@ The Emacs view and browser projection normalize their decoded activity and share
 boundaries, grouping thresholds, summaries, and running/failure/warning facts.
 Only a tool starts a run; leading messages and completion breadcrumbs remain
 standalone, including after a boundary or scope change.
+Audit attachment follows the source tool, not the order of projected completion
+and summary rows.
 A tool/delivery activity run remains mutable until its surrounding
 transcript boundary closes it; substantive reasoning is a standalone,
 initially expanded disclosure and closes the preceding tool run. An individual completed call can still join a
@@ -505,11 +507,19 @@ audit combinations, and partition tests cover the boundary/scope reset and
 rebuilding with `nil`.
 
 Re-review also found that a deferred request summary could shield the preceding
-tool from a displayed audit in the browser. Audit association now looks past
-deferred transparent summaries, including multiple summaries and their failure
-rows, to the preceding effective activity row, matching Emacs's deferred-summary
-handling. Other transparent records, such as own-completion mail, retain their
-source ordering for audit association.
+tool from a displayed audit in the browser. Looking past projected summary rows
+fixed that case, but another seed exposed the same failure when a completion
+breadcrumb intervened too. Projected row order cannot recover the source
+attachment after the breadcrumb has been split out of its tool.
+
+Resolve audit ownership while scanning source segments instead. A breadcrumb
+retains its originating tool; deferred summaries and their failure rows replace
+neither that owner nor the last effective activity row. Mail, prose, substantive
+reasoning and scope changes end tool attachment, including hidden or deduplicated
+own-completion mail. A displayed audit marks its source tool as an individual
+presentation boundary, or splits after the last activity row when no tool owns
+it. This matches Emacs's merge-before-split ordering without another record-kind
+skip or a surface-specific grouping exception.
 
 The shared running fact includes settled transcript tools whose background work
 is still running; the Emacs header animates only calls still in flight. These
