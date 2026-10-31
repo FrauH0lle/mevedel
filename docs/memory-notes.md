@@ -130,7 +130,9 @@ diagnostic or note-format counter. Accepted passes prove attempts for their exac
 admitted versions, while checked write outcomes prove actual deletion. A captured
 but unadmitted note gets no disposal proposal. The finite attempt set replaces
 capture-history ranking and the applied-progress catch-up guard; new versions and
-later arrivals wait for the next cohort.
+later arrivals wait for the next cohort. A batch reads a frozen member's current
+version only when that member can enter it, so capture IO stays linear in the
+cohort; a changed member is deferred when its batch is reached.
 
 Confirmed deletions, held work and review failures remain distinct outcomes.
 Extraction dependencies, target ownership, current-use and unsaved-buffer
