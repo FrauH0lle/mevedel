@@ -41,7 +41,10 @@ contracts remain in the documentation map above.
 Before planning or implementing code changes, writing or running tests,
 compiling, or committing, read [docs/development.md](docs/development.md).
 It owns dependency setup, upstream checkout procedures, code conventions,
-test structure, diagnostic handling, and compilation commands.
+test structure, diagnostic handling, and compilation commands. Its
+[checks table](docs/development.md#checks-before-committing) fixes the test
+tier: the affected tier before every commit, the full suite and fresh-file
+lane before merging a branch and in CI.
 
 Before changing prompts, requests, callbacks, tool calls, presets, buffers,
 transcripts, session flow, agents, or coordination, follow the development

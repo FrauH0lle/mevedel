@@ -114,27 +114,49 @@ git -C .scratch/upstream/gptel pull --ff-only
 
 ### Checks before committing
 
-After installing the Eask development dependencies, run the same fail-fast
-check as GitHub CI:
+Choose the check by what happens next, not by how large the change looks. The
+fast tier decides on its own when a change needs the full suite.
+
+| When | Command | Tests run |
+|---|---|---|
+| Before every commit | `eask run script check -- --affected` | the affected tier |
+| Before merging a branch into `master` | `eask run script check`, then `eask run script test -- --fresh-files` | full suite, then every file in a fresh Emacs |
+| Every push and pull request (CI) | both of the merge-time commands, as parallel jobs | full suite and fresh-file lane |
+| While iterating on a change | `python3 test/run_tests.py FILES` | the named files |
+
+- Do not run the full suite before an ordinary commit, even for a large or
+  cross-cutting change: `--affected` selects the full suite itself when the
+  change touches shared test support, a broadly required library or code it
+  cannot map (see [the affected tier](#affected-tier)).
+- A commit made directly on `master` is checked by the fast tier locally and by
+  CI after the push; the merge-time commands apply when a branch is merged.
+- A failure in either tier blocks the commit or merge. Do not switch tiers to
+  avoid a failure.
+
+After installing the Eask development dependencies, run the fail-fast check
+(`--affected` and `--jobs` pass through to the test runner):
 
 ```bash
 npx @emacs-eask/cli run script check
 # With Eask on PATH:
 eask run script check
+# The pre-commit tier:
+eask run script check -- --affected
 # Limit test concurrency on smaller machines:
 npx @emacs-eask/cli run script check -- --jobs 4
 ```
 
 The check first runs the deterministic standards checks below, cleans stale
 bytecode, compiles the package with `--strict` (warnings fail the command), then
-runs the complete isolated ERT suite through the existing
+runs the isolated ERT suite (or the affected tier) through the existing
 `test` script. The test runner cleans bytecode again before loading sources, so
 compiled files cannot shadow edits. Each failed step stops the check and returns
 a nonzero status. Dependency installation remains a separate setup step.
 
 #### Opt-in pre-commit hook
 
-To run that check automatically before local commits, from the repository root:
+To run the pre-commit tier automatically before local commits, from the
+repository root:
 
 ```bash
 git config --local core.hooksPath .githooks
@@ -145,7 +167,7 @@ This replaces the repository's configured hooks path; inspect
 optional and is never performed by Eask or CI. To undo it, use
 `git config --local --unset core.hooksPath` (or restore your previous value).
 The hook requires Node/npx, Python 3, Emacs and installed Eask development
-dependencies, and runs the full check, not a focused subset. It checks the
+dependencies, and runs `check -- --affected`. It checks the
 working tree, not a temporary copy of the index: when partially staging files,
 ensure the staged change passes independently too. CI runs the check even when
 the hook is not installed or is bypassed; required branch checks are a separate
@@ -251,6 +273,8 @@ python3 test/run_tests.py 'test/test-mevedel-compact*.el'
 python3 test/run_tests.py --fresh-files 'test/test-mevedel-compact*.el'
 # Replay exactly one worker's saved file roster and test sequence
 python3 test/run_tests.py --replay .scratch/test-suite-performance/RUN/0-partition.json
+# The pre-commit tier: files affected by changes since the merge base with master
+python3 test/run_tests.py --affected
 ```
 
 For a faster complete ERT-only run, use the measured parallel runner after
@@ -275,6 +299,19 @@ available CPU count and selected worker count. Tests must be
 independent of execution order; setup belongs inside the case or `:before-each`,
 not in a separate template form. Shared fixtures isolate tool registries and
 their lookup cache as well as cleaning up runtime state.
+
+Cases stay together so that a fixture built once per worker is reused rather
+than rebuilt on every worker. Discovery records each case's defining file. A
+whole file is one unit; a file larger than one worker's share of the selected
+test time splits into its deftests (names differing only by a final `@N`), and
+a deftest larger than the share splits into contiguous runs of cases. Units keep
+inventory order inside and are placed longest first on the least loaded worker.
+Cases without a timing have unknown cost, so they are dealt round-robin after
+the measured units, least loaded worker first: a new deftest spreads evenly
+rather than landing on the one worker a 0.01-second estimate would choose.
+With the 2026-10-30 durations the full suite's predicted per-worker time is
+unchanged (324.4 seconds at eight workers) while the deftests spread over more
+than one worker fall from 2,151 to 14.
 
 `--fresh-files` instead starts a separate Emacs for every selected file, with
 `--jobs` limiting concurrent files. It discovers and runs each file's cases in
@@ -311,14 +348,46 @@ additive. Startup, loading, and shutdown are included in wall time; the differen
 between worker wall and ERT time measures their combined overhead. Fixture setup
 and teardown are included in individual case durations.
 
-A successful complete partitioned run updates `latest-durations.csv`, used to
-balance later runs. Focused, fresh-file, and replay runs never replace it.
+A successful partitioned run of every test file updates `latest-durations.csv`,
+used to balance later runs; this includes an `--affected` run that fell back to
+the full suite. Focused, fresh-file, and replay runs never replace it.
 `--durations CSV` supplies another report; without timing history, all discovered
-cases are distributed evenly. No test is omitted because a timing is missing.
+cases are dealt round-robin, ungrouped. Timings below a millisecond count as one
+millisecond. No test is omitted because a timing is missing.
 Provisioned SSH, Podman, or Docker acceptance environments force serial execution
 because their tests share target roots. Real transport acceptance remains
 `test/run-remote-acceptance.sh`; its provisioning and runtime are separate from
 the ordinary ERT command. Conditional skips remain visible in reports.
+
+#### Affected tier
+
+`--affected [REV]` selects test files for the changes since `git merge-base REV
+HEAD` (default `master`): committed changes, staged and unstaged edits,
+deletions, and untracked files that are not ignored. It reads the repository's
+own `require` and `provide` forms; there is no hand-maintained mapping.
+
+- A changed root or `test/` library selects the test files that require one of
+  its features directly, the test files it owns by name (`test-STEM.el` and
+  `test-STEM-SUBJECT.el`, where STEM is the longest matching library), and
+  itself when it is a test file. Transitive requires are not followed: through
+  the package entry point the median library reaches 385 of 508 test files.
+- Any other changed file selects the test files that contain its path, its
+  quoted file name, or one of its directories (`docs/`, `relay/`, `prompts/`).
+- The fixed smoke set in `test/affected_tests.py` (the data model, the package
+  entry point and agent execution, under a second together) is always added.
+- The full suite runs instead when a change touches the runner or shared test
+  support (`Eask`, `scripts/check.sh`, `test/run_tests.py`,
+  `test/affected_tests.py`, `test/ert-runner.el`, `test/helpers.el`), a library
+  that more than a quarter of the test files require directly (today
+  `mevedel-structs.el`), or a non-documentation file no test file names.
+- Documentation (`docs/`, `.mevedel/`, Markdown, text and images) that no test
+  names, and deleted test files, add nothing beyond the smoke set.
+
+The console prints one line per changed file with its selection or fallback
+reason. A change to code therefore never selects zero tests silently: it maps
+to test files or to the full suite. The tier misses breakage that reaches a
+test only through an indirect require; the merge-time full suite and CI catch
+it.
 
 The runner uses Python's standard library and Eask from `PATH`. Invoking it
 through `npx` makes that Eask executable available to its workers too. Direct
