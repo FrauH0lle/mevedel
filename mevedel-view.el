@@ -918,8 +918,10 @@ existing `mevedel--view-buffer' binding untouched.  A
     ;; A transcript has no line numbers worth counting, and they cost four
     ;; columns of a directive frame that is already narrow.
     (setq-local display-line-numbers nil)
+    ;; Agent transcript views supply their own status strip but share the
+    ;; pinned prompt row.
+    (setq header-line-format '(:eval (mevedel-view--sticky-prompt-line)))
     (unless mevedel-view--agent-transcript-p
-      (setq header-line-format '(:eval (mevedel-view--sticky-prompt-line)))
       (setq-local tab-line-format
                   '(:eval (mevedel-view--status-strip)))))
   (unless (plist-get options :preserve-data-view-buffer)
@@ -1340,26 +1342,43 @@ Metadata lives on rendered prompt headers, not in the model transcript."
           (goto-char position)
           (recenter 0))))))
 
+(defun mevedel-view--click-pinned-prompt (event)
+  "Reveal the pinned prompt clicked in EVENT.
+The clicked header-line text names its target, so one map serves every
+preview and the header line allocates no keymap per redisplay."
+  (interactive "e")
+  (let* ((posn (event-start event))
+         (object (posn-string posn))
+         (target (and object
+                      (get-text-property (cdr object) 'mevedel-view-pinned-target
+                                         (car object)))))
+    (cond
+     ((null target))
+     ((car target)
+      (mevedel-view-segments-jump-to-prompt
+       (car target) (cdr target) (posn-window posn)))
+     (t (mevedel-view--jump-to-pinned-prompt (cdr target) event)))))
+
+(defvar mevedel-view--pinned-prompt-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [header-line mouse-1] #'mevedel-view--click-pinned-prompt)
+    map)
+  "Header-line map shared by every pinned prompt preview.")
+
 (defun mevedel-view--pinned-prompt-button (preview position width &optional archive)
   "Return a clickable PREVIEW at POSITION fitted to WIDTH columns.
 When ARCHIVE is non-nil, POSITION is a source position in that segment."
   (if (<= width 0)
       ""
-    (let ((map (make-sparse-keymap)))
-      (define-key map [header-line mouse-1]
-                  (lambda (event)
-                    (interactive "e")
-                    (if archive
-                        (mevedel-view-segments-jump-to-prompt
-                         archive position (posn-window (event-start event)))
-                      (mevedel-view--jump-to-pinned-prompt position event))))
+    (let ((text (truncate-string-to-width preview width 0 nil "…")))
       (propertize
-       (replace-regexp-in-string
-        "%" "%%"
-        (truncate-string-to-width preview width 0 nil "…") t t)
+       (if (string-search "%" text)
+           (replace-regexp-in-string "%" "%%" text t t)
+         text)
        'face 'link 'mouse-face 'highlight
        'help-echo "Jump to this prompt"
-       'local-map map))))
+       'mevedel-view-pinned-target (cons archive position)
+       'local-map mevedel-view--pinned-prompt-map))))
 
 (defun mevedel-view--prompt-on-screen-p (window)
   "Return non-nil when a prompt header below WINDOW's start is on screen.

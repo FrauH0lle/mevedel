@@ -362,7 +362,7 @@ resolved agent configuration, not the parent or summary-generation model."
 
 (defvar mevedel-view--agent-parent-map
   (let ((map (make-sparse-keymap)))
-    (define-key map [header-line mouse-1]
+    (define-key map [tab-line mouse-1]
                 (lambda (event)
                   (interactive "e")
                   (when-let* ((window (posn-window (event-start event)))
@@ -370,7 +370,7 @@ resolved agent configuration, not the parent or summary-generation model."
                     (select-window window)
                     (mevedel-view-close-agent-transcript))))
     map)
-  "Header-line map for returning from agent inspection to its parent.")
+  "Tab-line map for returning from agent inspection to its parent.")
 
 
 (defvar-keymap mevedel-view--agent-handle-map
@@ -409,8 +409,10 @@ transcript on click."
     (local-set-key (kbd "q") #'mevedel-view-close-agent-transcript)
     (local-set-key [remap gptel-send]
                    #'mevedel-view--transcript-gptel-send-blocked)
-    (setq header-line-format
-          '(:eval (mevedel-view--agent-transcript-header-line)))
+    ;; The agent header is this view's status strip.  The header line below
+    ;; it stays free for the pinned prompt, as in the main view.
+    (setq-local tab-line-format
+                '(:eval (mevedel-view--agent-transcript-status-strip)))
     (when (plist-get options :preserve-data-view-buffer)
       (with-current-buffer data-buffer
         (add-hook 'kill-buffer-hook
@@ -439,9 +441,9 @@ running in the UI."
      (inv-status inv-status)
      (t entry-status))))
 
-(defun mevedel-view--agent-transcript-header-line ()
-  "Return the header-line string for a transcript inspection view.
-The header line evaluates this on every redisplay of the view.  Optional
+(defun mevedel-view--agent-transcript-status-strip ()
+  "Return the tab-line status strip for a transcript inspection view.
+The tab line evaluates this on every redisplay of the view.  Optional
 fields therefore fit against a running width instead of remeasuring the
 growing header, and hover details are built only when shown."
   (let* ((info (mevedel-view--agent-transcript-current-info))

@@ -998,6 +998,7 @@
   (dolist (width '(-10 0))
     (should (equal "" (mevedel-view--pinned-prompt-button
                        "Long prompt that must yield to controls" 4 width))))
+
   (save-window-excursion
     (mevedel-view-test--with-buffers
       (mevedel-view-test--insert-data data-buf "Very long prompt\n" nil)
@@ -1014,7 +1015,27 @@
             (should (string-match-p "ask · idle" header))
             (should-not (string-match-p "Very long prompt" header))
             (should (string-search "Very long prompt"
-                                   (mevedel-view--sticky-prompt-line)))))))))
+                                   (mevedel-view--sticky-prompt-line))))))))
+
+  :doc "previews share one map and route clicks by the clicked text's target"
+  (let* ((archived (mevedel-view--pinned-prompt-button "Archived prompt" 42 30 3))
+         (local (mevedel-view--pinned-prompt-button "Local prompt" 7 30))
+         (line (concat (propertize "Prompt  " 'face 'shadow) archived))
+         (window (selected-window))
+         calls)
+    (should (eq (get-text-property 0 'local-map archived)
+                (get-text-property 0 'local-map local)))
+    (cl-letf (((symbol-function 'mevedel-view-segments-jump-to-prompt)
+               (lambda (&rest args) (push args calls))))
+      (let ((command (lookup-key (get-text-property 0 'local-map archived)
+                                 [header-line mouse-1])))
+        (funcall command (list 'mouse-1 (list window 'header-line '(10 . 0) 0
+                                              (cons line 10))))
+        (should (equal (list (list 3 42 window)) calls))
+        ;; The label carries no target.
+        (funcall command (list 'mouse-1 (list window 'header-line '(1 . 0) 0
+                                              (cons line 1))))
+        (should (= 1 (length calls)))))))
 
 (mevedel-deftest mevedel-view--jump-to-pinned-prompt ()
   ,test

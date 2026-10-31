@@ -1406,16 +1406,21 @@ uses the window width), so a long prompt does not run across a wide window. In
 tight windows, it truncates to its own row's width, without taking
 space from the operational controls. Its stored text is capped at 512 characters,
 including an ellipsis, after filtering and whitespace normalization. This bounds
-the width measurement performed on every header-line evaluation. Clicking it reveals the original prompt,
+the width measurement performed on every header-line evaluation. Every preview
+shares one header-line keymap; the clicked text carries its target, so an
+evaluation allocates no keymap or closure. Clicking it reveals the original prompt,
+expanding a folded turn or input when necessary. It is view-only:
+synthetic/model-only context is excluded, and archived segments use only their
+own visible turns.
 Finding the prompt above the top edge is a binary search over the view's prompt
 header runs, collected once per text change: a scroll step can evaluate the
 header line several times, and a backward property walk cost 0.1-0.3 ms each.
 The cache follows `buffer-chars-modified-tick`, not the modification tick:
 fontifying newly visible text while scrolling changes only properties and
 would otherwise rebuild it on almost every step.
-expanding a folded turn or input when necessary. It is view-only:
-synthetic/model-only context is excluded, and archived segments use only their
-own visible turns.
+Agent transcript views use the same two rows: their agent header (parent link,
+path, state, model and session) is the status strip, and the header line below
+pins the agent's task or a later follow-up prompt the same way.
 In the live segment after compaction, the row can also show the originating
 prompt from an earlier segment when no retained prompt governs the window.
 When compaction copies multiple prompts into the live tail, content before
@@ -3088,6 +3093,9 @@ prepared twice. Accepted input is added to ordinary workspace input history.
 `mevedel-view-agent.el` owns transcript lookup and inspection views, live
 rows and badges, and status/handle refresh. Transcript turn rendering remains
 in `mevedel-view-render.el`.
+Inspection views put the agent header in the tab line and keep the header line
+for the [pinned prompt](#status-strip-and-cockpit-routing), so a long task stays
+identifiable after it scrolls away. `[← Parent]` in the tab line closes the view.
 
 Agent activity rows are projections of canonical tool and lifecycle events:
 `Started PATH`, `SendMessage: PATH`,
