@@ -1114,7 +1114,9 @@ ordinary output bound; a failed or incomplete scan never permits direct executio
 Bubblewrap capability probes are cached independently per execution target.
 Local probes use the short `mevedel-sandbox-probe-timeout`; remote probes use
 `mevedel-sandbox-remote-probe-timeout` (10 seconds by default) so transport
-latency does not silently disable best-effort confinement.
+latency does not silently disable best-effort confinement. A successful local
+probe also caches the kernel's Landlock ABI, which decides whether confined
+commands get the [host socket restriction](permissions.md#child-confinement).
 
 All operating-system children receive deterministic defaults for UTF-8 locale,
 no color, terminal mode, and pagers, plus `MEVEDEL_EXECUTION=1`. An invocation

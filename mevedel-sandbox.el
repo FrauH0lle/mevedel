@@ -5,8 +5,10 @@
 ;; Builds and probes the Linux Bubblewrap boundary used by model-triggered
 ;; child processes.  The host is read-only, approved roots are rebound
 ;; writable, and process and network namespaces cover the requested process
-;; and all descendants.  This module selects confinement and prepares
-;; execution facts; `mevedel-execution' owns launch and teardown without replay.
+;; and all descendants.  Where the kernel supports it, a Landlock launcher
+;; also keeps local commands from connecting to host Unix sockets outside an
+;; allow-list.  This module selects confinement and prepares execution facts;
+;; `mevedel-execution' owns launch and teardown without replay.
 
 ;;; Code:
 
@@ -185,6 +187,15 @@ remote target is left untouched."
 (defvar mevedel-sandbox--git-ssh-program "ssh"
   "Host ssh program the fetch-only Git broker runs.")
 
+(defconst mevedel-sandbox--landlock-script
+  (file-name-concat
+   (mevedel-library-source-directory (or load-file-name buffer-file-name))
+   "scripts" "mevedel-landlock.py")
+  "Launcher restricting which host Unix sockets a confined command reaches.")
+
+(defconst mevedel-sandbox--landlock-abi 9
+  "First Landlock ABI with `LANDLOCK_ACCESS_FS_RESOLVE_UNIX'.")
+
 
 ;;
 ;;; Bubblewrap profile
@@ -294,12 +305,38 @@ OMIT-PROC-P leaves the host proc filesystem visible through the root bind."
      (t
       (format "Bubblewrap probe failed: %s" detail)))))
 
+(defun mevedel-sandbox--landlock-probe ()
+  "Return the local Landlock socket launcher, or why it is unavailable.
+Return (:python PYTHON :abi ABI) when the running kernel's Landlock ABI
+restricts pathname Unix sockets, otherwise (:reason REASON).  Without it,
+confined commands still reach host sockets their mounts expose."
+  (if-let* ((python (executable-find "python3")))
+      (let ((abi
+             (condition-case nil
+                 (with-temp-buffer
+                   (let ((default-directory temporary-file-directory))
+                     (and (eql 0 (call-process python nil '(t nil) nil "-I" "-S"
+                                               mevedel-sandbox--landlock-script
+                                               "abi"))
+                          (string-match "\\`\\([0-9]+\\)\n?\\'" (buffer-string))
+                          (string-to-number (match-string 1 (buffer-string))))))
+               (error nil))))
+        (cond
+         ((null abi) (list :reason "Landlock probe failed"))
+         ((zerop abi) (list :reason "Landlock is not enabled"))
+         ((< abi mevedel-sandbox--landlock-abi)
+          (list :reason (format "Landlock ABI %d lacks socket restriction (needs %d)"
+                                abi mevedel-sandbox--landlock-abi)))
+         (t (list :python python :abi abi))))
+    (list :reason "'python3' is not installed")))
+
 (defun mevedel-sandbox-probe (&optional workdir)
   "Return and cache Bubblewrap availability facts for WORKDIR's target.
 
 The probe creates the same core namespaces and mounts as real execution but
 runs only `true'.  A failed probe means the backend is unavailable even when a
-`bwrap' executable is installed."
+`bwrap' executable is installed.  Available facts carry :landlock, the result
+of `mevedel-sandbox--landlock-probe' for a local target."
   (let* ((target (and workdir (file-remote-p workdir)))
          (cached (alist-get target mevedel-sandbox--probe-cache
                             nil nil #'equal)))
@@ -357,7 +394,13 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                             (when (or (plist-get without-proc :timed-out-p)
                                       (plist-get without-proc :error))
                               (list :retry-on-execution t))))))))))))
-           facts)))))
+           (if (plist-get facts :available)
+               (append facts
+                       (list :landlock
+                             (if target
+                                 (list :reason "remote execution target")
+                               (mevedel-sandbox--landlock-probe))))
+             facts))))))
 
 (defun mevedel-sandbox--canonical-directories (roots)
   "Return existing canonical directories from ROOTS without duplicates."
@@ -1257,6 +1300,39 @@ also hides sockets created after launch.")
                    (list "--tmpfs" directory)))
                mevedel-sandbox--socket-directories)))
 
+(defun mevedel-sandbox--socket-allow-list (roots temporary-root grants broker)
+  "Return the paths whose host Unix sockets a confined command may reach.
+These are the sockets mevedel provides -- BROKER's directory and the Wayland
+display socket -- the canonical writable ROOTS except shared temporary space,
+and the paths of explicit write GRANTS.  Connecting needs write permission
+on a socket, so read grants add nothing.  TEMPORARY-ROOT, the local
+temporary directory and /tmp, and any root containing them, stay restricted:
+other programs put their sockets there."
+  (let ((shared (delete-dups
+                 (mapcar (lambda (directory)
+                           (file-name-as-directory (file-truename directory)))
+                         (delq nil (list temporary-root temporary-file-directory
+                                         "/tmp/"))))))
+    (delete-dups
+     (append
+      (when broker (list (plist-get broker :directory)))
+      (when-let* ((socket (mevedel-sandbox--wayland-socket))) (list socket))
+      (cl-remove-if (lambda (root)
+                      (cl-some (lambda (directory) (string-prefix-p root directory))
+                               shared))
+                    roots)
+      (cl-loop for grant in grants
+               when (eq (plist-get grant :access) 'write)
+               collect (plist-get grant :path))))))
+
+(defun mevedel-sandbox--host-socket-facts (launcher)
+  "Return confinement facts for Landlock LAUNCHER, a probe's :landlock value."
+  (if (plist-get launcher :python)
+      (list :host-sockets 'allow-listed)
+    (list :host-sockets 'reachable
+          :host-sockets-reason (or (plist-get launcher :reason)
+                                   "Landlock was not probed"))))
+
 (defun mevedel-sandbox--refused-facts (sandbox reason)
   "Return facts for a child refused by SANDBOX for REASON."
   (list :sandbox sandbox :filesystem 'unavailable :network 'unavailable
@@ -1293,15 +1369,18 @@ WORKDIR identifies the execution target that the pending child will use."
                (mevedel-sandbox-probe))))
         (cond
          ((plist-get availability :available)
-          (list :sandbox 'bubblewrap
-                :filesystem 'workspace-write
-                :proc (if (plist-get availability :mount-proc)
-                          'fresh
-                        'host)
-                :network
-                (if (eq t (plist-get additional-permissions :network))
-                    'unrestricted
-                  'isolated)))
+          (append
+           (list :sandbox 'bubblewrap
+                 :filesystem 'workspace-write
+                 :proc (if (plist-get availability :mount-proc)
+                           'fresh
+                         'host)
+                 :network
+                 (if (eq t (plist-get additional-permissions :network))
+                     'unrestricted
+                   'isolated))
+           (mevedel-sandbox--host-socket-facts
+            (plist-get availability :landlock))))
          ((eq mode 'required)
           (list :sandbox 'refused
                 :filesystem 'unavailable
@@ -1318,12 +1397,16 @@ WORKDIR identifies the execution target that the pending child will use."
 
 (defun mevedel-sandbox--confined-preparation
     (command workdir writable-roots executable mount-proc-p
-             additional-permissions &optional temporary-root candidates)
+             additional-permissions &optional temporary-root candidates
+             landlock)
   "Prepare COMMAND in WORKDIR with WRITABLE-ROOTS using EXECUTABLE.
 MOUNT-PROC-P requests a fresh proc filesystem for the PID namespace.
 ADDITIONAL-PERMISSIONS is the validated additive execution profile.
 TEMPORARY-ROOT is the writable temporary directory exempt from
-protected-path glob discovery.  CANDIDATES wraps already discovered paths."
+protected-path glob discovery.  CANDIDATES wraps already discovered paths.
+LANDLOCK is the probe's :landlock fact; with its launcher, a local command
+reaches only the host Unix sockets `mevedel-sandbox--socket-allow-list'
+names."
   (let* ((canonical-workdir
           (file-name-as-directory (file-truename workdir)))
          (roots (mevedel-sandbox--canonical-directories writable-roots)))
@@ -1345,6 +1428,7 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
              canonical-workdir roots temporary-root candidates))
            (restrictions (plist-get protected :restrictions))
            (local-p (not (file-remote-p canonical-workdir)))
+           (launcher (and local-p (plist-get landlock :python)))
            broker)
       (condition-case err
           (let* ((filesystem-permissions
@@ -1382,21 +1466,26 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                                (message "mevedel: Git SSH broker unavailable: %s"
                                         (error-message-string err))
                                nil)))))
-                 (facts (list :sandbox 'bubblewrap
-                              :git-common-directories
-                              (mapcar #'file-local-name
-                                      (plist-get protected :git-common-directories))
-                              :filesystem 'workspace-write
-                              :proc (if mount-proc-p 'fresh 'host)
-                              :network (if network-access-p
-                                           'unrestricted
-                                         'isolated)
-                              :writable-roots roots
-                              :protected-paths (length restrictions)
-                              :additional-filesystem
-                              (length filesystem-permissions)
-                              :additional-filesystem-read filesystem-read-count
-                              :additional-filesystem-write filesystem-write-count))
+                 (facts (append
+                         (list :sandbox 'bubblewrap
+                               :git-common-directories
+                               (mapcar #'file-local-name
+                                       (plist-get protected :git-common-directories))
+                               :filesystem 'workspace-write
+                               :proc (if mount-proc-p 'fresh 'host)
+                               :network (if network-access-p
+                                            'unrestricted
+                                          'isolated)
+                               :writable-roots roots
+                               :protected-paths (length restrictions)
+                               :additional-filesystem
+                               (length filesystem-permissions)
+                               :additional-filesystem-read filesystem-read-count
+                               :additional-filesystem-write filesystem-write-count)
+                         (mevedel-sandbox--host-socket-facts
+                          (if local-p
+                              landlock
+                            (list :reason "remote execution target")))))
                  (arguments
                   (append
                    (list "--new-session"
@@ -1428,9 +1517,19 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                      (list "--proc" "/proc"))
                    (list "--chdir" canonical-workdir "--")
                    (mevedel-sandbox--device-grant-command
-                    (append (list "sh" "-c" mevedel-sandbox--marker-script
-                                  "mevedel-sandbox" marker)
-                            command)
+                    (append
+                     ;; Before the marker: a launcher that cannot restrict
+                     ;; the command fails the launch instead of running it.
+                     (when launcher
+                       (append
+                        (list launcher "-I" "-S" mevedel-sandbox--landlock-script
+                              "exec")
+                        (mevedel-sandbox--socket-allow-list
+                         roots temporary-root filesystem-permissions broker)
+                        (list "--")))
+                     (list "sh" "-c" mevedel-sandbox--marker-script
+                           "mevedel-sandbox" marker)
+                     command)
                     (plist-get plan :grants) canonical-workdir))))
             (list :state 'confined
                   :command
@@ -1503,7 +1602,8 @@ CANDIDATES is the private, single-invocation discovery result used by
                   command workdir writable-roots
                   (plist-get availability :executable)
                   (plist-get availability :mount-proc)
-                  additional-permissions temporary-root candidates)
+                  additional-permissions temporary-root candidates
+                  (plist-get availability :landlock))
                (error
                 (mevedel-sandbox--refused-preparation
                  'refused (error-message-string err))))
@@ -1674,6 +1774,9 @@ Scan for exact lines without splitting and rebuilding all command output."
                read-count write-count)))
    (when (eq (plist-get facts :proc) 'host)
      "; proc: host")
+   (when (eq (plist-get facts :host-sockets) 'reachable)
+     (format "; host sockets: reachable (%s)"
+             (plist-get facts :host-sockets-reason)))
    (let ((reason (plist-get facts :reason)))
      (when reason
        (format "; reason: %s" reason)))))

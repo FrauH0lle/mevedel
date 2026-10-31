@@ -1010,22 +1010,44 @@ a full escalation reaches those services. `/tmp/.X11-unix` and `/tmp/.ICE-unix`
 are also replaced by empty tmpfs mounts: an X server accepts input injection
 and the ICE session manager controls the desktop session.
 
-Socket masking is path-based, so other host sockets remain reachable:
+Masking hides paths, but the temporary directory must stay shared, because
+commands, native tools and batch Eval exchange files through it, and other
+programs put sockets there and under `/run`. A local confined command
+therefore starts through `scripts/mevedel-landlock.py`, which applies a
+Landlock ruleset before the command and its descendants run. It handles only
+`LANDLOCK_ACCESS_FS_RESOLVE_UNIX` (Landlock ABI 9): connecting to, or sending
+a datagram to, a pathname Unix socket created outside the command fails with
+`EACCES` unless the socket lies beneath an allowed path:
 
-- The system D-Bus at `/run/dbus/system_bus_socket`. polkit gates each action;
-  those allowed without authentication are essentially logind power
-  operations for the active session.
-- systemd's local SSH socket `/run/ssh-unix-local/socket`, which still requires
-  SSH authentication; the ssh-agent and `~/.ssh` are hidden.
-- The system manager's Varlink socket `/run/systemd/io.systemd.Manager`, whose
-  privileged methods are permission-checked.
-- Sockets other programs place elsewhere in shared temporary space or in
-  writable roots, such as a Codex app-server control socket under
-  `/tmp/codex-daemon-UID/` and Qt single-instance or login-manager sockets in
-  `/tmp`. The temporary directory stays shared because commands, native tools
-  and batch Eval exchange files through it.
-- Abstract sockets, including Xwayland's, only with a network grant: network
-  isolation separates the abstract namespace.
+- the Git SSH broker's per-command directory and the Wayland socket bound
+  back into the runtime directory, the sockets mevedel provides. The MCP
+  socket root needs no entry: it is masked, and only the broker directory is
+  bound back beneath it;
+- writable roots other than shared temporary space: the session's temporary
+  directory, `/tmp`, and any root containing them are excluded;
+- paths of explicitly approved write grants. Connecting requires write
+  permission on a socket, so a read grant does not reopen one.
+
+The ruleset also sets `LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET`, so an abstract
+socket created outside the command, such as Xwayland's, stays unreachable even
+with a network grant. Sockets the command or its descendants create remain
+reachable to them. No other filesystem or network access is handled; the
+mounts above remain the filesystem boundary. The system D-Bus, systemd's local
+SSH and Varlink manager sockets, a Codex app-server control socket under
+`/tmp/codex-daemon-UID/`, and Qt single-instance or login-manager sockets in
+`/tmp` are therefore unreachable. A socket in a writable workspace root stays
+reachable, including one a host program created there and one an earlier
+confined command left listening.
+
+The Bubblewrap probe also asks the local kernel for its Landlock ABI with
+`landlock_create_ruleset`'s version query, through the same script. When
+`python3` is missing, Landlock is disabled, or the ABI is older than 9, the
+command runs without the launcher: host sockets the mounts expose remain
+reachable, and the execution facts record `host-sockets: reachable` with the
+reason, shown in the status line as `host sockets: reachable (REASON)`. A
+remote target always takes this fallback. A launcher that cannot apply its
+ruleset exits with status 125 before the command's start marker, so the launch
+fails rather than running unrestricted.
 
 A remote target's `XDG_RUNTIME_DIR` outside `/run/user` is not masked.
 
