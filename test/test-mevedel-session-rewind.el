@@ -2097,6 +2097,15 @@
                                     :head)))
                     (setf (mevedel-session-publication session)
                           (mevedel-session-publication-read session-dir))
+                    ;; The fixture's head is also a turn-0 state.  Heads are
+                    ;; ordered by whole-second manifest times, so make it
+                    ;; strictly older: the newest turn-0 head, the rewound
+                    ;; one, must be the one that stands for that state.
+                    (set-file-times
+                     (file-name-concat
+                      session-dir
+                      (plist-get (mevedel-session-publication session) :head))
+                     (time-subtract nil 60))
                     (let* ((restorable (publish "Original transcript\n" 1))
                            (rewound (publish "Rewound transcript\n" 0)))
                       (setq buffer (generate-new-buffer " *restore-live*"))

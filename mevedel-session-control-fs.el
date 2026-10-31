@@ -555,7 +555,7 @@ file-name ending, as plain text.  `base64' resolves through the target PATH,
 like `stat'.")
 
 (defvar mevedel-session-control-fs--programs (make-hash-table :test #'equal)
-  "Resolved target `bash' and `stat' paths, keyed by TRAMP prefix.
+  "Resolved target `bash', `stat' and, remotely, `gzip' paths by TRAMP prefix.
 
 Locating a program on a remote target costs one `test -x' per `exec-path'
 entry, and the durability layer inhibits the remote file-name cache, so
@@ -565,7 +565,9 @@ script proves its own parent directory, and a moved interpreter fails the
 operation, which drops the entry.")
 
 (defun mevedel-session-control-fs--programs (remote)
-  "Return a cons of target `bash' and `stat' paths for REMOTE."
+  "Return the target program paths for REMOTE.
+The value is a list of `bash' and `stat' and, for a remote target only, the
+optional `gzip' that `mevedel-session-control-fs--script-arguments' uses."
   ;; Every remote target is readiness-gated to Linux already; a local
   ;; target never is, yet the scripts need procfs descriptor pinning and
   ;; GNU stat, mv, and base64 semantics.  Refusing here covers every
@@ -583,8 +585,63 @@ operation, which drops the entry.")
               (stat (executable-find "stat" remote)))
           (unless (and bash stat)
             (error "Portable control filesystem requires bash and stat"))
-          (puthash key (cons bash stat)
+          (puthash key (list bash stat
+                             (and remote (executable-find "gzip" remote)))
                    mevedel-session-control-fs--programs)))))
+
+(defvar mevedel-session-control-fs--compressed-script nil
+  "The program script as wrapped base64 of its gzip bytes, once computed.
+The symbol `none' records that local compression is unavailable.")
+
+;; A reload installs a new program script, so discard its old encoding too.
+(setq mevedel-session-control-fs--compressed-script nil)
+
+(defconst mevedel-session-control-fs--compressed-bootstrap
+  (concat "g=$1; s=$2; shift 2; "
+          "script=$(set -o pipefail; printf %s \"$s\" | base64 -d | \"$g\" -dc) || exit 70; "
+          "eval \"$script\"")
+  "Command line that decompresses the program script and runs it in place.
+Its first two arguments are the target `gzip' and the encoded script; the
+script's own arguments follow.")
+
+(defun mevedel-session-control-fs--compressed-script ()
+  "Return the encoded compressed program script, or nil when unavailable."
+  (unless mevedel-session-control-fs--compressed-script
+    (setq mevedel-session-control-fs--compressed-script
+          (or (ignore-errors
+                (with-temp-buffer
+                  (set-buffer-multibyte nil)
+                  (insert (encode-coding-string
+                           mevedel-session-control-fs--program-script 'utf-8-unix))
+                  (let ((default-directory temporary-file-directory))
+                    (when (eql 0 (call-process-region
+                                  (point-min) (point-max) "gzip" t t nil "-9nc"))
+                      ;; Wrapped at 76 columns, so no physical line nears the
+                      ;; pty budget `mevedel-session-control-fs--argument-budget'
+                      ;; describes.
+                      (base64-encode-string (buffer-string))))))
+              'none)))
+  (and (stringp mevedel-session-control-fs--compressed-script)
+       mevedel-session-control-fs--compressed-script))
+
+(defun mevedel-session-control-fs--script-arguments (remote programs)
+  "Return the interpreter arguments that run the program script.
+REMOTE is the target prefix and PROGRAMS its resolved program paths.
+
+A remote command line crosses TRAMP's pty, where the shell-quoted script
+alone is about 17 KB and pty backpressure made every program wait for it.
+Where the target has `gzip', the script travels compressed at about a
+fifth of that size behind a short decompressing bootstrap.  A local
+command is exec'd directly and keeps the script inline, as does a target
+without `gzip'."
+  (let ((gzip (and remote (nth 2 programs)))
+        (encoded (and remote (nth 2 programs)
+                      (mevedel-session-control-fs--compressed-script))))
+    (if encoded
+        (list "-p" "-c" mevedel-session-control-fs--compressed-bootstrap
+              "mevedel-session-control-fs" (file-local-name gzip) encoded)
+      (list "-p" "-c" mevedel-session-control-fs--program-script
+            "mevedel-session-control-fs"))))
 
 (defun mevedel-session-control-fs--connection-directory (path)
   "Return an always-present directory on PATH's target for process dispatch.
@@ -1160,7 +1217,8 @@ LOCK-DIRECTORY is its optional target-side lock."
       (let* ((default-directory
               (mevedel-session-control-fs--connection-directory
                (or remote "/")))
-             (bash (car (mevedel-session-control-fs--programs remote)))
+             (programs (mevedel-session-control-fs--programs remote))
+             (bash (car programs))
              (staged (list nil))
              ;; Encoded once: the oversized path used to re-encode every
              ;; payload a second time for the request file.
@@ -1221,10 +1279,10 @@ LOCK-DIRECTORY is its optional target-side lock."
                              (apply
                               #'process-file
                               bash input (list output nil) nil
-                              "-p" "-c"
-                              mevedel-session-control-fs--program-script
-                              "mevedel-session-control-fs"
-                              (append flags arguments)))))
+                              (append
+                               (mevedel-session-control-fs--script-arguments
+                                remote programs)
+                               flags arguments)))))
                          (text (with-current-buffer output (buffer-string))))
                     (unless (and (integerp status) (zerop status))
                       ;; The resolved interpreters are the only cached input, so a

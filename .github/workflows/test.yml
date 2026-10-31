@@ -63,8 +63,13 @@ jobs:
       timeout-minutes: 6
       run: |
         sudo apt-get update -o Acquire::Retries=3
-        sudo apt-get -y install ripgrep bubblewrap
+        sudo apt-get -y install ripgrep bubblewrap locales
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+    - name: Provision German UTF-8 locale for control filesystem tests
+      run: |
+        sudo locale-gen de_DE.UTF-8
+        test "$(LC_ALL=de_DE.UTF-8 locale charmap)" = UTF-8
 
     - name: Verify ripgrep and Bubblewrap
       run: |

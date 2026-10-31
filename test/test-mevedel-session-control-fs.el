@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-session-control-fs)
+(require 'bytecomp)
 
 (require 'helpers
          (file-name-concat
@@ -943,6 +944,204 @@ streams over stdin."
       (clrhash mevedel-session-control-fs--programs)
       (when (file-directory-p root)
         (delete-directory root t)))))
+
+(defun mevedel-session-control-fs-test--program-commands (thunk)
+  "Call THUNK and return the interpreter arguments of every program it ran."
+  (let ((process-file (symbol-function 'process-file))
+        commands)
+    (cl-letf (((symbol-function 'process-file)
+               (lambda (program &optional infile buffer display &rest args)
+                 (when (equal "-p" (car args))
+                   (push args commands))
+                 (apply process-file program infile buffer display args))))
+      (funcall thunk))
+    (nreverse commands)))
+
+(defun mevedel-session-control-fs-test--compressed-round-trip (locale)
+  "Check compressed remote script transport and UTF-8 content under LOCALE."
+  (let* ((host "control-fs-compressed")
+         (root (file-name-as-directory
+                (make-temp-file "mevedel-control-fs-compressed-" t)))
+         (path (format "/mevedelmock:%s:%sfile" host root))
+         (content "eins\nzwei ä界\n")
+         (process-environment
+          (append (list (concat "LANG=" locale) (concat "LC_ALL=" locale))
+                  process-environment)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (clrhash mevedel-session-control-fs--programs)
+          ;; The locale really reaches the target-side command.
+          (should (equal (concat locale "|" (if (equal locale "C")
+                                               "ANSI_X3.4-1968" "UTF-8"))
+                         (with-temp-buffer
+                           (let ((default-directory (file-name-directory path)))
+                             (process-file "sh" nil t nil "-c"
+                                           "printf '%s|%s' \"$LC_ALL\" \"$(locale charmap)\""))
+                           (buffer-string))))
+          (let* (results
+                 (commands
+                  (mevedel-session-control-fs-test--program-commands
+                   (lambda ()
+                     (setq results
+                           (mevedel-session-control-fs-run-program
+                            (list (list :op 'write :path path :content content)
+                                  (list :op 'read :path path))))))))
+            (should (= 1 (length commands)))
+            (should (equal mevedel-session-control-fs--compressed-bootstrap
+                           (nth 2 (car commands))))
+            (should (member (mevedel-session-control-fs--compressed-script)
+                            (car commands)))
+            (should-not (member mevedel-session-control-fs--program-script
+                                (car commands)))
+            (should (equal '(ok ok) (mapcar (lambda (result) (plist-get result :status))
+                                            results)))
+            (should (equal content (plist-get (nth 1 results) :value)))
+            (should (equal content (mevedel-session-control-fs-read-file path)))))
+      (clrhash mevedel-session-control-fs--programs)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-control-fs--script-arguments ()
+  ,test
+  (test)
+  :doc "sends the compressed script to a remote target under the C locale"
+  (mevedel-session-control-fs-test--compressed-round-trip "C")
+
+  :doc "rejects malformed base64 even when gzip can decode all script bytes"
+  (let* ((host "control-fs-broken-base64")
+         (root (file-name-as-directory
+                (make-temp-file "mevedel-control-fs-broken-base64-" t)))
+         (path (format "/mevedelmock:%s:%sfile" host root))
+         (mevedel-session-control-fs--compressed-script
+          (concat (mevedel-session-control-fs--compressed-script) "!")))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (clrhash mevedel-session-control-fs--programs)
+          (let ((err (should-error
+                      (mevedel-session-control-fs-run-program
+                       (list (list :op 'write :path path :content "not written")
+                             (list :op 'read :path path)))
+                      :type 'file-error)))
+            (should (equal "Portable control program failed" (nth 1 err))))
+          (should-not (file-exists-p (file-name-concat root "file")))
+          (should-not (gethash (file-remote-p path)
+                               mevedel-session-control-fs--programs)))
+      (clrhash mevedel-session-control-fs--programs)
+      (delete-directory root t)))
+
+  :doc "uses the current script after reloading the compiled module with a warm cache"
+  (let* ((host "control-fs-reloaded")
+         (root (file-name-as-directory
+                (make-temp-file "mevedel-control-fs-reloaded-" t)))
+         (path (format "/mevedelmock:%s:%sfile" host root))
+         (source (concat (file-name-sans-extension
+                          (locate-library "mevedel-session-control-fs")) ".el"))
+         (compiled (file-name-concat root "mevedel-session-control-fs.elc"))
+         (current-script mevedel-session-control-fs--program-script)
+         (mevedel-session-control-fs--program-script "exit 99\n")
+         (mevedel-session-control-fs--compressed-script nil)
+         (byte-compile-dest-file-function (lambda (_) compiled)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (clrhash mevedel-session-control-fs--programs)
+          (should (mevedel-session-control-fs--compressed-script))
+          (should (byte-compile-file source))
+          (load compiled nil t)
+          (should (equal current-script mevedel-session-control-fs--program-script))
+          (let ((results
+                 (mevedel-session-control-fs-run-program
+                  (list (list :op 'write :path path :content "reloaded")
+                        (list :op 'read :path path)))))
+            (should (equal '(ok ok) (mapcar (lambda (r) (plist-get r :status)) results)))
+            (should (equal "reloaded" (plist-get (nth 1 results) :value)))))
+      (clrhash mevedel-session-control-fs--programs)
+      (delete-directory root t)))
+
+  :doc "fails the whole program when the target cannot decompress the script"
+  (let* ((host "control-fs-broken-gzip")
+         (root (file-name-as-directory
+                (make-temp-file "mevedel-control-fs-broken-gzip-" t)))
+         (path (format "/mevedelmock:%s:%sfile" host root)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (clrhash mevedel-session-control-fs--programs)
+          (let ((programs (mevedel-session-control-fs--programs
+                           (file-remote-p path))))
+            (should (nth 2 programs))
+            (puthash (file-remote-p path)
+                     (list (nth 0 programs) (nth 1 programs) "false")
+                     mevedel-session-control-fs--programs))
+          (let ((err (should-error
+                      (mevedel-session-control-fs-run-program
+                       (list (list :op 'write :path path :content "x")))
+                      :type 'file-error)))
+            (should (equal "Portable control program failed" (nth 1 err))))
+          (should-not (file-exists-p (file-name-concat root "file")))
+          ;; A failed program drops the entry, so the next one re-resolves.
+          (should-not (gethash (file-remote-p path)
+                               mevedel-session-control-fs--programs)))
+      (clrhash mevedel-session-control-fs--programs)
+      (delete-directory root t)))
+
+  :doc "keeps the inline script on a target without gzip and for a local program"
+  (let* ((host "control-fs-no-gzip")
+         (root (file-name-as-directory
+                (make-temp-file "mevedel-control-fs-no-gzip-" t)))
+         (remote (format "/mevedelmock:%s:%sfile" host root))
+         (local (file-name-concat root "local"))
+         (real (symbol-function 'executable-find)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (clrhash mevedel-session-control-fs--programs)
+          (cl-letf (((symbol-function 'executable-find)
+                     (lambda (name &optional remote-p)
+                       (unless (and remote-p (equal name "gzip"))
+                         (funcall real name remote-p)))))
+            (dolist (path (list remote local))
+              (let* (results
+                     (commands
+                      (mevedel-session-control-fs-test--program-commands
+                       (lambda ()
+                         (setq results
+                               (mevedel-session-control-fs-run-program
+                                (list (list :op 'write :path path :content "inline")
+                                      (list :op 'read :path path))))))))
+                (ert-info ((format "Path %s" path))
+                  (should (= 1 (length commands)))
+                  (should (equal mevedel-session-control-fs--program-script
+                                 (nth 2 (car commands))))
+                  (should (equal "inline" (plist-get (nth 1 results) :value))))))
+            (should-not (nth 2 (gethash (file-remote-p remote)
+                                        mevedel-session-control-fs--programs)))))
+      (clrhash mevedel-session-control-fs--programs)
+      (delete-directory root t)))
+
+  :doc "runs compressed remote programs under German UTF-8 when the locale is installed"
+  (progn
+    (let ((process-environment
+           (append '("LANG=de_DE.UTF-8" "LC_ALL=de_DE.UTF-8") process-environment)))
+      (unless (equal "UTF-8\n"
+                     (with-temp-buffer
+                       (and (eql 0 (call-process "locale" nil '(t nil) nil "charmap"))
+                            (buffer-string))))
+        (ert-skip "de_DE.UTF-8 locale is not installed")))
+    (mevedel-session-control-fs-test--compressed-round-trip "de_DE.UTF-8"))
+
+  :doc "keeps decoder pipefail out of the evaluated program"
+  (let* ((host "control-fs-pipefail-scope")
+         (root (file-name-as-directory
+                (make-temp-file "mevedel-control-fs-pipefail-scope-" t)))
+         (path (format "/mevedelmock:%s:%sfile" host root))
+         (mevedel-session-control-fs--compressed-script nil)
+         (mevedel-session-control-fs--program-script
+          (concat "if [[ -o pipefail ]]; then exit 99; fi\n"
+                  mevedel-session-control-fs--program-script)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (clrhash mevedel-session-control-fs--programs)
+          (should (mevedel-session-control-fs-write-file path "scoped"))
+          (should (equal "scoped" (mevedel-session-control-fs-read-file path))))
+      (clrhash mevedel-session-control-fs--programs)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-control-fs--program-results ()
   ,test
