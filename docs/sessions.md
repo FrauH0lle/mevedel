@@ -692,12 +692,16 @@ acknowledgements.
 
 A session retaining a native identity in its root or any child conversation
 rejects cooperative control transfer, Save As, Fork, Rewind and Redo. Manual
-transcript compaction and the side-conversation command consider only the root
-conversation, and are also unavailable with the external provider selected.
+transcript compaction considers only the root conversation, and is also
+unavailable with the external provider selected. The ephemeral `/btw` command
+instead forks settled native root history through ACP; see
+[side conversations](view.md#ephemeral-btw-side-conversations).
 Unstarted and released markers hold no native history and restrict nothing. These commands cannot
 treat a copied transcript as an equivalent native model history. The adapter's
 native fork extension alone does not map mevedel's chronological checkpoints
-and independent conversation scopes to native message boundaries.
+and independent conversation scopes to native message boundaries. Unlike those
+durable operations, `/btw` forks only the current settled root, stores no native
+identity in session metadata, and deletes the fork when the side ends.
 Direct commands and menu actions report the external-history restriction before
 arming a fork or changing state. Save As refuses before asking for a name or
 saving the parent, and Redo refuses before reading the published-head choices.

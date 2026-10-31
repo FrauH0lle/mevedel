@@ -7,6 +7,7 @@ import sys
 import subprocess
 import time
 import traceback
+from pathlib import Path
 
 
 def reply(request_id, result):
@@ -92,6 +93,15 @@ session_info = {}
 config_behavior = None
 applied = {}
 inspection = None
+history_root = os.getenv("MEVEDEL_ACP_TEST_HISTORY")
+
+
+def wait_gate(name):
+    gate = os.getenv(name)
+    if gate:
+        Path(gate + ".ready").touch()
+        while not Path(gate).exists():
+            time.sleep(0.01)
 
 
 def sdk_messages(batches, index):
@@ -107,13 +117,36 @@ for line in sys.stdin:
     try:
         method = message.get("method")
         params = message.get("params", {})
+        if trace := os.getenv("MEVEDEL_ACP_TEST_TRACE"):
+            with open(trace, "a", encoding="utf-8") as log:
+                log.write(json.dumps(message) + "\n")
         if method == "initialize":
             client_compaction = isinstance(params.get("clientCapabilities", {}).get("session", {}).get("compaction"), dict)
+            capabilities = {"resume": {}}
+            if history_root:
+                capabilities.update({"fork": {}, "delete": {}})
+                capabilities.pop(os.getenv("MEVEDEL_ACP_TEST_MISSING_CAP"), None)
             reply(request_id, {"protocolVersion": 1, "agentCapabilities": {
                 "loadSession": True, "promptCapabilities": {"image": not os.getenv("MEVEDEL_ACP_TEST_NO_IMAGES")},
-                "sessionCapabilities": {"resume": {}}}})
+                "sessionCapabilities": capabilities}})
+        elif method == "session/fork":
+            source = Path(history_root, params["sessionId"] + ".json")
+            fork_id = os.getenv("MEVEDEL_ACP_TEST_FORK_ID", "fixture-fork")
+            if fork_id and fork_id != params["sessionId"]:
+                Path(history_root, fork_id + ".json").write_bytes(source.read_bytes())
+            wait_gate("MEVEDEL_ACP_TEST_FORK_GATE")
+            reply(request_id, {"sessionId": fork_id})
+        elif method == "session/delete":
+            if Path(history_root, "delete-fails").exists():
+                print(json.dumps({"jsonrpc": "2.0", "id": request_id,
+                                  "error": {"code": -32000, "message": "Fixture deletion failed"}}), flush=True)
+                continue
+            Path(history_root, params["sessionId"] + ".json").unlink(missing_ok=True)
+            reply(request_id, {})
         elif method in ("session/new", "session/resume", "session/load"):
             session_id = params.get("_meta", {}).get("fixtureSessionId", "fixture-session")
+            if history_root and params.get("sessionId"):
+                session_id = params["sessionId"]
             if params.get("sessionId", session_id) != session_id:
                 print(json.dumps({"jsonrpc": "2.0", "id": request_id,
                                   "error": {"code": -32000, "message": "Missing history"}}), flush=True)
@@ -183,6 +216,25 @@ for line in sys.stdin:
                 applied[params["configId"]] = params["value"]
             reply(request_id, session_info)
         elif method == "session/prompt":
+            if history_root:
+                history_path = Path(history_root, session_id + ".json")
+                history = json.loads(history_path.read_text())
+                prompt = params["prompt"][0]["text"]
+                history.append(prompt)
+                history_path.write_text(json.dumps(history))
+                if prompt == "wait":
+                    pending = request_id
+                    continue
+                if prompt == "crash":
+                    os._exit(7)
+                if prompt == "fail":
+                    print(json.dumps({"jsonrpc": "2.0", "id": request_id,
+                                      "error": {"code": -32000, "message": "Fixture prompt failed"}}), flush=True)
+                    continue
+                if not tool_batches and not compaction_events:
+                    chunk("History: " + " | ".join(history))
+                    reply(request_id, {"stopReason": "end_turn"})
+                    continue
             if inspection:
                 with open(inspection["promptLog"], "a", encoding="utf-8") as log:
                     log.write(json.dumps(params) + "\n")
@@ -477,6 +529,7 @@ for line in sys.stdin:
                 reply(request_id, prompt_response)
                 reply(request_id, prompt_response)
         elif method == "session/cancel" and pending is not None:
+            wait_gate("MEVEDEL_ACP_TEST_CANCEL_GATE")
             reply(pending, cancel_response)
             pending = None
     except Exception:

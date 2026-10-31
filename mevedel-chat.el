@@ -82,6 +82,10 @@
 (declare-function mevedel-auth-assert-ready "mevedel-auth" (backend))
 (autoload 'mevedel-auth-assert-ready "mevedel-auth")
 
+;; `mevedel-claude-code-btw'
+(declare-function mevedel-claude-code-btw-send "mevedel-claude-code-btw" (input policy))
+(autoload 'mevedel-claude-code-btw-send "mevedel-claude-code-btw")
+
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--safe-accepted-prompt
                   "mevedel-collaboration" (data-buffer))
@@ -1319,7 +1323,9 @@ The effective model and effort apply only to this request, not saved selection."
         ;; hooks and yielding checks can change that baseline.  gptel's model
         ;; transform owns its private prompt locals; native takes explicit args.
         (if (mevedel-claude-code-backend-p backend)
-            (mevedel-claude-code-send (or model-input native-input) policy)
+            (if (and mevedel--session (mevedel-session-audit-session mevedel--session))
+                (mevedel-claude-code-btw-send (or model-input native-input) policy)
+              (mevedel-claude-code-send (or model-input native-input) policy))
           (when (and mevedel--session (not mevedel--current-directive-uuid)
                      (assoc "root" (mevedel-session-external-conversations mevedel--session)))
             (mevedel-claude-code-release-history mevedel--session))

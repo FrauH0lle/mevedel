@@ -79,6 +79,15 @@ automatic gates:
 - the pre-send prompt transform for ordinary user requests.
 - the continuation WAIT gate before tool-result follow-up requests.
 
+Click **compact on/off** in the chat's top status strip to toggle these
+automatic gates for the open session. This overrides `mevedel-compact-auto`
+locally, not its global default or another chat's setting. Closing and reopening
+the session restores the configured default. Re-enabling also clears the
+repeated-failure latch. The toggle neither runs a compaction immediately nor
+cancels one already in progress; manual `/compact` remains available.
+Claude instead shows the non-interactive **compact provider** label: its native
+compaction is provider-managed, and this control does not disable it.
+
 During auto-compaction the view reuses the request progress row and
 changes its status to `Compacting...`. When compaction completes, the
 original request continues and the spinner returns to `Thinking...`.

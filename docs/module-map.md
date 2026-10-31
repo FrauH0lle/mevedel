@@ -251,6 +251,7 @@ Turn engines (Claude Code through ACP and MCP)
   mevedel-claude-code-backend.el provider type, model catalog, installation settings (executable/adapter/directory), minimum CLI/adapter versions and version parser, autoloaded engine dispatch
   mevedel-claude-code.el      guided setup, launch preflight and isolated ACP launch
   mevedel-claude-code-session.el root, directive and shared-item sends and persisted external conversation references
+  mevedel-claude-code-btw.el  ephemeral native history fork, side dispatch and deletion lifecycle
   mevedel-claude-code-agent.el retained-child subscription dispatch, sample limits and native history references
   mevedel-claude-code-history.el native history state, divergence and excerpt recovery
   mevedel-claude-code-context.el native context receipts, compaction restoration and full-context continuation

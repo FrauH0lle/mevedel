@@ -50,6 +50,20 @@
 (autoload 'mevedel-chat-install-request-hooks "mevedel-chat")
 (autoload 'mevedel-chat-prepare-transcript-buffer "mevedel-chat")
 
+;; `mevedel-claude-code'
+(declare-function mevedel-claude-code-backend-p "mevedel-claude-code-backend" (backend))
+
+;; `mevedel-claude-code-btw'
+(declare-function mevedel-claude-code-btw-assert-open "mevedel-claude-code-btw" ())
+(declare-function mevedel-claude-code-btw-close "mevedel-claude-code-btw" ())
+(declare-function mevedel-claude-code-btw-open
+                  "mevedel-claude-code-btw" (parent side history ready))
+(declare-function mevedel-claude-code-btw-parent-history "mevedel-claude-code-btw" ())
+(autoload 'mevedel-claude-code-btw-close "mevedel-claude-code-btw")
+(autoload 'mevedel-claude-code-btw-assert-open "mevedel-claude-code-btw")
+(autoload 'mevedel-claude-code-btw-open "mevedel-claude-code-btw")
+(autoload 'mevedel-claude-code-btw-parent-history "mevedel-claude-code-btw")
+
 ;; `mevedel-compact-evidence'
 (declare-function mevedel-compact-evidence-context-snapshot
                   "mevedel-compact-evidence" (context))
@@ -655,21 +669,23 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
 
 (defun mevedel-side-conversation--abort (&optional _data-buffer)
   "Abort work in the current side data buffer without persistence."
-  (let ((aborted (mevedel-side-conversation--busy-p (current-buffer))))
-    ;; Tool and permission callbacks may launch a follow-up provider request.
-    ;; Settle them before draining gptel's process list.
-    (when mevedel--current-request
-      (mevedel-request-end))
-    (mevedel-permission-queue-abort-all mevedel--session)
-    (while (mevedel-side-conversation--busy-p (current-buffer))
-      (setq aborted t)
-      (gptel-abort (current-buffer)))
-    (when aborted
-      (goto-char (point-max))
-      (insert
-       (mevedel-side-conversation--interrupted-boundary
-        "The preceding side response was interrupted and is incomplete. Its assistant and tool material is reference-only; do not treat it as a settled result."))
-      (mevedel-view-rerender mevedel--view-buffer))))
+  (if (mevedel-claude-code-backend-p gptel-backend)
+      (mevedel-claude-code-btw-close)
+    (let ((aborted (mevedel-side-conversation--busy-p (current-buffer))))
+      ;; Tool and permission callbacks may launch a follow-up provider request.
+      ;; Settle them before draining gptel's process list.
+      (when mevedel--current-request
+	(mevedel-request-end))
+      (mevedel-permission-queue-abort-all mevedel--session)
+      (while (mevedel-side-conversation--busy-p (current-buffer))
+	(setq aborted t)
+	(gptel-abort (current-buffer)))
+      (when aborted
+	(goto-char (point-max))
+	(insert
+	 (mevedel-side-conversation--interrupted-boundary
+          "The preceding side response was interrupted and is incomplete. Its assistant and tool material is reference-only; do not treat it as a settled result."))
+	(mevedel-view-rerender mevedel--view-buffer)))))
 
 
 ;;
@@ -697,14 +713,17 @@ Returns a plist of invocation-time copies consumed by
 `mevedel-side-conversation--make-session' and
 `mevedel-side-conversation--init-side-buffer'."
   (let ((workspace (or mevedel--workspace
-                       (mevedel-session-workspace mevedel--session))))
+                       (mevedel-session-workspace mevedel--session)))
+        (native (and (mevedel-claude-code-backend-p gptel-backend)
+                     (mevedel-claude-code-btw-parent-history))))
     (list
      :parent-session mevedel--session
      :workspace workspace
      :working-directory
      (or (mevedel-session-working-directory mevedel--session)
          default-directory)
-     :snapshot (mevedel-side-conversation--snapshot)
+     :snapshot (if native "" (mevedel-side-conversation--snapshot))
+     :native-history native
      :request-locals (mevedel-side-conversation--request-locals)
      :hook-rules (mevedel-side-conversation--tool-hook-rules
                   (mevedel-hooks-effective-rules
@@ -860,6 +879,7 @@ FROZEN-CONTEXT is the materialized gptel context plist."
   "Create a side view forked from PARENT-DATA, then call CALLBACK."
   (let* ((frozen (mevedel-side-conversation--freeze-parent-state))
          (side-session (mevedel-side-conversation--make-session frozen))
+         (parent-tick (buffer-chars-modified-tick parent-data))
          (side-data (generate-new-buffer " *mevedel-btw-data*")))
     (with-current-buffer side-data
       ;; Plant cleanup before the asynchronous context freeze so a kill
@@ -880,17 +900,24 @@ FROZEN-CONTEXT is the materialized gptel context plist."
          side-data
          (lambda (frozen-context)
            (condition-case callback-error
-               (let ((side-view
-                      (mevedel-side-conversation--init-side-buffer
-                       side-data side-session frozen frozen-context)))
-                 (with-current-buffer side-view
-                   (mevedel-view--full-rerender))
-                 (funcall callback side-view))
-             ;; Killing the side buffer clears the parent link through
-             ;; its kill-buffer hook.
+               (let ((initialize
+                      (lambda ()
+                        (let ((side-view
+                               (mevedel-side-conversation--init-side-buffer
+                                side-data side-session frozen frozen-context)))
+                          (with-current-buffer side-view
+                            (mevedel-view--full-rerender))
+                          (funcall callback side-view)))))
+                 (if-let* ((history (plist-get frozen :native-history)))
+                     (progn
+                       (unless (and (buffer-live-p parent-data)
+                                    (= parent-tick (buffer-chars-modified-tick parent-data)))
+                         (user-error "Parent history changed while opening /btw; try again"))
+                       (mevedel-claude-code-btw-open parent-data side-data history initialize))
+                   (funcall initialize)))
+             ;; Killing the side also clears its parent's link.
              ((error quit)
-              (when (buffer-live-p side-data)
-                (kill-buffer side-data))
+              (when (buffer-live-p side-data) (kill-buffer side-data))
               (signal (car callback-error) (cdr callback-error))))))
       ((error quit)
        (when (buffer-live-p side-data)
@@ -921,6 +948,9 @@ FROZEN-CONTEXT is the materialized gptel context plist."
     (user-error "Side conversation data has been discarded"))
   (when (mevedel-side-conversation--busy-p mevedel--data-buffer)
     (user-error "The /btw response is still active"))
+  (with-current-buffer mevedel--data-buffer
+    (when (mevedel-claude-code-backend-p gptel-backend)
+      (mevedel-claude-code-btw-assert-open)))
   (let* ((raw (mevedel-view--input-text))
          (session (buffer-local-value 'mevedel--session mevedel--data-buffer)))
     (when (string-empty-p raw)
@@ -939,7 +969,8 @@ FROZEN-CONTEXT is the materialized gptel context plist."
   (unless (and mevedel--session
                (mevedel-session-workspace mevedel--session))
     (user-error "No mevedel session in this buffer"))
-  (mevedel-engine-assert-local-history mevedel--session "/btw" gptel-backend t)
+  (unless (mevedel-claude-code-backend-p gptel-backend)
+    (mevedel-engine-assert-local-history mevedel--session "/btw" gptel-backend t))
   (when (and mevedel--current-request
              (mevedel-request-directive-uuid mevedel--current-request))
     (user-error "/btw is unavailable during directive requests"))

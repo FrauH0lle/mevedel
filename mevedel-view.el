@@ -53,6 +53,16 @@
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 
+;; `mevedel-compact'
+(defvar mevedel-compact-auto)
+(defvar mevedel--compact-auto-disabled)
+
+;; `mevedel-compact-run'
+(defvar mevedel-compact-run-failure-count)
+
+;; `mevedel-engine'
+(declare-function mevedel-engine-external-p "mevedel-engine" (backend))
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-teardown-session
                   "mevedel-execution" (session))
@@ -169,6 +179,8 @@
                   "mevedel-view-agent" (&optional event))
 
 ;; `mevedel-view-composer'
+(declare-function mevedel-view--assert-live-tip
+                  "mevedel-view-composer" (&optional allow-armed-fork))
 (declare-function mevedel-view--effective-permission-mode
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--input-marker-position
@@ -839,6 +851,7 @@ view.  When `:preserve-data-view-buffer' is non-nil, leave DATA-BUF's
 existing `mevedel--view-buffer' binding untouched.  A
 `:side-conversation-p' view omits durable input history, and
 `:transcript-start' hides inherited model context from projection."
+  (require 'mevedel-compact)
   (require 'mevedel-models)
   (require 'mevedel-tools)
   (require 'mevedel-view-composer)
@@ -1078,6 +1091,29 @@ Kills the associated view buffer."
   (when-let* ((vb mevedel--view-buffer)
               (_ (buffer-live-p vb)))
     (kill-buffer vb)))
+
+(defun mevedel-view-toggle-auto-compaction (&optional event)
+  "Toggle automatic compaction for this chat, or the chat clicked in EVENT.
+Only future local compaction admission changes; an ongoing compaction is
+not cancelled.  Native providers manage their own automatic compaction."
+  (interactive (list (when (mouse-event-p last-input-event) last-input-event)))
+  (with-current-buffer (if event (window-buffer (posn-window (event-start event)))
+                         (current-buffer))
+    (mevedel-view--assert-live-tip)
+    (when mevedel-view--side-conversation-p
+      (user-error "Side conversations do not compact"))
+    (unless (buffer-live-p mevedel--data-buffer)
+      (user-error "No live chat buffer"))
+    (with-current-buffer mevedel--data-buffer
+      (when (mevedel-engine-external-p gptel-backend)
+        (user-error "Automatic compaction is managed by the provider"))
+      (setq-local mevedel-compact-auto
+                  (not (and mevedel-compact-auto
+                            (not mevedel--compact-auto-disabled))))
+      (when mevedel-compact-auto
+        (setq mevedel--compact-auto-disabled nil
+              mevedel-compact-run-failure-count 0)))
+    (force-mode-line-update)))
 
 (defun mevedel-view--status-strip-button (label area help)
   "Return clickable status strip LABEL for cockpit AREA with HELP."
@@ -1435,6 +1471,15 @@ when one of them changes."
            (goal-status (and goal (mevedel-goal-status goal)))
            (goal-turns (and goal (mevedel-goal-turns-run goal)))
            (preset-name (and session (mevedel-session-preset-name session)))
+           (compaction
+            (and session (not mevedel-view--side-conversation-p)
+                 (cond
+                  ((mevedel-engine-external-p
+                    (buffer-local-value 'gptel-backend data-buffer)) 'provider)
+                  ((and (buffer-local-value 'mevedel-compact-auto data-buffer)
+                        (not (buffer-local-value
+                              'mevedel--compact-auto-disabled data-buffer))) 'on)
+                  (t 'off))))
            (tool-count (mevedel-tools-active-count data-buffer))
            (width (mevedel-view--status-strip-width))
            (cache-key
@@ -1444,7 +1489,7 @@ when one of them changes."
                     (plist-get mevedel-view--composer-scope :directive-id)
                     (plist-get mevedel-view--composer-scope :action)
                     state model (and goal t) goal-status goal-turns
-                    preset-name tool-count width
+                    preset-name compaction tool-count width
                     (display-graphic-p) (selected-window))))
       (if (equal cache-key mevedel-view--status-strip-cache-key)
           mevedel-view--status-strip-cache-value
@@ -1475,6 +1520,17 @@ when one of them changes."
                                    '(foreign expired lost contested))
                              (propertize (format "lease %s" lease-state)
                                          'face 'warning))
+                        (when compaction
+                          (if (eq compaction 'provider)
+                              (propertize "compact provider" 'face 'shadow
+                                          'help-echo "Automatic compaction is managed by the provider")
+                            (let ((map (make-sparse-keymap)))
+                              (define-key map [tab-line mouse-1]
+                                          #'mevedel-view-toggle-auto-compaction)
+                              (propertize
+                               (format "compact %s" compaction)
+                               'face 'link 'mouse-face 'highlight 'local-map map
+                               'help-echo "Toggle automatic compaction for this open session"))))
                         (mevedel-view--status-strip-button
                          mode 'mode "Open mode cockpit")
                         (and scope

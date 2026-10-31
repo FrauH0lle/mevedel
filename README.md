@@ -837,6 +837,19 @@ the patch before applying it.
   `mevedel-buddy-abort`
 - `mevedel-retry-plan-implementation`
 
+The chat's top **compact on/off** control toggles automatic compaction for
+that open session without moving the cursor or changing other chats. It does
+not cancel compaction already running; `/compact` remains available for manual
+compaction. Reopening a session restores the configured default. Claude shows
+**compact provider** instead, because its native compaction is provider-managed.
+
+Use `/btw [QUESTION]` for an independent, multi-turn aside with the current
+context. On Claude Code, finish the parent turn first: mevedel forks the native
+history rather than copying the visible transcript. The adapter must advertise
+session fork, resume and delete; otherwise the command explains the refusal.
+Close the side with `C-c C-z`. Closing, aborting or failing a native side deletes
+its fork without changing the parent; after an abort or failure, open a new side.
+Other gptel backends still allow `/btw` during streaming and follow-ups after abort.
 
 ## Tools & Agents
 

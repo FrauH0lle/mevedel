@@ -1430,13 +1430,19 @@ right-side state is dropped. Clickable parts route to session cockpit
 surfaces such as top, mode, model, and tools. The request state is
 plain status text. Goal status/turns and the model name are separate links:
 the model always opens Model, even when a Goal is active or completed.
+**compact on/off** toggles automatic compaction for this open local-history
+session with the strip's usual left-click binding. It updates only the tab
+line, preserving the composer, cursor, selection and window positions. Native
+Claude sessions show **compact provider**, with explanatory hover text and no
+click action. Ephemeral `/btw` sides omit the control. See
+[compaction](compaction.md#user-model) for lifetime and failure-reset behavior.
 The view must not copy or proxy gptel's clickable
 data-buffer header line; gptel-owned header controls stay in the raw
 data buffer. The request state is `settling` while a lost turn's deferred
 terminal work still owns the session. The tab line is evaluated on every
 redisplay, so the strip is cached by its raw inputs: session name, root,
 target identity, publication and lease state, permission and Plan mode,
-directive scope, request state, model, Goal status and turns, preset, tool
+directive scope, request state, model, Goal status and turns, preset, compaction, tool
 count, width, display type and selected window. Each redisplay reads them
 without entering the transcript buffer and formats labels only when one
 changes. Entering an Org transcript buffer swaps its many buffer-local
@@ -1649,7 +1655,7 @@ appears after the next such action rather than instantly.
 ## Ephemeral `/btw` Side Conversations
 
 `/btw [PROMPT]` opens one multi-turn side conversation owned by the current
-root session. It may be invoked while the root response is streaming. The side
+root session. With gptel it may be invoked while the root response is streaming. The side
 receives an invocation-time copy of the effective post-compaction context and
 request configuration. Additional gptel text and media context is materialized
 at that point rather than retaining live files, buffers, or overlays. Fresh
@@ -1661,17 +1667,39 @@ incomplete and reference-only. Later root activity is never synchronized or
 merged. Synchronous and callback-style gptel context formatters are both
 materialized before the side accepts input.
 
+With Claude Code, `/btw` forks the adapter's native stored history, then resumes
+only the new identity for side turns. It requires settled, current history on
+this installation: finish a parent turn first, and recover edited, foreign or
+uncertain history before opening a side. A parent changed during fork startup
+causes refusal and cleanup instead of a silently newer snapshot. No transcript
+excerpt substitutes for a native fork. The adapter must advertise session fork,
+resume and delete; missing capabilities produce an explicit refusal. Claude Code
+is currently the only selectable ACP backend; the fork/delete transport itself
+uses the shared ACP session-operation path.
+
 The inherited context stays in the side data buffer for gptel but is below the
 view's projection boundary, so the side opens with only its origin header and
 new turns visible. The side has its own transient session, request lifecycle,
 permission queue, stream rendering, and composer. It has no session/input
-history, persistence, compaction, queued follow-ups, slash commands, skills,
+history, persistence, mevedel-managed compaction, queued follow-ups, slash commands, skills,
 Goal/Plan/task state, or ordinary session hooks. `C-c RET` sends only while the
-side is idle and `C-c C-k` aborts the current side response without closing the
-conversation. Aborting appends the same structural incomplete boundary so a
+side is idle and `C-c C-k` aborts the current side response. With gptel this does
+not close the conversation. Aborting appends the same structural incomplete boundary so a
 follow-up cannot mistake partial prose for a settled answer. Closing the side
 discards it; closing the parent also closes its side. Neither operation rolls
 back already approved workspace effects.
+
+Native side answers retain their fork for follow-ups. Closing the side or its
+parent, aborting, a provider error, or orderly Emacs exit deletes the fork via
+ACP after its writer stops. Abort and error leave the side transcript readable,
+but reject more input until you close it and open a new side. Late startup
+replies after closure are also deleted. Failed deletion warns with the fork ID
+and remains eligible for exit cleanup; a hard crash or failed cleanup can leave
+adapter-owned history behind. Process shutdown alone is not deletion. Native
+side dispatch uses the frozen restricted tool roster and ephemeral request
+settlement, not root preset refresh, context receipts or durable history publication.
+Provider compaction stays inside the native fork and does not rotate or archive
+the temporary side transcript in mevedel.
 
 A parent owns at most one side. Bare `/btw` focuses it; `/btw PROMPT` submits
 only when its composer is empty and no side response is active. Refused inline
