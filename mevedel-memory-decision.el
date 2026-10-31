@@ -280,12 +280,29 @@ release.  Return the published decision metadata."
               (prepared (plist-get accepted :prepared))
               (review (plist-get accepted :review))
               (journal (mevedel-journal-store-directory root))
+              (path (file-name-concat journal (mevedel-journal-store--filename review 'consolidation)))
+              (text (mevedel-journal-store--encode review nil 'consolidation))
               (observed (car (mevedel-session-control-fs-run-program
-                              (list (list :op 'read :optional t :coding 'utf-8-unix
-                                          :path (file-name-concat
-                                                 journal (mevedel-journal-store--filename review 'consolidation))))))))
+                              (list (list :op 'read :optional t :coding 'utf-8-unix :path path))))))
          (unless (and (eq (plist-get observed :status) 'ok)
-                      (equal (plist-get observed :value) (mevedel-journal-store--encode review nil 'consolidation)))
+                      (equal (plist-get observed :value) text))
+           ;; Public review text is derived from this authenticated bundle.
+           ;; The immutable publisher only creates absent records; repair a
+           ;; changed projection under mutation ownership before calling it.
+           ;; Fence repair against settlement/takeover under their target lock.
+           ;; The byte check also refuses changes since the observation.
+           (when (eq (plist-get observed :status) 'ok)
+             (dolist (result (mevedel-session-control-fs-run-program
+                             (list (list :op 'verify :path (mevedel-journal-claim--path mutation nil)
+                                         :content (json-serialize (mevedel-journal-claim--record mutation)))
+                                   (list :op 'absent :path (mevedel-journal-claim--path mutation t))
+                                   (list :op 'before-time :path (plist-get mutation :directory)
+                                         :content (number-to-string (plist-get mutation :expires-at)))
+                                   (list :op 'verify-hash :path path
+                                         :content (secure-hash 'sha256 (plist-get observed :value)))
+                                   (list :op 'write :path path :content text :coding 'utf-8-unix))
+                             (plist-get mutation :directory)))
+               (mevedel-session-control-fs-program-value result)))
            (mevedel-memory-store--publish-owned workspace accepted mutation))
          (mevedel-memory-store--assert-owned mutation)
          (let ((published (mevedel-journal-store-publish-decision root (plist-get decision :metadata)))
@@ -870,7 +887,9 @@ editor.  A callback alone grants no automatic authority."
       (mevedel-memory-decision--dispatch
        callback
        (lambda (complete)
-        (mevedel-memory-decision--start-operation
+        (if (not (mevedel-memory-decision-automatic-current-p automatic))
+            (funcall complete '(:status held :reason "Automatic application is no longer current"))
+          (mevedel-memory-decision--start-operation
        workspace
        (lambda (job live reply)
          (if (not (or (plist-get reply :synchronous) (mevedel-memory-decision--idle-p)))
@@ -882,7 +901,7 @@ editor.  A callback alone grants no automatic authority."
             :observation (unless (plist-get reply :synchronous) reply))))
        (lambda (reply) (funcall complete (mevedel-memory-decision--public-reply reply)))
        (lambda () (mevedel-memory-decision-automatic-current-p automatic))
-       nil (list :application t :pass-id pass :proposal-id proposal) continuation automatic))))
+       nil (list :application t :pass-id pass :proposal-id proposal) continuation automatic)))))
      (callback
       (mevedel-memory-decision--deliver
        callback (lambda () (mevedel-memory-decision-apply workspace pass proposal
