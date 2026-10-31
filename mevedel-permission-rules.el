@@ -530,15 +530,31 @@ unqualified rules.  Within each group, deny > ask > allow.  Return
 
 TARGET supplies the path domain for target-home patterns.  When ACCESS is
 `read', read-only entries permit access; inaccessible entries still protect it.
+A quoted `/:' name and, for a local PATH, the canonical file it reaches
+through symlinks are checked too: a workspace link into a protected tree
+names that tree.
 Returns non-nil if the path is protected."
   (when path
-    (let ((expanded (mevedel-expand-file-name path)))
+    (let* ((expanded (mevedel-expand-file-name path))
+           (unquoted (if (and (not (file-remote-p expanded))
+                              (string-prefix-p "/:" expanded))
+                         (mevedel-collapse-leading-slashes (substring expanded 2))
+                       expanded))
+           (spellings
+            (delete-dups
+             (list expanded unquoted
+                   (unless (file-remote-p unquoted)
+                     ;; Resolves existing ancestors and keeps a missing tail.
+                     (let ((file-name-handler-alist nil))
+                       (mevedel-file-truename unquoted)))))))
       (cl-loop for (pattern . mode) in
                (mevedel-permission-protected-path-policy)
                thereis
                (and (not (and (eq access 'read) (eq mode 'read-only)))
-                    (mevedel-permission-rules-match-path-p
-                     expanded pattern target))))))
+                    (cl-some (lambda (spelling)
+                               (mevedel-permission-rules-match-path-p
+                                spelling pattern target))
+                             spellings))))))
 
 (defun mevedel-permission-rules--path-contained-p (path root)
   "Return non-nil when PATH is ROOT or is contained by it."

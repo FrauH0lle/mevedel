@@ -328,6 +328,28 @@
     (should (mevedel-permission-rules-path-protected-p
              (concat "/" (expand-file-name "~/.ssh/id_ed25519")) nil 'read))
     (should (mevedel-permission-rules-path-protected-p "//srv/secret/key" nil 'read)))
+  :doc "a workspace symlink or quoted name reaching a protected tree is protected"
+  (let* ((top (file-truename (make-temp-file "mevedel-protected-link-" t)))
+         (outside (file-name-concat top "outside"))
+         (ws (file-name-concat top "ws"))
+         (mevedel-protected-paths `((,(concat outside "/.ssh/**") . inaccessible))))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat outside ".ssh") t)
+          (make-directory ws)
+          (write-region "DECOY" nil (file-name-concat outside ".ssh/key") nil 'silent)
+          (make-symbolic-link (file-name-concat outside ".ssh") (file-name-concat ws "s"))
+          (should (mevedel-permission-rules-path-protected-p
+                   (file-name-concat ws "s/key") nil 'read))
+          ;; A missing tail below the link is still inside the tree.
+          (should (mevedel-permission-rules-path-protected-p
+                   (file-name-concat ws "s/new") nil 'read))
+          (should (mevedel-permission-rules-path-protected-p
+                   (concat "/:" outside "/.ssh/key") nil 'read))
+          ;; Control: an ordinary workspace path stays unprotected.
+          (should-not (mevedel-permission-rules-path-protected-p
+                       (file-name-concat ws "plain") nil 'read)))
+      (delete-directory top t)))
   :doc "read access respects the protection level"
   (let ((mevedel-protected-paths '(("**/.git/**" . read-only)
                                    ("**/.ssh/**" . inaccessible))))

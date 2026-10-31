@@ -1584,10 +1584,15 @@ a disabled transport cleans immediately instead of dropping work"
             (dolist (access '(read write))
               (dolist (path (list (concat "/" runtime)
                                   (concat "/" runtime "/gnupg/")
+                                  (concat "/:" runtime)
                                   (file-name-concat root "rt")))
                 (when (file-directory-p path)
                   (should-error (prepare path access)
                                 :type 'mevedel-sandbox-policy-error))))
+            ;; An exact quoted read used to be dropped silently as needing no mount.
+            (should-error (mevedel-sandbox--resolve-filesystem-permissions
+                           (list (list :path (concat "/:" runtime) :access 'read)))
+                          :type 'mevedel-sandbox-policy-error)
             ;; Negative control: admitted, the doubled-slash grant reopens the bus.
             (cl-letf (((symbol-function 'mevedel-sandbox--check-runtime-grants)
                        #'ignore))

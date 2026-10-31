@@ -303,6 +303,11 @@ a trailing `/**`, policy covers both the directory and its descendants. On a
 remote session, leading `~` uses the target user's probed home; a
 client-absolute custom pattern stays in the client path domain and therefore
 does not become a remote protection rule.
+Protection is matched against every spelling that reaches the file: the
+path as given, its `/:`-unquoted form, a leading `//` collapsed to `/`, and,
+for a local path, its canonical target through symlinks (with a missing tail
+kept). A workspace symlink into `~/.ssh` is therefore as protected as
+`~/.ssh` itself. Filesystem grants refuse `/:`-quoted paths outright.
 String-only entries are invalid by design. Glob discovery walks the
 workspace, memory, and additional writable roots before every launch; the
 execution target's temporary directory is excluded as a discovery root. A

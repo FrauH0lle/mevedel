@@ -488,6 +488,10 @@ Provider schemas lower it to an ordinary JSON string and append the guidance
 resource addresses use a separate path-or-resource contract, so a recognized
 `scheme://` address is not rejected as a web URL and ordinary paths retain
 their current behavior.
+Ordinary paths of either type are canonicalized before authorization, symlinks
+included, and the handler receives that canonical path. A Read, Grep or Glob
+through a workspace symlink is therefore authorized, and performed, on the
+file it reaches.
 
 Code-navigation tools keep filesystem access in Emacs buffers, so Imenu and
 Tree-sitter operate on remote files through the active file handler. Remote

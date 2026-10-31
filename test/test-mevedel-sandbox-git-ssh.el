@@ -192,28 +192,44 @@ remote command locally, as sshd would, and logs each invocation to `log'."
                                         "fake" (format "git-upload-pack '%s'" remote))
                          :connection-type 'pipe :noquery t
                          :filter #'ignore :sentinel #'ignore))))
-                   pid)
+                   pid start alive)
               (unwind-protect
                   (progn
+                    ;; The stub writes "PID\n"; read only a complete line.
                     (while (and (not (and (file-exists-p pid-file)
-                                          (> (file-attribute-size (file-attributes pid-file)) 0)))
+                                          (string-suffix-p
+                                           "\n" (with-temp-buffer
+                                                  (insert-file-contents pid-file)
+                                                  (buffer-string)))))
                                 (< (float-time) deadline))
                       (accept-process-output nil 0.01))
                     (setq pid (string-to-number
                                (with-temp-buffer (insert-file-contents pid-file)
                                                  (buffer-string))))
                     (should (> pid 0))
+                    ;; Pin the identity: the stub after exec, by start time,
+                    ;; so a reused PID cannot stand in for it.
+                    (let ((deadline (+ (float-time) 5)))
+                      (while (and (not (string-match-p
+                                        "sleep 30" (or (alist-get 'args (process-attributes pid)) "")))
+                                  (< (float-time) deadline))
+                        (accept-process-output nil 0.01)))
+                    (setq start (alist-get 'start (process-attributes pid)))
+                    (should start)
                     (mevedel-sandbox--git-ssh-stop broker)
                     (should-not (process-live-p (plist-get broker :process)))
                     (should-not (file-exists-p directory))
+                    ;; One /proc read per observation; assert the last one.
                     (let ((deadline (+ (float-time) 5)))
-                      (while (and (process-attributes pid)
-                                  (not (equal "Z" (alist-get 'state (process-attributes pid))))
+                      (while (and (setq alive
+                                        (let ((attributes (process-attributes pid)))
+                                          (and attributes
+                                               (equal start (alist-get 'start attributes))
+                                               (not (member (alist-get 'state attributes)
+                                                            '("Z" "X"))))))
                                   (< (float-time) deadline))
                         (accept-process-output nil 0.01)))
-                    (should-not (and (process-attributes pid)
-                                     (not (equal "Z" (alist-get 'state
-                                                                (process-attributes pid)))))))
+                    (should-not alive))
                 (delete-process client)))
             ;; Stopping twice is harmless: teardown paths may overlap.
             (mevedel-sandbox--git-ssh-stop broker))

@@ -2862,7 +2862,10 @@ default Bash keeps bare dot inspection automatic"
   :doc "a doubled leading slash in a requested grant is collapsed"
   (should (equal '((:path "/run/user/1000/gnupg/" :access read))
                  (mevedel-tool-exec-permission--filesystem-paths
-                  ["//run/user/1000/gnupg/"] 'read))))
+                  ["//run/user/1000/gnupg/"] 'read)))
+  :doc "a quoted /: grant path is refused, not dropped"
+  (should-error (mevedel-tool-exec-permission--filesystem-paths
+                 ["/:/run/user/1000"] 'read)))
 
 (provide 'test-mevedel-tool-exec-permission)
 
