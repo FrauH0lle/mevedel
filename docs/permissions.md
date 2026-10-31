@@ -980,7 +980,10 @@ broker. The entry must not be a symlink. A `.git` directory is refused when the
 root sits inside another Git work tree, where it may itself be a plant; a
 linked worktree's pointer file must be linked back from its administrative
 directory. Resolved metadata outside every writable root is accepted, but an
-earlier command may still have written it under a grant. A `.git` write grant
+earlier command may still have written it under a grant. The broker trusts
+the session root's repository as it is found on disk when the session
+starts, so a repository prepared by an earlier session rooted at a parent
+directory is trusted like any repository the user opens. A `.git` write grant
 likewise lets a command change the remotes,
 `insteadOf` rules and hooks that later brokers and host Git trust. ssh runs
 without connection sharing, and teardown stops the broker with its ssh
