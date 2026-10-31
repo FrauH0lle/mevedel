@@ -52,9 +52,16 @@ effects before repeating an operation.
 A local confined command that names `git`, run in a repository whose fetch
 remotes use SSH, gets a fetch-only SSH transport. `git fetch`, `git pull
 --ff-only`, `git ls-remote` and `git archive --remote` then reach those remotes
-through the host's ssh, with the user's agent and SSH configuration; keys,
-`known_hosts` and the agent never enter the sandbox. No network grant is needed.
-HTTPS remotes are unaffected and still need the network grant above.
+through the host's ssh, with the user's agent and SSH configuration. ssh runs
+on the host, so the transport passes no key or agent connection into the
+sandbox; confinement also hides the agent socket that `SSH_AUTH_SOCK` names,
+but not other agent sockets, and `~/.ssh` stays masked. No network grant is
+needed. HTTPS remotes are unaffected and still need the network grant above.
+
+The repository must be the workspace's own (or metadata outside every
+writable root, such as a linked worktree's main repository): a nested `.git`
+inside the workspace may have been written by an earlier confined command,
+so it gets no transport.
 
 Fetching writes protected Git metadata, so request write access to the
 repository's Git directory; for a linked worktree, its shared common directory:
@@ -65,6 +72,10 @@ Bash(command="git fetch origin",
      additional_permissions={"file_system":{"write":["/repo/.git"]}},
      justification="Fetch origin's new commits.")
 ```
+
+A `.git` write grant also lets the command rewrite the remotes, `insteadOf`
+rules and hooks that later brokers and host Git trust, so grant it only for a
+command you would let change them.
 
 The transport accepts only `git-upload-pack` and `git-upload-archive`, and only
 for the SSH destinations of the repository's fetch remotes as configured when
@@ -97,8 +108,8 @@ a targeted explanation. Bubblewrap uses a user namespace: host root-owned files
 can appear owned by the overflow UID (often 65534), which OpenSSH rejects even
 though the files are readable. A read-only bind of `/` preserves access, not the
 host UID mapping. Additional network or exact-path grants cannot fix that mapping.
-It means ssh ran inside confinement; a Git fetch from the repository's SSH
-remotes uses the [fetch-only transport](#git-over-ssh) instead.
+It means ssh ran inside confinement; a Git fetch from the workspace
+repository's SSH remotes uses the [fetch-only transport](#git-over-ssh) instead.
 
 The diagnostic is a clue, not proof: compare the configuration's owner on the
 host and inside confinement, and use `ssh -G HOST` to check configuration without

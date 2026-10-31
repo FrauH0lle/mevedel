@@ -989,30 +989,73 @@ Launch preparation still checks the actual restrictions afresh."
 ;;
 ;;; Fetch-only Git SSH transport
 
-(defun mevedel-sandbox--git-ssh-urls (workdir)
-  "Return the fetch URLs of WORKDIR's repository that may use SSH.
-Git expands `insteadOf' rewrites.  The broker parses them strictly;
-this only skips repositories whose remotes cannot use SSH."
-  (when-let* ((git (executable-find "git")))
-    (with-temp-buffer
-      (let ((default-directory (file-name-as-directory workdir))
-            urls)
-        (when (eql 0 (call-process git nil '(t nil) nil "remote" "-v"))
+(defun mevedel-sandbox--git-ssh-trusted-p (path roots git)
+  "Return non-nil when Git metadata PATH predates any confined write.
+ROOTS are the preparation's canonical writable roots, primary root first.
+Metadata outside every writable root is unreachable to confined commands.
+Inside them, only the primary root's own `.git' directory qualifies: it is
+protected, or created empty, before every confined command there, while a
+nested `.git' elsewhere may have been planted by an earlier command.  A
+primary root inside another Git work tree may itself be such a plant, so
+its `.git' directory is refused; GIT finds the enclosing work tree."
+  (let ((primary-git (file-name-concat (car roots) ".git")))
+    (if (file-in-directory-p path primary-git)
+        (and (file-directory-p primary-git)
+             (not (file-symlink-p primary-git))
+             (let ((default-directory
+                    (file-name-directory (directory-file-name (car roots)))))
+               (not (eql 0 (call-process git nil nil nil "rev-parse"
+                                         "--is-inside-work-tree")))))
+      (not (cl-some (lambda (root) (file-in-directory-p path root)) roots)))))
+
+(defun mevedel-sandbox--git-ssh-git-dir (git workdir roots)
+  "Return WORKDIR's Git directory when its metadata is trusted, else nil.
+GIT resolves both the Git directory and the shared common directory; each
+must satisfy `mevedel-sandbox--git-ssh-trusted-p' for ROOTS."
+  (with-temp-buffer
+    (let ((default-directory (file-name-as-directory workdir)))
+      (when (eql 0 (call-process git nil '(t nil) nil "rev-parse"
+                                 "--path-format=absolute"
+                                 "--git-dir" "--git-common-dir"))
+        (pcase (split-string (buffer-string) "\n" t)
+          (`(,directory ,common)
+           (let ((directory (file-truename directory))
+                 (common (file-truename common)))
+             (and (mevedel-sandbox--git-ssh-trusted-p directory roots git)
+                  (mevedel-sandbox--git-ssh-trusted-p common roots git)
+                  directory))))))))
+
+(defun mevedel-sandbox--git-ssh-urls (git git-dir)
+  "Return the fetch URLs of the repository at GIT-DIR that may use SSH.
+GIT reads that repository explicitly, so a nested `.git' cannot be
+discovered in its place.  Git expands `insteadOf' rewrites.  The broker
+parses the URLs strictly; this only skips repositories whose remotes
+cannot use SSH.  Remote-helper URLs (`helper::address') are not SSH."
+  (with-temp-buffer
+    (let ((default-directory (file-name-as-directory git-dir))
+          urls)
+      (when (eql 0 (call-process git nil '(t nil) nil
+                                 (concat "--git-dir=" git-dir) "remote" "-v"))
           (dolist (line (split-string (buffer-string) "\n" t))
             (when (string-match "\\`[^\t]+\t\\(.+\\) (fetch)\\'" line)
               (let ((url (match-string 1 line)))
                 (when (and (string-search ":" url)
                            (not (string-match-p
+                                 "\\`[A-Za-z][A-Za-z0-9+.-]*::" url))
+                           (not (string-match-p
                                  "\\`\\(?:https?\\|git\\|file\\)://" url)))
                   (push url urls)))))
-          (delete-dups (nreverse urls)))))))
+          (delete-dups (nreverse urls))))))
 
-(defun mevedel-sandbox--git-ssh-start (command workdir)
+(defun mevedel-sandbox--git-ssh-start (command workdir roots)
   "Start the fetch-only Git SSH broker for confined COMMAND in WORKDIR.
+ROOTS are the canonical writable roots, primary root first.
 Return a plist with :process, :directory and :socket, or nil when COMMAND
-does not mention git, WORKDIR is remote, or no fetch remote uses SSH.
-The allowed destinations are read now, before the confined command can
-change the repository configuration.  The broker lives in its own
+does not mention git, WORKDIR is remote, its Git metadata may have been
+written by a confined command, or no fetch remote uses SSH.  The allowed
+destinations are read now, before the confined command starts.  A `.git'
+write grant still lets a command change what later brokers trust.  The
+broker lives in its own
 owner-only directory under the local tool-server socket root, which
 confinement masks; only this command's directory is bound back."
   (when-let* (((not (file-remote-p workdir)))
@@ -1021,7 +1064,9 @@ confinement masks; only this command's directory is bound back."
                                (string-match-p "\\bgit\\b" argument)))
                         command))
               (python (executable-find "python3"))
-              (urls (mevedel-sandbox--git-ssh-urls workdir))
+              (git (executable-find "git"))
+              (git-dir (mevedel-sandbox--git-ssh-git-dir git workdir roots))
+              (urls (mevedel-sandbox--git-ssh-urls git git-dir))
               (directory (with-file-modes #o700
                            (make-temp-file
                             (file-name-concat (mevedel-mcp-socket-root) "git-ssh-")
@@ -1197,7 +1242,7 @@ protected-path glob discovery.  CANDIDATES wraps already discovered paths."
                       (setq broker
                             (condition-case err
                                 (mevedel-sandbox--git-ssh-start
-                                 command canonical-workdir)
+                                 command canonical-workdir roots)
                               (error
                                (message "mevedel: Git SSH broker unavailable: %s"
                                         (error-message-string err))
