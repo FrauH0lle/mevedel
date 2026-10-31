@@ -43,8 +43,8 @@
          (files (capture) (plist-get (cdr (plist-get capture :root)) :files)))
       ,test))
   (test)
-  :doc "32, 50 and 100 members freeze before the sixteen-note request bound"
-  (dolist (count '(32 50 100))
+  :doc "17 and 100 members freeze before the sixteen-note request bound"
+  (dolist (count '(17 100))
     (dotimes (index count) (put (format "n%03d.md" index) index))
     (let* ((cohort (freeze)) (batch (capture cohort)))
       (should (plist-get cohort :complete))
@@ -66,6 +66,77 @@
       (should (= 20 (plist-get batch :remaining)))
       (should (= 12 (plist-get next :notes)))
       (should (= 8 (plist-get next :remaining)))))
+  :doc "walking a multi-batch cohort reads each member's version once, linearly in cohort size"
+  (let ((mevedel-memory-notes--max-notes 2)
+        (version (symbol-function 'mevedel-memory-notes--version))
+        (reads 0))
+    (dolist (count '(6 12))
+      (dotimes (index count) (put (format "n%02d.md" index) index))
+      (let* ((cohort (freeze)) (rest cohort) (batches 0) (admitted nil))
+        (setq reads 0)
+        (cl-letf (((symbol-function 'mevedel-memory-notes--version)
+                   (lambda (path) (cl-incf reads) (funcall version path))))
+          (while (plist-get rest :members)
+            (let* ((batch (capture rest)) (taken (files batch)))
+              (should (= 2 (length taken)))
+              (should-not (plist-get batch :deferred))
+              (should (= (- (length (plist-get rest :members)) 2) (plist-get batch :remaining)))
+              (setq admitted (append admitted taken) batches (1+ batches)
+                    rest (plist-put (copy-tree rest) :members
+                                    (seq-remove (lambda (member) (member (plist-get member :file) taken))
+                                                (plist-get rest :members)))))))
+        ;; An admitted member is read three times: readiness, the snapshot's
+        ;; version, and the post-snapshot recheck.  Members past the batch are
+        ;; not read, so totals stay linear; rereading every remaining member
+        ;; per batch would add 4+2 reads at six members and 10+8+...+2 at twelve.
+        (should (= (* 3 count) reads))
+        (should (= (/ count 2) batches))
+        (should (equal (names cohort) admitted)))
+      (dolist (name (directory-files shared nil "\\.md\\'")) (delete-file (file-name-concat shared name)))))
+  :doc "a member changed past the batch counts as remaining, then is deferred once at its own batch"
+  (let ((mevedel-memory-notes--max-notes 2))
+    (put "a.md" 0) (put "b.md" 1)
+    (let* ((late (put "c.md" 2)) (cohort (freeze)))
+      (write-region "Edited after freezing\n" nil late nil 'silent)
+      (set-file-times late (seconds-to-time (+ (- now (* 20 86400)) 2)))
+      (let ((batch (capture cohort)))
+        (should (equal '("a.md" "b.md") (files batch)))
+        (should (= 1 (plist-get batch :remaining)))
+        (should-not (plist-get batch :deferred)))
+      (let ((last (capture (plist-put (copy-tree cohort) :members (last (plist-get cohort :members))))))
+        (should-not (plist-get last :root))
+        (should (= 0 (plist-get last :remaining)))
+        (should (equal '("c.md") (mapcar (lambda (row) (plist-get (plist-get row :member) :file))
+                                         (plist-get last :deferred)))))))
+  :doc "a used or dirty member past the batch is reported blocked only while it is still its frozen version"
+  (let ((mevedel-memory-notes--max-notes 2))
+    (dolist (use '(dirty in-use))
+      (dolist (changed '(t nil))
+        (put "a.md" 0) (put "b.md" 1)
+        (let* ((late (put "c.md" 2)) (cohort (freeze)) buffer)
+          (when changed
+            ;; Edited on disk but still age-ready: only its version differs.
+            (write-region "Edited after freezing\n" nil late nil 'silent)
+            (set-file-times late (seconds-to-time (+ (- now (* 20 86400)) 2))))
+          (when (eq use 'dirty)
+            (setq buffer (find-file-noselect late))
+            (with-current-buffer buffer (setq-local create-lockfiles nil) (insert "Draft")))
+          (let ((batch (mevedel-memory-notes-capture workspace nil :cohort cohort
+                                                     :in-use (when (eq use 'in-use) '("c.md")))))
+            (should (equal '("a.md" "b.md") (files batch)))
+            (should (= 0 (plist-get batch :remaining)))
+            (should (equal '("c.md") (mapcar (lambda (row) (plist-get (plist-get row :member) :file))
+                                             (plist-get batch :deferred))))
+            ;; A changed member defers silently, as when its version is read first;
+            ;; the unchanged control still explains why it waits.
+            (should (equal (unless changed
+                             (list (cons "c.md" (if (eq use 'dirty) "Shared file has unsaved buffer changes"
+                                                  "Shared file is in active local use"))))
+                           (plist-get batch :blocked))))
+          (when buffer
+            (with-current-buffer buffer (set-buffer-modified-p nil))
+            (kill-buffer buffer))
+          (dolist (name (directory-files shared nil "\\.md\\'")) (delete-file (file-name-concat shared name)))))))
   :doc "only raw metadata survives serialization and tied mtimes sort by relative path"
   (progn
     (put "z.md" 0 "UNIQUE-SOURCE-BODY\n")

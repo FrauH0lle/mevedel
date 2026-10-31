@@ -636,7 +636,8 @@ or `directory` as the type; a disposal whose extraction is undecided shows
 `D` starts a **backlog drain**; `k` stops it, including between requests or while
 waiting for running memory work. `/remember drain` and `M-x mevedel-remember-drain`
 start the same operation. The header shows batch number, status and the last
-observed notes-remaining count; completion messages report each batch's notes
+observed notes-remaining count (frozen members past the batch; one changed since
+freezing counts until its own batch defers it); completion messages report each batch's notes
 and digest backlog. Drain runs successive general reviews, with ordinary-note
 batches bounded to 16 notes / 96 KiB and oversized notes reviewed alone in
 bounded chunks; digest/request limits remain unchanged. Its first offer can explicitly
