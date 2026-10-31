@@ -206,7 +206,9 @@
             (should-not read)
             (should-not sent)
             (pcase revocation ('guest (remhash 1 guests)) ('room (setq live-room nil)))
-            (let ((deadline (+ (float-time) 1)))
+            ;; Authority is checked after transport becomes idle; this is a
+            ;; progress watchdog, not a requirement to reply within one second.
+            (let ((deadline (+ (float-time) 5)))
               (while (and (> (hash-table-count mevedel-transport--pending) 0)
                           (< (float-time) deadline))
                 (accept-process-output nil 0.01)))
