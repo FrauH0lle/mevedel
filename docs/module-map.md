@@ -283,7 +283,8 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-editing.el     SharedCreate/Edit/SaveImage tools, shared:// views
   mevedel-tool-skills.el      Skill and ListSkills tool schemas
   mevedel-tool-introspect.el  EmacsDescribe/EmacsFind/EmacsManual introspection
-  mevedel-buddy.el            edit recording, diff assembly, review requests
+  mevedel-buddy.el            edit recording, diff assembly, briefs, review requests
+  mevedel-buddy-feed.el       /buddy: feed a session's plan, Goal, or exchange to Buddy
   mevedel-buddy-note.el       ephemeral note overlays and their model tools
   mevedel-tools.el            complete tool registration + stable discovery catalog
   mevedel-tools-list.el       native tools cockpit list

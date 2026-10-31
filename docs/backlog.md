@@ -138,6 +138,27 @@ bounded feature before considering generic prompt or agent hook handlers.
 There is no automatic root-turn reviewer/instruction-injection path today.
 The original request came from the 2026-08-20 watchdog/advisor discussion.
 
+### Buddy comment trigger
+
+Follow-up to `/buddy`: a comment containing `BUDDY!` in a buffer with
+`mevedel-buddy-mode` runs guidance at once on its enclosing defun, using the
+comment text as the question. No existing watcher fits as is. Buddy's change
+recording sees the edit, but the trigger needs its own rules before it can use
+the idle timer:
+
+- Fire when the edit settles, not on the `!` keystroke, so the question after
+  the marker is complete.
+- Skip `mevedel-buddy-min-interval` and preempt an automatic review, as
+  `mevedel-buddy-guide` does.
+- Fire once per comment. A comment left in the buffer must not fire again on
+  later edits elsewhere. Key it in memory by marker or text hash.
+- Send the enclosing defun (`beginning-of-defun`), or the whole buffer when
+  there is none.
+
+Detection checks only the changed lines in `mevedel-buddy--after-change`; it
+never polls or rescans buffers. Buddy does not remove the comment after the
+guidance runs: the user deletes it.
+
 ### Goal-continuation evidence coverage
 
 Consider a producer-to-permission-review regression for Goal continuation:

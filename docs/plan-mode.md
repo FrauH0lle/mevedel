@@ -16,6 +16,10 @@ completed Goal is historical and does not block it.
 including implementation requests, remain planning input until the user exits
 Plan or accepts a proposal.
 
+To implement a plan yourself, run `/buddy`: it feeds the current plan to
+[Buddy](buddy.md#feeding-a-session-to-buddy) and leaves Plan mode and the
+pending proposal untouched.
+
 ## Directive Plan before implementation
 
 A top-level directive can independently enable **Plan before implementation**
