@@ -23,23 +23,32 @@
 (require 'mevedel-models)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-structs)
+(require 'websocket)
 (require 'mevedel-session-test-support
          (file-name-concat
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 
-(mevedel-deftest mevedel-collaboration--handle-fork
-  (:doc "forks the shared session for owner links only, through guest dispatch")
+(defun test-mevedel-collaboration--fork-harness (body &optional start)
+  "Call BODY with a fork-ready room's helpers.
+BODY receives a plist: `:receive' delivers a sealed fork frame for a
+request id, `:frame' dispatches a decoded frame from a peer, `:sent' and
+`:children' return the replies and child buffers so far, and `:room' is
+the room.  START replaces the child's room dial."
   (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
          (data-buffer (plist-get fixture :buffer))
          (guests (make-hash-table :test #'eql))
          (room (list :session (plist-get fixture :session)
                      :guests guests :transport 'relay))
-         (owner (list :name "Owner" :writable t :owner t :guest-id "o"))
-         sent started children)
+         (key (make-string 32 5))
+         (transport (list :state 'open :key key
+                          :on-frame (lambda (peer frame)
+                                      (mevedel-collaboration--on-frame
+                                       data-buffer peer frame))))
+         sent children)
     (puthash 2 (list :name "Writer" :writable t :owner nil :guest-id "w") guests)
-    (puthash 3 owner guests)
+    (puthash 3 (list :name "Owner" :writable t :owner t :guest-id "o") guests)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-collaboration--room-for-buffer)
                    (lambda (_buffer) room))
@@ -47,52 +56,39 @@
                    (lambda (_room) data-buffer))
                   ((symbol-function 'mevedel-collaboration--transport-send)
                    (lambda (_transport peer frame) (push (cons peer frame) sent)))
-                  ;; The child room's relay dial is outside this test.
+                  ;; The child room's relay dial is outside these tests.
                   ((symbol-function 'mevedel-collaboration--start)
                    (lambda (session buffer)
-                     (push (cons session buffer) started)
-                     (list :session session :link-owner "owner-link")))
+                     (push buffer children)
+                     (if start (funcall start session buffer)
+                       (list :session session
+                             :link-owner (format "owner-link-%d" (length children))))))
                   ((symbol-function 'mevedel-collaboration--guest-link)
                    (lambda (new-room guest)
                      (and (plist-get guest :owner) (plist-get new-room :link-owner))))
                   ((symbol-function 'mevedel--display-chat-buffer) #'ignore)
                   ((symbol-function 'mevedel--run-session-start-hooks) #'ignore)
                   ((symbol-function 'mevedel-model-apply-session-policy) #'ignore))
-          ;; A full-control guest without the owner token cannot fork, and
-          ;; is not even answered: the authority is not its to ask about.
-          (mevedel-collaboration--on-frame
-           data-buffer 2 '(:t "fork" :reqId 1 :forkPoint "fixture-fork"))
-          (should-not sent)
-          (should-not started)
-          ;; An unknown fork point is refused to the owner with the reason.
-          (mevedel-collaboration--on-frame
-           data-buffer 3 '(:t "fork" :reqId 2 :forkPoint "no-such-point"))
-          (should (equal "new-session" (plist-get (cdar sent) :t)))
-          (should (eq :json-false (plist-get (cdar sent) :ok)))
-          (should (string-match-p "no longer exists" (plist-get (cdar sent) :message)))
-          (should-not started)
-          (setq sent nil)
-          (mevedel-collaboration--on-frame
-           data-buffer 3 '(:t "fork" :reqId 3 :forkPoint "fixture-fork"))
-          (should (= 1 (length started)))
-          (let ((child (caar started)))
-            (push (cdar started) children)
-            (should (equal "fixture-fork"
-                           (mevedel-session-forked-from-fork-point-id child)))
-            (should (eq 'conversation (mevedel-session-fork-type child)))
-            (should (equal '(3) (mapcar #'car sent)))
-            (should (eq t (plist-get (cdar sent) :ok)))
-            (should (equal 3 (plist-get (cdar sent) :reqId)))
-            (should (equal "owner-link" (plist-get (cdar sent) :link)))
-            (should (equal (mevedel-session-name child)
-                           (plist-get (cdar sent) :name))))
-          ;; The source session is left as it was.
-          (should (eq (plist-get fixture :session)
-                      (buffer-local-value 'mevedel--session data-buffer)))
-          ;; A retransmitted request is the same fork, not a second one.
-          (mevedel-collaboration--on-frame
-           data-buffer 3 '(:t "fork" :reqId 3 :forkPoint "fixture-fork"))
-          (should (= 1 (length started))))
+          (funcall
+           body
+           (list :room room :fixture fixture
+                 :sent (lambda () sent)
+                 :children (lambda () children)
+                 :frame (lambda (peer frame)
+                          (mevedel-collaboration--on-frame data-buffer peer frame))
+                 ;; The sealed path a browser uses: envelope, seal, decode.
+                 :receive
+                 (lambda (request-id &optional peer)
+                   (mevedel-collaboration--transport-receive
+                    transport
+                    (make-websocket-frame
+                     :opcode 'binary :completep t
+                     :payload (mevedel-collaboration--envelope-pack
+                               (or peer 3)
+                               (mevedel-collaboration--seal
+                                key
+                                (format "{\"t\":\"fork\",\"reqId\":%d,\"forkPoint\":\"fixture-fork\"}"
+                                        request-id)))))))))
       (dolist (child children)
         (when (buffer-live-p child)
           (let ((view (buffer-local-value 'mevedel--view-buffer child)))
@@ -100,6 +96,122 @@
             (when (buffer-live-p view) (kill-buffer view)))
           (kill-buffer child)))
       (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
+
+(mevedel-deftest mevedel-collaboration--handle-fork
+  (:doc "forks the shared session for owner links only, through guest dispatch")
+  (test-mevedel-collaboration--fork-harness
+   (lambda (h)
+     (let ((sent (plist-get h :sent))
+           (children (plist-get h :children))
+           (fixture (plist-get h :fixture)))
+       ;; A full-control guest without the owner token cannot fork, and is
+       ;; not even answered: the authority is not its to ask about.
+       (funcall (plist-get h :receive) 1 2)
+       (should-not (funcall sent))
+       (should-not (funcall children))
+       ;; An unknown fork point is refused to the owner with the reason.
+       (funcall (plist-get h :frame) 3
+                '(:t "fork" :reqId 2 :forkPoint "no-such-point"))
+       (should (equal "new-session" (plist-get (cdar (funcall sent)) :t)))
+       (should (eq :json-false (plist-get (cdar (funcall sent)) :ok)))
+       (should (string-match-p "no longer exists"
+                               (plist-get (cdar (funcall sent)) :message)))
+       (should-not (funcall children))
+       (funcall (plist-get h :receive) 3)
+       (should (= 1 (length (funcall children))))
+       (let* ((child-buffer (car (funcall children)))
+              (child (buffer-local-value 'mevedel--session child-buffer))
+              (reply (cdar (funcall sent))))
+         (should (equal "fixture-fork"
+                        (mevedel-session-forked-from-fork-point-id child)))
+         (should (eq 'conversation (mevedel-session-fork-type child)))
+         (should (eq t (plist-get reply :ok)))
+         (should (equal 3 (plist-get reply :reqId)))
+         (should (equal "owner-link-1" (plist-get reply :link)))
+         (should (equal (mevedel-session-name child) (plist-get reply :name))))
+       ;; The source session is left as it was.
+       (should (eq (plist-get fixture :session)
+                   (buffer-local-value 'mevedel--session
+                                       (plist-get fixture :buffer))))))))
+
+(mevedel-deftest mevedel-collaboration--handle-fork/replay
+  (:doc "forks each request id once per connection, however late or interleaved its retry")
+  (test-mevedel-collaboration--fork-harness
+   (lambda (h)
+     (let ((sent (plist-get h :sent))
+           (children (plist-get h :children))
+           (receive (plist-get h :receive)))
+       (funcall receive 3)
+       (let ((first (cdar (funcall sent)))
+             (now (float-time)))
+         ;; A late retry, long after any duplicate window, is answered with
+         ;; the recorded outcome instead of a second fork.
+         (cl-letf (((symbol-function 'float-time)
+                    (lambda (&optional _time) (+ now 3600))))
+           (funcall receive 3))
+         (should (= 1 (length (funcall children))))
+         (should (equal first (cdar (funcall sent))))
+         ;; Another request in between neither forgets nor repeats it.
+         (funcall receive 4)
+         (should (= 2 (length (funcall children))))
+         (should (equal "owner-link-2" (plist-get (cdar (funcall sent)) :link)))
+         (funcall receive 3)
+         (should (= 2 (length (funcall children))))
+         (should (equal first (cdar (funcall sent)))))
+       ;; Outcomes are bounded.  A dropped id's repeat is refused as stale,
+       ;; not performed, while an id never seen still forks.
+       (let ((mevedel-collaboration--max-fork-outcomes 1))
+         (funcall receive 5)
+         (should (= 3 (length (funcall children))))
+         (funcall receive 4)
+         (should (= 3 (length (funcall children))))
+         (should (eq :json-false (plist-get (cdar (funcall sent)) :ok)))
+         (should (string-match-p "stale" (plist-get (cdar (funcall sent)) :message)))
+         (funcall receive 5)
+         (should (= 3 (length (funcall children))))
+         (should (eq t (plist-get (cdar (funcall sent)) :ok))))
+       (funcall receive 2)
+       (should (= 3 (length (funcall children))))
+       ;; The ids belong to the admitted connection: a peer that leaves
+       ;; takes them along.
+       (should (gethash 3 (plist-get (plist-get h :room) :fork-ledgers)))
+       (mevedel-collaboration--on-control (current-buffer) 'peer-left 3)
+       (should-not (gethash 3 (plist-get (plist-get h :room) :fork-ledgers)))))))
+
+(mevedel-deftest mevedel-collaboration--handle-fork/room-failure
+  (:doc "keeps a published fork whose room fails, but no live child, and says how to open it")
+  (test-mevedel-collaboration--fork-harness
+   (lambda (h)
+     (let ((sent (plist-get h :sent))
+           (children (plist-get h :children))
+           (receive (plist-get h :receive)))
+       (funcall receive 3)
+       (should (= 1 (length (funcall children))))
+       (let* ((child-buffer (car (funcall children)))
+              (reply (cdar (funcall sent)))
+              (saved (cl-find-if
+                      (lambda (entry)
+                        (equal "fixture-fork"
+                               (plist-get (plist-get entry :summary)
+                                          :forked-from-fork-point-id)))
+                      (mevedel-session-persistence-list-sessions
+                       (mevedel-session-workspace
+                        (plist-get (plist-get h :fixture) :session))))))
+         (should-not (buffer-live-p child-buffer))
+         (should (eq :json-false (plist-get reply :ok)))
+         (should (string-match-p "injected dial failure" (plist-get reply :message)))
+         (should (string-match-p "M-x mevedel" (plist-get reply :message)))
+         ;; The saved fork remains, and the reply names it.
+         (should saved)
+         (should (file-directory-p (plist-get saved :save-path)))
+         (should (string-match-p
+                  (regexp-quote (plist-get (plist-get saved :summary) :session-id))
+                  (plist-get reply :message)))
+         ;; Its retry reports the same outcome rather than forking again.
+         (funcall receive 3)
+         (should (= 1 (length (funcall children))))
+         (should (equal reply (cdar (funcall sent)))))))
+   (lambda (_session _buffer) (error "Injected dial failure"))))
 
 (mevedel-deftest mevedel-collaboration--handle-session-models
   (:doc "refreshes the current catalog only for peers allowed to request sessions")
