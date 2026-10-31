@@ -49,7 +49,7 @@ REASON defaults to a fixture label."
   (let ((claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180)))
     (should claim)
     (unwind-protect
-        (let ((decision (mevedel-memory-decision--accept workspace claim accepted proposal status (or reason "Fixture decision"))))
+        (let ((decision (mevedel-memory-decision--accept workspace (list :claim claim) accepted proposal status (or reason "Fixture decision"))))
           (mevedel-memory-store--mutation
            workspace
            (lambda (mutation)
@@ -58,11 +58,27 @@ REASON defaults to a fixture label."
       (mevedel-journal-claim-settle claim 'cancelled ""))))
 
 (defun mevedel-test-application-wait (predicate)
-  "Drive the real event loop until PREDICATE, with a bounded failure deadline."
-  (let ((deadline (+ (float-time) 30)))
+  "Drive the real event loop until PREDICATE, with a progress watchdog.
+This bounds a hung test, not application latency; multiple real children and
+checked writes must be able to finish under single-CPU contention."
+  (let ((deadline (+ (float-time) 300)))
     (while (and (not (funcall predicate)) (< (float-time) deadline))
       (accept-process-output nil .01)))
   (should (funcall predicate)))
+
+(defun mevedel-test-application-start (workspace accepted proposal context callback)
+  "Apply ACCEPTED PROPOSAL in WORKSPACE with CONTEXT and CALLBACK.
+Observe the real transport owner for fault injection and cleanup assertions;
+the public verb, not this helper, constructs and drives the operation."
+  (let ((start (symbol-function 'mevedel-journal-worker-start)) owner)
+    (cl-letf (((symbol-function 'mevedel-journal-worker-start)
+               (lambda (ws operation reply &optional force payload job)
+                 (setq owner job)
+                 (funcall start ws operation reply force payload job))))
+      (mevedel-memory-decision-apply
+       workspace (plist-get (plist-get accepted :prepared) :id) (plist-get proposal :id)
+       :automatic context :callback callback))
+    owner))
 
 (defmacro mevedel-test-application-fixture (&rest body)
   "Run BODY with an accepted pending note, STATE and its real WORKSPACE."
@@ -78,6 +94,7 @@ REASON defaults to a fixture label."
           (proposal (car (plist-get accepted :proposals)))
           (path (plist-get (cdr (car (plist-get proposal :before))) :path))
           (key (mevedel-memory-store--claim-directory workspace))
+          (context (mevedel-memory-decision-automatic-context workspace (current-buffer)))
           (state (list :workspace workspace :origin-buffer (current-buffer)
                        :settled t
                        :claim (plist-get (plist-get accepted :prepared) :claim)))
@@ -192,6 +209,7 @@ REASON defaults to a fixture label."
         ;; normal cycle recovering durable undecided proposals after exit.
         (setq quiet t result nil idle-callbacks nil)
         (plist-put state :stop-apply nil)
+        (plist-put state :application-context nil)
         (mevedel-memory-pass--apply-async state nil (lambda (value) (setq result value)))
         (mevedel-test-application-wait
          (lambda () (when idle-callbacks (funcall (pop idle-callbacks))) result))
@@ -223,7 +241,7 @@ REASON defaults to a fixture label."
                      (should-not result)
                      (should-not (file-exists-p path))
                      (should-not (seq-some (lambda (row) (plist-get row :marked))
-                                           (mevedel-memory-write-list workspace)))
+                                           (mevedel-memory-write--list workspace)))
                      (should (eq 'completed
                                  (plist-get (mevedel-journal-claim-outcome (plist-get operation :claim)) :status)))
                      (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id))))
@@ -305,7 +323,7 @@ REASON defaults to a fixture label."
                      (lambda (claim live _reply)
                        (mevedel-memory-decision--apply-owned
                         workspace claim (plist-get (plist-get accepted :prepared) :id) (plist-get proposal :id)
-                        (lambda (paths) (cl-incf written (length paths))) live))
+                        :on-applied (lambda (paths) (cl-incf written (length paths))) :live live))
                      (lambda (value) (cl-incf callbacks) (setq result value))
                      nil nil (list :application t :pass-id (plist-get (plist-get accepted :prepared) :id)
                                    :proposal-id (plist-get proposal :id))))
@@ -338,7 +356,7 @@ REASON defaults to a fixture label."
 		 (lambda (&rest _) (ert-fail "Decision recovery ran in editor")))
 	        ((symbol-function 'mevedel-memory-store-recover)
 		 (lambda (&rest _) (ert-fail "Store recovery ran in editor")))
-	        ((symbol-function 'mevedel-memory-pass--pending-items)
+	        ((symbol-function 'mevedel-memory-decision--pending-items)
 		 (lambda (&rest _) (ert-fail "Pending discovery ran in editor")))
 	        ((symbol-function 'mevedel-journal-worker-start)
 		 (lambda (&rest args)
@@ -415,7 +433,9 @@ REASON defaults to a fixture label."
       (should (= 0 (plist-get result :unapplied-count)))
       (should-not (plist-get result :error))
       (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))
-      (let ((input (mevedel-memory-decision--application-input accepted proposal workspace)))
+      (let ((input (plist-get (mevedel-memory-decision-inspect
+                               workspace :pass (plist-get (plist-get accepted :prepared) :id)
+                               :proposal (plist-get proposal :id)) :check)))
         (should (eq 'waiting (plist-get input :status)))
         (should (string-match-p "unsaved" (plist-get input :reason))))
       (should (equal (make-string 100 ?x) (mevedel-session-control-fs-read-file path)))
@@ -555,7 +575,7 @@ REASON defaults to a fixture label."
           (dolist (item (plist-get bundle :proposals))
             (mevedel-test-application-decide workspace bundle item 'rejected)))
         (mevedel-test-memory-history-owned workspace
-          (should-not (mevedel-memory-pass--pending-items workspace nil)))
+          (should-not (plist-get (mevedel-memory-decision-pending workspace) :items)))
         (cl-letf (((symbol-function 'mevedel-journal-worker-start)
                    (lambda (&rest args) (cl-incf children) (apply start args))))
           (mevedel-memory-pass--apply-async state nil (lambda (value) (setq result value)))
@@ -593,7 +613,7 @@ REASON defaults to a fixture label."
               (mevedel-memory-store-publish workspace (plist-get prepared :id))
               (should (equal (list (plist-get extraction :id)) (plist-get disposal :requires)))
               (should (eq 'waiting (plist-get (mevedel-memory-decision--requirements workspace disposal) :status)))
-              (let ((selected (mevedel-memory-pass--pending-items workspace nil)))
+              (let ((selected (plist-get (mevedel-memory-decision-pending workspace) :items)))
                 (should (= 2 (length selected)))
                 (should (equal (sort (mapcar (lambda (item) (plist-get item :id)) items) #'string<)
                                (sort (mapcar (lambda (item) (plist-get item :proposal)) selected) #'string<))))
@@ -609,13 +629,14 @@ REASON defaults to a fixture label."
                        ('foreign (setcdr (car (plist-get observation :requirements))
                                          (list :proposal-id (plist-get proposal :id)))))
                      (mevedel-memory-decision--apply-owned
-                      workspace owned (plist-get prepared :id) (plist-get disposal :id) nil live nil observation))
+                      workspace owned (plist-get prepared :id) (plist-get disposal :id)
+                      :live live :observation observation))
                    (lambda (value) (setq reply value))
                    nil nil (list :application t :pass-id (plist-get prepared :id)
                                  :proposal-id (plist-get disposal :id)))
                   (mevedel-test-application-wait (lambda () reply))
                   (if (eq selection 'undecided)
-                      (should (plist-get reply :held))
+                      (should (eq 'waiting (plist-get (plist-get reply :value) :status)))
                     (should (string-match-p
                              (if (eq selection 'missing) "Missing or mismatched" "belongs to another proposal")
                              (plist-get reply :error))))
@@ -668,102 +689,132 @@ REASON defaults to a fixture label."
            (file (file-name-concat (mevedel-memory-decision--directory workspace) (concat (plist-get decision :decision-id) ".el"))))
       (write-region "\n" nil file t 'silent)
       (should (equal "Accepted memory decision changed"
-                     (error-message-string (should-error (mevedel-memory-pass--pending-items workspace nil))))))))
+                     (error-message-string (should-error (mevedel-memory-decision-pending workspace))))))))
 
-(mevedel-deftest mevedel-memory-decision--start-operation ()
+(mevedel-deftest mevedel-memory-decision-apply/worker ()
   ,test
   (test)
   :doc "cancellation fences a real suspended child and ignores duplicate late success"
   (mevedel-test-application-fixture
-    (let (job ran (callbacks 0))
-      (setq job (mevedel-memory-decision--start-operation
-		 workspace (lambda (&rest _) (setq ran t))
-		 (lambda (value) (cl-incf callbacks) (setq result value))))
-      (signal-process (plist-get job :worker) 'SIGSTOP)
-      (mevedel-memory-decision--operation-stop job)
-      (mevedel-memory-decision--operation-ready job '(:ok t))
-      (mevedel-memory-decision--operation-ready job '(:ok t))
+    (let ((automatic (mevedel-memory-decision-automatic-context workspace (current-buffer)))
+          (start (symbol-function 'mevedel-journal-worker-start))
+          child claim ready ran (callbacks 0))
+      (cl-letf (((symbol-function 'mevedel-journal-worker-start)
+                 (lambda (ws kind callback &optional force payload owner)
+                   (setq ready callback claim (plist-get payload :claim)
+                         child (funcall start ws kind callback force payload owner)))))
+        (mevedel-memory-decision-apply
+         workspace (plist-get (plist-get accepted :prepared) :id) (plist-get proposal :id)
+         :automatic automatic :on-applied (lambda (_) (setq ran t))
+         :callback (lambda (value) (cl-incf callbacks) (setq result value))))
+      (signal-process child 'SIGSTOP)
+      (mevedel-memory-decision-cancel automatic)
+      (funcall ready '(:ok t))
+      (funcall ready '(:ok t))
       (should (= 1 callbacks))
       (should (plist-get result :cancelled))
       (should-not (plist-get result :error))
       (should-not ran)
-      (should-not (process-live-p (plist-get job :worker)))
-      (should (eq 'cancelled (plist-get (mevedel-journal-claim-outcome (plist-get job :claim)) :status)))))
+      (should (file-exists-p path))
+      (should-not (process-live-p child))
+      (should (eq 'cancelled (plist-get (mevedel-journal-claim-outcome claim) :status)))))
 
   :doc "fixed real deadline expires while child is suspended; takeover and late callback cannot commit"
   (mevedel-test-application-fixture
-    (let ((acquire (symbol-function 'mevedel-journal-claim-acquire)) job successor ran (callbacks 0))
+    (let ((acquire (symbol-function 'mevedel-journal-claim-acquire))
+          (start (symbol-function 'mevedel-journal-worker-start))
+          (automatic (mevedel-memory-decision-automatic-context workspace (current-buffer)))
+          child claim ready successor ran (callbacks 0))
       (unwind-protect
-	  (progn
-	    (cl-letf (((symbol-function 'mevedel-journal-claim-acquire)
-		       (lambda (directory _seconds) (funcall acquire directory 1))))
-	      (setq job (mevedel-memory-decision--start-operation
-			 workspace (lambda (&rest _) (setq ran t))
-			 (lambda (value) (cl-incf callbacks) (setq result value)))))
-	    (signal-process (plist-get job :worker) 'SIGSTOP)
-	    (mevedel-test-application-wait (lambda () result))
-	    (setq successor (funcall acquire key 180))
-	    (should successor)
-	    (should (eq 'expired (plist-get (mevedel-journal-claim-outcome (plist-get job :claim)) :status)))
-	    (mevedel-memory-decision--operation-ready job '(:ok t))
-	    (should (= 1 callbacks))
-	    (should-not ran)
-	    (should (plist-get result :error)))
+          (progn
+            (cl-letf (((symbol-function 'mevedel-journal-claim-acquire)
+                       (lambda (directory _seconds) (funcall acquire directory 1)))
+                      ((symbol-function 'mevedel-journal-worker-start)
+                       (lambda (ws kind callback &optional force payload owner)
+                         (setq ready callback claim (plist-get payload :claim)
+                               child (funcall start ws kind callback force payload owner)))))
+              (mevedel-memory-decision-apply
+               workspace (plist-get (plist-get accepted :prepared) :id) (plist-get proposal :id)
+               :automatic automatic :on-applied (lambda (_) (setq ran t))
+               :callback (lambda (value) (cl-incf callbacks) (setq result value))))
+            (signal-process child 'SIGSTOP)
+            (mevedel-test-application-wait (lambda () result))
+            (setq successor (funcall acquire key 180))
+            (should successor)
+            (should (eq 'expired (plist-get (mevedel-journal-claim-outcome claim) :status)))
+            (funcall ready '(:ok t))
+            (should (= 1 callbacks))
+            (should-not ran)
+            (should (file-exists-p path))
+            (should (plist-get result :error)))
         (when successor (mevedel-journal-claim-settle successor 'cancelled "")))))
 
   :doc "origin closure, settled ownership and explicit child failure cannot enter the editor operation"
   (dolist (failure '(origin claim child))
     (mevedel-test-application-fixture
       (let ((start (symbol-function 'mevedel-journal-worker-start))
-            (origin (generate-new-buffer " *operation-origin*")) job ran injected (callbacks 0))
+            (origin (generate-new-buffer " *operation-origin*")) claim ready ran injected (callbacks 0))
         (unwind-protect
             (progn
               (cl-letf (((symbol-function 'mevedel-journal-worker-start)
                          (lambda (ws operation callback &rest args)
+                           (setq ready callback claim (plist-get (cadr args) :claim))
                            (apply start ws operation
                                   (lambda (reply)
                                     (setq injected t)
                                     (pcase failure
                                       ('origin (kill-buffer origin))
-                                      ('claim (should (mevedel-journal-claim-settle (plist-get job :claim) 'cancelled ""))))
+                                      ('claim (should (mevedel-journal-claim-settle claim 'cancelled ""))))
                                     (funcall callback (if (eq failure 'child) '(:error "Injected child failure") reply))) args))))
                 (with-current-buffer origin
-                  (setq job (mevedel-memory-decision--start-operation
-                             workspace (lambda (&rest _) (setq ran t))
-                             (lambda (value) (cl-incf callbacks) (setq result value)))))
+                  (setq-local mevedel-memory-consolidation-mode 'auto)
+                  (mevedel-memory-decision-apply
+                   workspace (plist-get (plist-get accepted :prepared) :id) (plist-get proposal :id)
+                   :automatic (mevedel-memory-decision-automatic-context workspace origin)
+                   :on-applied (lambda (_) (setq ran t))
+                   :callback (lambda (value) (cl-incf callbacks) (setq result value))))
                 (mevedel-test-application-wait (lambda () result)))
               (should injected)
               (should (= 1 callbacks))
               (should-not ran)
               (if (eq failure 'origin)
-                  (progn (should (plist-get result :held)) (should-not (plist-get result :error)))
+                  (progn (should (eq 'held (plist-get result :status))) (should-not (plist-get result :error)))
                 (should (plist-get result :error)))
-              (mevedel-memory-decision--operation-ready job '(:ok t))
+              (should (file-exists-p path))
+              (funcall ready '(:ok t))
               (should (= 1 callbacks)))
           (when (buffer-live-p origin) (kill-buffer origin))))))
 
   :doc "a reentrant duplicate cannot enter or finish before the outer editor function unwinds"
   (mevedel-test-application-fixture
-    (let (job outer-done (entries 0) (callbacks 0))
-      (setq job
-            (mevedel-memory-decision--start-operation
-             workspace
-             (lambda (_claim _live reply)
-               (when (= 1 (cl-incf entries))
-                 (mevedel-memory-decision--operation-ready job reply)
-                 (should (= 0 callbacks))
-                 (should-not (plist-get job :done)))
-               (setq outer-done t))
-             (lambda (reply)
-               (should outer-done)
-               (cl-incf callbacks)
-               (setq result reply))))
-      (mevedel-test-application-wait (lambda () result))
-      (should (= 1 entries))
-      (should (= 1 callbacks))
-      (should (plist-get result :ok))
+    (let ((start (symbol-function 'mevedel-journal-worker-start))
+          (automatic (mevedel-memory-decision-automatic-context workspace (current-buffer)))
+          ready observed outer-done (entries 0) (callbacks 0))
+      (cl-letf (((symbol-function 'mevedel-journal-worker-start)
+                 (lambda (ws kind callback &rest args)
+                   (apply start ws kind
+                          (lambda (reply)
+                            (when (eq kind 'memory-recover) (setq ready callback observed reply))
+                            (funcall callback reply)) args))))
+        (mevedel-memory-decision-apply
+         workspace (plist-get (plist-get accepted :prepared) :id) (plist-get proposal :id)
+         :automatic automatic
+         :on-applied (lambda (_paths)
+                       (cl-incf entries)
+                       (funcall ready observed)
+                       (should (= 0 callbacks))
+                       (setq outer-done t))
+         :callback (lambda (reply)
+                     (should outer-done)
+                     (cl-incf callbacks)
+                     (setq result reply)))
+        (mevedel-test-application-wait (lambda () result)))
+      (should (= 1 entries callbacks))
+      (should (eq 'applied (plist-get result :status)))
       (should-not (plist-get result :cancelled))
-      (should (eq 'cancelled (plist-get (mevedel-journal-claim-outcome (plist-get job :claim)) :status)))))
+      (should-not (file-exists-p path))
+      (funcall ready observed)
+      (should (= 1 callbacks entries))))
 
   :doc "live origin rebind, workspace retarget and wrong-job reply refuse continuation"
   (dolist (failure '(session workspace root reply))
@@ -775,7 +826,8 @@ REASON defaults to a fixture label."
              ran injected callback-origin)
         (unwind-protect
             (progn
-              (with-current-buffer origin (setq-local mevedel--session session))
+              (with-current-buffer origin
+                (setq-local mevedel--session session mevedel-memory-consolidation-mode 'auto))
               (cl-letf (((symbol-function 'mevedel-journal-worker-start)
                          (lambda (ws operation callback &rest args)
                            (apply start ws operation
@@ -789,42 +841,41 @@ REASON defaults to a fixture label."
                                       ('reply (setq reply (plist-put reply :operation-id "another-operation"))))
                                     (funcall callback reply)) args))))
                 (with-current-buffer origin
-                  (mevedel-memory-decision--start-operation
-                   workspace (lambda (&rest _) (setq ran t))
-                   (lambda (reply) (setq callback-origin (current-buffer) result reply))))
+                  (mevedel-memory-decision-apply
+                   workspace (plist-get (plist-get accepted :prepared) :id) (plist-get proposal :id)
+                   :automatic (mevedel-memory-decision-automatic-context workspace origin)
+                   :on-applied (lambda (_) (setq ran t))
+                   :callback (lambda (reply) (setq callback-origin (current-buffer) result reply))))
                 (mevedel-test-application-wait (lambda () result)))
               (should injected)
               (should-not ran)
               (if (eq failure 'reply)
                   (should (plist-get result :error))
-                (should (plist-get result :held))
+                (should (eq 'held (plist-get result :status)))
                 (should-not (plist-get result :error)))
               (unless (eq failure 'reply) (should-not (eq callback-origin origin))))
           (setf (mevedel-workspace-root workspace) root)
           (kill-buffer origin))))))
 
-(mevedel-deftest mevedel-memory-pass--application-live-p/origin-policy ()
+(mevedel-deftest mevedel-memory-decision-apply/origin-policy ()
   ,test
   (test)
   :doc "origin-local automatic mode applies while a timer runs in an unrelated propose buffer"
   (mevedel-test-application-fixture
     (let ((origin (generate-new-buffer " *auto-origin*"))
-          (other (generate-new-buffer " *propose-incidental*"))
-          (step (symbol-function 'mevedel-memory-pass--application-step)) observed)
+          (other (generate-new-buffer " *propose-incidental*")))
       (unwind-protect
           (progn
-            (plist-put state :origin-buffer origin)
             (with-current-buffer origin (setq-local mevedel-memory-consolidation-mode 'auto))
             (with-current-buffer other (setq-local mevedel-memory-consolidation-mode 'propose))
-            (cl-letf (((symbol-function 'mevedel-memory-pass--application-step)
-                       (lambda (&rest args)
-                         (push (list (current-buffer) mevedel-memory-consolidation-mode) observed)
-                         (apply step args))))
-              (with-current-buffer origin
-                (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value))))
-              (with-current-buffer other (mevedel-test-application-wait (lambda () result))))
-            (should (equal (car (last observed)) (list other 'propose)))
-            (should (= 1 (plist-get result :applied-count)))
+            (let ((automatic (mevedel-memory-decision-automatic-context workspace origin)))
+              (with-current-buffer other
+                (should (mevedel-memory-decision-automatic-current-p automatic))
+                (mevedel-memory-decision-apply
+                 workspace (plist-get (plist-get accepted :prepared) :id) (plist-get proposal :id)
+                 :automatic automatic :callback (lambda (value) (setq result value)))
+                (mevedel-test-application-wait (lambda () result))))
+            (should (eq 'applied (plist-get result :status)))
             (should-not (file-exists-p path)))
         (kill-buffer origin) (kill-buffer other))))
   :doc "origin-local propose mode holds before worker dispatch despite an unrelated automatic buffer"
@@ -834,17 +885,18 @@ REASON defaults to a fixture label."
           (start (symbol-function 'mevedel-journal-worker-start)) (children 0))
       (unwind-protect
           (progn
-            (plist-put state :origin-buffer origin)
             (with-current-buffer origin (setq-local mevedel-memory-consolidation-mode 'propose))
             (with-current-buffer other (setq-local mevedel-memory-consolidation-mode 'auto))
             (cl-letf (((symbol-function 'mevedel-journal-worker-start)
                        (lambda (&rest args) (cl-incf children) (apply start args))))
-              (with-current-buffer origin
-                (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value))))
+              (with-current-buffer other
+                (mevedel-memory-decision-apply
+                 workspace (plist-get (plist-get accepted :prepared) :id) (plist-get proposal :id)
+                 :automatic (mevedel-memory-decision-automatic-context workspace origin)
+                 :callback (lambda (value) (setq result value))))
               (with-current-buffer other (mevedel-test-application-wait (lambda () result))))
             (should (= 0 children))
-            (should (= 1 (plist-get result :held-count)))
-            (should (= 0 (plist-get result :applied-count)))
+            (should (eq 'held (plist-get result :status)))
             (should (file-exists-p path)))
         (kill-buffer origin) (kill-buffer other))))
   :doc "a late origin policy change refuses the actual write even from another automatic buffer"
@@ -854,7 +906,6 @@ REASON defaults to a fixture label."
           (commit (symbol-function 'mevedel-memory-notes-commit)) injected)
       (unwind-protect
           (progn
-            (plist-put state :origin-buffer origin)
             (with-current-buffer origin (setq-local mevedel-memory-consolidation-mode 'auto))
             (with-current-buffer other (setq-local mevedel-memory-consolidation-mode 'auto))
             (cl-letf (((symbol-function 'mevedel-memory-notes-commit)
@@ -864,23 +915,26 @@ REASON defaults to a fixture label."
                            (with-current-buffer origin (setq-local mevedel-memory-consolidation-mode 'propose)))
                          (with-current-buffer other (apply commit args)))))
               (with-current-buffer origin
-                (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value))))
+                (mevedel-memory-decision-apply
+                 workspace (plist-get (plist-get accepted :prepared) :id) (plist-get proposal :id)
+                 :automatic (mevedel-memory-decision-automatic-context workspace origin)
+                 :callback (lambda (value) (setq result value))))
               (with-current-buffer other (mevedel-test-application-wait (lambda () result))))
             (should injected)
-            (should (= 0 (plist-get result :applied-count)))
+            (should (eq 'held (plist-get result :status)))
             (should (file-exists-p path))
             (should-not (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get proposal :id)) :status))))
         (kill-buffer origin) (kill-buffer other)))))
 
-(mevedel-deftest mevedel-memory-decision--operation-finish ()
+(mevedel-deftest mevedel-memory-decision-cancel ()
   ,test
   (test)
   :doc "one settlement IO failure is reported while a bounded retry fences the child before deletion"
   (mevedel-test-application-fixture
     (let ((settle (symbol-function 'mevedel-journal-claim-settle))
           (delete (symbol-function 'delete-process)) job events (attempts 0) (callbacks 0))
-      (setq job (mevedel-memory-decision--start-operation
-                 workspace #'ignore (lambda (value) (push 'callback events) (cl-incf callbacks) (setq result value))))
+      (setq job (mevedel-test-application-start
+                 workspace accepted proposal context (lambda (value) (push 'callback events) (cl-incf callbacks) (setq result value))))
       (signal-process (plist-get job :worker) 'SIGSTOP)
       (cl-letf (((symbol-function 'mevedel-journal-claim-settle)
                  (lambda (claim &rest args)
@@ -893,7 +947,7 @@ REASON defaults to a fixture label."
                  (lambda (process)
                    (when (eq process (plist-get job :worker)) (push 'deleted events))
                    (funcall delete process))))
-        (mevedel-memory-decision--operation-stop job))
+        (mevedel-memory-decision-cancel context))
       (should (= 2 attempts))
       (should (= 1 callbacks))
       (should (equal '(fenced deleted callback) (nreverse events)))
@@ -901,7 +955,7 @@ REASON defaults to a fixture label."
       (should-not (plist-get result :unsettled))
       (should-not (gethash key mevedel-memory-decision--operations))
       (should-not (process-live-p (plist-get job :worker)))
-      (mevedel-memory-decision--operation-finish job '(:ok t))
+      (mevedel-memory-decision-cancel context)
       (should (= 1 callbacks))))
   :doc "persistent settlement failure reports unresolved authority and retains the tracked child without deleting it"
   (mevedel-test-application-fixture
@@ -910,13 +964,13 @@ REASON defaults to a fixture label."
           (progn
             (cl-letf (((symbol-function 'mevedel-journal-claim-acquire)
                        (lambda (directory _seconds) (funcall acquire directory 2))))
-              (setq job (mevedel-memory-decision--start-operation
-                         workspace #'ignore (lambda (value) (cl-incf callbacks) (setq result value)))))
+              (setq job (mevedel-test-application-start
+                 workspace accepted proposal context (lambda (value) (cl-incf callbacks) (setq result value)))))
             (setq deadline (plist-get (plist-get job :claim) :expires-at))
             (signal-process (plist-get job :worker) 'SIGSTOP)
             (cl-letf (((symbol-function 'mevedel-journal-claim-settle)
                        (lambda (&rest _) (cl-incf attempts) (error "Persistent settlement IO failure"))))
-              (mevedel-memory-decision--operation-stop job))
+              (mevedel-memory-decision-cancel context))
             (should (= 2 attempts))
             (should (= 1 callbacks))
             (should (plist-get result :unsettled))
@@ -939,19 +993,19 @@ REASON defaults to a fixture label."
   :doc "a callback exception occurs only after settlement, process stop and registry cleanup"
   (mevedel-test-application-fixture
     (let ((callbacks 0) job)
-      (setq job (mevedel-memory-decision--start-operation
-                 workspace #'ignore (lambda (_) (cl-incf callbacks) (error "Injected callback failure"))))
+      (setq job (mevedel-test-application-start
+                 workspace accepted proposal context (lambda (_) (cl-incf callbacks) (error "Injected callback failure"))))
       (signal-process (plist-get job :worker) 'SIGSTOP)
       (should (equal "Injected callback failure"
-                     (error-message-string (should-error (mevedel-memory-decision--operation-stop job)))))
+                     (error-message-string (should-error (mevedel-memory-decision-cancel context)))))
       (should (= 1 callbacks))
       (should-not (gethash key mevedel-memory-decision--operations))
       (should-not (process-live-p (plist-get job :worker)))
       (should (eq 'cancelled (plist-get (mevedel-journal-claim-outcome (plist-get job :claim)) :status)))
-      (mevedel-memory-decision--operation-finish job '(:ok t))
+      (mevedel-memory-decision-cancel context)
       (should (= 1 callbacks)))))
 
-(mevedel-deftest mevedel-memory-decision--operation-finish/fence-proof ()
+(mevedel-deftest mevedel-memory-decision-cancel/fence-proof ()
   ,test
   (test)
   :doc "a nil settlement without an outcome retains the child and original deadline, never treating return as proof"
@@ -959,12 +1013,12 @@ REASON defaults to a fixture label."
     (let (job (attempts 0))
       (unwind-protect
           (progn
-            (setq job (mevedel-memory-decision--start-operation
-                       workspace #'ignore (lambda (value) (setq result value))))
+            (setq job (mevedel-test-application-start
+                 workspace accepted proposal context (lambda (value) (setq result value))))
             (signal-process (plist-get job :worker) 'SIGSTOP)
             (cl-letf (((symbol-function 'mevedel-journal-claim-settle)
                        (lambda (&rest _) (cl-incf attempts) nil)))
-              (mevedel-memory-decision--operation-stop job))
+              (mevedel-memory-decision-cancel context))
             (should (= 2 attempts))
             (should (plist-get result :unsettled))
             (should (string-match-p "No durable memory operation fence" (plist-get result :error)))
@@ -977,11 +1031,11 @@ REASON defaults to a fixture label."
           (cancel-timer (plist-get job :timer))))))
   :doc "an authenticated competing outcome permits retirement after native settlement returns nil"
   (mevedel-test-application-fixture
-    (let ((job (mevedel-memory-decision--start-operation
-                workspace #'ignore (lambda (value) (setq result value)))))
+    (let ((job (mevedel-test-application-start
+                 workspace accepted proposal context (lambda (value) (setq result value)))))
       (signal-process (plist-get job :worker) 'SIGSTOP)
       (should (mevedel-journal-claim-settle (plist-get job :claim) 'failed "competing outcome"))
-      (mevedel-memory-decision--operation-stop job)
+      (mevedel-memory-decision-cancel context)
       (should-not (plist-get result :unsettled))
       (should (plist-get result :cancelled))
       (should-not (plist-get result :error))
@@ -992,8 +1046,8 @@ REASON defaults to a fixture label."
     (let ((acquire (symbol-function 'mevedel-journal-claim-acquire)) job (callbacks 0))
       (cl-letf (((symbol-function 'mevedel-journal-claim-acquire)
                  (lambda (directory _seconds) (funcall acquire directory 2))))
-        (setq job (mevedel-memory-decision--start-operation
-                   workspace #'ignore (lambda (value) (cl-incf callbacks) (setq result value)))))
+        (setq job (mevedel-test-application-start
+                 workspace accepted proposal context (lambda (value) (cl-incf callbacks) (setq result value)))))
       (signal-process (plist-get job :worker) 'SIGSTOP)
       (mevedel-test-application-wait (lambda () result))
       (should (= 1 callbacks))
@@ -1348,7 +1402,7 @@ REASON defaults to a fixture label."
             (should (= 1 (plist-get result :held-count)))
             (should-not (file-exists-p path))
             (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get proposal :id)) :status)))
-            (should-not (plist-get (car (mevedel-memory-write-list workspace)) :marked)))
+            (should-not (plist-get (car (mevedel-memory-write--list workspace)) :marked)))
           (should (= 0 (plist-get result :unapplied-count)))
           (should (= (if (eq seam 'request) 0 1) (plist-get result :applied-count)))
           (should (= (if (eq seam 'request) 0 1) (plist-get result :updated-files)))
@@ -1393,7 +1447,7 @@ REASON defaults to a fixture label."
       (should (string-match-p "Visible settlement IO failure" (plist-get result :error)))
       (should-not (file-exists-p path))
       (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get proposal :id)) :status)))
-      (should-not (plist-get (car (mevedel-memory-write-list workspace)) :marked))
+      (should-not (plist-get (car (mevedel-memory-write--list workspace)) :marked))
       (should (eq 'completed (plist-get (mevedel-journal-claim-outcome (plist-get operation :claim)) :status)))
       (should-not (gethash key mevedel-memory-decision--operations))
       (should-not (gethash key mevedel-memory-pass--running))
@@ -1479,16 +1533,16 @@ REASON defaults to a fixture label."
     (let* ((scope (plist-get (plist-get accepted :prepared) :scope))
            (claim (mevedel-journal-claim-acquire key 180))
            (intent (unwind-protect
-                       (mevedel-memory-write-call
+                       (mevedel-memory-write--call
                         scope (plist-get proposal :root)
-                        (lambda (target) (mevedel-memory-write-prepare workspace claim target accepted proposal)))
+                        (lambda (target) (mevedel-memory-write--prepare workspace claim target accepted proposal)))
                      (mevedel-journal-claim-settle claim 'cancelled "")))
            (recover (symbol-function 'mevedel-memory-decision-recover))
            (store (symbol-function 'mevedel-memory-store-recover))
            (fence (symbol-function 'mevedel-memory-decision--operation-fence))
            (inspect (symbol-function 'mevedel-memory-decision--recover-writes))
            job owner events fence-observation inspection-observation (inspections 0) (callbacks 0))
-      (should (plist-get (car (mevedel-memory-write-list workspace)) :marked))
+      (should (plist-get (car (mevedel-memory-write--list workspace)) :marked))
       (cl-labels ((publication ()
                     (when (and job (not (plist-get job :released)))
                       (should (equal owner (plist-get (plist-get job :claim) :owner)))
@@ -1530,7 +1584,7 @@ REASON defaults to a fixture label."
       (should (equal '(decisions store fenced) inspection-observation))
       (should (equal '(decisions store fenced) (reverse events)))
       (should (file-exists-p path))
-      (should-not (plist-get (car (mevedel-memory-write-list workspace)) :marked))
+      (should-not (plist-get (car (mevedel-memory-write--list workspace)) :marked))
       (should (eq 'unavailable (plist-get (mevedel-memory-decision-status workspace (plist-get proposal :id)) :status)))
       (should-not (gethash key mevedel-memory-decision--recovery-workers)))))
 
@@ -1627,16 +1681,16 @@ REASON defaults to a fixture label."
                 (setq job
                       (mevedel-memory-decision--start-operation
                        workspace
-                       (lambda (claim live _reply)
+                       (lambda (owned live _reply)
                          (should-error
                           (mevedel-memory-write--commit
                            workspace target intent changes
                            (lambda ()
-                             (mevedel-memory-store--assert-owned claim)
+                             (mevedel-memory-store--assert-owned (plist-get owned :claim))
                              (mevedel-memory-store--assert-owned target) t)
                            (lambda () (unless (funcall live) (error "Forward stopped")))))
                          (should (= 0 callbacks))
-                         (should (mevedel-journal-claim-owned-p claim))
+                         (should (mevedel-journal-claim-owned-p (plist-get owned :claim)))
                          (dolist (row before)
                            (should (equal "old" (mevedel-session-control-fs-read-file (plist-get (cdr row) :path)))))
                          (setq outer-done t))
@@ -1676,29 +1730,29 @@ REASON defaults to a fixture label."
                    (prog1 (apply mutate args)
                      (unless stopped
                        (setq stopped t)
-                       (should (cl-some (lambda (row) (plist-get row :marked)) (mevedel-memory-write-list workspace)))
+                       (should (cl-some (lambda (row) (plist-get row :marked)) (mevedel-memory-write--list workspace)))
                        (mevedel-memory-decision--operation-stop job))))))
         (setq job
               (mevedel-memory-decision--start-operation
                workspace
                (lambda (owner live _reply)
                  (mevedel-memory-decision--apply-owned
-                  workspace owner (plist-get prepared :id) (plist-get (car (plist-get bundle :proposals)) :id) nil live))
+                  workspace owner (plist-get prepared :id) (plist-get (car (plist-get bundle :proposals)) :id) :live live))
                (lambda (reply) (setq result reply))))
         (mevedel-test-application-wait (lambda () result)))
       (should stopped)
       (ert-info ((prin1-to-string result))
-                (should (plist-get result :held))
+                (should (eq 'held (plist-get (plist-get result :value) :status)))
                 (should (plist-get result :cancelled))
-                (should-not (plist-get result :value))
+                (should-not (plist-get (plist-get result :value) :decision-id))
                 (should-not (plist-get result :error)))
       (should-not (mevedel-memory-decision-status workspace (plist-get (car (plist-get bundle :proposals)) :id)))
       (should-not (file-exists-p (file-name-concat memory "new.md")))
       (should-not (file-exists-p (file-name-concat memory "MEMORY.md")))
-      (let ((rows (mevedel-memory-write-list workspace)))
+      (let ((rows (mevedel-memory-write--list workspace)))
         (should (= 1 (length rows)))
         (should-not (plist-get (car rows) :marked))
-        (should (eq 'before (mevedel-memory-write-state (plist-get (car rows) :intent))))))))
+        (should (eq 'before (mevedel-memory-write--state (plist-get (car rows) :intent))))))))
 
 (mevedel-deftest mevedel-memory-pass--apply-async/quit-rollback ()
   ,test
@@ -1727,7 +1781,7 @@ REASON defaults to a fixture label."
                    (prog1 (apply mutate args)
                      (unless interrupted
                        (setq interrupted t)
-                       (should (cl-some (lambda (row) (plist-get row :marked)) (mevedel-memory-write-list workspace)))
+                       (should (cl-some (lambda (row) (plist-get row :marked)) (mevedel-memory-write--list workspace)))
                        (when intervene
                          (setq intervened-path (plist-get (nth 1 args) :path))
                          (write-region "Intervening external edit" nil intervened-path nil 'silent))
@@ -1741,7 +1795,7 @@ REASON defaults to a fixture label."
       (should (= 0 (plist-get result :applied-count)))
       (should (file-exists-p path))
       (should-not (gethash key mevedel-memory-decision--operations))
-      (let ((rows (mevedel-memory-write-list workspace)))
+      (let ((rows (mevedel-memory-write--list workspace)))
         (should (= 1 (length rows)))
         (if intervene
             (progn
@@ -1750,7 +1804,7 @@ REASON defaults to a fixture label."
               (should (eq 'recovery-required
                           (plist-get (mevedel-memory-decision-status workspace (plist-get (car (plist-get bundle :proposals)) :id)) :status)))
               (should (plist-get (car rows) :marked))
-              (should (eq 'changed (mevedel-memory-write-state (plist-get (car rows) :intent))))
+              (should (eq 'changed (mevedel-memory-write--state (plist-get (car rows) :intent))))
               (should (equal "Intervening external edit" (mevedel-session-control-fs-read-file intervened-path))))
           (should-not (plist-get result :error))
           (should (= 1 (plist-get result :held-count)))
@@ -1759,7 +1813,7 @@ REASON defaults to a fixture label."
           (should-not (file-exists-p (file-name-concat memory "new.md")))
           (should-not (file-exists-p (file-name-concat memory "MEMORY.md")))
           (should-not (plist-get (car rows) :marked))
-          (should (eq 'before (mevedel-memory-write-state (plist-get (car rows) :intent))))))))))
+          (should (eq 'before (mevedel-memory-write--state (plist-get (car rows) :intent))))))))))
 
 (mevedel-deftest mevedel-memory-write--commit/forward-gate ()
   ,test
@@ -1826,11 +1880,11 @@ REASON defaults to a fixture label."
   :doc "C-g after actual note mutation retains applied result and stops the remaining proposal"
   (let ((mevedel-test-application-items 2))
     (mevedel-test-application-fixture
-      (let* ((run (symbol-function 'mevedel-memory-write-run))
+      (let* ((run (symbol-function 'mevedel-memory-write--run))
              (other (cadr (plist-get accepted :proposals)))
              (other-path (plist-get (cdr (car (plist-get other :before))) :path))
              interrupted (callbacks 0))
-        (cl-letf (((symbol-function 'mevedel-memory-write-run)
+        (cl-letf (((symbol-function 'mevedel-memory-write--run)
                    (lambda (&rest args)
                      (prog1 (apply run args)
                        (unless interrupted (setq interrupted t) (signal 'quit nil))))))
@@ -1848,7 +1902,7 @@ REASON defaults to a fixture label."
         (should (file-exists-p other-path))
         (should (eq 'applied (plist-get (mevedel-memory-decision-status workspace (plist-get proposal :id)) :status)))
         (should-not (mevedel-memory-decision-status workspace (plist-get other :id)))
-        (should-not (plist-get (car (mevedel-memory-write-list workspace)) :marked))
+        (should-not (plist-get (car (mevedel-memory-write--list workspace)) :marked))
         (should-not (gethash key mevedel-memory-decision--operations)))))
 
   :doc "actual authenticated result survives cancellation and genuine final cleanup failure"
@@ -1868,7 +1922,7 @@ REASON defaults to a fixture label."
                  (lambda (claim live _reply)
                    (setq actual (mevedel-memory-decision--apply-owned
                                  workspace claim (plist-get (plist-get accepted :prepared) :id)
-                                 (plist-get proposal :id) nil live))
+                                 (plist-get proposal :id) :live live))
                    (mevedel-memory-decision--operation-stop job)
                    actual)
                  (lambda (reply) (cl-incf callbacks) (setq result reply))))
@@ -1971,11 +2025,11 @@ REASON defaults to a fixture label."
     (let* ((mevedel-memory-decision--inhibit-recovery nil)
            (scope (plist-get (plist-get accepted :prepared) :scope))
            (claim (mevedel-journal-claim-acquire key 180))
-           (intent (mevedel-memory-write-call
+           (intent (mevedel-memory-write--call
                     scope (plist-get proposal :root)
                     (lambda (target)
-                      (let ((intent (mevedel-memory-write-prepare workspace claim target accepted proposal)))
-                        (mevedel-memory-write-abandon workspace claim target intent)
+                      (let ((intent (mevedel-memory-write--prepare workspace claim target accepted proposal)))
+                        (mevedel-memory-write--abandon workspace claim target intent)
                         intent))))
            (pin (mevedel-memory-write--pin intent))
            (bad-id (make-string 64 ?0))
@@ -2060,8 +2114,8 @@ REASON defaults to a fixture label."
                        (setq injected t)
                        (let ((claim (mevedel-journal-claim-acquire key 180)))
                          (should claim)
-                         (mevedel-memory-decision--publish
-                          workspace (mevedel-memory-decision--accept workspace claim accepted second 'rejected "Foreign decision"))))
+                         (mevedel-memory-decision--publish-accepted
+                          workspace (mevedel-memory-decision--accept workspace (list :claim claim) accepted second 'rejected "Foreign decision"))))
                      (funcall next state job))))
           (mevedel-memory-pass--apply-async state accepted (lambda (value) (setq result value)))
           (mevedel-test-application-wait (lambda () result)))
@@ -2135,7 +2189,9 @@ REASON defaults to a fixture label."
                   (should-not (mevedel-memory-decision-status workspace (plist-get second :id)))
                   (when (eq late 'edit)
                     (with-current-buffer buffer (should (buffer-modified-p)))
-                    (let ((input (mevedel-memory-decision--application-input accepted second workspace)))
+                    (let ((input (plist-get (mevedel-memory-decision-inspect
+                                             workspace :pass (plist-get (plist-get accepted :prepared) :id)
+                                             :proposal (plist-get second :id)) :check)))
                       (should (eq 'waiting (plist-get input :status)))
                       (should (string-match-p "unsaved" (plist-get input :reason)))))))
             (when (buffer-live-p buffer) (with-current-buffer buffer (set-buffer-modified-p nil)) (kill-buffer buffer))
@@ -2149,7 +2205,7 @@ REASON defaults to a fixture label."
     (let* ((prior (mevedel-journal-claim-acquire key 180))
            (outcome (mevedel-journal-claim-settle prior 'cancelled ""))
            (claim (mevedel-journal-claim-acquire key 180))
-           (context (mevedel-memory-decision--operation-context workspace (current-buffer)))
+           (context (mevedel-memory-decision--context workspace (current-buffer)))
            (job (append (list :claim claim) context))
            (predecessor (append (list :claim prior :outcome outcome) context)))
       (unwind-protect

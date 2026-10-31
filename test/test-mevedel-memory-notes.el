@@ -132,7 +132,7 @@
       ;; Cohort scheduling does not weaken pending-decision protection.
       (should-not (files (capture)))
       (mevedel-memory-decision-reject workspace (plist-get (plist-get accepted :review) :pass-id)
-                                      (plist-get proposal :id) "Reconsider now")
+                                      (plist-get proposal :id) :reason "Reconsider now")
       (note "new.md" 1)
       (should (equal '("old.md" "new.md") (files (capture))))))
   :doc "changed accepted bytes fail authentication rather than influencing admission"

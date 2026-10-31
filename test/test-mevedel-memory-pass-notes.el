@@ -162,15 +162,15 @@
                                      (cl-letf (((symbol-function 'mevedel-memory-pass--async-application-p)
                                                 (lambda (&rest _) nil))
                                                ((symbol-function 'mevedel-memory-pass--apply-automatic)
-                                                (lambda (ws pass proposal &rest rest)
+                                                (lambda (ws context pass proposal &rest rest)
                                                   (if (equal pass earlier)
                                                       (progn
                                                         (cl-incf pending-calls)
-                                                        (should (equal (plist-get item :id) (plist-get proposal :id)))
+                                                        (should (equal (plist-get item :id) proposal))
                                                         (when confirmed
-                                                          (should (eq 'applied (apply automatic ws pass proposal rest))))
-                                                        'quit)
-                                                    (apply automatic ws pass proposal rest))))
+                                                          (should (eq 'applied (car (apply automatic ws context pass proposal rest)))))
+                                                        (cons 'quit nil))
+                                                    (apply automatic ws context pass proposal rest))))
                                                ((symbol-function 'mevedel-telemetry-record-workspace)
                                                 (lambda (ws kind &rest props)
                                                   (when (eq kind 'memory-consolidation-completed) (setq event props))
@@ -238,12 +238,14 @@
                    (should (file-exists-p path))
                    (let ((extraction (proposal 'promote)) (disposal (proposal 'note-delete)))
                      (should-not (status extraction))
-                     (should-error (mevedel-memory-decision-apply workspace (pass) (plist-get disposal :id))
-                                   :type 'user-error)
+                     (let ((decision (mevedel-memory-decision-apply workspace (pass) (plist-get disposal :id))))
+                       (should (eq 'waiting (plist-get decision :status)))
+                       (should (equal "Apply the memory extractions from this note first."
+                                      (plist-get decision :reason))))
                      (should-not (status disposal))
                      ;; A pending disposal suppresses another review of the same version.
                      (should (= 0 (plist-get (capture) :notes)))
-                     (mevedel-memory-decision-reject workspace (pass) (plist-get extraction :id) "Not durable")
+                     (mevedel-memory-decision-reject workspace (pass) (plist-get extraction :id) :reason "Not durable")
                      (should (eq 'stale (plist-get (mevedel-memory-decision-apply workspace (pass) (plist-get disposal :id))
                                                    :status)))
                      (should (file-exists-p path))
@@ -495,16 +497,17 @@
                    (should (eq 'success (plist-get result :outcome)))
                    (let ((late (note "late.md" "See old.png for the regression." 0)))
                      (set-file-times late (seconds-to-time (+ now 60))))
-                   (let ((input (mevedel-memory-decision--application-input
-                                 (mevedel-memory-store-accepted workspace (pass))
-                                 (proposal 'note-delete "old.png") workspace)))
+                   (let ((input (plist-get (mevedel-memory-decision-inspect
+                                           workspace :pass (pass)
+                                           :proposal (plist-get (proposal 'note-delete "old.png") :id)) :check)))
                      (should (eq 'waiting (plist-get input :status)))
                      (should (equal "Citation check held: A surviving shared file references this attachment"
                                     (plist-get input :reason))))
-                   (should (equal '(user-error "Citation check held: A surviving shared file references this attachment")
-                                  (should-error (mevedel-memory-decision-apply
-                                                 workspace (pass) (plist-get (proposal 'note-delete "old.png") :id))
-                                                :type 'user-error)))
+                   (let ((decision (mevedel-memory-decision-apply
+                                    workspace (pass) (plist-get (proposal 'note-delete "old.png") :id))))
+                     (should (eq 'held (plist-get decision :status)))
+                     (should (equal "Citation check held: A surviving shared file references this attachment"
+                                    (plist-get decision :reason))))
                    (should-not (status (proposal 'note-delete "old.png")))
                    (should (equal (unibyte-string 0 1 2 3) (bytes image))))
                  :doc "ready notes admit independently without prematurely covering sparse recent digests"

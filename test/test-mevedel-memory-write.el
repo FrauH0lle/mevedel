@@ -33,7 +33,7 @@
         (should (equal (concat workspace "/notes/shared/.mevedel/state/memory-write/root")
                        (mevedel-memory-write-control-directory (concat workspace "/notes/shared"))))))))
 
-(mevedel-deftest mevedel-memory-write-call
+(mevedel-deftest mevedel-memory-write--call
     (:vars* ((root (make-temp-file "mevedel-memory-state-" t))
              (memory (file-name-concat root "owner" ".mevedel" "memory"))
              (alias (file-name-concat root "other" ".mevedel" "memory"))
@@ -56,16 +56,16 @@
                      (mevedel-memory-scope-capture other)))
            (id (caar (plist-get scope :roots)))
            (second-id (caar (plist-get second :roots))))
-      (mevedel-memory-write-call
+      (mevedel-memory-write--call
        scope id
        (lambda (claim)
          (should (equal (file-name-concat control "claims") (plist-get claim :directory)))
-         (should-error (mevedel-memory-write-call second second-id #'ignore))))
+         (should-error (mevedel-memory-write--call second second-id #'ignore))))
       (should-not (file-exists-p (file-name-concat memory ".mevedel")))
       (make-directory (file-name-concat control "pending"))
       (write-region (make-string 64 ?a) nil
                     (file-name-concat control "pending" (concat (make-string 64 ?b) ".pin")) nil 'silent)
-      (should-error (mevedel-memory-write-call second second-id #'ignore)))))
+      (should-error (mevedel-memory-write--call second second-id #'ignore)))))
 
 (mevedel-deftest mevedel-memory-write--changes
     (:vars* ((root (make-temp-file "mevedel-memory-reverse-" t))
@@ -106,7 +106,7 @@
     (should (equal after (mevedel-memory-write--after before (list change))))
     (should-not (mevedel-memory-write--changes before before))))
 
-(mevedel-deftest mevedel-memory-write-list
+(mevedel-deftest mevedel-memory-write--list
     (:vars* ((root (make-temp-file "mevedel-memory-write-list-" t))
              (workspace (mevedel-workspace--create :root root))
              (id (make-string 64 ?a))
@@ -119,7 +119,7 @@
   (progn
     (make-directory directory t)
     (write-region "(broken state" nil path nil 'silent)
-    (let ((rows (mevedel-memory-write-list workspace)))
+    (let ((rows (mevedel-memory-write--list workspace)))
       (should (= 1 (length rows)))
       (should (equal id (plist-get (car rows) :id)))
       (should (stringp (plist-get (car rows) :error)))
@@ -127,7 +127,7 @@
       (should-not (plist-get (car rows) :marked)))
     (should (equal "(broken state" (mevedel-session-control-fs-read-file path)))))
 
-(mevedel-deftest mevedel-memory-write-recovery-candidates
+(mevedel-deftest mevedel-memory-write--recovery-candidates
     (:vars* ((root (make-temp-file "mevedel-memory-write-candidates-" t))
              (workspace (mevedel-workspace--create :root root))
              (directory (mevedel-memory-write--directory workspace))
@@ -150,15 +150,15 @@
     (puthash (nth 3 ids) 'retired inspected)
     (write-region "hash" nil marked nil 'silent)
     (should (equal (list (nth 0 ids) (nth 1 ids))
-                   (mevedel-memory-write-recovery-candidates workspace)))
+                   (mevedel-memory-write--recovery-candidates workspace)))
     (delete-file marked)
     (should (equal (list (nth 0 ids))
-                   (mevedel-memory-write-recovery-candidates workspace))))
+                   (mevedel-memory-write--recovery-candidates workspace))))
   :doc "forgets identities whose records were collected"
   (progn
     (puthash (nth 2 ids) 'retired inspected)
     (delete-file (file-name-concat directory (concat (nth 2 ids) ".el")))
-    (mevedel-memory-write-recovery-candidates workspace)
+    (mevedel-memory-write--recovery-candidates workspace)
     (should-not (gethash (nth 2 ids) inspected)))
   :doc "native fallback bounds every marker program instead of probing all warm markers together"
   (let ((program (symbol-function 'mevedel-session-control-fs-run-program)) sizes)
@@ -175,7 +175,7 @@
                  (push (length operations) sizes)
                  (apply program operations args))))
       (should (equal (sort (copy-sequence ids) #'string<)
-                     (sort (mevedel-memory-write-recovery-candidates workspace) #'string<))))
+                     (sort (mevedel-memory-write--recovery-candidates workspace) #'string<))))
     (should (cl-every (lambda (size) (<= size 8)) sizes)))
   :doc "leaves writes on an unobservable target to the full inspection"
   (progn
@@ -183,7 +183,7 @@
       (puthash id (file-name-concat pending (concat id ".pin")) inspected))
     (cl-letf (((symbol-function 'mevedel-session-control-fs-paths-exist)
                (lambda (_) (error "Target unavailable"))))
-      (should (equal ids (mevedel-memory-write-recovery-candidates workspace))))))
+      (should (equal ids (mevedel-memory-write--recovery-candidates workspace))))))
 
 (mevedel-deftest mevedel-memory-write--mutate ()
   ,test
@@ -274,13 +274,13 @@
       (dolist (buffer buffers) (kill-buffer buffer))
       (delete-directory directory t))))
 
-(mevedel-deftest mevedel-memory-write-scope
+(mevedel-deftest mevedel-memory-write--scope
   (:doc "returns the captured scope of the intent's source pass")
   (progn
     (should (equal '(:workspace "w")
-                   (mevedel-memory-write-scope
+                   (mevedel-memory-write--scope
                     (list :accepted (list :prepared (list :scope '(:workspace "w")))))))
-    (should-not (mevedel-memory-write-scope nil))))
+    (should-not (mevedel-memory-write--scope nil))))
 
 (provide 'test-mevedel-memory-write)
 ;;; test-mevedel-memory-write.el ends here

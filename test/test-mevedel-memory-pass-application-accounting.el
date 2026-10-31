@@ -1,9 +1,9 @@
 ;;; test-mevedel-memory-pass-application-accounting.el --- Confirmed application counts -*- lexical-binding: t -*-
 
 ;;; Commentary:
-;; Bookkeeping fixtures inject application outcomes, not accepted storage proofs.
-;; Native actor admission, recovery and claim ownership remain real; checked
-;; target writes are covered by pass-notes and application-worker suites.
+;; Bookkeeping fixtures inject decision outcomes at the public decision verbs,
+;; not accepted storage proofs.  Synchronous pending selection keeps its real
+;; owned recovery; checked target writes are covered by the decision suites.
 
 ;;; Code:
 
@@ -52,12 +52,26 @@
        (maphash (lambda (_ retry) (cancel-timer (plist-get retry :timer))) mevedel-memory-pass--deferred)
        (delete-directory root t))))
 
-(defun mevedel-test-application--async (state accepted apply-owned &optional pending)
-  "Run STATE and ACCEPTED with APPLY-OWNED outcomes and PENDING identities.
-Drive a bounded sequence directly, retaining native ownership operations."
+(defun mevedel-test-application--async (state accepted decide &optional pending)
+  "Run STATE and ACCEPTED with DECIDE outcomes and PENDING identities.
+DECIDE receives a proposal identity and its confirmation callback and returns
+the decision result; `mevedel-memory-decision-interrupted' becomes a
+cancellation result carrying its accounted status.  Drive a bounded sequence
+directly through the public automatic decision verbs."
   (let ((callbacks 0) result job)
-    (cl-letf (((symbol-function 'mevedel-memory-decision--apply-owned) apply-owned)
-              ((symbol-function 'mevedel-memory-pass--pending-items) (lambda (&rest _) pending))
+    (cl-letf (((symbol-function 'mevedel-memory-decision-apply)
+               (cl-function
+                (lambda (_workspace _pass proposal &key automatic on-applied callback &allow-other-keys)
+                  (should automatic)
+                  (should callback)
+                  (funcall callback
+                           (condition-case err (funcall decide proposal on-applied)
+                             (mevedel-memory-decision-interrupted
+                              (list :status (plist-get (cadr err) :status) :cancelled t :reason (caddr err))))))))
+              ((symbol-function 'mevedel-memory-decision-pending)
+               (cl-function (lambda (_workspace &key automatic callback &allow-other-keys)
+                              (should automatic)
+                              (funcall callback (list :items pending)))))
               ((symbol-function 'mevedel-memory-pass--application-next) #'ignore))
       (setq job (mevedel-memory-pass--apply-async
                  state accepted (lambda (value) (cl-incf callbacks) (setq result value))))
@@ -83,11 +97,11 @@ Drive a bounded sequence directly, retaining native ownership operations."
            (accepted (mevedel-test-application--accepted (list written deleted empty terminal)))
            (notifications 0))
       (cl-letf (((symbol-function 'mevedel-memory-pass--apply-automatic)
-                 (lambda (_workspace _pass proposal notify)
-                   (unless (eq proposal terminal)
+                 (lambda (_workspace _context _pass proposal _note _file notify &optional _continuation)
+                   (unless (equal proposal (plist-get terminal :id))
                      (cl-incf notifications)
-                     (funcall notify (unless (eq proposal empty) '("changed.md"))))
-                   'applied))
+                     (funcall notify (unless (equal proposal (plist-get empty :id)) '("changed.md"))))
+                   (cons 'applied nil)))
                 ((symbol-function 'mevedel-memory-pass--apply-pending) (lambda (&rest _) '(0 . 0))))
         (let ((result (mevedel-memory-pass--apply state accepted)))
           (should (= 3 notifications))
@@ -95,7 +109,7 @@ Drive a bounded sequence directly, retaining native ownership operations."
   :doc "held unavailable stale failed and terminal outcomes without notifications count no files"
   (mevedel-test-application--fixture
     (dolist (outcome '(held unapplied applied))
-      (cl-letf (((symbol-function 'mevedel-memory-pass--apply-automatic) (lambda (&rest _) outcome))
+      (cl-letf (((symbol-function 'mevedel-memory-pass--apply-automatic) (lambda (&rest _) (cons outcome nil)))
                 ((symbol-function 'mevedel-memory-pass--apply-pending) (lambda (&rest _) '(0 . 0))))
         (should (= 0 (plist-get (mevedel-memory-pass--apply
                                 state (mevedel-test-application--accepted
@@ -104,7 +118,7 @@ Drive a bounded sequence directly, retaining native ownership operations."
   (mevedel-test-application--fixture
     (let (observed)
       (cl-letf (((symbol-function 'mevedel-memory-pass--apply-pending)
-                 (lambda (_workspace skip _held &optional notify)
+                 (lambda (_workspace skip _held &optional notify _context _continuation)
                    (should (equal "current" skip))
                    (setq observed notify)
                    (when notify (funcall notify '("earlier.md")))
@@ -123,11 +137,11 @@ Drive a bounded sequence directly, retaining native ownership operations."
              (calls 0) result escaped)
         (cl-letf (((symbol-function 'mevedel-memory-notes-passes) (lambda (&rest _) (list earlier)))
                   ((symbol-function 'mevedel-memory-pass--apply-automatic)
-                   (lambda (_workspace pass _proposal &optional notify)
+                   (lambda (_workspace _context pass _proposal _note _file &optional notify _continuation)
                      (should (equal "earlier-pass" pass))
                      (cl-incf calls)
                      (when confirmed (funcall notify '("earlier.md")))
-                     'quit)))
+                     (cons 'quit nil))))
           (condition-case nil
               (setq result (mevedel-memory-pass--apply state (mevedel-test-application--accepted nil)))
             (quit (setq escaped t)))
@@ -142,12 +156,12 @@ Drive a bounded sequence directly, retaining native ownership operations."
            trace result escaped)
       (cl-letf (((symbol-function 'mevedel-memory-notes-passes) (lambda (&rest _) (list earlier)))
                 ((symbol-function 'mevedel-memory-pass--apply-automatic)
-                 (lambda (_workspace pass proposal &optional notify)
+                 (lambda (_workspace _context pass proposal _note _file &optional notify _continuation)
                    (should (equal "earlier-pass" pass))
-                   (push (plist-get proposal :id) trace)
-                   (pcase (plist-get proposal :id)
-                     ("confirmed" (funcall notify '("earlier.md")) 'applied)
-                     ("interrupted" 'quit)
+                   (push proposal trace)
+                   (pcase proposal
+                     ("confirmed" (funcall notify '("earlier.md")) (cons 'applied nil))
+                     ("interrupted" (cons 'quit nil))
                      (_ (ert-fail "Continued after quit"))))))
         (condition-case nil
             (setq result (mevedel-memory-pass--apply state (mevedel-test-application--accepted nil)))
@@ -161,10 +175,10 @@ Drive a bounded sequence directly, retaining native ownership operations."
     (mevedel-test-application--fixture
       (let ((calls 0))
         (cl-letf (((symbol-function 'mevedel-memory-pass--apply-automatic)
-                   (lambda (_workspace _pass _proposal notify)
+                   (lambda (_workspace _context _pass _proposal _note _file notify &optional _continuation)
                      (cl-incf calls)
                      (when confirmed (funcall notify '("confirmed.md")))
-                     'quit))
+                     (cons 'quit nil)))
                   ((symbol-function 'mevedel-memory-pass--apply-pending)
                    (lambda (&rest _) (ert-fail "Pending work ran after quit"))))
           (let ((result (mevedel-memory-pass--apply
@@ -184,10 +198,11 @@ Drive a bounded sequence directly, retaining native ownership operations."
            (accepted (mevedel-test-application--accepted proposals "earlier")) notifications held)
       (cl-letf (((symbol-function 'mevedel-memory-notes-passes) (lambda (&rest _) (list accepted)))
                 ((symbol-function 'mevedel-memory-pass--apply-automatic)
-                 (lambda (_workspace _pass proposal &optional notify)
-                   (pcase (plist-get proposal :id)
-                     ("written" (when notify (funcall notify '("written.md"))) 'applied)
-                     ("terminal" 'applied) ("waiting" 'held) (_ 'unapplied)))))
+                 (lambda (_workspace _context _pass proposal _note _file &optional notify _continuation)
+                   (cons (pcase proposal
+                           ("written" (when notify (funcall notify '("written.md"))) 'applied)
+                           ("terminal" 'applied) ("waiting" 'held) (_ 'unapplied))
+                         nil))))
         (should (equal '(2 . 1) (mevedel-memory-pass--apply-pending
                                 workspace "current" (lambda (file) (push file held))
                                 (lambda (paths) (push paths notifications)))))
@@ -201,13 +216,13 @@ Drive a bounded sequence directly, retaining native ownership operations."
         (should (equal '(0 . 0) (mevedel-memory-pass--apply-pending
                                 workspace nil nil (lambda (&rest _) (ert-fail "Propose mode notified")))))))))
 
-(mevedel-deftest mevedel-memory-pass--pending-items/identities ()
+(mevedel-deftest mevedel-memory-decision-pending/identities ()
   (mevedel-test-application--fixture
     (let ((accepted (mevedel-test-application--accepted
                      (list (mevedel-test-application--proposal "note" 'note-delete)
                            (mevedel-test-application--proposal "memory")) "earlier")))
       (cl-letf (((symbol-function 'mevedel-memory-notes-passes) (lambda (&rest _) (list accepted))))
-        (let ((items (mevedel-memory-pass--pending-items workspace "current")))
+        (let ((items (plist-get (mevedel-memory-decision-pending workspace :skip "current") :items)))
           (should (= 2 (length items)))
           (should (plist-get (car items) :note))
           (should-not (plist-get (cadr items) :note))
@@ -224,9 +239,7 @@ Drive a bounded sequence directly, retaining native ownership operations."
            (calls 0)
            (result (mevedel-test-application--async
                     state accepted
-                    (lambda (_workspace claim _pass proposal notify currentp &optional _pending _observation)
-                      (should (funcall currentp))
-                      (mevedel-memory-store--assert-owned claim)
+                    (lambda (proposal notify)
                       (cl-incf calls)
                       (unless (equal proposal "terminal")
                         (funcall notify (unless (equal proposal "empty") '("shared-path.md"))))
@@ -258,8 +271,7 @@ Drive a bounded sequence directly, retaining native ownership operations."
              (result (mevedel-test-application--async
                       state (mevedel-test-application--accepted
                              (mapcar #'mevedel-test-application--proposal '("first" "later")))
-                      (lambda (_workspace _claim _pass _proposal notify currentp &optional _pending _observation)
-                        (should (funcall currentp))
+                      (lambda (_proposal notify)
                         (cl-incf calls)
                         (when confirmed (funcall notify '("confirmed.md")))
                         (signal 'mevedel-memory-decision-interrupted

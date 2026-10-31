@@ -308,7 +308,7 @@
   :doc "a newly discovered external marker cannot certify rows read before its creation"
   (let* ((item (topic))
          (intent (plist-get (seq-find (lambda (row) (equal (car item) (plist-get (plist-get row :intent) :pass)))
-                                     (mevedel-memory-write-list workspace)) :intent))
+                                     (mevedel-memory-write--list workspace)) :intent))
          (pin (mevedel-memory-write--pin intent))
          (run (symbol-function 'mevedel-session-control-fs--run-program))
          (checks 0) first)

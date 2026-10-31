@@ -1,4 +1,4 @@
-;;; test-mevedel-memory-write-abandon.el --- Checked pending write retirement -*- lexical-binding: t -*-
+;;; test-mevedel-memory-write--abandon.el --- Checked pending write retirement -*- lexical-binding: t -*-
 
 ;;; Commentary:
 ;; Native control IO proves cancellation can retire an unchanged intent only.
@@ -72,10 +72,10 @@
           (path (plist-get (cdr (car (plist-get proposal :before))) :path))
           (claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180)))
      (unwind-protect
-         (mevedel-memory-write-call
+         (mevedel-memory-write--call
           (plist-get (plist-get accepted :prepared) :scope) (plist-get proposal :root)
           (lambda (target)
-            (let* ((intent (mevedel-memory-write-prepare workspace claim target accepted proposal))
+            (let* ((intent (mevedel-memory-write--prepare workspace claim target accepted proposal))
                    (pin (mevedel-memory-write--pin intent)))
               ,@body)))
        (mevedel-journal-claim-settle claim 'cancelled "")
@@ -84,22 +84,22 @@
          (kill-buffer buffer))
        (delete-directory root t))))
 
-(mevedel-deftest mevedel-memory-write-abandon ()
+(mevedel-deftest mevedel-memory-write--abandon ()
   ,test
   (test)
   :doc "unchanged native intent is unmarked only after exact fence and creates no public decision"
   (mevedel-test-abandon-fixture
     (should (file-exists-p pin))
-    (mevedel-memory-write-abandon workspace claim target intent)
+    (mevedel-memory-write--abandon workspace claim target intent)
     (should (equal (make-string 100 ?x) (mevedel-session-control-fs-read-file path)))
     (should-not (file-exists-p pin))
-    (should (equal intent (mevedel-memory-write-read workspace (plist-get intent :id) (plist-get intent :hash))))
+    (should (equal intent (mevedel-memory-write--read workspace (plist-get intent :id) (plist-get intent :hash))))
     (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))
     (let ((outcome (mevedel-journal-claim-outcome claim)))
       (should (eq 'cancelled (plist-get outcome :status)))
       (should (equal "" (plist-get outcome :payload))))
     (mevedel-memory-store--assert-owned target)
-    (should-not (plist-get (car (mevedel-memory-write-list workspace)) :marked)))
+    (should-not (plist-get (car (mevedel-memory-write--list workspace)) :marked)))
 
   :doc "wrong intent hash target token directory or originating client cannot abandon"
   (dolist (change '(hash token directory client))
@@ -111,8 +111,8 @@
           ('directory (plist-put bad-target :directory (file-name-concat root "other-claims"))))
         (if (eq change 'client)
             (cl-letf (((symbol-function 'mevedel-workspace-identity-client) (lambda () "other-client")))
-              (should-error (mevedel-memory-write-abandon workspace claim bad-target bad-intent)))
-          (should-error (mevedel-memory-write-abandon workspace claim bad-target bad-intent)))
+              (should-error (mevedel-memory-write--abandon workspace claim bad-target bad-intent)))
+          (should-error (mevedel-memory-write--abandon workspace claim bad-target bad-intent)))
         (should (file-exists-p pin))
         (should (file-exists-p path))
         (should-not (mevedel-journal-claim-outcome claim)))))
@@ -122,7 +122,7 @@
     (mevedel-test-abandon-fixture
       (if (eq change 'after) (delete-file path)
         (write-region "Intervening edit" nil path nil 'silent))
-      (should-error (mevedel-memory-write-abandon workspace claim target intent))
+      (should-error (mevedel-memory-write--abandon workspace claim target intent))
       (should (file-exists-p pin))
       (should-not (mevedel-journal-claim-outcome claim))))
 
@@ -135,8 +135,8 @@
                                    (plist-get intent :after)))))
         (should (= 2 (length (plist-get intent :changes))))
         (mevedel-memory-write--mutate target before after)
-        (should (eq 'mixed (mevedel-memory-write-state intent)))
-        (should-error (mevedel-memory-write-abandon workspace claim target intent))
+        (should (eq 'mixed (mevedel-memory-write--state intent)))
+        (should-error (mevedel-memory-write--abandon workspace claim target intent))
         (should (file-exists-p pin))
         (should-not (mevedel-journal-claim-outcome claim)))))
 
@@ -157,7 +157,7 @@
                                                       (list :status "cancelled" :payload "")))
                               nil (mevedel-journal-claim--path token t) nil 'silent)))
                        (funcall settle token status payload)))))
-          (should-error (mevedel-memory-write-abandon workspace claim target intent)))
+          (should-error (mevedel-memory-write--abandon workspace claim target intent)))
         (should injected)
         (should (file-exists-p pin))
         (should (file-exists-p path)))))
@@ -178,7 +178,7 @@
                          ('mode (set-file-modes path #o400))
                          ('target (mevedel-journal-claim-settle target 'cancelled ""))))
                      (funcall run program directory))))
-          (should-error (mevedel-memory-write-abandon workspace claim target intent)))
+          (should-error (mevedel-memory-write--abandon workspace claim target intent)))
         (should injected)
         (should (file-exists-p pin))
         (should (file-exists-p path))
@@ -212,7 +212,7 @@
                                     (plist-get target :directory))
                                    (plist-get target :expires-at))))
                        (funcall run program directory))))
-            (should-error (mevedel-memory-write-abandon workspace claim target intent)))
+            (should-error (mevedel-memory-write--abandon workspace claim target intent)))
           (should injected)
           (should owned-before-wait)
           (should deadline-crossed)
@@ -229,7 +229,7 @@
     (mevedel-test-abandon-fixture
       (should (eq 'note-prune (plist-get proposal :action)))
       (should (plist-get (cdar (plist-get intent :before)) :empty))
-      (mevedel-memory-write-abandon workspace claim target intent)
+      (mevedel-memory-write--abandon workspace claim target intent)
       (should-not (file-exists-p pin))
       (should (file-directory-p path))
       (should-not (directory-files path nil directory-files-no-dot-files-regexp))
@@ -238,7 +238,7 @@
       (should (eq 'note-prune (plist-get proposal :action)))
       (should (plist-get (cdar (plist-get intent :before)) :directory))
       (should (plist-get (cdar (plist-get intent :before)) :empty))
-      (should (eq 'before (mevedel-memory-write-state intent)))
+      (should (eq 'before (mevedel-memory-write--state intent)))
       (let ((run (symbol-function 'mevedel-session-control-fs-run-program))
             (child (file-name-concat path "arrived.txt")) injected)
         (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
@@ -249,7 +249,7 @@
                        (setq injected t)
                        (write-region "New child" nil child nil 'silent))
                      (funcall run program directory))))
-          (should-error (mevedel-memory-write-abandon workspace claim target intent)))
+          (should-error (mevedel-memory-write--abandon workspace claim target intent)))
         (should injected)
         (should (file-exists-p pin))
         (should (equal "New child" (mevedel-session-control-fs-read-file child)))
@@ -267,7 +267,7 @@
                      (when (equal (plist-get token :owner) (plist-get claim :owner))
                        (setq injected t buffer (find-file-noselect path))
                        (with-current-buffer buffer (goto-char (point-max)) (insert "unsaved draft")))))))
-        (should-error (mevedel-memory-write-abandon workspace claim target intent)))
+        (should-error (mevedel-memory-write--abandon workspace claim target intent)))
       (should injected)
       (should (file-exists-p pin))
       (should (equal (make-string 100 ?x) (mevedel-session-control-fs-read-file path)))
@@ -288,12 +288,12 @@
                      (funcall run program directory))))
           (if (eq failure 'quit)
               (condition-case nil
-                  (progn (mevedel-memory-write-abandon workspace claim target intent)
+                  (progn (mevedel-memory-write--abandon workspace claim target intent)
                          (ert-fail "Quit was swallowed"))
                 (quit (setq interrupted t)))
             (should (string-match-p "Injected abandonment IO failure"
                                     (error-message-string (should-error
-                                                           (mevedel-memory-write-abandon workspace claim target intent)))))))
+                                                           (mevedel-memory-write--abandon workspace claim target intent)))))))
         (should injected)
         (when (eq failure 'quit) (should interrupted))
         (should (file-exists-p pin))
@@ -315,7 +315,7 @@
                                      '(verify absent before-time verify-hash verify-mode directory-p verify-list delete-file)))
                        (when (eq (plist-get op :op) 'delete-file) (should (equal pin (plist-get op :path))))))
                    (funcall run program directory))))
-        (mevedel-memory-write-abandon workspace claim target intent))
+        (mevedel-memory-write--abandon workspace claim target intent))
       (should deletion)
       (should-not (file-exists-p pin)))))
 

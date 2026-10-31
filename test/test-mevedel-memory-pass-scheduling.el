@@ -224,10 +224,14 @@
                  :doc "auto applies memory and instruction proposals sequentially and counts shared files once"
                  (let ((memory (proposals))
                        (mevedel-memory-consolidation-mode 'auto))
-                   (start :memory-only t)
-                   ;; The mode is frozen when the pass starts, not read from the current buffer
-                   ;; when its asynchronous callback arrives.
-                   (let ((mevedel-memory-consolidation-mode 'manual)) (finish))
+                   ;; Admission follows the live origin, never the unrelated
+                   ;; buffer delivering the asynchronous callback.
+                   (with-temp-buffer
+                     (setq-local mevedel-memory-consolidation-mode 'auto)
+                     (start :memory-only t)
+                     (with-temp-buffer
+                       (setq-local mevedel-memory-consolidation-mode 'manual)
+                       (finish)))
                    (should (eq 'success (plist-get result :outcome)))
                    (should (= 4 (plist-get result :updated-files)))
                    (should (= 3 (plist-get result :applied-count)))

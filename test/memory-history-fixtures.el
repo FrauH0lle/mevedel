@@ -61,7 +61,7 @@ path under a fresh workspace claim each; they skip the per-call recovery of
                     (unwind-protect
                         (should (eq 'applied
                                     (plist-get (mevedel-memory-decision--apply-owned
-                                                workspace owner (plist-get prepared :id) (plist-get proposal :id) nil)
+                                                workspace (list :claim owner) (plist-get prepared :id) (plist-get proposal :id))
                                                :status)))
                       (mevedel-journal-claim-settle owner 'cancelled "")))))
               (push accepted bundles))

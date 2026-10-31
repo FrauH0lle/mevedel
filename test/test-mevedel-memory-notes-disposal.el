@@ -57,9 +57,9 @@
          (should (equal bytes (mevedel-session-control-fs-read-file path 'no-conversion)))
          (should (= #o640 (file-modes path))))
        (not-applied ()
-         (condition-case nil
-             (should-not (eq 'applied (plist-get (apply-item) :status)))
-           ((user-error mevedel-memory-decision-held) nil))
+         ;; Holds are returned statuses; nothing is decided or deleted.
+         (should (eq 'held (plist-get (apply-item) :status)))
+         (should-not (mevedel-memory-decision-status workspace (plist-get proposal :id)))
          (original)))
     ,test)
   (test)
@@ -75,10 +75,10 @@
     (should (file-directory-p shared))
     (should-not (file-exists-p (file-name-concat root ".mevedel" "state" "shared-notes" "blobs")))
     (should-error (mevedel-memory-decision-reverse workspace pass (plist-get proposal :id)) :type 'user-error)
-    (let* ((write (car (mevedel-memory-write-list workspace)))
-           (intent (mevedel-memory-write-read workspace (plist-get write :id) (plist-get write :hash))))
+    (let* ((write (car (mevedel-memory-write--list workspace)))
+           (intent (mevedel-memory-write--read workspace (plist-get write :id) (plist-get write :hash))))
       (should intent)
-      (should-error (mevedel-memory-write-rollback workspace claim nil intent) :type 'user-error))
+      (should-error (mevedel-memory-write--rollback workspace claim nil intent) :type 'user-error))
     (should-not (file-exists-p path)))
   :doc "changed bytes after review remain untouched even with their old mtime restored"
   (progn

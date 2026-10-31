@@ -141,7 +141,9 @@
         (recent (file-name-concat shared "recent-handoff.md"))
         (mevedel-memory-notes--max-notes 2)
         (findings 7)
-        (deadline (+ (float-time) 120))
+        ;; A progress watchdog, not a latency assertion: real notes and
+        ;; their checked writes may share a CPU with other test processes.
+        (deadline (+ (float-time) 600))
         pending-response requests responses buffers offered)
     ;; A headerless handoff below fourteen days is not in the eligible cohort.
     (write-region "# Recent handoff\nTODO: still working.\n" nil recent nil 'silent)

@@ -2,8 +2,58 @@
 
 ## Proposal decisions
 
+The decision module owns each proposal decision as one transaction. Callers use
+`mevedel-memory-decision-apply`, `-reject`, `-reverse`, or `-recover-write`;
+they do not acquire claims, prepare write intents, or interpret child replies.
+The write module is private implementation, apart from its control-directory
+and intent-filename helpers used by retention.
+
+Each verb returns a plist with `:status`, optional `:reason`, detached
+`:decision` metadata when a decision exists, and an opaque `:continuation`.
+Statuses are `applied`, `rejected`, `reversed`, `stale`, `unavailable`,
+`recovery-required`, `waiting`, `held`, `skipped`, and `idle-wait`. A hold or
+unmet extraction dependency returns `held` or `waiting`, not an accepted
+decision. The cockpit presents those refusals to the user. Automatic application
+returns `skipped` for any already-decided proposal.
+
+One explicit serial request may pass the previous result's `:continuation` to
+the next verb. The decision owner freshly proves consecutive claim generations
+for the same actor and origin before omitting repeated workspace recovery.
+Omitting the continuation starts with full recovery. Holds (early or late),
+waiting, idle deferral, failure, interruption, changed origin, and claim-chain
+gaps discard continuity. Clean terminal outcomes and skipped work can retain it.
+The continuation is ephemeral, never an authority cache, and must not be reused
+across separate commands. Each continuously owned phase authenticates its
+accepted bundle once; acceptance settlement, a new claim, or a child handoff
+ends that phase. Forward-write checks remain fresh.
+
+For automatic application, construct an opaque origin binding with
+`mevedel-memory-decision-automatic-context`. It can be reused within the request;
+each job has separate bookkeeping, while `mevedel-memory-decision-cancel`
+cancels the shared context and its active work. `automatic-current-p` checks the
+original actor's live policy and workspace identity rather than the timer's
+current buffer. The context is not frozen permission.
+
+Without a callback, application is synchronous and signals errors and quit.
+`mevedel-memory-decision-interrupted` carries any already-accounted decision.
+With `:callback`, application delivers one result, including admission failure,
+as `:error` or `:cancelled` when appropriate; confirmed effects and updated-file
+accounting survive cancellation and publication failure. Exceptions from the
+caller callback propagate rather than causing a second delivery. A callback
+alone grants no automatic authority. Automatic context plus callback selects
+child-assisted placement on supported local Linux workspaces; unsupported and
+remote targets retain checked synchronous execution. `pending` selects undecided
+automatic identities through the same child boundary when given both arguments;
+otherwise it is a read-only selection without acquiring a claim.
+
+`mevedel-memory-decision-inspect` supplies detached provisional proposal/write
+snapshots for the cockpit, copying mutable strings and lists. Inspection grants
+no authority: actions freshly authenticate state. `retention` reports whether
+decision/write evidence still prevents history expiry.
+
 `mevedel-memory-decision-reject` records a rejection without editing memory or
-rewriting the completed review. It acquires workspace ownership and checks the
+changing the accepted review. Publication can repair its derived public text.
+Rejection acquires workspace ownership and checks the
 proposal's original target authority. A repeated rejection returns the same
 terminal decision, including its original reason. The reason is optional and
 limited to 4 KiB. Private `.mevedel/state/journal/decisions/<decision-id>.el` records retain the
@@ -15,7 +65,12 @@ identities, date, status, reason, and a private-state hash. Their body is derive
 from metadata and includes no private topic or proposed replacement. Decision
 status is verified against immutable acceptance evidence; public text alone
 cannot decide a pending proposal or release its evidence. When every proposal
-in a pass is terminal, publication releases that pass's digest pins. Review
+in a pass has an authenticated terminal decision, publication releases that
+pass's digest pins. Under one journal-mutation claim, publication reauthenticates
+the decision and bundle, checks the exact pass-review bytes, and repairs an
+absent or changed projection. Repair of existing bytes checks the observed hash,
+unsettled claim and deadline under the mutation-claim lock; a changed observation
+or fenced owner refuses repair. Review
 and decision records remain retained while evidence or unresolved work needs
 them, then expire together under the resolution-based history window.
 
@@ -25,7 +80,8 @@ one authenticated proposal bundle with the write reader within that scan and
 discards the proof after publication. Pending automatic selection shares one
 public journal observation, refreshing it and discarding pass proofs after
 each application. Every application still acquires fresh workspace and target
-ownership and performs the ordinary recovery and freshness checks.
+ownership and performs freshness checks; only a freshly proved serial
+continuation can omit the workspace recovery prelude.
 
 For local automatic application, the child selects both the proposal's previous
 decision and its required extraction decisions under the operation's workspace
@@ -115,8 +171,8 @@ counting it as held or unapplied: the completed recovery operation is fenced and
 released before the idle wait, and a fresh operation reacquires ownership later.
 No claim deadline is extended or authority retained while waiting. Undecided
 proposals remain durable for normal pending selection after cancellation or exit.
-Each transaction remains synchronous (roughly half a second in the measured
-fixture), but a proposal batch cannot continuously delay input. Citation body
+The editor's write transaction remains synchronous and can still block input;
+the yielding proposal batch does not make that transaction nonblocking. Citation body
 rereads use fresh per-root batches of at most eight, with unchanged byte bounds,
 capture/reread/inventory ordering and final live-editor checks. The pass stays
 registered until application finishes and its final callback runs once.
@@ -161,7 +217,10 @@ already in use; this applies to the synchronous fallback for worker-ineligible
 targets as well as the yielding path. All affected visiting buffers, including
 unchanged before-state dependencies, must still be unmodified. Cancellation or
 a newly started use prevents new forward writes without disabling safely
-owned checked rollback. A refusal after durable intent preparation follows the
+owned checked rollback. Note deletion checks local use again after the final
+ownership/root IO and buffer checks: those checks can yield and admit a new
+reader after the earlier admission check. This last check does no IO and a hold
+still follows checked abandonment. A refusal after durable intent preparation follows the
 checked abandonment path only for a known admission hold or cancellation whose
 complete before-state is freshly proved after any checked rollback. It
 authenticates the exact intent and original tokens, checks visiting buffers
@@ -218,7 +277,10 @@ before takeover or fails its guard afterward. The same mechanism protects
 rollback and marker retirement. This requires Linux `flock` on the storage
 host; acquisition waits at most 20 seconds and process death releases the lock.
 
-Application accepts an immutable decision before retiring the marker. Status
+Application accepts an immutable decision, retires the resolved marker under
+target ownership, then publishes under fresh journal-mutation ownership. This
+order is shared by synchronous and child-assisted execution. Failed publication
+leaves the accepted decision recoverable even after the marker is retired. Status
 ordering uses accepted claim generations, so retries in the same second still
 produce an unambiguous latest result. Entry-level index checks work independently
 of review identity and retained write history. The original pass stays immutable;

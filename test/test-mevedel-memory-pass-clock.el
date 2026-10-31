@@ -100,7 +100,7 @@
       (should-not (mevedel-journal-cleanup-pass-retired-p root pass))
       (cl-letf (((symbol-function 'mevedel-journal-store-timestamp) (lambda (_) date)))
         (should (eq 'rejected (plist-get (mevedel-memory-decision-reject
-                                         workspace pass (plist-get proposal :id) "Retain the fixture note")
+                                         workspace pass (plist-get proposal :id) :reason "Retain the fixture note")
                                         :status))))
       (let ((record (retire entry)))
         (should (eq :false (gethash "journal-bearing" record)))

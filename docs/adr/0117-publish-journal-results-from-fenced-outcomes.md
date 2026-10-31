@@ -31,13 +31,20 @@ and discards proofs after applying a proposal. Completed pass recovery still
 authenticates every bundle and recovers accepted expiry under mutation ownership,
 but avoids republication when exact public bytes match and no spare pins remain.
 These operation-local observations do not survive a new application claim.
-An automatic sequence may retain only its clean recovery predecessor's exact
-claim/outcome identity, never those authenticated content observations.
+An explicit serial request by one actor and origin may retain only its clean
+recovery predecessor's exact claim/outcome identity, never those authenticated
+content observations. The decision owner exposes four verbs (apply, reject,
+reverse, recover-write) over one executor; callers carry an opaque continuation,
+not claims, write intents, or child replies. The accepted bundle is authenticated
+once per continuously owned phase, never across acceptance settlement, a new
+claim or a child handoff. Write-adjacent ownership, deadline, bytes, mode,
+cancellation, reference and live-buffer checks remain fresh.
 
 Local automatic application uses one parent-owned fixed-deadline workspace
 claim per proposal. The first maintenance worker performs publication/store
 recovery. A clean operation may establish an ephemeral recovery predecessor for
-the same automatic job. Its next claim must be exactly the following generation,
+the same explicit serial request, including synchronous callers. Its next claim
+must be exactly the following generation,
 with both predecessor records freshly verified alongside the new claim's exact
 identity, latest generation, absence of outcome and unexpired deadline in one
 pinned program. Only that continuity proof omits repeated history recovery;
@@ -49,9 +56,10 @@ evidence, never treating a child observation as write authority. Dependency
 discovery moved with status discovery because scanning public history per
 required extraction reintroduced history-dependent editor transaction cost.
 Intervening consolidation claims, context changes, failures, holds, cancellation,
-expired/failed outcomes or incomplete accounting discard continuity. New jobs and
-deferred retries begin with recovery. Pending discovery remains at the original
-tail of the sequence; its read-only child independently authenticates the same
+expired/failed outcomes or incomplete accounting discard continuity. Both early
+and prepared late holds discard it. Separate commands and deferred retries begin
+with recovery; there is no client-wide last-good-recovery cache. Pending discovery
+remains at the original tail of the sequence; its read-only child independently authenticates the same
 continuity proof before omitting recovery. Unsupported targets retain native
 recovery when no continuity proof exists. The editor freshly checks the current
 operation and ownership before acquiring
@@ -85,10 +93,20 @@ operation remains registered through publication; acceptance alone, failed
 marker retirement or interrupted publication cannot establish continuity.
 Confirmed newly written-file accounting survives publication failure or
 cancellation, and accepted unpublished decisions remain recoverable.
-Automatic
-note forward writes recheck that no open session uses the note, cancellation
+Synchronous decisions use the same accept, retire, then publish order. Publication
+reauthenticates the decision identity/hash and bundle under one mutation claim,
+checks exact pass-review bytes, and republishes an absent or damaged projection.
+Repair of existing text verifies the observed hash and the unsettled mutation
+claim/deadline under the same target lock as settlement. Public terminal entries
+can refuse pin release but cannot prove it; every terminal decision still needs
+private authentication. Read-only inspection copies mutable leaves and grants no
+authority for a later action.
+
+Automatic note forward writes recheck that no open session uses the note, cancellation
 and unsaved buffers at their mutation boundary; checked rollback keeps its
-separate ownership proof.
+separate ownership proof. The final note-use check is local and follows all
+yielding ownership/root and buffer checks. An earlier admission check cannot
+protect a reader admitted during that IO; a late hold uses checked abandonment.
 Reentrant replies cannot enter an executing continuation. Reply identity, origin
 binding and freshly read workspace identity fence delayed continuations.
 Cancellation fences the child before stopping it; an executing editor transaction
@@ -436,6 +454,33 @@ longer than ordinary recall when evidence or recovery still needs it; the recall
 limit is not an erasure guarantee.
 
 ## Decision history
+
+### 2026-10-31: own proposal decisions and explicit serial continuity
+
+Previously the pass drove decision-private claims, child replies and predecessor
+records, while each synchronous application repeated workspace recovery and
+bundle authentication. The decision module now owns those mechanics behind
+four verbs. Continuity is explicit per serial request, not an automatic-only
+optimization or a client-wide recovery cache. Authentication is shared only
+within one owned phase; settlement and publication still separate authority.
+
+A matched compiled four-note probe at the previous implementation used 139,
+150, 153 and 185 control programs per serial apply. The transaction implementation
+used 83 for the first and 60 for each following apply (one sequence per build).
+Reject counts also decreased, from 85, 93, 94 and 116 to 54, 60, 61 and 62.
+These counts motivated removing repeated orchestration, not removing durable
+write records or fresh write guards. The regression bounds sequenced cost and
+checks linear marginal control-program cost across a synchronous multi-note
+drain. Separate timing and heartbeat measurements remain necessary: fewer
+programs do not imply nonblocking editor work.
+
+Publication now owns one mutation claim and validates exact review bytes rather
+than mere existence. A damaged projection exposed the immutable publisher's
+refusal to overwrite an existing record. Checked repair derives its bytes from
+the newly authenticated bundle, fences the mutation owner under the target lock,
+and refuses a second observed-byte change; pin release still requires all
+terminal decisions to authenticate. Both execution placements accept, retire,
+then publish. No user-facing approval, inspection or recovery feature is removed.
 
 ### 2026-10-30: schedule local automatic application around editor activity
 

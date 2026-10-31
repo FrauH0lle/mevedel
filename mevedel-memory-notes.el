@@ -1147,7 +1147,7 @@ the cockpit or retain their review's history.  Return (REJECTED . FAILED)."
                 (condition-case nil
                     (progn
                       (mevedel-memory-decision-reject workspace id (plist-get proposal :id)
-                                                      mevedel-memory-notes-superseded-reason)
+                                                      :reason mevedel-memory-notes-superseded-reason)
                       (cl-incf rejected))
                   (error (cl-incf failed)))))))))
     (cons rejected failed)))
@@ -1220,7 +1220,8 @@ empty; absence is a state.  Links and other entries signal."
 (defun mevedel-memory-notes-commit (workspace root target changes currentp &optional before-write)
   "Permanently delete shared-note CHANGES below ROOT in WORKSPACE.
 TARGET and CURRENTP guard the existing write operation.  BEFORE-WRITE rechecks
-forward admission; active use and unsaved buffers still prevent deletion.
+forward admission; a final local-use check follows the yielding ownership
+checks.  Active use and unsaved buffers still prevent deletion.
 The native deletion checks the reviewed bytes and mode.  No undo or trash copy
 is created, and this entry point cannot restore a deleted file."
   (let ((lock (plist-get target :directory)))
@@ -1244,10 +1245,12 @@ is created, and this entry point cannot restore a deleted file."
           (error "Shared-note disposal cannot write or restore files"))
         (when before-write (funcall before-write))
         (unless (funcall currentp) (error "Shared-note ownership is unavailable"))
-        (when (mevedel-memory-notes-in-use-p workspace relative)
-          (signal 'mevedel-memory-decision-held '("Shared file is in active local use")))
         (when-let* ((buffer (find-buffer-visiting path)) ((buffer-modified-p buffer)))
           (error "Shared note has unsaved buffer changes: %s" path))
+        ;; CURRENTP can yield during ownership/root IO after BEFORE-WRITE.
+        ;; Consult only local access state here, immediately before deletion.
+        (when (mevedel-memory-notes-in-use-p workspace relative)
+          (signal 'mevedel-memory-decision--held '("Shared file is in active local use")))
         (dolist (result
                  (mevedel-session-control-fs-run-program
                   (append

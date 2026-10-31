@@ -387,6 +387,36 @@ for remaining citations before deleting a note."
       (when (mevedel-journal-claim-settle claim 'completed (secure-hash 'sha256 text))
         (mevedel-memory-store-accepted workspace id)))))
 
+(defun mevedel-memory-store--publish-owned (workspace accepted mutation)
+  "Publish ACCEPTED's review in WORKSPACE under journal MUTATION ownership.
+ACCEPTED must be authenticated under MUTATION.  Verify retained evidence when
+the review is absent, publish it and release spare pins.  Pending proposals
+keep their admitted evidence; a no-action pass releases it."
+  (let* ((prepared (plist-get accepted :prepared))
+         (id (plist-get prepared :id))
+         (review (plist-get accepted :review))
+         (root (mevedel-workspace-root workspace))
+         (journal (mevedel-journal-store-directory root))
+         (path (file-name-concat journal (mevedel-journal-store--filename review 'consolidation))))
+    (mevedel-journal-cleanup-recover journal)
+    (unless (mevedel-session-control-fs-path-exists-p path)
+      (dolist (entry (plist-get prepared :entries))
+        (when (member (plist-get entry :id) (plist-get review :digests))
+          (unless (and (equal (plist-get prepared :hash)
+                              (mevedel-session-control-fs-read-file
+                               (mevedel-memory-store--pin workspace id (plist-get entry :id)) 'utf-8-unix 65))
+                       (equal (plist-get entry :sha256)
+                              (secure-hash 'sha256
+                                           (plist-get (mevedel-journal-store-read root (plist-get entry :file)) :text))))
+            (error "Accepted review evidence is unavailable")))))
+    (mevedel-memory-store--assert-owned mutation)
+    (let ((published (mevedel-journal-store-publish-review root review)))
+      (setf (mevedel-workspace-journal-observation workspace) nil)
+      (mevedel-memory-store--release-pins workspace prepared
+                                         (and (plist-get accepted :proposals) (plist-get review :digests)) mutation)
+      (mevedel-journal-cleanup-schedule workspace t)
+      published)))
+
 (defun mevedel-memory-store-publish (workspace id)
   "Recoverably publish WORKSPACE pass ID's accepted review and release spare pins.
 The accepted private proposal bundle must already exist. Pending proposals keep
@@ -394,31 +424,10 @@ their admitted evidence; a no-action pass releases it after public publication."
   (mevedel-memory-store--mutation
    workspace
    (lambda (mutation)
-     (let* ((accepted (or (mevedel-memory-store-accepted workspace id)
-                          (error "Memory pass has no accepted result")))
-            (prepared (plist-get accepted :prepared))
-            (review (plist-get accepted :review))
-            (root (mevedel-workspace-root workspace))
-            (journal (mevedel-journal-store-directory root))
-            (path (file-name-concat journal (mevedel-journal-store--filename review 'consolidation))))
-       (mevedel-journal-cleanup-recover journal)
-       (unless (mevedel-session-control-fs-path-exists-p path)
-         (dolist (entry (plist-get prepared :entries))
-           (when (member (plist-get entry :id) (plist-get review :digests))
-             (unless (and (equal (plist-get prepared :hash)
-                                 (mevedel-session-control-fs-read-file
-                                  (mevedel-memory-store--pin workspace id (plist-get entry :id)) 'utf-8-unix 65))
-                          (equal (plist-get entry :sha256)
-                                 (secure-hash 'sha256
-                                              (plist-get (mevedel-journal-store-read root (plist-get entry :file)) :text))))
-               (error "Accepted review evidence is unavailable")))))
-       (mevedel-memory-store--assert-owned mutation)
-       (let ((published (mevedel-journal-store-publish-review root review)))
-         (setf (mevedel-workspace-journal-observation workspace) nil)
-         (mevedel-memory-store--release-pins workspace prepared
-                                            (and (plist-get accepted :proposals) (plist-get review :digests)) mutation)
-         (mevedel-journal-cleanup-schedule workspace t)
-         published)))))
+     (mevedel-memory-store--publish-owned
+      workspace (or (mevedel-memory-store-accepted workspace id t)
+                    (error "Memory pass has no accepted result"))
+      mutation))))
 
 (defun mevedel-memory-store-recover (workspace)
   "Recover settled pass publications and evidence releases in WORKSPACE.
