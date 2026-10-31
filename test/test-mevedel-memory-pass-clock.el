@@ -64,7 +64,12 @@
          (mevedel-memory-pass--general-times workspace (mevedel-journal-store-entries root)))
        (retire (entry)
          ;; A covered digest expires before its dependent general review.
-         (dotimes (_ 3) (mevedel-journal-cleanup-expired workspace t))
+         ;; Stop once that review is retired, rather than creating and
+         ;; collecting another batch of otherwise unrelated cleanup claims.
+         (should-not (mevedel-journal-cleanup-pass-retired-p root (plist-get entry :pass-id)))
+         (cl-loop repeat 3
+                  until (mevedel-journal-cleanup-pass-retired-p root (plist-get entry :pass-id))
+                  do (mevedel-journal-cleanup-expired workspace t))
          (should (mevedel-journal-cleanup-pass-retired-p root (plist-get entry :pass-id)))
          (json-parse-string
           (mevedel-session-control-fs-read-file

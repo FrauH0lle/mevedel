@@ -185,6 +185,10 @@
              (identity (mevedel-workspace-identity-ensure directory))
              (mevedel-memory-dirs nil)
              (mevedel-memory-consolidation-mode 'manual)
+             ;; Most cases test settlement, not process dispatch.  Telemetry,
+             ;; disk failure and the late-callback race retain real children;
+             ;; test-mevedel-memory-pass-worker covers their other boundaries.
+             (mevedel-journal-worker--child-p t)
              (gptel--known-backends nil)
              (model (make-symbol "review-model"))
              (backend (gptel-make-openai "coordinator-test" :key "test-only" :models (list model)))
@@ -204,6 +208,9 @@
     (cl-labels ((start (&rest options)
                   (setq state (apply #'mevedel-memory-pass-start workspace
                                      (lambda (value) (cl-incf settlements) (setq result value)) options))
+                  (if mevedel-journal-worker--child-p
+                      (should-not (plist-get state :worker))
+                    (should (processp (plist-get state :worker))))
                   (let ((deadline (+ (float-time) 10)))
                     (while (and state (not (plist-get state :request))
                                 (not (plist-get state :settled)) (< (float-time) deadline))
@@ -212,6 +219,9 @@
                 (finish (text)
                   (funcall provider text (gptel-fsm-info request))
                   (gptel--fsm-transition request 'DONE)
+                  (if mevedel-journal-worker--child-p
+                      (should-not (plist-get state :worker))
+                    (should (processp (plist-get state :worker))))
                   (let ((deadline (+ (float-time) 15)))
                     (while (and (not (plist-get state :settled)) (< (float-time) deadline))
                       (accept-process-output nil .01))))
@@ -239,7 +249,7 @@
       ,test))
   (test)
   :doc "telemetry reports focused review counts and usage without private focus or content"
-  (progn
+  (let ((mevedel-journal-worker--child-p nil))
     (mevedel-test-memory-pass--digest workspace 1 "closed" "Closed")
     (start :focus "SECRET focus")
     (setf (plist-get (gptel-fsm-info request) :tokens) '(:input 11 :cached 3 :output 5)
@@ -284,7 +294,7 @@
       (should (= 1 (plist-get result :remaining)))
       (should-not (string-match-p "SECRET" (prin1-to-string records)))))
   :doc "telemetry preserves provider usage when accepting a valid result fails on disk"
-  (progn
+  (let ((mevedel-journal-worker--child-p nil))
     (mevedel-test-memory-pass--digest workspace 1 "closed" "Closed")
     (start)
     (make-directory (file-name-concat
@@ -322,7 +332,7 @@
     (should-not (mevedel-memory-pass-running workspace))
     (should-not (timerp (plist-get state :timer))))
   :doc "cancellation fences a late callback while a successor remains live"
-  (progn
+  (let ((mevedel-journal-worker--child-p nil))
     (mevedel-test-memory-pass--digest workspace 1 "closed" "Closed")
     (start)
     (let ((old-provider provider) (old-request request) (old-claim (plist-get state :claim)))

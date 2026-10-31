@@ -24,7 +24,9 @@
                           (mevedel-journal-max-age-days 14)
                           (mevedel-memory-consolidation-mode 'propose)
                           (mevedel-memory-consolidation-min-hours 24)
-                          (mevedel-memory-consolidation-min-digests 5)
+                          ;; Keep the real five-digest gate in the first case;
+                          ;; unrelated scheduling cases need only two digests.
+                          (mevedel-memory-consolidation-min-digests 2)
                           (mevedel-memory-pass--inhibit-scheduling nil)
                           (mevedel-memory-decision--inhibit-recovery nil)
                           (gptel--known-backends nil)
@@ -90,7 +92,7 @@
                                      ,test))
                  (test)
                  :doc "automatic admission requires five eligible digests while explicit review bypasses the gate"
-                 (progn
+                 (let ((mevedel-memory-consolidation-min-digests 5))
                    (dotimes (n 4) (digest (1+ n)))
                    (should-not (start :automatic t))
                    (should (= 0 calls))
@@ -136,17 +138,18 @@
                    (start :memory-only t)
                    (finish)
                    (cl-incf now 86401)
-                   (dotimes (n 5) (digest (1+ n)))
+                   (dotimes (n 2) (digest (1+ n)))
                    (start :focus "Source conditions")
                    (finish)
                    (should (start :automatic t))
-                   (should (= 5 (length selected)))
+                   (should (= 2 (length selected)))
                    (finish)
                    (should (= 3 calls)))
                  :doc "retired journal-bearing completion postpones review without retaining private bodies"
                  (progn
-                   (dotimes (n 5) (digest (1+ n)))
+                   (dotimes (n 2) (digest (1+ n)))
                    (start)
+                   (should (= 2 (length selected)))
                    (finish)
                    (let ((mevedel-memory-history-max-age-days 0))
                      (cl-incf now 1)
@@ -157,25 +160,27 @@
                      (mevedel-journal-cleanup-expired workspace t)
                      (should (mevedel-journal-cleanup-pass-retired-p
                               root (plist-get (plist-get state :claim) :owner))))
-                   (dotimes (n 5) (digest (+ 6 n)))
+                   (dotimes (n 2) (digest (+ 3 n)))
                    (should-not (start :automatic t))
                    (cl-incf now 86400)
                    (should (start :automatic t))
+                   (should (= 2 (length selected)))
                    (finish))
                  :doc "recovered note-only publication leaves journal admission available"
                  (let* ((claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
                         (prepared (mevedel-memory-store-prepare workspace claim (mevedel-memory-scope-capture workspace) nil "")))
                    (mevedel-memory-store-accept workspace prepared none nil "test:model" nil)
-                   (dotimes (n 5) (digest (1+ n)))
+                   (dotimes (n 2) (digest (1+ n)))
                    (should (start :automatic t))
+                   (should (= 2 (length selected)))
                    (should (= 1 calls))
                    (finish)
-                   (should (= 7 (length (mevedel-journal-store-entries root)))))
+                   (should (= 4 (length (mevedel-journal-store-entries root)))))
                  :doc "another client's live claim postpones automatic admission without settling it"
                  (let ((claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180)))
                    (unwind-protect
                        (progn
-                         (dotimes (n 5) (digest (1+ n)))
+                         (dotimes (n 2) (digest (1+ n)))
                          (should-not (start :automatic t))
                          (should-not (mevedel-journal-claim-outcome claim))
                          (should (= 0 calls)))
@@ -184,7 +189,7 @@
                  (let ((claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180)))
                    (unwind-protect
                        (progn
-                         (dotimes (n 5) (digest (1+ n)))
+                         (dotimes (n 2) (digest (1+ n)))
                          (mevedel-memory-pass-schedule workspace)
                          (drain)
                          (should (= 0 calls))
@@ -192,9 +197,10 @@
                          (mevedel-memory-pass-schedule workspace)
                          (drain)
                          (should (= 1 calls))
+                         (should (= 2 (length selected)))
                          (let (messages)
                            (mevedel-test--with-captured-messages messages (finish))
-                           (should (string-search "memory review covered 5 digests" messages))))
+                           (should (string-search "memory review covered 2 digests" messages))))
                      (mevedel-journal-claim-settle claim 'cancelled "")))
                  :doc "manual and cached count failures perform no filesystem work at turn completion"
                  (progn
@@ -245,7 +251,7 @@
                                                     (mevedel-journal-store-entries root))))))
                  :doc "exit cancels queued and running work and fences late queue callbacks"
                  (progn
-                   (dotimes (n 5) (digest (1+ n)))
+                   (dotimes (n 2) (digest (1+ n)))
                    (mevedel-memory-pass-schedule workspace)
                    (let* ((timer (gethash workspace mevedel-memory-pass--pending))
                           (function (timer--function timer)) (args (timer--args timer)))
@@ -257,7 +263,7 @@
                    (should (eq 'aborted (plist-get result :outcome)))
                    (should-not (mevedel-memory-pass-running workspace))
                    (finish)
-                   (should (= 5 (length (mevedel-journal-store-entries root)))))
+                   (should (= 2 (length (mevedel-journal-store-entries root)))))
                  :doc "auto preserves an intervening creation and can apply an independent fresh proposal"
                  (let ((memory (proposals))
                        (mevedel-memory-consolidation-mode 'auto))
@@ -293,21 +299,22 @@
                    (should-not (plist-get result :updated-files)))
                  :doc "a failed count is throttled for ten minutes and a later turn rechecks it"
                  (mevedel-test--with-captured-messages nil
-                                                       (dotimes (n 4) (digest (1+ n)))
+                                                       (digest 1)
                                                        (mevedel-memory-pass-schedule workspace)
                                                        (drain)
                                                        (should (= 0 calls))
-                                                       (digest 5)
+                                                       (digest 2)
                                                        (mevedel-memory-pass-schedule workspace)
                                                        (should (= 0 (hash-table-count mevedel-memory-pass--pending)))
                                                        (setf (plist-get (mevedel-workspace-memory-schedule workspace) :after) (1- (float-time)))
                                                        (mevedel-memory-pass-schedule workspace)
                                                        (drain)
                                                        (should (= 1 calls))
+                                                       (should (= 2 (length selected)))
                                                        (finish))
                  :doc "transport deferral can be cancelled without inference or a leaked opportunity"
                  (let ((key (list 'memory-pass workspace)))
-                   (dotimes (n 5) (digest (1+ n)))
+                   (dotimes (n 2) (digest (1+ n)))
                    ;; Queue the opportunity before the transport becomes busy;
                    ;; scheduling inside a handler now correctly holds its timer.
                    (mevedel-memory-pass-schedule workspace)
