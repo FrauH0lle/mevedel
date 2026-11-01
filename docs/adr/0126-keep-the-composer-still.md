@@ -93,10 +93,10 @@ Their viewport transaction must not replace that exact mapping with a source-run
 character offset or mistake the changed offset for a lost start. They therefore
 reuse the same viewport policy while retaining the splice's position mapping.
 
-History readers keep their native viewport when a window changes height,
-including growth caused by a shrinking echo area. For other windows,
-height-only growth repairs newly exposed blank space using the height
-delta, provided the same buffer and width were displayed previously. This
+History and status readers keep their native viewport when a window changes
+height, including growth caused by a shrinking echo area. Only for windows whose
+point is in the editable composer, height-only growth repairs newly exposed blank
+space using the height delta, provided the same buffer and width were displayed previously. This
 inference covers popup closure with an unchanged start, not arbitrary simultaneous
 scrolling, reflow or buffer replacement. The first size change also remembers
 the original height and viewport. While the buffer and width remain unchanged
@@ -233,6 +233,16 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Status visits skip window-growth repair too (2026-11-01).** A live trace
+  after Magit returned to the view and a consult minibuffer closed showed
+  point in the status zone, not transcript history. The history-reader guard
+  therefore allowed blank-space repair and moved the start backward from
+  167024 to 166391. Height-growth repair now applies only when that window's
+  point is in the editable composer. Status visits retain their reading
+  viewport, consistent with their priority over blank-space repair during
+  redraws. Composer unmatched-growth and size-round-trip recovery remain
+  unchanged; previewing another buffer can still invalidate their baseline.
 
 - **Status shrink keeps the reader, not the blank-space budget (2026-11-01).**
   Repeated agent-row toggles reproduced a backward-moving window start in both

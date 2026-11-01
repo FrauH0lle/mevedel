@@ -833,5 +833,80 @@ WINDOW defaults to the selected window, but need not be selected."
   :doc "non-selected reader in paragraph middle stays nearest to rewritten text"
   nil "stable middle" 'shrink)
 
+(mevedel-deftest mevedel-view-user-state/status-minibuffer-roundtrip ()
+  (progn
+    (skip-unless (display-graphic-p))
+    (mevedel-view-user-state-test--with-view
+      (let* ((left (selected-window))
+             (right (split-window-right))
+             (windows (list left right))
+             (resize-mini-windows nil)
+             (preview (generate-new-buffer "preview")))
+        (unwind-protect
+            (progn
+              (set-window-buffer right view-buf)
+              (mevedel-view-test--insert-composer-draft
+               mevedel-view-user-state-test--draft 4)
+              (mevedel-view--render-status)
+              (redisplay t)
+              (goto-char (point-min))
+              (search-forward "[Manage]")
+              (backward-char (length "[Manage]"))
+              (let ((visit (point)))
+                (should (>= visit mevedel-view--status-marker))
+                (should (< visit (mevedel-view--input-start)))
+                (dolist (window windows)
+                  (set-window-point window visit)
+                  (mevedel-view--set-viewport
+                   window (mevedel-view--viewport-at-y window visit 200)))
+                (select-window (if ,right right left))
+                (redisplay t)
+                (let ((before
+                       (mapcar (lambda (window)
+                                 (should (> (mevedel-view--window-blank-pixels window) 160))
+                                 (list (window-start window)
+                                       (mevedel-view--position-screen-y visit window)))
+                               windows)))
+                  (condition-case nil
+                      (minibuffer-with-setup-hook
+                          (lambda ()
+                            (enlarge-window 8)
+                            (redisplay t)
+                            ;; Previewing another buffer invalidates the old
+                            ;; size baseline, as consult-buffer does in use.
+                            (when ,preview
+                              (cl-mapc
+                               (lambda (window state)
+                                 (set-window-buffer window preview)
+                                 (redisplay t)
+                                 (set-window-buffer window view-buf)
+                                 (set-window-point window visit)
+                                 (set-window-start window (car state) t)
+                                 (redisplay t))
+                               windows before))
+                            (dolist (window windows)
+                              (should (= visit (window-point window))))
+                            (setq unread-command-events (list ?\C-g)))
+                        (read-from-minibuffer "Preview: "))
+                    (quit nil))
+                  (redisplay t)
+                  (should (eq (selected-window) (if ,right right left)))
+                  (should (equal mevedel-view-user-state-test--draft
+                                 (mevedel-view--input-text)))
+                  (dolist (window windows)
+                    (should (= visit (window-point window))))
+                  (should
+                   (equal before
+                          (mapcar (lambda (window)
+                                    (list (window-start window)
+                                          (mevedel-view--position-screen-y visit window)))
+                                  windows))))))
+          (kill-buffer preview)))))
+  (right preview)
+  :doc "status readers retain their rows across minibuffer resizing, left selected" nil nil
+  :doc "status readers retain their rows across minibuffer resizing, right selected" t nil
+  :doc "status readers retain their rows after preview resets the baseline, left selected" nil t
+  :doc "status readers retain their rows after preview resets the baseline, right selected" t t)
+
 (provide 'test-mevedel-view-user-state)
 ;;; test-mevedel-view-user-state.el ends here

@@ -1144,10 +1144,10 @@ command switches buffers. Commandless mutations repair immediately despite a
 stale `this-command` value. History/snapshot replacement and sending a folded draft are
 single transactions, not independent insertion/deletion viewport states. Only
 an actual increase in blank pixels triggers backward traversal. Height-only
-window growth leaves transcript readers at their native reading viewport;
-for other windows it infers the old blank area from the height delta when the
-buffer and width are unchanged. Width changes and newly displayed buffers are
-not inferred. The first size change remembers the original height and viewport;
+window growth leaves transcript and status readers at their native reading
+viewport; only windows with point in the editable composer infer the old blank
+area from the height delta when the buffer and width are unchanged. Width changes
+and newly displayed buffers are not inferred. The first size change remembers the original height and viewport;
 returning to that height restores the viewport while the buffer and width are
 unchanged and nothing else moved it. Shrink-then-grow therefore exposes nothing
 new, grow-then-shrink undoes its repair, and only growth beyond both the

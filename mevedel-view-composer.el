@@ -1512,7 +1512,8 @@ that height restores it, in either order: a shrink then growth exposes
 nothing new, and a growth then shrink undoes its repair.  Only growth
 beyond both the original height and any height already repaired counts as
 newly exposed.
-Transcript readers keep their native viewport instead of filling new space.
+Only windows with point in the editable composer fill new space; transcript
+and status readers keep their native viewport.
 Pending input keeps the viewport, except when undoing a repair made within
 `mevedel-view--transient-repair-seconds'.
 Record geometry only on size changes, not on ordinary redisplays."
@@ -1520,9 +1521,9 @@ Record geometry only on size changes, not on ordinary redisplays."
          (height (cdr (mevedel-view--window-body-geometry window)))
          (width (window-body-width window t))
          (viewport (cons (window-start window) (window-vscroll window t)))
-         (reader (and (markerp mevedel-view--status-marker)
-                      (eq (marker-buffer mevedel-view--status-marker) (current-buffer))
-                      (< (window-point window) mevedel-view--status-marker)))
+         (composer (and (markerp mevedel-view--input-marker)
+                        (eq (marker-buffer mevedel-view--input-marker) (current-buffer))
+                        (>= (window-point window) (mevedel-view--input-start))))
          ;; :height and :viewport are the original geometry, :shown the
          ;; viewport last observed or set here, :accounted the tallest height
          ;; whose blank space is already settled, :repaired the last repair time.
@@ -1532,7 +1533,7 @@ Record geometry only on size changes, not on ordinary redisplays."
                  (= (plist-get state :width) width)
                  (equal (plist-get state :shown) viewport))
       (setq state nil))
-    (if (or reader
+    (if (or (not composer)
             (not (and (eq (window-old-buffer window) (current-buffer))
                       (> old-height 0)
                       (= width (window-old-body-pixel-width window)))))
