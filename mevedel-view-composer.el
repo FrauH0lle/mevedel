@@ -1233,13 +1233,27 @@ into a neighbor.  With STRICT, return nil instead of clamping a lost offset."
            (count 0)
            found done)
        (while (and (not done) (< pos limit))
-         (let ((next (mevedel-view--render-anchor-run-end pos limit)))
-           (when (equal identity (mevedel-view--render-anchor-identity pos))
+         (let ((next (mevedel-view--render-anchor-run-end pos limit))
+               (current (mevedel-view--render-anchor-identity pos)))
+           (cond
+            ((equal identity current)
              (if (= count nth)
                  (setq done t
                        found (and (or (not strict) (< (+ pos offset) next))
                                   (min (max pos (1- next)) (+ pos offset))))
                (setq count (1+ count))))
+            ;; A completed response can absorb its formerly separate live
+            ;; paragraph.  Retain the character, not the container's header.
+            ((and (eq (cadr identity) 'response)
+                  (eq (cadr current) 'response)
+                  (not (get-text-property pos 'mevedel-view-collapsed))
+                  (< (car current) (car identity))
+                  (< (car identity)
+                     (cdr (get-text-property pos 'mevedel-view-source))))
+             (let ((position (+ pos (- (car identity) (car current)) offset)))
+               (setq done t
+                     found (and (or (not strict) (< position next))
+                                (min (1- next) position))))))
            (setq pos next)))
        (or found
            (and (not strict)

@@ -711,5 +711,127 @@ WINDOW defaults to the selected window, but need not be selected."
     (should (= transcript (point)))
     (should-not (window-parameter nil 'mevedel-view-scroll-return))))
 
+(mevedel-deftest mevedel-view-user-state/live-reader ()
+  ;; The graphical runner repeats every transition after a real wheel event
+  ;; in the command loop, including one targeting the non-selected window.
+  (dolist (scroll (if noninteractive '(nil) '(nil t)))
+    (mevedel-view-user-state-test--with-view
+      (mevedel-view-test--insert-data data-buf "Continue.\n" nil)
+      (mevedel-view--full-rerender)
+      (mevedel-view-user-state-test--begin-turn data-buf)
+      (mevedel-view-user-state-test--add-chunk
+       data-buf "\nA paragraph with a stable middle and a stable ending.")
+      (mevedel-view--render-stream-update data-buf)
+      (let* ((windows (mevedel-view-user-state-test--arrange))
+	     (reader (if ,selected (car windows) (cdr windows)))
+	     (position (save-excursion
+			 (goto-char (point-min))
+			 (search-forward ,needle)
+			 (point))))
+	(set-window-point reader position)
+	(set-window-start reader
+			  (save-excursion (goto-char position)
+					  (line-beginning-position)))
+	(unless noninteractive (redisplay t))
+	(when scroll
+	  (let ((scroll-preserve-screen-position t)
+		(mouse-wheel-follow-mouse t)
+		(mouse-wheel-scroll-amount '(2 ((shift) . hscroll)))
+		(mouse-wheel-progressive-speed nil))
+	    (mevedel-view-user-state-test--wheel 'wheel-up reader))
+	  (should (= position (window-point reader))))
+	(let ((start (window-start reader))
+	      (y (mevedel-view--position-screen-y position reader))
+	      (selected-window (selected-window)))
+	  (when (eq ,chunk 'rewrite)
+	    ;; A canonical source correction before the retained paragraph
+	    ;; invalidates the live tail through its real before-change hook.
+	    (with-current-buffer data-buf
+	      (goto-char (point-min))
+	      (search-forward "Streaming")
+	      (delete-region (- (point) 9) (point))
+	      (insert (propertize "Continued" 'gptel 'response))))
+	  (when (eq ,chunk 'shrink)
+	    (with-current-buffer data-buf
+	      (goto-char (point-min))
+	      (search-forward "A paragraph")
+	      (delete-region (match-beginning 0) (point-max))
+	      (insert (propertize "A shorter paragraph." 'gptel 'response))))
+	  (if (memq ,chunk '(tool rewrite))
+	      (progn
+		(mevedel-view-test--insert-data
+		 data-buf "(:name \"Bash\" :args (:command \"echo done\"))\n\ndone\n"
+		 '(tool . "live-reader-tool"))
+		(mevedel-view-user-state-test--add-chunk data-buf "After the tool."))
+	    (unless (memq ,chunk '(settle shrink))
+	      (mevedel-view-user-state-test--add-chunk data-buf ,chunk)))
+	  (if (memq ,chunk '(settle shrink))
+	      (let ((from (marker-position mevedel-view--data-turn-start)))
+		(with-current-buffer data-buf
+		  (mevedel-view-stream-render-response from (point-max))))
+	    (mevedel-view--render-stream-update data-buf))
+	  (unless noninteractive (redisplay t))
+	  (when (eq ,chunk 'shrink)
+	    (setq position (save-excursion
+			     (goto-char (point-min))
+			     (search-forward "A shorter paragraph.")
+			     (point))))
+	  (should (= position (window-point reader)))
+	  (should (= start (window-start reader)))
+	  (should (equal y (mevedel-view--position-screen-y
+			    (window-point reader) reader)))
+	  (should (eq selected-window (selected-window)))
+	  (should (equal mevedel-view-user-state-test--draft
+			 (mevedel-view--input-text)))))))
+  (selected needle chunk)
+  :doc "selected reader at paragraph end survives growth"
+  t "stable ending." " More text."
+  :doc "selected reader in paragraph middle survives growth"
+  t "stable middle" " More text."
+  :doc "non-selected reader at paragraph end survives growth"
+  nil "stable ending." " More text."
+  :doc "non-selected reader in paragraph middle survives growth"
+  nil "stable middle" " More text."
+  :doc "selected reader at paragraph end survives a stable block boundary"
+  t "stable ending." "\n\nNext paragraph."
+  :doc "selected reader in paragraph middle survives a stable block boundary"
+  t "stable middle" "\n\nNext paragraph."
+  :doc "non-selected reader at paragraph end survives a stable block boundary"
+  nil "stable ending." "\n\nNext paragraph."
+  :doc "non-selected reader in paragraph middle survives a stable block boundary"
+  nil "stable middle" "\n\nNext paragraph."
+  :doc "selected reader at paragraph end survives a tool boundary"
+  t "stable ending." 'tool
+  :doc "selected reader in paragraph middle survives a tool boundary"
+  t "stable middle" 'tool
+  :doc "non-selected reader at paragraph end survives a tool boundary"
+  nil "stable ending." 'tool
+  :doc "non-selected reader in paragraph middle survives a tool boundary"
+  nil "stable middle" 'tool
+  :doc "selected reader at paragraph end survives settlement"
+  t "stable ending." 'settle
+  :doc "selected reader in paragraph middle survives settlement"
+  t "stable middle" 'settle
+  :doc "non-selected reader at paragraph end survives settlement"
+  nil "stable ending." 'settle
+  :doc "non-selected reader in paragraph middle survives settlement"
+  nil "stable middle" 'settle
+  :doc "selected reader at paragraph end survives a source-corrected stream update"
+  t "stable ending." 'rewrite
+  :doc "selected reader in paragraph middle survives a source-corrected stream update"
+  t "stable middle" 'rewrite
+  :doc "non-selected reader at paragraph end survives a source-corrected stream update"
+  nil "stable ending." 'rewrite
+  :doc "non-selected reader in paragraph middle survives a source-corrected stream update"
+  nil "stable middle" 'rewrite
+  :doc "selected reader at paragraph end stays nearest to rewritten text"
+  t "stable ending." 'shrink
+  :doc "selected reader in paragraph middle stays nearest to rewritten text"
+  t "stable middle" 'shrink
+  :doc "non-selected reader at paragraph end stays nearest to rewritten text"
+  nil "stable ending." 'shrink
+  :doc "non-selected reader in paragraph middle stays nearest to rewritten text"
+  nil "stable middle" 'shrink)
+
 (provide 'test-mevedel-view-user-state)
 ;;; test-mevedel-view-user-state.el ends here
