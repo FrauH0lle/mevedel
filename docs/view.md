@@ -2942,12 +2942,14 @@ context that never becomes the chat buffer's `gptel-context`. Root `WaitAgent`
 uses the same steering path and wakes the wait at the next possible boundary
 rather than creating a mailbox message.
 
-A Claude Code turn takes steering the same way. It arrives with the next native
-tool batch, or as a further prompt of the same turn when the native prompt ends
-first. Steering with images stops the native prompt at its tool batch and
-continues the turn with a prompt carrying them. A native turn cannot wait at a held boundary, so steering still held by
-the cockpit or an unresolved interaction when it succeeds becomes the first
-follow-ups ([Sessions](sessions.md#native-context-delivery)).
+A Claude Code turn takes steering at the same boundaries. After the current
+native tool batch finishes, its prompt stops and the same turn sends an ordinary
+user prompt carrying the steering text and images. Steering is never delivered
+as hook context. If the native prompt ends first, steering becomes a further
+prompt of that same turn. Neither path interrupts a running tool or starts a new
+Mevedel turn. A native turn cannot wait at a held boundary, so steering still
+held by the cockpit or an unresolved interaction when it succeeds becomes the
+first follow-ups ([Sessions](sessions.md#native-context-delivery)).
 
 A plain send refused because the workflow is occupied names the occupying
 cause: a retained accepted-plan implementation hints

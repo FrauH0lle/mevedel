@@ -126,18 +126,6 @@ user attachment."
                           parts)))
           content))))
 
-(defun mevedel-claude-code-context--prompt-received-p (pending message)
-  "Return non-nil when native user MESSAGE echoes PENDING prompt delivery.
-Its body is one exact text block, and the echo carries at least one image
-per pending image; the prompt may carry other parts around them."
-  (let ((parts (mevedel-claude-code-context--user-parts message)))
-    (and (seq-some (lambda (block)
-                     (and (equal "text" (alist-get 'type block))
-                          (equal (plist-get pending :body) (alist-get 'text block))))
-                   parts)
-         (>= (length (mevedel-claude-code-context--echoed-images parts))
-             (length (plist-get pending :images))))))
-
 (defun mevedel-claude-code-context--observations (owner)
   "Render OWNER's currently selected observations through their shared owner."
   (let* ((mevedel-tools--current-engine owner)
@@ -273,11 +261,6 @@ as full restoration.  The native system already retains the complete baseline."
 
 ;;; Steering
 
-(defconst mevedel-claude-code-context--steering-header
-  "The user sent this message while you were working. Treat it as their direct input with the authority of a user prompt; address it, then continue."
-  "Model-visible framing for steering delivered inside a running native turn.
-Hook context is not a user message, so the header restores its authority.")
-
 (defun mevedel-claude-code-context--steering-entries (owner)
   "Return root request OWNER's steering deliverable now, in FIFO order.
 A turn ending at a boundary takes none, and held delivery waits."
@@ -290,7 +273,7 @@ A turn ending at a boundary takes none, and held delivery waits."
 
 (defun mevedel-claude-code-context--steering (owner)
   "Prepare OWNER's deliverable steering, or nil.
-Return a plist of the model-visible :body, its ACP :images, the user-role
+Return a plist of the authored :text, its ACP :images, the user-role
 :transcript, mention reminder :entries and the receipt :commits that consume
 each entry."
   (when-let* ((entries (mevedel-claude-code-context--steering-entries owner)))
@@ -299,14 +282,13 @@ each entry."
            (session (mevedel-request-session owner))
            (fresh (or (mevedel-request-directive-uuid owner)
                       (plist-get info :mevedel-native-isolated)))
-           body images transcript reminders commits)
+           texts images transcript reminders commits)
       (dolist (entry entries)
         (let ((expansion (with-current-buffer (plist-get info :buffer)
                            (mevedel-tools-steering-expand
                             session entry fresh (plist-get info :model)))))
-          (setq body (concat body mevedel-claude-code-context--steering-header "\n\n"
-                             (plist-get expansion :text) "\n")
-                images (append images
+          (push (plist-get expansion :text) texts)
+          (setq images (append images
                                (mevedel-claude-code-context--images
                                 (plist-get expansion :media-contexts)
                                 (plist-get info :model)))
@@ -321,7 +303,8 @@ each entry."
           (push (lambda () (mevedel-tools-steering-commit session entry expansion fresh)) commits)))
       (dolist (entry entries)
         (mevedel-tools--assert-steering-claim session entry))
-      (list :body body :images images :transcript transcript
+      (list :text (mapconcat #'identity (nreverse texts) "\n\n")
+            :images images :transcript transcript
             :entries (nreverse reminders) :commits (nreverse commits)))))
 
 (defun mevedel-claude-code-context-check (owner)
@@ -370,11 +353,11 @@ plist of further typed `:entries' and their `:commits'."
           (error "Claude's unacknowledged delivery prevents required context updates"))
         (unless pending
           (let* ((batch (mevedel-claude-code-context--batch entries (if prompt-p 'turn-start 'mid-turn)))
-                 (body (concat (car batch) (plist-get steering :body)))
+                 (body (car batch))
                  (transcript (concat (cdr batch) (plist-get steering :transcript)))
-                 ;; Hook context is text only; steering images need a prompt.
+                 ;; Authored steering needs a user prompt, never hook context.
                  (overflow (and (not prompt-p)
-                                (or (plist-get steering :images)
+                                (or steering
                                     (not (mevedel-claude-code-context-hook-fits-p body)))))
                  (messages (and context (mevedel-tools--mailbox-new-messages
                                          context (plist-get info :buffer))))
@@ -397,6 +380,7 @@ plist of further typed `:entries' and their `:commits'."
               (setf (mevedel-engine-info owner)
                     (plist-put info :mevedel-claude-context-pending
                                (list :context context :messages (nreverse selected) :body body
+                                     :steering-text (plist-get steering :text)
                                      :images (plist-get steering :images)
                                      :transcript transcript
                                      :observations (and changed observations)
@@ -409,10 +393,14 @@ plist of further typed `:entries' and their `:commits'."
                                      :event "PostToolBatch")))
               body)))))))
 
-(defun mevedel-claude-code-context--pending-images (owner)
-  "Return the ACP images of OWNER's pending context delivery."
-  (plist-get (plist-get (mevedel-engine-info owner) :mevedel-claude-context-pending)
-             :images))
+(defun mevedel-claude-code-context--prompt-parts (pending)
+  "Return ordered ACP content parts for PENDING delivery.
+Typed context and mail precede authored steering text and its images."
+  (when pending
+    (append (list `((type . "text") (text . ,(plist-get pending :body))))
+            (when-let* ((text (plist-get pending :steering-text)))
+              (list `((type . "text") (text . ,text))))
+            (plist-get pending :images))))
 
 (defun mevedel-claude-code-context-next-prompt (owner)
   "Return OWNER's next native prompt content within the same turn, or nil.
@@ -420,33 +408,45 @@ Full overflow context continues the turn, as does steering the user queued
 after its last tool boundary.  Delivery still requires the exact SDK user
 receipt.  A user boundary stop discards only these unsubmitted batches; their
 underlying events remain queued."
-  (let ((info (mevedel-engine-info owner)) content)
-    (dolist (key '(:mevedel-claude-context-pending :mevedel-claude-restoration-pending))
-      (when-let* ((pending (plist-get info key))
-                  ((eq 'continuation (plist-get pending :route))))
-        (if (plist-get info :mevedel-end-turn)
-            (setq info (plist-put info key nil))
-          (plist-put pending :route 'prompt)
-          (push `((type . "text") (text . ,(plist-get pending :body))) content)
-          (dolist (image (plist-get pending :images))
-            (push image content)))))
-    (setf (mevedel-engine-info owner) info)
-    (if (not content)
-        (when-let* (((not (plist-get info :mevedel-claude-context-pending)))
-                    ((mevedel-claude-code-context--steering-entries owner))
-                    (body (mevedel-claude-code-context-prepare owner t)))
-          (vconcat (list `((type . "text") (text . ,body)))
-                   (mevedel-claude-code-context--pending-images owner)))
-      ;; Restoration occupies its own receipt slot.  Capture prompt reminders
-      ;; too, including a child's newly reserved final-sample warning.
-      (unless (plist-get info :mevedel-claude-context-pending)
-        (when-let* ((body (mevedel-claude-code-context-prepare owner t)))
-          (push `((type . "text") (text . ,body)) content)
-          (dolist (image (mevedel-claude-code-context--pending-images owner))
-            (push image content))))
-      (vconcat [((type . "text")
-                 (text . "Continue the current task after applying the complete context updates below. The prior native prompt stopped only to deliver this context in full. Earlier tool effects remain applied; do not replay them."))]
-               (nreverse content)))))
+  (let* ((info (mevedel-engine-info owner))
+         (deliveries
+          (cl-loop for key in '(:mevedel-claude-restoration-pending :mevedel-claude-context-pending)
+                   for pending = (plist-get info key)
+                   when (eq 'continuation (plist-get pending :route))
+                   collect (cons key pending)))
+         (boundary-p deliveries))
+    ;; A continuation can also need fresh prompt reminders or steering that
+    ;; arrived after the final tool boundary.  Never replace a pending hook.
+    (when (and (not (plist-get info :mevedel-end-turn))
+               (not (plist-get info :mevedel-claude-context-pending))
+               (or deliveries (mevedel-claude-code-context--steering-entries owner))
+               (mevedel-claude-code-context-prepare owner t))
+      (setq deliveries
+            (append deliveries
+                    (list (cons :mevedel-claude-context-pending
+                                (plist-get (mevedel-engine-info owner) :mevedel-claude-context-pending))))))
+    ;; Expansion may process an explicit boundary stop.  Discard only the
+    ;; unsubmitted batches; dead-turn settlement releases their queue claims.
+    (setq info (mevedel-engine-info owner))
+    (if (plist-get info :mevedel-end-turn)
+        (progn
+          (dolist (delivery deliveries)
+            (setq info (plist-put info (car delivery) nil)))
+          (setf (mevedel-engine-info owner) info)
+          nil)
+      (when deliveries
+        (let ((content
+               (vconcat
+                (when (and boundary-p
+                           (not (seq-some (lambda (delivery) (plist-get (cdr delivery) :steering-text)) deliveries)))
+                  [((type . "text")
+                    (text . "Continue the current task after applying the complete context updates below. The prior native prompt stopped only to deliver this context in full. Earlier tool effects remain applied; do not replay them."))])
+                (cl-loop for (_key . pending) in deliveries
+                         append (mevedel-claude-code-context--prompt-parts pending)))))
+          (dolist (delivery deliveries)
+            (plist-put (cdr delivery) :route 'prompt)
+            (plist-put (cdr delivery) :content content))
+          content)))))
 
 (defun mevedel-claude-code-context-prompt (owner content &optional history)
   "Append OWNER's selected context and initial context deliveries to ACP CONTENT.
@@ -493,8 +493,13 @@ The native user-message echo, not submission, confirms delivery."
                                                                    " Never replay a prior tool call merely because its result is missing."))))
                         ;; Nothing is consumed, but tools still wait for receipt.
                         :commits (cons #'ignore (plist-get extra :commits)))))
-    (when-let* ((body (mevedel-claude-code-context-prepare owner t extra)))
-      (setq content (vconcat content (vector `((type . "text") (text . ,body))))))
+    (when (mevedel-claude-code-context-prepare owner t extra)
+      (setq content
+            (vconcat content
+                     (mevedel-claude-code-context--prompt-parts
+                      (plist-get (mevedel-engine-info owner) :mevedel-claude-context-pending))))
+      (plist-put (plist-get (mevedel-engine-info owner) :mevedel-claude-context-pending)
+                 :content content))
     (when-let* ((commit (plist-get (mevedel-engine-info owner) :mevedel-claude-input-commit)))
       (setf (mevedel-engine-info owner)
             (plist-put
@@ -520,7 +525,8 @@ tool notifications, malformed output and duplicate receipts cannot consume mail.
                    (equal "_claude/sdkMessage" (alist-get 'method notification))
                    (pcase (plist-get pending :route)
                      ('prompt
-                      (mevedel-claude-code-context--prompt-received-p pending message))
+                      (when-let* ((content (plist-get pending :content)))
+                        (mevedel-claude-code-context--input-received-p content message)))
                      ('hook
                       (and (equal "system" (alist-get 'type message))
                            (equal "hook_response" (alist-get 'subtype message))

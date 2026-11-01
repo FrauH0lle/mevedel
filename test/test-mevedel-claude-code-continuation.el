@@ -9,6 +9,8 @@
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "mevedel-engine-test-support"))
 (require 'mevedel-claude-code-session)
+(require 'mevedel-claude-code)
+(require 'mevedel-view-stream)
 
 (mevedel-deftest mevedel--send-request/claude-large-context (:quiet t)
                  (dolist (mode '(normal missing pause cancel restore))
@@ -20,7 +22,7 @@
                            (file (file-name-concat root "evidence.txt"))
                            (mevedel-goal-token-budget 48)
                            (goal (mevedel-goal-create "Finish this bounded native turn" :session session))
-                           (calls 0) prompts decisions readings
+                           (calls 0) prompts decisions readings steered
                            (mevedel-post-tool-use-functions
                             (list (lambda (_event)
                                     (cl-incf calls)
@@ -47,6 +49,12 @@
                                                        (push (copy-sequence (plist-get (mevedel-engine-info owner) :tokens-full)) readings))
                                                      (let ((decision (mevedel-claude-code--control owner event)))
                                                        (when (eq :json-false (plist-get decision :continue))
+                                                         (when (and (eq mode 'restore) (not steered))
+                                                           (setq steered t)
+                                                           (mevedel-session-enqueue-pending-input
+                                                            session 'steering
+                                                            (list :input "RESTORATION-STEER-4801"
+                                                                  :request-id (mevedel-request-id request))))
                                                          (pcase mode
                                                            ('pause (mevedel-goal-pause))
                                                            ('cancel (mevedel-abort buffer))))
@@ -91,6 +99,15 @@
                       (when (memq mode '(normal restore))
                         (should (string-search changed (prin1-to-string (car prompts))))
                         (should (eq :json-false (plist-get (cadr decisions) :continue))))
+                      (when (eq mode 'normal)
+                        (should (equal
+                                 "Continue the current task after applying the complete context updates below. The prior native prompt stopped only to deliver this context in full. Earlier tool effects remain applied; do not replay them."
+                                 (alist-get 'text (seq-elt (car prompts) 0)))))
+                      (when (eq mode 'restore)
+                        (should (equal "RESTORATION-STEER-4801"
+                                       (alist-get 'text (seq-elt (car prompts) (1- (length (car prompts)))))))
+                        (should-not (string-search "Continue the current task" (prin1-to-string (car prompts))))
+                        (should (= 1 (how-many "RESTORATION-STEER-4801" (point-min) (point-max)))))
                       (should (equal (append (when (memq mode '(normal restore)) '((:input 30 :output 18 :cache 0)))
                                              '((:input 13 :output 7 :cache 0))
                                              (when (eq mode 'restore) '((:input 13 :output 7 :cache 0)))) readings))
@@ -101,6 +118,106 @@
                           ;; MCP refusal may race the later SDK usage notification on stdio.
                           (should (memq (mevedel-goal-tokens-used goal) '(20 48)))
                         (should (= (if (memq mode '(pause cancel)) 20 48) (mevedel-goal-tokens-used goal))))))))
+
+(mevedel-deftest mevedel--send-request/claude-steering-boundary (:quiet t)
+  (dolist (mode '(normal end-turn cancel-before cancel-after))
+    (mevedel-engine-test--with-claude-session
+      (let* ((file (file-name-concat root "evidence.txt"))
+             (draft "> Keep this draft\nwith its second line")
+             (calls 0) (terminals 0) steered stopped received prompts view
+             (gptel-post-response-functions
+              (cons (lambda (&rest _) (cl-incf terminals)) gptel-post-response-functions))
+             (mevedel-post-tool-use-functions
+              (list (lambda (_event)
+                      (cl-incf calls)
+                      (unless steered
+                        (setq steered t)
+                        (mevedel-session-enqueue-pending-input
+                         session 'steering (list :input "BOUNDARY-USER-8841"
+                                                 :request-id (mevedel-request-id request))))
+                      nil))))
+        (write-region "Evidence" nil file nil 'silent)
+        (setq-local gptel-system-prompt "Steering boundary fixture"
+                    gptel-tools (list (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read"))))
+        (unwind-protect
+            (save-window-excursion
+              (setq view (mevedel-view--ensure buffer))
+              (set-window-buffer (selected-window) view)
+              (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+                         (mevedel-engine-test--claude-launch
+                          (lambda (_system _mcp _model _effort &optional _id hook)
+                            (list :control
+                                  (lambda (owner event)
+                                    (let ((decision (mevedel-claude-code--control owner event)))
+                                      (when (and (eq :json-false (plist-get decision :continue)) (not stopped))
+                                        (setq stopped t)
+                                        (pcase mode
+                                          ('end-turn
+                                           ;; Keep the requeued follow-up inspectable after the stop.
+                                           (mevedel-session-set-pending-input-paused session t)
+                                           (setf (mevedel-engine-info owner)
+                                                 (plist-put (mevedel-engine-info owner) :mevedel-end-turn 'user)))
+                                          ('cancel-before (mevedel-abort buffer))))
+                                      decision))
+                                  :observe
+                                  (lambda (owner event)
+                                    (let ((message (map-nested-elt event '(params message))))
+                                      (when (equal "user" (alist-get 'type message))
+                                        (push (copy-tree (map-nested-elt message '(message content))) prompts))
+                                      (mevedel-claude-code--observe owner event)
+                                      (when (and (eq mode 'cancel-after) (not received)
+                                                 (seq-some (lambda (part) (equal "BOUNDARY-USER-8841" (alist-get 'text part)))
+                                                           (map-nested-elt message '(message content))))
+                                        (setq received t)
+                                        (mevedel-abort buffer))))
+                                  :meta
+                                  `((hookCommand . ,hook) (suppressResponseOnStop . t) (preToolHook . t)
+                                    (toolBatches . [[((name . "Read") (id . "before-steering") (args . ((file_path . ,file))))]
+                                                    [((name . "Read") (id . "must-not-run") (args . ((file_path . ,file))))]])
+                                    (promptResponse . ((stopReason . "end_turn")
+                                                       (usage . ((inputTokens . 13) (cachedWriteTokens . 0) (outputTokens . 7)))))
+                                    (continuationPrompts
+                                     . [((toolBatches . [[((name . "Read") (id . "after-steering") (args . ((file_path . ,file))))]])
+                                         (promptResponse . ((stopReason . "end_turn")
+                                                            (usage . ((inputTokens . 17) (cachedWriteTokens . 0) (outputTokens . 11))))))])))))))
+                (mevedel--insert-user-turn "Read the evidence")
+                (mevedel--send-request "Read the evidence")
+                (with-current-buffer view
+                  (goto-char (point-max))
+                  (insert draft))
+                (let ((window (selected-window))
+                      (start (window-start))
+                      (offset (with-current-buffer view (- (point) (mevedel-view--input-start)))))
+                  (mevedel-test--await 8 "Steering boundary did not settle"
+                    (not (mevedel-turn-busy-p buffer)))
+                  (with-current-buffer view
+                    (mevedel-view--render-stream-update buffer)
+                    (should (equal draft (mevedel-view--input-text)))
+                    (should (= offset (- (point) (mevedel-view--input-start)))))
+                  (should (eq window (selected-window)))
+                  (should (= start (window-start window)))))
+              (ert-info ((format "steering boundary=%S" mode))
+                (should stopped)
+                (should (= 1 terminals))
+                (should (= 1 (mevedel-session-turn-count session)))
+                (should (= (if (eq mode 'normal) 2 1) calls))
+                (should (= (if (memq mode '(normal cancel-after)) 1 0)
+                           (how-many "BOUNDARY-USER-8841" (point-min) (point-max))))
+                (pcase mode
+                  ('normal
+                   (should (= 2 (length (seq-uniq prompts #'equal))))
+                   (should (equal '(:input 30 :output 18 :cache 0)
+                                  (plist-get (mevedel-engine-info request) :tokens-full)))
+                   (should-not (mevedel-session-pending-steering session)))
+                  ('end-turn
+                   (should (= 1 (length (seq-uniq prompts #'equal))))
+                   (should-not (mevedel-session-pending-steering session))
+                   (should (equal "BOUNDARY-USER-8841" (plist-get (car (mevedel-session-pending-follow-ups session)) :input))))
+                  ('cancel-before
+                   (should (equal "BOUNDARY-USER-8841" (plist-get (car (mevedel-session-pending-steering session)) :input)))
+                   (should-not (plist-get (car (mevedel-session-pending-steering session)) :delivering)))
+                  ('cancel-after (should received) (should-not (mevedel-session-pending-steering session))))))
+          (when (buffer-live-p view) (kill-buffer view)))))))
 
 (mevedel-deftest mevedel-agent-control-spawn/claude-large-context (:quiet t)
                  (mevedel-engine-test--with-claude-session

@@ -9,7 +9,10 @@
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "mevedel-engine-test-support"))
 (require 'mevedel-claude-code-session)
+(require 'mevedel-claude-code)
 (require 'mevedel-claude-code-agent)
+(require 'mevedel-claude-code-context)
+(require 'mevedel-acp)
 (require 'mevedel-init)
 
 (mevedel-deftest mevedel-view-send/claude-busy (:quiet t)
@@ -39,18 +42,20 @@
         (when (buffer-live-p view) (kill-buffer view))))))
 
 ;; Steering is queued at a hook or prompt boundary so its moment is exact.
-;; Image steering cannot ride hook text, so it continues the native turn.
+;; Authored text and images both continue the native turn as user prompts.
 (mevedel-deftest mevedel--send-request/claude-steering (:quiet t)
-  (dolist (mode '(hook mismatch final held image image-final image-resized image-missing))
+  (dolist (mode '(boundary oversized mismatch missing foreign nested split final held image image-final image-resized image-missing))
     (mevedel-engine-test--with-claude-session
       (let* ((file (file-name-concat root "evidence.txt"))
              (image (file-name-concat root "steer.png"))
              (data "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=")
-             (input (if (memq mode '(image image-final image-resized image-missing))
-                        (format "STEER-4417 @file:{%s}" image)
-                      "STEER-4417"))
+             (input (cond ((memq mode '(image image-final image-resized image-missing))
+                           (format "STEER-4417 @file:{%s}" image))
+                          ((eq mode 'oversized) (concat "STEER-4417 " (make-string 11000 ?x)))
+                          (t "STEER-4417")))
              (final (memq mode '(final image-final)))
-             steered)
+             (submit (symbol-function 'mevedel-acp-prompt))
+             steered prompts decisions submissions)
         (write-region "Evidence" nil file nil 'silent)
         (with-temp-buffer
           (set-buffer-multibyte nil)
@@ -69,24 +74,36 @@
                          (list :input input :model-input input
                                :transcript-payload input
                                :request-id (mevedel-request-id request))))))
-          (cl-letf (((symbol-function 'mevedel-claude-code-launch)
+          (cl-letf (((symbol-function 'mevedel-acp-prompt)
+                     (lambda (&rest args)
+                       (push (copy-tree (cadr args)) submissions)
+                       (apply submit args)))
+                    ((symbol-function 'mevedel-claude-code-launch)
                      (mevedel-engine-test--claude-launch
                       (lambda (_system _mcp _model _effort &optional _id hook)
-                        (list :control (lambda (owner event)
+                        (list :observe (lambda (owner event)
+                                         (when (equal "user" (map-nested-elt event '(params message type)))
+                                           (push (copy-tree (map-nested-elt event '(params message message content))) prompts))
+                                         (mevedel-claude-code--observe owner event))
+                              :control (lambda (owner event)
                                          (unless final (steer))
-                                         (mevedel-claude-code--control owner event))
+                                         (let ((decision (mevedel-claude-code--control owner event)))
+                                           (push decision decisions)
+                                           decision))
                               :complete-prompt (lambda (owner outcome)
                                                  (when final (steer))
                                                  (mevedel-claude-code--complete-prompt owner outcome))
                               :meta `((hookCommand . ,hook)
-                                      (hookAcknowledgement . ,(if (eq mode 'mismatch) "mismatch" t))
                                       (responseText . "Done")
                                       (continuationPrompts
                                        . [((responseText . "Steered reply")
                                            (promptAcknowledgement
-                                            . ,(if (memq mode '(image-resized image-missing))
-                                                   (symbol-name mode)
-                                                 t)))])
+                                            . ,(pcase mode
+                                                 ('mismatch "authored-mismatch")
+                                                 ('missing :false)
+                                                 ((or 'foreign 'nested 'split 'image-resized 'image-missing)
+                                                  (symbol-name mode))
+                                                 (_ t))))])
                                       (toolBatches
                                        . ,(apply #'vector
                                                  (mapcar (lambda (id)
@@ -99,19 +116,37 @@
             (mevedel-test--await 5 "Steering turn did not settle"
               (not (mevedel-turn-busy-p buffer)))))
         (ert-info ((format "mode=%S" mode))
-          (should (eq (if (memq mode '(mismatch image-missing)) 'error 'success)
+          (should (eq (if (memq mode '(mismatch missing foreign nested split image-missing)) 'error 'success)
                       (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
-          (should (= (if (memq mode '(hook final image image-final image-resized)) 1 0)
+          (should (= (if (memq mode '(boundary oversized final image image-final image-resized)) 1 0)
                      (how-many "STEER-4417" (point-min) (point-max))))
-          ;; Hook steering continues the first prompt; images need a second.
-          (should (eq (and (memq mode '(final image image-final image-resized image-missing)) t)
+          ;; Every deliverable steering batch needs a native user prompt.
+          (should (eq (not (eq mode 'held))
                       (and (string-search "Steered reply" (buffer-string)) t)))
+          (dolist (decision decisions)
+            (should-not (string-search "STEER-4417"
+                                       (or (plist-get (plist-get decision :hookSpecificOutput)
+                                                      :additionalContext) ""))))
+          (unless (memq mode '(held missing foreign nested split mismatch image-missing))
+            (should (seq-some (lambda (parts)
+                                (seq-some (lambda (part)
+                                            (let ((text (alist-get 'text part)))
+                                              (if (memq mode '(image image-final image-resized))
+                                                  (and text (string-prefix-p "STEER-4417" text))
+                                                (equal text input))))
+                                          parts)) prompts))
+            (should-not (string-search "Continue the current task" (prin1-to-string prompts))))
+          (when (eq mode 'oversized)
+            ;; Count dispatches, not the fixture's deliberately duplicated echoes.
+            (should (= 1 (seq-count (lambda (parts)
+                                     (seq-some (lambda (part) (equal input (alist-get 'text part))) parts))
+                                   submissions))))
           (should-not (string-search data (buffer-string)))
           (pcase mode
-            ((or 'hook 'final 'image 'image-final 'image-resized)
+            ((or 'boundary 'oversized 'final 'image 'image-final 'image-resized)
              (should-not (mevedel-session-pending-steering session))
              (should-not (mevedel-session-pending-follow-ups session)))
-            ((or 'mismatch 'image-missing)
+            ((or 'mismatch 'missing 'foreign 'nested 'split 'image-missing)
              (should (eq 'failed-turn
                          (plist-get (car (mevedel-session-pending-steering session)) :state))))
             ('held
@@ -120,6 +155,54 @@
              (should (equal '("STEER-4417")
                             (mapcar (lambda (entry) (plist-get entry :input))
                                     (mevedel-session-pending-follow-ups session)))))))))))
+
+(mevedel-deftest mevedel--send-request/claude-startup-steering (:quiet t)
+  (dolist (ack '(t "image-one-missing" "authored-mismatch" "split"))
+    (mevedel-engine-test--with-claude-session
+      (let* ((original (file-name-concat root "original.png"))
+             (steering (file-name-concat root "steering.png"))
+             (data "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=")
+             (input (format "Original image @file:{%s}" original))
+             (steer (format "STARTUP-AUTHORED-1913 @file:{%s}" steering))
+             (prepare (symbol-function 'mevedel-claude-code-context-input))
+             queued echoes)
+        (dolist (file (list original steering))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert (base64-decode-string data))
+            (let ((coding-system-for-write 'no-conversion))
+              (write-region (point-min) (point-max) file nil 'silent))))
+        (setq-local gptel-system-prompt "Startup steering fixture" gptel-tools nil)
+        (cl-letf (((symbol-function 'mevedel-claude-code-context-input)
+                   (lambda (owner text)
+                     (prog1 (funcall prepare owner text)
+                       (unless queued
+                         (setq queued t)
+                         (mevedel-session-enqueue-pending-input
+                          session 'steering (list :input steer :model-input steer :transcript-payload steer
+                                                  :request-id (mevedel-request-id request)))))))
+                  ((symbol-function 'mevedel-claude-code-launch)
+                   (mevedel-engine-test--claude-launch
+                    (lambda (_system _mcp _model _effort &optional _id _hook)
+                      (list :observe (lambda (owner event)
+                                       (when (equal "user" (map-nested-elt event '(params message type)))
+                                         (push (copy-tree (map-nested-elt event '(params message message content))) echoes))
+                                       (mevedel-claude-code--observe owner event))
+                            :meta `((promptAcknowledgement . ,ack)))))))
+          (mevedel--insert-user-turn input)
+          (mevedel--send-request input)
+          (mevedel-test--await 5 "Startup steering did not settle"
+            (not (mevedel-turn-busy-p buffer))))
+        (ert-info ((format "startup ack=%S" ack))
+          (should queued)
+          (should (eq (if (eq ack t) 'success 'error)
+                      (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))
+          (should (= (if (eq ack t) 1 0) (how-many "STARTUP-AUTHORED-1913" (point-min) (point-max))))
+          (if (eq ack t)
+              (progn
+                (should-not (mevedel-session-pending-steering session))
+                (should (= 2 (seq-count (lambda (part) (equal "image" (alist-get 'type part))) (car echoes)))))
+            (should (eq 'failed-turn (plist-get (car (mevedel-session-pending-steering session)) :state)))))))))
 
 (mevedel-deftest gptel-send/claude-session (:quiet t)
   (dolist (route '(raw paired init))
