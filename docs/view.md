@@ -1100,8 +1100,8 @@ Rebuilding the prompt is also chrome: undoing a draft never restores an older
 permission badge or prompt prefix inside the composer.
 
 Zone changes and re-renders preserve one active surface per window: point in a
-surviving visited interaction takes priority, then a visible composer with that
-window's caret in it, then the logical reading position. Clicking or moving into
+surviving visited interaction or status row takes priority, then a visible
+composer with that window's caret in it, then the logical reading position. Clicking or moving into
 history keeps the reading viewport even when the composer remains visible;
 another window editing the same composer keeps its independent composer anchor.
 Anchors use body-relative pixels and native display
@@ -1111,8 +1111,10 @@ height consistent before redisplay, even when header or tab-line heights change.
 Logical positions are restored before the pixel anchor. A surviving
 composer anchor retains intentional blank space. A lost or truncated logical
 window start instead permits filling the last page, even if anchoring exposes
-longer history lines and grows the character tail. Visiting windows repair only
-new blank pixels created below the buffer, retaining their prior blank area.
+longer history lines and grows the character tail. Interaction-card visits repair
+only new blank pixels created below the buffer, retaining their prior blank area.
+Status-row visits do not fill new blank space: collapsing details keeps the
+visited row still rather than scrolling the transcript to hold the composer.
 Surviving history readers keep their viewport through both growth and shrinkage
 below them. For other unanchored windows, a smaller character tail also permits
 clamping a start later than the last page backward; unchanged or growing tails

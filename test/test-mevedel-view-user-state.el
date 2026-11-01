@@ -407,6 +407,88 @@ REGION promises that THUNK replaces only that text."
   (let ((last-nonmenu-event nil))
     (call-interactively (key-binding (kbd "RET")))))
 
+(mevedel-deftest mevedel-view-user-state/status-shrink-reader ()
+  (mevedel-view-user-state-test--with-view
+    (setq executions nil
+          agents (list (list :path "/root/worker" :status 'running
+                             :started-at 990.0
+                             :model-metadata '(:backend "Provider"
+                                               :model "Model" :effort "high"))))
+    (unless ,toggle
+      (dotimes (n 3)
+        (push (list :path (format "/root/finished-%d" n)
+                    :status 'running :started-at 989.0)
+              agents)))
+    (mevedel-view--render-status)
+    (mevedel-view-test--insert-composer-draft
+     mevedel-view-user-state-test--draft 4)
+    (when ,toggle
+      (mevedel-view-user-state-test--activate-row "/root/worker"))
+    (let* ((left (selected-window))
+           (right (split-window-right))
+           (selected (if ,right-selected right left)))
+      (set-window-buffer right view-buf)
+      (select-window selected)
+      (mevedel-view--render-status)
+      (dolist (window (list left right))
+        (let ((position (save-excursion
+                          (goto-char (point-min))
+                          (search-forward (if ,toggle "/root/worker" "Line 58 of"))
+                          (line-beginning-position))))
+          (set-window-point window position)
+          (set-window-start window
+                            (save-excursion
+                              (goto-char position)
+                              (forward-line (if (eq window left) -3 -5))
+                              (point)) t)))
+      (unless noninteractive (redisplay t))
+      (cl-flet ((observe ()
+                  (mapcar (lambda (window)
+                            (list (window-start window) (window-point window)
+                                  (mevedel-view--position-screen-y
+                                   (window-point window) window)))
+                          (list left right))))
+        (let ((before (observe))
+              (lines (count-lines (point-min) (point-max))))
+          (should (mevedel-view--window-shows-end-p left))
+          (should (mevedel-view--window-shows-end-p right))
+          (dotimes (_ 6)
+            (if ,toggle
+                (if ,outer
+                    (progn
+                      (setq mevedel-view-execution--selected-agent
+                            (unless mevedel-view-execution--selected-agent
+                              "/root/worker"))
+                      (mevedel-view--full-rerender))
+                  (let ((last-nonmenu-event nil))
+                    (call-interactively (key-binding (kbd "RET")))))
+              (setq agents nil clock (+ clock 20.0))
+              (mevedel-view--render-status))
+            (unless noninteractive (redisplay t))
+            (should (equal before (observe)))
+            (when ,toggle
+              (should (= (count-lines (point-min) (point-max))
+                         (- lines (if mevedel-view-execution--selected-agent 0 4)))))
+            (should (eq selected (selected-window)))
+            (should (equal mevedel-view-user-state-test--draft
+                           (mevedel-view--input-text))))
+          (unless ,toggle
+            (should-not (string-search "/root/worker" (buffer-string)))
+            (should-not (string-search "/root/finished-" (buffer-string))))))))
+  (toggle right-selected outer)
+  :doc "toggling an agent preserves both visited rows, left selected"
+  t nil nil
+  :doc "toggling an agent preserves both visited rows, right selected"
+  t t nil
+  :doc "a full rerender shrinking status preserves both visits, left selected"
+  t nil t
+  :doc "a full rerender shrinking status preserves both visits, right selected"
+  t t t
+  :doc "completed agents leaving preserve both history readers, left selected"
+  nil nil nil
+  :doc "completed agents leaving preserve both history readers, right selected"
+  nil t nil)
+
 (mevedel-deftest mevedel-view-user-state/collapse-background-row ()
   (progn
     (skip-unless (display-graphic-p))
@@ -422,16 +504,23 @@ REGION promises that THUNK replaces only that text."
         (goto-char (mevedel-view--input-start))
         (recenter 20))
       (redisplay t)
-      (let ((composer-y (mevedel-view-test--composer-screen-y (selected-window))))
+      (let ((composer-y (mevedel-view-test--composer-screen-y (selected-window)))
+            (start (window-start))
+            (position (point))
+            (row-y (mevedel-view--position-screen-y (point) (selected-window))))
         (should (mevedel-view--window-blank-pixels (selected-window)))
         (mevedel-view-user-state-test--activate-row "Inspect runner")
         (redisplay t)
         (should (looking-at-p "  ▸ Running"))
         (should (equal mevedel-view-user-state-test--draft (mevedel-view--input-text)))
-        (should (equal composer-y
-                       (mevedel-view-test--composer-screen-y (selected-window)))))))
+        (should (= start (window-start)))
+        (should (= position (window-point)))
+        (should (equal row-y (mevedel-view--position-screen-y
+                             (point) (selected-window))))
+        (should (< (mevedel-view-test--composer-screen-y (selected-window))
+                   composer-y)))))
   (test)
-  :doc "collapsing a background row keeps a mid-window composer in place"
+  :doc "collapsing a background row keeps the visited row, not the composer"
   nil)
 
 (defun mevedel-view-user-state-test--wheel (direction &optional window)

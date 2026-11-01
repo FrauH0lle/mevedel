@@ -1822,7 +1822,8 @@ found without scanning the rest of the buffer."
 	                           (- ws (mevedel-view--input-start)))
                               (and visit-y
                                    (list visit visit-y
-                                         (or (mevedel-view--window-blank-pixels w) 0)))))))
+                                         (and (eq (car visit) 'interaction)
+                                              (or (mevedel-view--window-blank-pixels w) 0))))))))
                   (get-buffer-window-list (current-buffer) nil t))))
     (cl-flet ((resolve-position (position input-offset anchor)
                 (cond
@@ -1879,7 +1880,8 @@ found without scanning the rest of the buffer."
 			       (set-window-point w position)
 			       (mevedel-view--set-viewport
 				w (mevedel-view--viewport-at-y w position (nth 1 visit)))
-			       (mevedel-view--restore-window-blank-pixels w (nth 2 visit))
+			       (when (nth 2 visit)
+			         (mevedel-view--restore-window-blank-pixels w (nth 2 visit)))
 			       (push w visited-windows)))))
 		       (when (and (not positions-preserved) mevedel-view--pww-current-mark)
 			 (set-marker
