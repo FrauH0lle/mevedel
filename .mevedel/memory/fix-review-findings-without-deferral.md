@@ -1,6 +1,6 @@
 ---
 name: "Fix encountered issues without deferral"
-description: "Resolve encountered issues in authorized implementation and review-and-fix work, including flakes and coverage gaps; preserve consequential-choice and permission boundaries"
+description: "Revisit the backlog during work and resolve authorized, relevant findings without silently deferring them."
 type: feedback
 ---
 
@@ -14,8 +14,12 @@ On 2026-10-19, the user clarified that their request for a browser collaboration
 
 On 2026-10-20, during performance and async-publication implementation work, the user said “Please fix all issues encountered” and “please consider both options and do not defer any more.” Apply the no-deferral expectation to encountered implementation issues too, including test flakes and coverage gaps, rather than merely listing them as residuals.
 
-In the browser collaboration review context, the user also asked to be consulted before removing a user-visible feature or choosing between two reasonable UX designs. Fixing every finding does not mean silently making those choices.
+On 2026-10-31, the user corrected a one-time interpretation of checking `docs/backlog.md`: revisit it as work proceeds, including its Inbox, and pick up bugs that fit the area currently being touched. A planning-time scan alone does not satisfy this expectation. This is not a direction to sweep unrelated backlog items into every task.
 
-**Why:** The user explicitly rejected leaving discovered issues for future work and corrected both a review-only interpretation and further implementation deferrals.
+The user also favors implementing fixes incrementally while processing review notes when the environment supports hot-loading, rather than waiting for the entire review to finish. Apply this timing preference to suitable review workflows; it does not override authorization, ownership, or coordination boundaries.
 
-This expectation applies within the authorized task. It is not authorization to bypass permission boundaries or an explicit read-only, mock-only, or “no code changes yet” constraint. If a finding cannot be addressed within the available authority or evidence, report the blocker explicitly rather than silently deferring it or claiming completion.
+In the browser collaboration review context, the user asked to be consulted before removing a user-visible feature or choosing between two reasonable UX designs. Fixing every finding does not mean silently making those choices.
+
+**Why:** The user explicitly rejected leaving discovered issues for future work and corrected review-only interpretations, implementation deferrals, and treating backlog consultation as a single planning step. Incremental implementation is a preferred way to conduct suitable reviews, not permission to bypass necessary coordination or checks.
+
+**Scope:** These expectations apply within the authorized task. They do not authorize bypassing permission boundaries or an explicit read-only, mock-only, or “no code changes yet” constraint. If a finding cannot be addressed within the available authority or evidence, report the blocker explicitly rather than silently deferring it or claiming completion.

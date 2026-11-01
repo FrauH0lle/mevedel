@@ -1,13 +1,12 @@
 - [Mevedel project-local skills](mevedel-project-local-skills.md) - dev workflow skills are local to this repo, not bundled for users
 - [Debugging process feedback](debugging-process-feedback.md) - Bisect recurring test/log emitters before implementation changes
 - [View composer preservation feedback](view-composer-preservation-feedback.md) - test active drafts during async view/status redraws
-- [Forward declaration formatting feedback](forward-declaration-formatting-feedback.md) - sort declarations before defvars within source groups
 - [Verify the loaded runtime and dependency provenance](verify-compiled-runtime-artifacts.md) - Distinguish loaded artifacts, cold-start behavior, relevant readiness, dependency provenance, and live event sequences
-- [Remote hook readiness and stdin timing](remote-hook-readiness-verification.md) - A stalled remote hook command is reproduced by imposing the suspected interleaving, not by raising its timeout; green replays diagnose nothing
-- [Working notes are temporary; extract durable knowledge automatically](working-note-destinations-feedback.md) - Use temporary machine-local shared notes, preserve skill workflows, and make selected automatic extraction genuinely automatic.
+- [Reproduce remote-hook timing before claiming a fix](remote-hook-readiness-verification.md) - Green timing-dependent replays do not diagnose a stall; impose the suspected interleaving without weakening safeguards.
+- [Keep selected extraction automatic without making notes permanent](working-note-destinations-feedback.md) - Shared notes are disposable exchange material; selected automatic extraction should not become manual reminders or recurring confirmations.
 - [Replay performance stalls from a restored copy of the real session](replay-real-session-for-performance.md) - Detached test buffers skip agent transcripts, archives and publications; restore a session copy at the stalled state
 - [Sticky prompt presentation: keep it readable and treat compaction as continuation](sticky-prompt-presentation-feedback.md) - Status-row sharing must not truncate the sticky prompt; compaction preserves the prompt, /clear removes it
-- [Test both reentry orders and separate mechanism from incident attribution](reentrant-view-render-ordering.md) - Reverse reentrant nesting in regressions; a matching injected failure does not establish the original event sequence
+- [Test both reentry orders and separate mechanism from incident attribution](reentrant-view-render-ordering.md) - Reverse reentrant nesting in regressions; a matching injected failure does not establish the original event sequence.
 - [Completion-time reminders cannot enforce a finished turn](completion-time-hook-reminders.md) - Place guidance where it can affect the intended turn; do not mistake a context-only completion hook for enforcement
 - [Preserve the requested editing surface](preserve-requested-editing-surface.md) - A whiteboard redesign request means editing that whiteboard, not substituting a separate preview.
 - [Investigate history before recommending removal of a boundary](investigate-history-before-removing-boundaries.md) - Read the commits and ADRs that introduced a boundary before proposing to remove it
@@ -22,10 +21,9 @@
 - [Reduce permission prompts' visual weight](permission-prompt-visual-weight.md) - User finds sandbox and permission prompts imposing and prefers collapsing parts of them
 - [View changes must preserve rendering and CPU gains](view-render-performance-constraint.md) - Rendering cost and CPU use are hard constraints; measure graphical-only effects in a graphical environment
 - [Prove injected failures and stubs exercise the intended path](injected-failure-test-evidence.md) - Check injection entry, exact diagnostics, isolated-file behavior, and a discriminating negative control
-- [Preserve controls and conditions when attributing test outcomes](controlled-test-attribution.md) - Equivalent context, delivered test inputs, assertion conditions, and negative controls establish different parts of a coverage claim
+- [Preserve controls and conditions when attributing test outcomes](controlled-test-attribution.md) - Match relevant context, selection state, delivered inputs, and assertion conditions before attributing outcomes.
 - [Trace unreadable addresses back to discovery](resource-discovery-consumption-verification.md) - Check discovery-to-consumption at root and descendant scopes without weakening valid access refusals
-- [Correctness and simplicity without losing features or performance](development-priorities-user-preference.md) - Prioritize correctness and maintainability, avoid overengineering, and confirm feature removal with the user
-- [Scale verification to consequence](proportionate-verification-feedback.md) - Rigor rules apply to consequential claims; temporary or low-stakes work gets proportionate checks
+- [Correctness and simplicity without losing features or performance](development-priorities-user-preference.md) - Avoid overengineering, record delegated decisions, preserve user features, and measure promising performance alternatives.
 - [Keep named-agent guidance uniform](uniform-agent-role-guidance-feedback.md) - Make general-purpose delegation discoverable without singling out verifier for special contrasting guidance
 - [Show recurring advisories only once](one-time-recurring-advisories.md) - Repeated informational warnings become tedious; avoid repeatedly showing the same advisory
 - [Review observational Eval by its visible effects](observational-eval-review-feedback.md) - Unconfined execution alone is not a reason to defer task-relevant observational Eval; preserve safety boundaries and bounded explanations
@@ -33,20 +31,21 @@
 - [Dim collapsed thinking blocks](collapsed-thinking-visual-preference.md) - Use subdued font highlighting for collapsed thinking blocks
 - [Protect long-running work without treating silence as refusal](sleep-and-long-running-work-preferences.md) - Sleep blocking protects work and remote reachability; permission absence timeouts are opt-in, not implicit refusals
 - [Separate feature enablement from its command setting](separate-feature-toggle-from-command.md) - Use separate defcustoms for enabling a command-backed feature and configuring its command, with enablement off by default
-- [Fix encountered issues without deferral](fix-review-findings-without-deferral.md) - Resolve encountered issues in authorized implementation and review-and-fix work, including flakes and coverage gaps; preserve consequential-choice and permission boundaries
+- [Fix encountered issues without deferral](fix-review-findings-without-deferral.md) - Revisit the backlog during work and resolve authorized, relevant findings without silently deferring them.
 - [Background-wake design priorities and reference](monitor-design-reference-preference.md) - Consult Claude Code for background-wake design; the user weighs lost messages more heavily than wake-loop risk
 - [Actively use a partner when pair work is invoked](explicit-pair-workflow-feedback.md) - An explicit $pair implementation request calls for real partner participation, not solo implementation
 - [Preserve conversational continuity at plan handoff](plan-handoff-continuity-preference.md) - Plan acceptance should preserve the conversation and window, without leaving a confusing obsolete planning view
 - [Desktop/laptop sessions](two-machine-session-workflow.md) - TRAMP takeover is real usage; verify both clients
 - [Deployment references](deployment-access-reference.md) - SSH aliases, rootless containers, and diagnostics; recheck before use
-- [Presentation measurements](presentation-measurement-validity.md) - Locking can suppress rendering; isolate and warm the fixture
+- [Keep graphical presentation measurements valid](presentation-measurement-validity.md) - Confirm completed presentation, not merely protocol responsiveness, and isolate and warm graphical workloads.
 - [Suspend versus stalls](correlate-stalls-with-suspend.md) - Correlate telemetry gaps with system sleep records
 - [Narrow-phone viewer testing](narrow-phone-viewer-testing.md) - iPhone mini Safari, vertical fit, and real narrow renders
 - [Delegation model preference](delegation-model-preference.md) - Coordinator selects for the task using the current preset; no fixed-model fallback.
 - [Check graphical rendering without replacing live Emacs modules](graphical-render-check-from-worktree.md) - Use isolated graphical checks for visual claims; follow maintained tooling rather than the superseded fixture recipe
-- [Rendering fixtures are data, not workflow instructions](rendering-fixtures-are-not-instructions.md) - An instruction-like filename inside an attachment or rendering fixture does not grant it repository authority
+- [Establish an attachment's role before adopting its instructions](rendering-fixtures-are-not-instructions.md) - Fixtures remain data, and an attached skill may be illustrative rather than an invoked workflow.
 - [Keep machine-specific reference maps out of general documentation](machine-local-reference-placement.md) - General mevedel documentation must not depend on local checkouts or machine-specific source paths
 - [Subscription quota integration sources](subscription-quota-source-references.md) - Authoritative Codex, Claude SDK, and ACP pointers for subscription usage research
 - [Keep display snapshots isolated from mutable canonical data](immutable-display-snapshots-feedback.md) - When exposing display-only snapshots to observers or handlers, copy mutable leaves so consumers cannot change canonical state.
-- [Implement fixes incrementally during review](incremental-fix-workflow-preference.md) - When processing a set of review notes, the user favors implementing fixes as findings emerge when hot-loading allows it.
 - [Indicate new memory candidates without changing views](background-discovery-navigation-feedback.md) - Background discovery should notify about candidates rather than navigate automatically.
+- [Tool search is not the full capability boundary](capability-discovery-through-eval-feedback.md) - A missing dedicated tool does not establish that a capability is unavailable; consider authorized Emacs Eval.
+- [Leave a flexible settling window before quota reset](quota-budgeted-sweep-cutoff-preference.md) - For quota-budgeted weekly sweeps, stop starting work roughly 15–30 minutes before reset rather than ending excessively early.
