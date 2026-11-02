@@ -18,6 +18,7 @@
 (require 'mevedel-collaboration-artifact)
 (require 'mevedel-shared-editing)
 (require 'mevedel-structs)
+(require 'mevedel-workspace)
 (require 'tabulated-list)
 (require 'helpers
          (file-name-concat
@@ -143,6 +144,23 @@
         (let ((item (mevedel-cockpit-surface-selected)))
           (should (equal "board" (plist-get item :id)))
           (should (equal title (plist-get item :title)))))))
+
+  :doc "marks the artifacts shared through artifact links"
+  (mevedel-artifacts-list-test--with-store
+    (mevedel-artifact-store-create-meta workspace "board" "state.json" 'whiteboard "Plan")
+    (mevedel-artifact-store-create-meta workspace "notes" "state.json" 'document "Notes")
+    (let ((link (mevedel-artifact-store-link-path workspace "board")))
+      (make-directory (file-name-directory link) t)
+      (write-region "" nil link nil 'silent))
+    (with-current-buffer (mevedel-artifacts-list-open
+                          (mevedel-artifacts-list-test--context session view data))
+      (should (equal "shared" (aref (cadr (assoc "board" tabulated-list-entries)) 6)))
+      (should (equal "" (aref (cadr (assoc "notes" tabulated-list-entries)) 6)))
+      (mevedel-cockpit-goto-id "board")
+      (should (string-match-p "Shared +yes"
+                              (mevedel-report-test-text
+                               (mevedel-artifacts-list--details
+                                (mevedel-cockpit-surface-selected) nil))))))
 
   :doc "opens from a plain project buffer without a session"
   (mevedel-artifacts-list-test--with-store

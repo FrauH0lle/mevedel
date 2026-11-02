@@ -3081,6 +3081,23 @@ async function main() {
   sockets[1].dispatch('close', {code: 4001});
   assert.equal(timer, null);
 
+  // An artifact link opened in the browser: the room answers with an
+  // artifact welcome, and the viewer only says where the link belongs.
+  const dialed = sockets.length;
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), {...context});
+  await waitFor(() => sockets.length === dialed + 1, 'artifact link dial');
+  const artifactSocket = sockets.at(-1);
+  artifactSocket.dispatch('open');
+  await waitFor(() => artifactSocket.sent.length >= 1, 'artifact link hello');
+  nodes['terminal-title'].textContent = '';
+  artifactSocket.dispatch('message', {data: await seal(key, 1, {
+    t: 'welcome', proto: 3, room: 'artifact', id: 'snt-pipeline', kind: 'whiteboard',
+    title: 'SNT analysis pipeline', readOnly: false})});
+  await waitFor(() => textOf(nodes['terminal-title']) === 'Artifact link', 'artifact link notice');
+  assert.equal(textOf(nodes['terminal-message']), 'Paste this link into mevedel or an MCP client.');
+  assert.equal(nodes.composer.hidden, true);
+  assert.equal(artifactSocket.readyState, 3, 'the viewer leaves the artifact room');
+
   console.log('viewer protocol passed');
 }
 
