@@ -150,8 +150,8 @@ AUTHORIZE, COMMIT, the reply and the returned cancellation function."
 ;;;###autoload
 (defun mevedel-artifact-backend-save-version (workspace id &optional session-id)
   "Record WORKSPACE's artifact ID as a version after a turn edited it.
-A local artifact is versioned by the store, as
-`mevedel-artifact-store-save-version' describes, and its result is
+A local artifact is versioned by the store for the session SESSION-ID,
+as `mevedel-artifact-store-save-version' describes, and its result is
 returned.  A registered artifact records nothing here and returns nil:
 where it is served keeps its versions, an origin one per working stretch."
   (unless (mevedel-artifact-backend-registered-p workspace id)

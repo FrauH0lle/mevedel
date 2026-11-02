@@ -517,7 +517,7 @@ refusal of the first file that changed since it was read."
          (primary (plist-get (mevedel-artifact-store-meta workspace id) :file))
          (changes (plist-get args :changes)))
     (unless (and (vectorp changes) (> (length changes) 0))
-      (error "write-files needs changes: the files to write or delete"))
+      (error "'write-files' needs changes: the files to write or delete"))
     (let* ((requested
             (mapcar (lambda (change)
                       (let ((file (plist-get change :file))
