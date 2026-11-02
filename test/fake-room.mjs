@@ -98,7 +98,8 @@ function wsFrame(opcode, payload) {
  * KIND overrides the welcome's artifact kind, such as `html'.
  * ON-EDITING, when given, answers an editing request no fixture covers:
  * it is called with the request body and { writable } and returns the
- * reply body, or undefined for the default refusal.
+ * reply body, or undefined for the origin's refusal of an action not in
+ * its allowlist ("An artifact link does not permit ACTION").
  * Return { url, link(tier), received, connections, goodbye(reason, {back}),
  * close }.  GOODBYE ends the room for its connected consumers as the
  * origin does; unless BACK, later connections find no host.
@@ -230,7 +231,8 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, kind, re
           }
         }
         const body = onEditing?.(frame.body, { writable })
-          ?? { error: 'An artifact link does not permit that' };
+          ?? { error: `An artifact link does not permit ${typeof frame.body?.action === 'string'
+            ? frame.body.action : 'that'}` };
         await send({ t: 'editing', reqId: frame.reqId, body });
       }
     };

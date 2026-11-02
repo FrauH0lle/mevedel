@@ -38,6 +38,9 @@ const tierOf = (link) => (Buffer.from(link.slice(link.lastIndexOf('.') + 1), 'ba
 /* SharedEdit's limit for an image brought into a whiteboard or document. */
 const IMAGE_MAX_BYTES = 4_700_000;
 
+/* The origin's limit for one file of an HTML artifact. */
+const FILE_MAX_BYTES = 16 * 1024 * 1024;
+
 /* Whether BYTES are a PNG, JPEG, WebP or SVG image. */
 function imageFile(bytes) {
   const starts = (...prefix) => prefix.every((b, i) => bytes[i] === b);
@@ -111,14 +114,18 @@ function stale(ctx, name, file, reply) {
   if (typeof reply.text === 'string' || typeof reply.data === 'string' || reply.hash === null) {
     see(ctx, name, file, reply.hash ?? null);
   }
-  const current = typeof reply.text === 'string' ? `Current content of ${file}:\n${reply.text}`
-    : reply.hash === null ? `${file} does not exist now.`
-      : `${file} has ${reply.bytes} bytes now; read it again with read_artifact.`;
-  return { content: [{ type: 'text', text: `${reply.error}.\n${current}` }], isError: true };
+  // The origin's error already says when the file is gone.
+  const current = typeof reply.text === 'string' ? `\nCurrent content of ${file}:\n${reply.text}`
+    : reply.hash === null ? ''
+      : `\n${file} has ${reply.bytes} bytes now; read it again with read_artifact.`;
+  return { content: [{ type: 'text', text: `${reply.error}.${current}` }], isError: true };
 }
 
 /* Write CONTENT to FILE of artifact NAME with HASH; return the MCP result. */
 async function writeFile(name, file, content, hash, ctx) {
+  if (Buffer.byteLength(content) > FILE_MAX_BYTES) {
+    throw new Error(`${file} would be larger than ${FILE_MAX_BYTES} bytes`);
+  }
   const reply = await exchange(name, { action: 'write-file', file, hash, text: content }, ctx);
   if (reply.code === 'stale') return stale(ctx, name, file, reply);
   if (reply.error) throw new Error(reply.error);
@@ -138,7 +145,8 @@ export const tools = [
     description: 'List the remote artifacts attached on this machine: whiteboards, documents and HTML '
       + 'artifacts that '
       + 'live in a mevedel workspace elsewhere (their origin). Shows each one\'s name, title, kind, '
-      + 'whether this link may only view or also edit it, and whether its origin is reachable now.',
+      + 'the origin it comes from (workspace and host), whether this link may only view or also edit '
+      + 'it, and whether its origin is reachable now.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     async run(_args, ctx) {
       const attached = Object.entries(readStore(ctx.env).artifacts);
@@ -147,18 +155,20 @@ export const tools = [
           + 'npx mevedel-remote-artifact attach LINK';
       }
       const lines = await Promise.all(attached.map(async ([name, found]) => {
-        let { title, kind } = found;
+        let { title, kind, origin } = found;
         let reach = 'origin reachable';
         try {
           const room = await (ctx.connect ?? openEntry)(found, ctx);
           ({ title, kind } = room.welcome);
+          if (typeof room.welcome.origin === 'string' && room.welcome.origin) ({ origin } = room.welcome);
           room.close();
         } catch (error) {
           // The generic error and the goodbyes already say so; others get the prefix.
           reach = error.message.startsWith('Origin unavailable')
             ? `o${error.message.slice(1)}` : `origin unavailable: ${error.message}`;
         }
-        return `${name}: ${JSON.stringify(title)} ${kind}, ${tierOf(found.link)} link, ${reach}`;
+        return `${name}: ${JSON.stringify(title)} ${kind}${origin ? ` from ${origin}` : ''}, `
+          + `${tierOf(found.link)} link, ${reach}`;
       }));
       return lines.join('\n');
     },
@@ -370,18 +380,28 @@ export const tools = [
     name: 'view_artifact',
     description: 'Look at a remote whiteboard as drawn at its origin, or at one image embedded in a '
       + 'whiteboard or document: a board image by its fileId, a document image by the key its src '
-      + 'shows. Any link may view.',
+      + 'shows. For a whiteboard, item previews one library item instead (LIBRARY/ITEM-ID, as '
+      + 'whiteboard_libraries lists it). Any link may view.',
     inputSchema: {
       type: 'object',
       properties: {
         name: nameArgument,
         image: { type: 'string', description: 'Key of an embedded image; omit for the whole board.' },
+        item: { type: 'string', description: 'Library item to preview instead, as LIBRARY/ITEM-ID from '
+          + 'whiteboard_libraries; whiteboards only, not with image.' },
       },
       required: ['name'],
       additionalProperties: false,
     },
-    async run({ name, image }, ctx) {
-      const result = await onRoom(name, { action: 'view', ...(image === undefined ? {} : { image }) }, ctx);
+    async run({ name, image, item }, ctx) {
+      if (item !== undefined && image !== undefined) {
+        throw new Error('Give image or item, not both: image views an embedded image, item a library item');
+      }
+      if (item !== undefined && (typeof item !== 'string' || !item.includes('/'))) {
+        throw new Error('item needs LIBRARY/ITEM-ID from whiteboard_libraries');
+      }
+      const result = await onRoom(name, item !== undefined ? { action: 'library', part: 'item', item }
+        : { action: 'view', ...(image === undefined ? {} : { image }) }, ctx);
       return { content: picture(result.png, result.mime) };
     },
   },

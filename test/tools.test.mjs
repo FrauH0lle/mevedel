@@ -28,21 +28,28 @@ test('the registry offers list_artifacts and read_artifact with input schemas', 
   }
 });
 
-test('list_artifacts shows name, title, kind, tier and whether the origin is reachable', async (t) => {
+test('list_artifacts shows name, title, kind, origin, tier and whether the origin is reachable', async (t) => {
   const env = tempEnv(t);
   const board = await room(t);
-  const notes = await room(t, { bindings: { $ID: 'notes', $TITLE: 'Meeting notes' } });
+  const notes = await room(t, { bindings: { $ID: 'notes', $TITLE: 'Meeting notes', $ORIGIN: 'minutes on laptop' } });
   const gone = await room(t, { bindings: { $ID: 'old-board', $TITLE: 'Old board' } });
+  // An origin whose welcome names no origin.
+  const older = await room(t, { bindings: { $ID: 'older', $TITLE: 'Older', $ORIGIN: undefined } });
   await attach(env, board.link('edit'));
   await attach(env, notes.link('view'));
   await attach(env, gone.link('edit'));
+  await attach(env, older.link('view'));
   await gone.close();
   const result = await callTool('list_artifacts', {}, { env });
   assert.ok(!result.isError);
-  const text = result.content[0].text;
-  assert.match(text, /^snt-pipeline: "SNT analysis pipeline" whiteboard, edit link, origin reachable$/m);
-  assert.match(text, /^notes: "Meeting notes" whiteboard, view link, origin reachable$/m);
-  assert.match(text, /^old-board: "Old board" whiteboard, edit link, origin unavailable \(revoked, deleted, or offline\)$/m);
+  assert.deepEqual(result.content[0].text.split('\n'), [
+    'snt-pipeline: "SNT analysis pipeline" whiteboard from snt-app on mevedel-host, edit link, origin reachable',
+    'notes: "Meeting notes" whiteboard from minutes on laptop, view link, origin reachable',
+    // An unreachable origin is named as attach stored it.
+    'old-board: "Old board" whiteboard from snt-app on mevedel-host, edit link, '
+      + 'origin unavailable (revoked, deleted, or offline)',
+    'older: "Older" whiteboard, view link, origin reachable',
+  ]);
 });
 
 test('list_artifacts says how to attach when nothing is attached', async (t) => {
