@@ -20,7 +20,11 @@
 ;; kind and the artifact, never a session snapshot or store listing.
 ;; Every other frame type is dropped.  Editing requests go through
 ;; `mevedel-collaboration-artifact-room--actions', the allowlist of what
-;; an artifact link may do, each pinned to the room's own artifact.
+;; an artifact link may do, each pinned to the room's own artifact: read
+;; and view it, and with an edit link change it with `SharedEdit''s
+;; actions, attributed to the consumer as a remote agent.  Committed
+;; changes of the artifact, and of no other, reach its room as change
+;; events.
 
 ;;; Code:
 
@@ -37,7 +41,7 @@
 
 ;; `mevedel-collaboration-editing'
 (declare-function mevedel-collaboration-editing--send
-                  "mevedel-collaboration-editing" (room peer req-id value))
+                  "mevedel-collaboration-editing" (room peer req-id value &optional raw))
 (declare-function mevedel-collaboration-editing-handle
                   "mevedel-collaboration-editing" (room peer frame &optional dispatch))
 
@@ -47,6 +51,7 @@
 ;; `mevedel-shared-editing'
 (declare-function mevedel-shared-editing-call "mevedel-shared-editing"
                   (workspace args callback &optional authorize commit))
+(declare-function mevedel-shared-editing--json "mevedel-shared-editing" (value))
 (declare-function mevedel-shared-editing-list "mevedel-shared-editing" (workspace))
 
 ;; `mevedel-collaboration-transport'
@@ -177,9 +182,101 @@ LINES)) with the hash-prefixed lines, or (:error MESSAGE)."
                                                      :text))))))
    authorize))
 
+(defconst mevedel-collaboration-artifact-room--image-max-bytes 4700000
+  "Largest image an artifact link may upload, as SharedEdit's limit.")
+
+(defconst mevedel-collaboration-artifact-room--edit-keys
+  '(("patch" :changes)
+    ("rename" :title)
+    ("background" :background)
+    ("image" :data :x :y :width :alt :afterId))
+  "SharedEdit actions an edit link may request, with the keys each passes on.
+Anything else a request carries is dropped; the origin adds the pinned
+id and the attribution itself.  An image arrives as `:data', the file's
+base64 content, since the origin cannot read the consumer's files.")
+
+(defun mevedel-collaboration-artifact-room--edit-reply (value)
+  "Return the consumer's reply to the editing helper's VALUE.
+It is what SharedEdit tells the model: the stored lines of what changed
+as JSON `:text', and for a whiteboard the picture as base64 `:png'.  A
+stale edit returns the stale targets with their current lines."
+  (if-let* ((failure (plist-get value :error)))
+      (if (equal (plist-get value :code) "stale")
+          (list :error failure :code "stale" :targets (plist-get value :targets)
+                :revision (plist-get value :revision))
+        (list :error failure))
+    (let ((result (plist-get value :result)))
+      (list :result
+            (append (list :text (mevedel-shared-editing--json (plist-get result :model)))
+                    (when-let* ((png (plist-get result :png)))
+                      (list :png png)))))))
+
+(defun mevedel-collaboration-artifact-room--edit (room guest args authorize reply)
+  "Run GUEST's SharedEdit action ARGS on ROOM's artifact.
+Only the keys `mevedel-collaboration-artifact-room--edit-keys' names
+for the action pass, with the room's artifact id and the actor
+\"Agent: NAME (remote)\", NAME being the one GUEST declared in its
+hello.  AUTHORIZE and REPLY are as in
+`mevedel-collaboration-artifact-room--actions'.  The item is attached
+to no session."
+  (let* ((action (plist-get args :action))
+         (request (list :action action :id (plist-get room :artifact) :image t
+                        :actor (format "Agent: %s (remote)" (plist-get guest :name))
+                        :opId (secure-hash 'sha256 (format "%s%s" (current-time)
+                                                           (random t))))))
+    (dolist (key (cdr (assoc action mevedel-collaboration-artifact-room--edit-keys)))
+      (when (plist-member args key)
+        (setq request (plist-put request key (plist-get args key)))))
+    (when (equal action "image")
+      (let ((data (plist-get args :data)))
+        (unless (and (stringp data) (not (string-empty-p data)))
+          (error "The image action needs data: the image file as base64"))
+        (when (> (length data)
+                 (* 4 (ceiling mevedel-collaboration-artifact-room--image-max-bytes 3)))
+          (error "Shared images are limited to %d bytes"
+                 mevedel-collaboration-artifact-room--image-max-bytes))))
+    (mevedel-shared-editing-call
+     (plist-get room :workspace) request
+     (lambda (value)
+       (funcall reply (mevedel-collaboration-artifact-room--edit-reply value)))
+     authorize)))
+
+(defun mevedel-collaboration-artifact-room--view (room _guest args authorize reply)
+  "Show ROOM's artifact as a picture, as `shared://ID/view.png' does.
+With `:image' in ARGS, show that embedded image instead, as
+`shared://ID/images/KEY' does.  AUTHORIZE and REPLY are as in
+`mevedel-collaboration-artifact-room--actions'; REPLY receives
+\(:result (:png BASE64 :mime MIME)) or (:error MESSAGE)."
+  (let ((image (plist-get args :image)))
+    (unless (or (null image) (stringp image))
+      (error "The image to view is named by its key"))
+    (mevedel-shared-editing-call
+     (plist-get room :workspace)
+     (append (list :action "view" :id (plist-get room :artifact)
+                   :part (if image "image" "png"))
+             (when image (list :image image)))
+     (lambda (value)
+       (funcall reply
+                (if-let* ((failure (plist-get value :error)))
+                    (list :error failure)
+                  (let ((result (plist-get value :result)))
+                    (list :result (list :png (plist-get result :png)
+                                        :mime (or (plist-get result :mime) "image/png")))))))
+     authorize)))
+
 (defconst mevedel-collaboration-artifact-room--actions
   '(("read" :kinds (whiteboard document)
-     :run mevedel-collaboration-artifact-room--read))
+     :run mevedel-collaboration-artifact-room--read)
+    ("view" :kinds (whiteboard document)
+     :run mevedel-collaboration-artifact-room--view)
+    ("patch" :kinds (whiteboard document) :write t
+     :run mevedel-collaboration-artifact-room--edit)
+    ("rename" :kinds (whiteboard document) :write t
+     :run mevedel-collaboration-artifact-room--edit)
+    ("background" :kinds (whiteboard document) :write t
+     :run mevedel-collaboration-artifact-room--edit)
+    ("image" :kinds (whiteboard document) :write t
+     :run mevedel-collaboration-artifact-room--edit))
   "Editing actions an artifact link may request, by action name.
 Each entry is (ACTION . PROPERTIES):
 
@@ -209,10 +306,11 @@ room that is still running."
           (lambda ()
             (and (eq guest (mevedel-collaboration--guest room peer))
                  (or (not (plist-get entry :write)) (plist-get guest :writable))
+                 (or (null id) (equal id (plist-get room :artifact)))
                  (eq room (gethash key mevedel-collaboration-artifact-room--rooms)))))
          (reply (lambda (value)
                   (when (eq guest (mevedel-collaboration--guest room peer))
-                    (mevedel-collaboration-editing--send room peer req-id value)))))
+                    (mevedel-collaboration-editing--send room peer req-id value t)))))
     (cond
      ((not (and entry (memq (plist-get room :artifact-kind) (plist-get entry :kinds))))
       (error "An artifact link does not permit %s" (if (stringp action) action "that")))
@@ -263,6 +361,25 @@ whose links are meant to keep working."
     (remhash peer (plist-get room :guests))
     (plist-put room :last-guest-departure (float-time))
     (mevedel-sleep-update)))
+
+(defun mevedel-collaboration-artifact-room--changed (workspace state _result)
+  "Tell the consumers of WORKSPACE's artifact room for STATE's item it changed.
+Only the room of that very artifact hears of it, as a `changed' event
+naming its id, kind, title and revision; consumers read the content
+again when they need it.  Rooms of other artifacts hear nothing, and
+a deletion is left to the room's own lifecycle."
+  (when-let* (((not (plist-get state :deleted)))
+              (room (mevedel-collaboration-artifact-room--find
+                     (mevedel-workspace-root workspace) (plist-get state :id)))
+              ((> (hash-table-count (plist-get room :guests)) 0)))
+    (mevedel-collaboration-editing--send
+     room 0 "event"
+     (list :event "changed" :id (plist-get state :id) :kind (plist-get state :kind)
+           :title (plist-get state :title) :revision (plist-get state :revision))
+     t)))
+
+(add-hook 'mevedel-shared-editing-change-hook
+          #'mevedel-collaboration-artifact-room--changed)
 
 (defun mevedel-collaboration-artifact-room--on-state (root id state)
   "Track relay transport STATE for the room of ROOT's artifact ID.

@@ -74,12 +74,15 @@ IDs, while exact before/after snapshots stay on the host for reversion."
              (append (plist-get visible :transactions) nil)))))
         visible))))
 
-(defun mevedel-collaboration-editing--send (room peer req-id value)
-  "Send bounded VALUE chunks to PEER in ROOM for REQ-ID."
+(defun mevedel-collaboration-editing--send (room peer req-id value &optional raw)
+  "Send bounded VALUE chunks to PEER in ROOM for REQ-ID.
+VALUE is projected for a browser editor, without content, picture and
+contribution snapshots, unless RAW is non-nil."
   (let* ((encoded (base64-encode-string
                    (encode-coding-string
                     (mevedel-shared-editing--json
-                     (mevedel-collaboration-editing--browser-value value))
+                     (if raw value
+                       (mevedel-collaboration-editing--browser-value value)))
                     'utf-8-unix) t))
          (length (length encoded))
          (offset 0))
