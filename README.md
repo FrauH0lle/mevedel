@@ -76,7 +76,8 @@ Key features:
   directory listings
 - [Bubblewrap](https://github.com/containers/bubblewrap) on Linux for Bash and
   batch Eval child confinement
-- Optional: Python 3 and a kernel with Landlock ABI 9 or newer, to keep
+- Python 3 for safely opening and writing authorized file-tool paths
+- Optional: a kernel with Landlock ABI 9 or newer, to keep
   confined commands away from host Unix sockets outside the workspace
 - Optional: [mcp.el](https://github.com/lizqwerscott/mcp.el) for `@mcp` mentions
 - Optional: Poppler (`pdftoppm`) for rendering selected PDF pages with `Read`
@@ -85,10 +86,10 @@ Key features:
 - Optional: ImageMagick (`magick` or `convert`) for image/PDF resize and
   compression options in `Read`
 
-Remote Linux targets require `rg`, `bash`, and `setsid`.  Git is required only
-for Git-backed workflows, Bubblewrap follows the configured sandbox mode, and
-media converters remain optional.  Mevedel probes these capabilities but does
-not install target dependencies.
+Remote Linux targets require `rg`, `bash`, `setsid`, and `python3`.  Git is
+required only for Git-backed workflows, Bubblewrap follows the configured
+sandbox mode, and media converters remain optional.  Mevedel probes these
+capabilities but does not install target dependencies.
 
 On a remote workspace, another package doing remote I/O from a process
 sentinel can interrupt a mevedel command mid-conversation; TRAMP then refuses

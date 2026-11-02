@@ -108,7 +108,7 @@ class CheckTests(unittest.TestCase):
                      'GIT_INDEX_FILE': str(directory / 'commit-index')})
             self.assertEqual(result.returncode, 23)
             self.assertEqual(log.read_text().splitlines(),
-                             [tmp, '@emacs-eask/cli run script check'])
+                             [tmp, '@emacs-eask/cli run script check -- --affected'])
 
 
 if __name__ == '__main__':

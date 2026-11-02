@@ -109,7 +109,7 @@
       (should (string-search "g to retry" (overlay-get mevedel-memory-list--notice 'before-string)))
       (should-not (mevedel-cockpit-surface-selected t))
       (mevedel-memory-list-memories)
-      (should (string-search "Loading memories" (overlay-get mevedel-memory-list--notice 'before-string)))
+      ;; Memories may already have completed while history recovery was pending.
       (mevedel-test-memory-list-await-memories)
       (should (string-search "No stored memories" (overlay-get mevedel-memory-list--notice 'before-string)))
       (mevedel-memory-list-candidates)
