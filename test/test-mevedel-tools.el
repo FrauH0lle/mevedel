@@ -1964,6 +1964,28 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
       (should (equal native gptel-tools))
       (should (equal catalog (mevedel-session-tool-catalog mevedel--session)))))
 
+  :doc "prints a contextualized contract without changing the registered arguments"
+  (with-temp-buffer
+    (let ((static '((value string :required "Static description"))))
+      (mevedel-tool-register
+       (mevedel-tool--create
+        :name "Contextual" :category "mevedel" :summary "Static summary"
+        :description "Contextual contract" :args static
+        :contextualize
+        (lambda (args summary)
+          (cons (list (list (car (car args)) 'string :required
+                            "Buffer description"))
+                summary))))
+      (setq-local mevedel--session
+                  (mevedel-session--create
+                   :tool-catalog '((("mevedel" "Contextual") . "Static summary"))))
+      (let (result)
+        (mevedel-tools--tool-search (lambda (s) (setq result s)) "Contextual")
+        (should (string-search "Buffer description" result))
+        (should-not (string-search "Static description" result)))
+      (should (equal static
+                     (mevedel-tool-args (mevedel-tool-get "Contextual"))))))
+
   :doc "filters current request restrictions and omits unregistered catalog entries"
   (with-temp-buffer
     (mevedel-tool-register
@@ -2046,6 +2068,21 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
       (should-not (string-search "NativeProbe" section))
       (should-not (string-search "Ghost" section))
       (should-not (string-search "more tools are omitted" section))))
+
+  :doc "shows a tool's summary resolved for the current buffer"
+  (with-temp-buffer
+    (mevedel-define-tool
+     :name "ContextProbe" :handler #'ignore :summary "Static"
+     :description "Context probe"
+     :contextualize (lambda (args summary)
+                      (cons args (concat summary " [buffer-local]"))))
+    (setq-local mevedel--session
+                (mevedel-session--create
+                 :tool-catalog '((("mevedel" "ContextProbe") . "s"))))
+    (setq-local gptel-tools
+                (list (mevedel-tool-gptel-tool (mevedel-tool-get "ToolCall"))))
+    (should (string-search "- (ContextProbe) - Static [buffer-local]"
+                           (mevedel-tools-listing-section))))
 
   :doc "follows the current request's ToolCall restriction"
   (with-temp-buffer

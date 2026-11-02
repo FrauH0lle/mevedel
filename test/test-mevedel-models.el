@@ -91,6 +91,93 @@
         (should (eq gptel-backend (plist-get policy :backend)))
         (should (eq gptel-model (plist-get policy :model)))))))
 
+(mevedel-deftest mevedel-model-tier-guide ()
+  ,test
+  (test)
+
+  :doc "names each tier's provider and effort with a hint for the basic tiers"
+  (mevedel-models-test--with-backends
+    (let ((mevedel-model-tiers
+           '((fast :provider "Fast:fast-model" :effort nil)
+             (balanced :provider "Balanced:balanced-model" :effort high)
+             (strong :provider "Fast:fast-model" :effort high)))
+          (gptel-backend (gptel-get-backend "Ollama"))
+          (gptel-model 'llama3.1:8b)
+          (gptel-reasoning-effort 'medium))
+      (let ((guide (mevedel-model-tier-guide)))
+        (should (string-search
+                 "fast = Fast:fast-model (default effort), for search" guide))
+        (should (string-search
+                 "balanced = Balanced:balanced-model (high), for routine" guide))
+        (should (string-search
+                 "strong = Fast:fast-model (high), for hard design" guide))
+        ;; Omitting the argument keeps the session model for roleless agents.
+        (should (string-search "Ollama:llama3.1:8b (medium)" guide)))))
+
+  :doc "collapses identical tiers into one sentence"
+  (mevedel-models-test--with-backends
+    (let ((mevedel-model-tiers '((fast) (balanced) (strong)))
+          (gptel-backend (gptel-get-backend "Ollama"))
+          (gptel-model 'llama3.1:8b)
+          (gptel-reasoning-effort 'medium))
+      (let ((guide (mevedel-model-tier-guide)))
+        (should (string-search "All tiers use the session model" guide))
+        (should (string-search "Ollama:llama3.1:8b" guide))
+        (should-not (string-search "fast =" guide)))
+      (should (equal "all tiers use the session model"
+                     (mevedel-model-tier-guide t)))))
+
+  :doc "reports a tier with no provider and no fallback as unavailable"
+  (mevedel-models-test--with-backends
+    (let ((mevedel-model-tiers
+           '((fast :provider "Missing:nothing")
+             (balanced :provider "Balanced:balanced-model")
+             (strong)))
+          (mevedel-model-fallback-provider nil)
+          (gptel-backend nil)
+          (gptel-model nil)
+          (gptel-reasoning-effort 'medium))
+      (should (string-search "fast = unavailable"
+                             (mevedel-model-tier-guide)))
+      (should (equal "fast=unavailable, balanced=balanced-model, strong=unavailable"
+                     (mevedel-model-tier-guide t)))))
+
+  :doc "shows the fallback model for a tier whose provider is unavailable"
+  (mevedel-models-test--with-backends
+    (let ((mevedel-model-tiers
+           '((fast :provider "Missing:nothing")
+             (balanced :provider "Balanced:balanced-model")
+             (strong)))
+          (mevedel-model-fallback-provider "Fast:fast-model")
+          (gptel-backend (gptel-get-backend "Ollama"))
+          (gptel-model 'llama3.1:8b)
+          (gptel-reasoning-effort 'medium))
+      (should (string-search "fast = Fast:fast-model (medium)"
+                             (mevedel-model-tier-guide)))))
+
+  :doc "lists additional tiers without a usage hint"
+  (mevedel-models-test--with-backends
+    (let ((mevedel-model-tiers
+           '((fast :provider "Fast:fast-model")
+             (custom :provider "Balanced:balanced-model" :effort low)))
+          (gptel-backend (gptel-get-backend "Ollama"))
+          (gptel-model 'llama3.1:8b)
+          (gptel-reasoning-effort 'medium))
+      (should (string-search "; custom = Balanced:balanced-model (low)."
+                             (mevedel-model-tier-guide)))))
+
+  :doc "compact form shows model names only"
+  (mevedel-models-test--with-backends
+    (let ((mevedel-model-tiers
+           '((fast :provider "Fast:fast-model")
+             (balanced :provider "Balanced:balanced-model")
+             (strong :provider "Fast:fast-model" :effort high)))
+          (gptel-backend (gptel-get-backend "Ollama"))
+          (gptel-model 'llama3.1:8b)
+          (gptel-reasoning-effort 'medium))
+      (should (equal "fast=fast-model, balanced=balanced-model, strong=fast-model"
+                     (mevedel-model-tier-guide t))))))
+
 (mevedel-deftest mevedel-model-supported-efforts
   ()
   ,test

@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-agents)
+(require 'gptel-openai)
 (require 'mevedel-context-delivery)
 (require 'mevedel-agent-control)
 (require 'mevedel-execution-target)
@@ -24,6 +25,23 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
+
+(defvar gptel-reasoning-effort)
+
+(defmacro test-mevedel-agents--with-tiers (&rest body)
+  "Run BODY with an isolated backend and two configured model tiers."
+  (declare (indent 0) (debug t))
+  `(let ((gptel--known-backends nil)
+         (mevedel-model-fallback-provider nil))
+     (gptel-make-openai "Team" :key "test"
+                        :models '(small-model big-model other-model))
+     (let ((mevedel-model-tiers
+            '((fast :provider "Team:small-model" :effort nil)
+              (strong :provider "Team:big-model" :effort high)))
+           (gptel-backend (gptel-get-backend "Team"))
+           (gptel-model 'other-model)
+           (gptel-reasoning-effort 'medium))
+       ,@body)))
 
 
 ;;
@@ -635,6 +653,23 @@
       ;; The registered tool every buffer shares never changes.
       (should (equal [] (funcall roles registered)))))
 
+  :doc "describes this buffer's tiers on the copied model argument"
+  (progn
+    (mevedel-tool-ui--register)
+    (test-mevedel-agents--with-tiers
+      (with-temp-buffer
+        (setq-local gptel-tools
+                    (list (mevedel-tool-gptel-tool (mevedel-tool-get "Agent"))))
+        (mevedel-agents-set-specs '(("alpha")))
+        (mevedel-agents-install-agent-schema)
+        (let ((model (cl-find "model" (gptel-tool-args (car gptel-tools))
+                              :key (lambda (arg) (plist-get arg :name))
+                              :test #'equal)))
+          (should (equal ["fast" "strong"] (plist-get model :enum)))
+          (should (string-search
+                   "strong = Team:big-model (high), for hard design"
+                   (plist-get model :description)))))))
+
   :doc "leaves a foreign same-named tool and a discoverable Agent alone"
   (progn
     (mevedel-tool-ui--register)
@@ -651,6 +686,51 @@
         (setq-local gptel-tools nil)
         (mevedel-agents-install-agent-schema)
         (should-not gptel-tools)))))
+
+(mevedel-deftest mevedel-agents-agent-contract ()
+  ,test
+  (test)
+  :doc "resolves the roster and tier guide for the current buffer"
+  (progn
+    (mevedel-tool-ui--register)
+    (test-mevedel-agents--with-tiers
+      (with-temp-buffer
+        (mevedel-agents-set-specs '(("alpha") ("beta")))
+        (let* ((tool (mevedel-tool-get "Agent"))
+               (resolved (mevedel-tool-contextual-contract tool))
+               (extras (lambda (name)
+                         (nthcdr 4 (assq name (car resolved))))))
+          (should (equal ["alpha" "beta"]
+                         (plist-get (funcall extras 'role) :enum)))
+          (should (equal ["fast" "strong"]
+                         (plist-get (funcall extras 'model) :enum)))
+          (should (string-search
+                   "fast = Team:small-model (default effort), for search"
+                   (nth 3 (assq 'model (car resolved)))))
+          (should (string-prefix-p "Start a retained" (cdr resolved)))
+          (should (string-search "Model tiers: fast=small-model, strong=big-model"
+                                 (cdr resolved)))
+          ;; The registered specification stays buffer independent.
+          (should (equal [] (plist-get (nthcdr 4 (assq 'role (mevedel-tool-args tool)))
+                                       :enum)))
+          (should-not (string-search "Model tiers" (mevedel-tool-summary tool)))
+          ;; The specialist listing line carries the same tier models.
+          (should (string-search
+                   "Model tiers: fast=small-model, strong=big-model"
+                   (mevedel-tool-ptc--tool-declaration "Agent")))))))
+
+  :doc "a buffer keeps the tier mapping it was configured with"
+  (progn
+    (mevedel-tool-ui--register)
+    (test-mevedel-agents--with-tiers
+      (with-temp-buffer
+        (setq-local mevedel-model-tiers
+                    (copy-tree '((fast :provider "Team:big-model"))))
+        (let ((resolved (mevedel-tool-contextual-contract
+                         (mevedel-tool-get "Agent"))))
+          (should (string-search "fast = Team:big-model"
+                                 (nth 3 (assq 'model (car resolved)))))
+          (should-not (string-search "small-model" (cdr resolved))))))))
 
 (provide 'test-mevedel-agents)
 

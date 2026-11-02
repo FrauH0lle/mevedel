@@ -428,9 +428,10 @@ with catalog order preserved within each group."
   "Return the complete callable contract for catalog ENTRY."
   (let* ((path (car entry))
          (tool (mevedel-tool-get (cadr path) (car path)))
-         (name (mevedel-tool-call-name tool)))
+         (name (mevedel-tool-call-name tool))
+         (args (car (mevedel-tool-contextual-contract tool))))
     (format "%s\n\n%s\n\nArguments (name type requirement description schema):\n%S\n\nCalling signature: %s\n\nExpression template (replace placeholders using the contract above):\n%s\n%s"
-            name (or (mevedel-tool-prompt tool) (mevedel-tool-description tool)) (mevedel-tool-args tool)
+            name (or (mevedel-tool-prompt tool) (mevedel-tool-description tool)) args
             (mevedel-tool-ptc--tool-declaration name)
             (mevedel-tool-ptc--call-template name)
             (if (mevedel-tool-ptc--composable-p name)

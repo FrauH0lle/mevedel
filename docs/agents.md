@@ -868,3 +868,13 @@ the child request. Explicit Agent `model` and `effort` values have final
 precedence. Skill-specific preset entries use `$skill-name` symbols in the
 same workload map. Agent buffers receive a deep-copied snapshot of the maps,
 so nested agents keep the policy in effect when they were launched.
+
+The model sees the resolved tiers on both Agent surfaces: the `model` argument
+description lists each tier's provider and effort with a usage hint for `fast`,
+`balanced` and `strong`, the specialist listing and `ToolSearch` summary name
+the tier models, and the `role` enum lists the buffer's roster. Tools declare
+such buffer-specific text through a `:contextualize` function, resolved in the
+owner's buffer by `mevedel-tool-contextual-contract`, so presets and agent
+snapshots show their own tiers. When every tier is the session model the guide
+says so. A tier whose provider is unavailable shows the configured fallback
+model, or `unavailable` when there is none.

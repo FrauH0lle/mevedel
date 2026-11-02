@@ -30,7 +30,8 @@ agent with your effective instructions and capabilities.
   explicitly tell the child to treat them as background and not continue prior
   requests. Later parent turns are not synchronized.
 - `model` selects a configured tier or exact `BACKEND:MODEL`; `effort` must be
-  supported by that model. Use overrides when the assignment calls for them.
+  supported by that model. The `model` description lists what each tier uses
+  here and when to pick it. Use overrides when the assignment calls for them.
 - `working_directory` selects an existing directory, absolute or relative to
   your execution directory. It must be in the session workspace or a registered
   Git worktree of the same repository on the same target. The child and its
