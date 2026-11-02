@@ -587,8 +587,9 @@ A change of reachability is announced as a change of WORKSPACE's listing."
 See `mevedel-artifact-backend-catalog'.  A full row adds `:remote' t,
 the `:origin' name (the relay host while the origin gave none), the
 `:relay' host, the `:origin-id', the link's `:tier' and `:reachable'
-\(`yes', `no' or nil while unknown).  Listing them in full checks, in the
-background, the reachability of links not checked lately."
+\(`yes', `no' or nil while unknown), and the `:revision' of the origin's
+last change event.  Listing them in full checks, in the background, the
+reachability of links not checked lately."
   (mevedel-remote-artifact--remember workspace)
   (mapcar
    (lambda (cell)
@@ -617,6 +618,7 @@ background, the reachability of links not checked lately."
                   :relay relay
                   :origin-id (plist-get entry :id)
                   :tier (plist-get entry :tier)
+                  :revision (plist-get status :revision)
                   :reachable (plist-get status :reachable)
                   :error (plist-get status :error)))))))
    (cl-remove-if-not (lambda (cell) (mevedel-artifact-backend-registered-p workspace (car cell)))

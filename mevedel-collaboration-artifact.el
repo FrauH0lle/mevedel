@@ -92,10 +92,14 @@
 (defvar mevedel-collaboration-needs-host-message)
 
 ;; `mevedel-collaboration-artifact-projection'
+(declare-function mevedel-collaboration--artifact-revision
+                  "mevedel-collaboration-artifact-projection" (size modified))
 (declare-function mevedel-collaboration--artifact-stat-invalidate
                   "mevedel-collaboration-artifact-projection" ())
 (declare-function mevedel-collaboration--artifacts-dir
                   "mevedel-collaboration-artifact-projection" (session))
+(autoload 'mevedel-collaboration--artifact-revision
+  "mevedel-collaboration-artifact-projection")
 
 ;; `mevedel-collaboration-artifact-room'
 (declare-function mevedel-collaboration-artifact-room-sharing
@@ -514,7 +518,10 @@ The snapshot also records which artifacts are shared through links."
 (defun mevedel-collaboration--store-rows (room &optional snapshot)
   "Return ROOM's workspace artifacts as guests receive them.
 Attachment is relative to ROOM's session; a lobby has none.
-SNAPSHOT, when given, supplies the store observation shared across rooms."
+SNAPSHOT, when given, supplies the store observation shared across rooms.
+A row's revision changes with its artifact: for a local one with its
+primary file's size and time, read with the listing; for a remote one with
+the origin's last change event."
   (let* ((session (plist-get room :session))
          (attached (and session (mevedel-session-attached-artifacts session)))
          (workspace (mevedel-collaboration--room-workspace room))
@@ -530,6 +537,10 @@ SNAPSHOT, when given, supplies the store observation shared across rooms."
                        :size (plist-get row :size)
                        :modified (if (plist-get row :missing) nil
                                    (truncate (float-time (plist-get row :modified))))
+                       :revision (cond ((plist-get row :remote) (plist-get row :revision))
+                                       ((plist-get row :missing) nil)
+                                       (t (mevedel-collaboration--artifact-revision
+                                           (plist-get row :size) (plist-get row :modified))))
                        :versions (plist-get row :versions)
                        :item (if (memq (plist-get row :kind)
                                        mevedel-artifact-store-item-kinds)
@@ -562,10 +573,14 @@ sends the listing anyway."
 
 (defun mevedel-collaboration-item-link (link id &optional route)
   "Return room LINK opening shared item ID directly in its editor tab.
-ROUTE \"artifact\" opens store artifact ID in the viewer's panel instead."
-  (let ((hash (string-search "#" link)))
-    (concat (substring link 0 hash) "?" (or route "shared") "=" (url-hexify-string id)
-            (substring link hash))))
+ROUTE \"artifact\" opens store artifact ID in the viewer's panel instead.
+The viewer reads an editor tab's item from the query and a panel's from
+the fragment, after the room's key."
+  (if (equal route "artifact")
+      (concat link "?artifact=" (url-hexify-string id))
+    (let ((hash (string-search "#" link)))
+      (concat (substring link 0 hash) "?shared=" (url-hexify-string id)
+              (substring link hash)))))
 
 (defun mevedel-collaboration--store-conversation-link (guest workspace id)
   "Share artifact ID's dedicated session and return GUEST's link to it.

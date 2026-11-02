@@ -291,7 +291,8 @@ an artifact only by its record id, never by a filesystem path."
   (let (out)
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
                        :truncated :guest :directive :item :detail :details :diff
-                       :artifact :title :store :size :missing :presentation :shared
+                       :artifact :title :store :size :artifactRevision :missing
+                       :presentation :shared
                        :execution :description :number :firstSegment :lastSegment
                        :sender :mailType :outcome :activity :toolUseId :forkPoint))
       (when (plist-member record key)

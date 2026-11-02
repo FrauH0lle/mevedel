@@ -66,7 +66,8 @@
                                                :root save-path :name "w"))
          (dir (mevedel-artifact-store-directory workspace))
          (session (mevedel-session--create :name "s" :workspace workspace))
-         (path (file-name-concat dir "mockup/index.html")))
+         (path (file-name-concat dir "mockup/index.html"))
+         revision)
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
@@ -80,6 +81,7 @@
             (should (equal "mockup/index.html" (plist-get fields :artifact)))
             (should (equal "Architecture review" (plist-get fields :title)))
             (should (= 11 (plist-get fields :size)))
+            (should (stringp (setq revision (plist-get fields :artifactRevision))))
             (should (equal (expand-file-name path)
                            (plist-get fields :artifact-path)))
             (should-not (plist-member fields :missing)))
@@ -96,17 +98,18 @@
           ;; The stat is memoized against per-tick target round trips,
           ;; and a settling ApplyPatch drops the entry so the card follows.
           (write-region "<h1>hello again</h1>" nil path nil 'silent)
-          (should (= 11 (plist-get
-                         (car (mevedel-collaboration--artifact-fields
-                               `(:kind patch
-                                 :files ((:kind update :path ,path)))))
-                         :size)))
+          (let ((fields (car (mevedel-collaboration--artifact-fields
+                              `(:kind patch :files ((:kind update :path ,path)))))))
+            (should (= 11 (plist-get fields :size)))
+            (should (equal revision (plist-get fields :artifactRevision))))
           (mevedel-collaboration--artifact-stat-invalidate)
-          (should (= 20 (plist-get
-                         (car (mevedel-collaboration--artifact-fields
-                               `(:kind patch
-                                 :files ((:kind update :path ,path)))))
-                         :size)))
+          ;; The card's revision follows the file, so an open panel can
+          ;; offer to reload it.
+          (let ((fields (car (mevedel-collaboration--artifact-fields
+                              `(:kind patch :files ((:kind update :path ,path)))))))
+            (should (= 20 (plist-get fields :size)))
+            (should (stringp (plist-get fields :artifactRevision)))
+            (should-not (equal revision (plist-get fields :artifactRevision))))
           ;; A deleted artifact still projects, marked missing, so it
           ;; reads as deleted rather than as a gap in the log.
           (delete-file path)
@@ -115,7 +118,8 @@
                               `(:kind patch
                                 :files ((:kind update :path ,path)))))))
             (should (eq t (plist-get fields :missing)))
-            (should-not (plist-member fields :size)))
+            (should-not (plist-member fields :size))
+            (should-not (plist-member fields :artifactRevision)))
           ;; Without a session there is no artifact store at all.
           (with-temp-buffer
             (should-not (mevedel-collaboration--artifact-fields
@@ -242,8 +246,8 @@
           (delete-file path)
           (mevedel-collaboration-notify-artifacts-changed workspace)
           (should-not published)
-          (should (cdr (mevedel-collaboration--artifact-stat
-                        (expand-file-name path))))
+          (should-not (car (mevedel-collaboration--artifact-stat
+                            (expand-file-name path))))
           (let ((timer (gethash workspace mevedel-collaboration--artifact-notifications)))
             (cancel-timer timer)
             (apply (timer--function timer) (timer--args timer)))
@@ -388,9 +392,13 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
 (mevedel-deftest mevedel-collaboration--store-rows ()
   ,test
   (test)
-  :doc "lists the workspace store with attachment relative to the room"
+  :doc "lists the workspace store with attachment relative to the room, and a revision per artifact"
   (mevedel-collaboration-artifact-test--with-store
-    (let ((rows (append (plist-get (mevedel-collaboration--store-frame room) :artifacts) nil)))
+    (let ((rows (append (plist-get (mevedel-collaboration--store-frame room) :artifacts) nil))
+          (revision (lambda ()
+                      (plist-get (cl-find "page" (mevedel-collaboration--store-rows room)
+                                          :key (lambda (row) (plist-get row :id)) :test #'equal)
+                                 :revision))))
       (should (equal '("draft" "page") (sort (mapcar (lambda (row) (plist-get row :id)) rows)
                                              #'string<)))
       (let ((page (cl-find "page" rows :key (lambda (row) (plist-get row :id)) :test #'equal)))
@@ -399,7 +407,13 @@ as (PEER . FRAME), guest 1 reads and guest 2 writes in both rooms."
         (should (equal "page/index.html" (plist-get page :artifact)))
         (should (eq :json-false (plist-get page :item)))
         (should (= 1 (plist-get page :versions)))
-        (should (integerp (plist-get page :modified)))))
+        (should (integerp (plist-get page :modified)))
+        ;; The revision stays put while the file does, and moves when it changes.
+        (should (stringp (plist-get page :revision)))
+        (should (equal (plist-get page :revision) (funcall revision)))
+        (write-region "<p>page, edited</p>" nil (file-name-concat store "page" "index.html")
+                      nil 'silent)
+        (should-not (equal (plist-get page :revision) (funcall revision)))))
     (should (cl-every (lambda (row) (eq :json-false (plist-get row :attached)))
                       (plist-get (mevedel-collaboration--store-frame lobby) :artifacts)))
     ;; Unreadable metadata leaves its artifact out, not the listing.

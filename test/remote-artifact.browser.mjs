@@ -3,9 +3,9 @@
  * remote-artifact package's own CLI and stdio MCP server, and Chromium,
  * all on one whiteboard.  The browser joins through the origin's session
  * room; the package through the artifact's edit link.  The package then
- * edits an HTML artifact's files through its own link; the viewer shows an
- * HTML artifact only as fetched when opened, so that part is checked at
- * the origin.
+ * edits an HTML artifact's files through its own link, checked at the
+ * origin; the origin's browser, with the page open, offers a reload that
+ * shows the edit.
  *
  * The origin is shared-editing/test/room.el: it runs real tools and the
  * real sharing operation on request through files in its directory.
@@ -237,12 +237,29 @@ test(
       assert.equal(primary.text, html);
       const files = await mcp.call('list_artifact_files', { name: 'site' });
       assert.equal(files.text, `index.html (${Buffer.byteLength(html)} bytes, primary)`);
+      // The origin's browser has the page open in its panel, through the
+      // link Project artifacts `o' opens.
+      await page.goto(`${links.full}?artifact=landing`);
+      const panelFrame = page.frameLocator('#artifact-body iframe');
+      const heading = () => panelFrame.locator('h1').textContent();
+      await until(async () => (await heading()) === 'Hello');
+      await panelFrame.locator('body').evaluate(() => (window.beforeReload = true));
+      const reloadButton = page.locator('#artifact-reload');
+      assert.equal(await reloadButton.isHidden(), true);
       const fileEdit = await mcp.call('edit_artifact_file', { name: 'site', file: 'index.html',
         old_string: '<h1>Hello</h1>', new_string: '<h1>Hello, world</h1>' });
       assert.equal(fileEdit.isError, false, fileEdit.text);
       assert.match(fileEdit.text, /^Edited index\.html/);
       const htmlEdited = '<!doctype html>\n<h1>Hello, world</h1>\n';
       assert.equal((await origin('HtmlFile', { id: 'landing', file: 'index.html' })).text, htmlEdited);
+      // The edit offers a reload without resetting the open page; the
+      // reload shows it.
+      await reloadButton.waitFor({ state: 'visible' });
+      assert.equal(await heading(), 'Hello');
+      assert.equal(await panelFrame.locator('body').evaluate(() => window.beforeReload), true);
+      await reloadButton.click();
+      await until(async () => (await heading()) === 'Hello, world');
+      assert.equal(await reloadButton.isHidden(), true);
       const changed = '<!doctype html>\n<h1>Changed at the origin</h1>\n';
       await origin('HtmlFile', { id: 'landing', file: 'index.html', content: changed });
       const stale = await mcp.call('write_artifact_file', { name: 'site', file: 'index.html',

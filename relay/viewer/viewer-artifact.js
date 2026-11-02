@@ -4,6 +4,9 @@
 (() => {
   const MAX_BASE64 = 24 * 1024 * 1024;
   const TRANSFER_TIMEOUT_MS = 30000;
+  // The host drops a guest's artifact fetches closer together than a
+  // second; a reload waits out the rest of that window instead.
+  const FETCH_SPACING_MS = 1100;
 
   // Panel previews and direct downloads consume the same bounded transfer.
   function receive(transfer, frame) {
@@ -52,7 +55,11 @@
   // read the viewer's root stamp. This prelude bakes the theme in force when
   // the frame is built and follows later toggles over postMessage; a page
   // themes itself off html[data-theme] alongside prefers-color-scheme.
-  function themePrelude(theme) {
+  // It also reports the page's scroll position, and a reloaded page starts
+  // at SCROLL, the position its predecessor last reported.
+  function themePrelude(theme, scroll) {
+    const restore = scroll && Number.isFinite(scroll.x) && Number.isFinite(scroll.y)
+      ? `addEventListener("load", () => scrollTo(${Math.round(scroll.x)},${Math.round(scroll.y)}));` : '';
     return '<script>(() => {const root = document.documentElement;'
       + 'const set = t => {if (t === "light" || t === "dark") '
       + 'root.setAttribute("data-theme", t); '
@@ -60,6 +67,11 @@
       + `set(${JSON.stringify(theme)});`
       + 'addEventListener("message", e => {if (e.source === parent && e.data '
       + '&& e.data.t === "theme") set(e.data.theme);});'
+      + 'let pending = 0;addEventListener("scroll", () => {if (pending) return;'
+      + 'pending = requestAnimationFrame(() => {pending = 0;'
+      + 'parent.postMessage({t: "artifact-scroll", x: scrollX, y: scrollY}, "*");});'
+      + '}, {passive: true});'
+      + restore
       // srcdoc inherits the room's base URL. Resolve local fragment links
       // inside this opaque document instead of navigating to the room.
       + 'addEventListener("click", e => {'
@@ -91,12 +103,20 @@
     const discussToggle = document.getElementById('artifact-discussion');
     const sidebarToggle = document.getElementById('artifact-discussions');
     const askButton = document.getElementById('artifact-ask');
+    const reloadButton = document.getElementById('artifact-reload');
     // KIND is 'artifact' for an artifact card or 'file' for a project file,
     // which has no discussions and is removed from the file tree instead.
     // STORE is the artifact store id discussions belong to, if any.
+    // MARKER is the open artifact's revision when it was fetched, undefined
+    // while none is known; PENDING is a reload's transfer in flight, FRAME
+    // the panel's HTML frame and SCROLL the position it last reported.
     const view = {id: null, name: null, filename: null, store: null, kind: 'artifact', record: null, reqId: 0,
-                  staging: null, meta: null, bytes: null, urls: [], frames: []};
+                  staging: null, meta: null, bytes: null, urls: [], frames: [],
+                  marker: undefined, pending: null, frame: null, scroll: null};
     let requestSequence = 0;
+    let lastFetch = 0;
+    // Each store artifact's revision, from the latest listing.
+    let storeMarkers = new Map();
     const downloads = new Map();
     let theme = null;
     const discussionKit = window.mevedelArtifactDiscussions;
@@ -125,11 +145,11 @@
 
     // Only the panel frame carries the discussion picker: its parent is this
     // viewer. A separate tab's frame answers to a shell with no room.
-    function sandboxedFrame(doc, html, discussable) {
+    function sandboxedFrame(doc, html, discussable, scroll) {
       const frame = doc.createElement('iframe');
       frame.setAttribute('sandbox', 'allow-scripts');
       frame.className = 'artifact-frame';
-      frame.srcdoc = CSP + themePrelude(theme)
+      frame.srcdoc = CSP + themePrelude(theme, scroll)
         + (discussable && discussions ? discussionKit.script() : '') + html;
       view.frames.push(frame);
       return frame;
@@ -162,6 +182,10 @@
       view.bytes = null;
       view.urls.splice(0).forEach(url => URL.revokeObjectURL(url));
       view.frames = [];
+      view.marker = undefined;
+      view.pending = null;
+      view.frame = null;
+      view.scroll = null;
       if (discussions) discussions.detach();
       if (panel) panel.hidden = true;
       if (body) body.replaceChildren();
@@ -169,6 +193,7 @@
       if (download) download.hidden = true;
       if (remove) remove.hidden = true;
       if (askButton) askButton.hidden = true;
+      if (reloadButton) reloadButton.hidden = true;
       onPage();
     }
 
@@ -214,6 +239,7 @@
       note('Loading…');
       panel.hidden = false;
       const reqId = view.reqId;
+      if (frame.t === 'artifact-get') lastFetch = Date.now();
       send({...frame, reqId}).then(ok => {
         if (!ok && view.reqId === reqId && metaEl) {
           metaEl.textContent = 'Connection lost';
@@ -235,7 +261,66 @@
         if (record[key] !== undefined) view.record[key] = record[key];
       }
       hydratePublished();
+      view.marker = currentMarker();
       onPage();
+    }
+
+    // The open artifact's revision as the latest listing or card reports
+    // it: a store artifact's from its listing row, a card's from the card.
+    // Undefined when nothing reports one, or for a version, which stays.
+    function currentMarker() {
+      if (!view.id || view.kind !== 'artifact' || !view.record) return undefined;
+      if (view.id.startsWith('artifact:')) return storeMarkers.get(view.id.slice(9));
+      const record = published.find(candidate => candidate.id === view.id);
+      return record && record.artifactRevision !== undefined ? record.artifactRevision : undefined;
+    }
+
+    // Offer a reload once a newer revision arrives. The frame stays: it
+    // holds the reader's scroll position, in-frame drafts and anchors.
+    function checkMarker() {
+      const marker = currentMarker();
+      if (marker === undefined) return;
+      if (view.marker === undefined) view.marker = marker;
+      else if (marker !== view.marker && reloadButton && !view.pending) reloadButton.hidden = false;
+    }
+
+    function storeRows(rows) {
+      storeMarkers = new Map((Array.isArray(rows) ? rows : [])
+        .filter(row => row && typeof row.id === 'string' && row.revision !== undefined)
+        .map(row => [row.id, row.revision]));
+      checkMarker();
+    }
+
+    // Fetch the open artifact again and show it in place, where its reader
+    // left it, once it arrives.
+    function reload() {
+      if (!view.id || view.kind !== 'artifact' || !view.bytes || view.pending) return;
+      const id = view.id;
+      const reqId = ++requestSequence;
+      view.pending = {staging: [], collected: 0, reqId, marker: currentMarker(),
+                      restore: {scroll: view.scroll, top: body ? body.scrollTop : 0}};
+      if (reloadButton) reloadButton.hidden = true;
+      const start = () => {
+        if (view.id !== id || view.pending?.reqId !== reqId) return;
+        if (metaEl) metaEl.textContent = 'Loading…';
+        lastFetch = Date.now();
+        send({t: 'artifact-get', reqId, id}).then(ok => {
+          if (!ok) failReload(reqId, 'Connection lost; reload again when it is back.');
+        });
+      };
+      const wait = lastFetch + FETCH_SPACING_MS - Date.now();
+      if (wait > 0) setTimeout(start, wait);
+      else start();
+    }
+
+    function failReload(reqId, message) {
+      if (view.pending?.reqId !== reqId) return;
+      view.pending = null;
+      if (metaEl && view.meta) {
+        metaEl.textContent = `${window.mevedelTranscriptRenderer.formatBytes(view.bytes.length)} · ${view.meta.mime}`;
+      }
+      if (reloadButton) reloadButton.hidden = false;
+      flash(message);
     }
 
     // A project file, named by its path in the project.
@@ -276,12 +361,16 @@
       return view.record ? {artifact: view.record} : null;
     }
 
-    function renderContent() {
+    // RESTORE, after a reload, is where the reader was: the HTML frame's
+    // reported scroll position or the panel body's.
+    function renderContent(restore = null) {
       if (!body || !view.bytes) return;
       const {mime} = view.meta;
       const {formatBytes, renderMarkdown} = window.mevedelTranscriptRenderer;
       if (metaEl) metaEl.textContent = `${formatBytes(view.bytes.length)} · ${mime}`;
       body.replaceChildren();
+      view.frame = null;
+      view.scroll = restore?.scroll || null;
       const artifact = view.kind === 'artifact';
       if (download) download.hidden = false;
       if (remove) remove.hidden = !(artifact && typeof canDelete === 'function' && canDelete());
@@ -291,7 +380,8 @@
       const discussable = artifact && view.store !== null;
       if (mime === 'text/html') {
         if (tab) tab.hidden = false;
-        const frame = sandboxedFrame(document, text(), discussable);
+        const frame = sandboxedFrame(document, text(), discussable, restore?.scroll);
+        view.frame = frame;
         body.append(frame);
         if (discussions && discussable) discussions.attach(frame, view.id, view.store);
       } else if (mime === 'text/markdown') {
@@ -311,6 +401,7 @@
       } else {
         note('This file type does not preview here — download it.');
       }
+      if (restore && restore.top) body.scrollTop = restore.top;
     }
 
     function handle(frame) {
@@ -323,6 +414,25 @@
             transfer.finish();
           } else transfer.touch();
         } catch (error) { transfer.finish(error); }
+        return;
+      }
+      if (view.pending && frame.reqId === view.pending.reqId) {
+        const pending = view.pending;
+        let bytes;
+        try { bytes = receive(pending, frame); }
+        catch (error) {
+          failReload(pending.reqId, error.message);
+          return;
+        }
+        if (bytes) {
+          view.pending = null;
+          view.bytes = bytes;
+          view.meta = pending.meta;
+          if (pending.marker !== undefined) view.marker = pending.marker;
+          renderContent(pending.restore);
+          // A change while it loaded is offered again.
+          checkMarker();
+        }
         return;
       }
       if (!view.id || frame.reqId !== view.reqId) return;
@@ -402,6 +512,7 @@
       if (discussions) discussions.records(records);
       const pageChanged = hydratePublished();
       paint();
+      checkMarker();
       if (pageChanged) onPage();
     }
 
@@ -448,6 +559,16 @@
     }
 
     if (closeButton) closeButton.addEventListener('click', close);
+    if (reloadButton) reloadButton.addEventListener('click', reload);
+    if (typeof window.addEventListener === 'function') {
+      window.addEventListener('message', event => {
+        const data = event.data;
+        if (!view.frame || event.source !== view.frame.contentWindow
+            || !data || data.t !== 'artifact-scroll'
+            || !Number.isFinite(data.x) || !Number.isFinite(data.y)) return;
+        view.scroll = {x: data.x, y: data.y};
+      });
+    }
     if (tab) tab.addEventListener('click', openTab);
     if (download) download.addEventListener('click', downloadFile);
     // ASK is {available, run}: whether a file can start a session here,
@@ -484,8 +605,8 @@
       return discussions.discuss(`artifact:${store}`, text, images);
     }
 
-    return Object.freeze({open, openFile, download: downloadPath, render, attachedRows, handle, handleDelete, close,
-                          describe,
+    return Object.freeze({open, openFile, download: downloadPath, render, attachedRows, storeRows, handle,
+                          handleDelete, close, describe,
                           page: () => (panel && !panel.hidden ? view.store : null),
                           setTheme, queue, handleDiscussion, storedDiscussions, discuss, activity});
   }

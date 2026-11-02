@@ -82,7 +82,8 @@ Cache immutable segment metadata, never a second transcript store."
                             (when-let* ((title (mevedel-collaboration--artifact-title
                                                session (plist-get record :artifact))))
                               (list :title title))
-                            (if (cdr stat) '(:missing t) (list :size (car stat))))))
+                            (if (null (car stat)) '(:missing t)
+                              (list :size (car stat) :artifactRevision (cdr stat))))))
                 (cdr (assq number archives)))))))
 
 (defun mevedel-collaboration--history-catalog-records (records)

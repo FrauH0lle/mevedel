@@ -55,8 +55,16 @@
   (when-let* ((workspace (and session (mevedel-session-workspace session))))
     (expand-file-name (mevedel-artifact-store-directory workspace))))
 
+(defun mevedel-collaboration--artifact-revision (size modified)
+  "Return the revision of a file of SIZE bytes last MODIFIED at that time.
+It changes when the file does; viewers only compare it for equality, to
+offer reloading an open artifact."
+  (format "%d-%s" size (format-time-string "%s.%N" modified t)))
+
 (defvar mevedel-collaboration--artifact-stats (make-hash-table :test #'equal)
-  "Cached (SIZE . MISSING-P) per published artifact's qualified path.
+  "Cached (SIZE . REVISION) per published artifact's qualified path.
+SIZE is nil for a missing file; REVISION is its
+`mevedel-collaboration--artifact-revision'.
 Projection runs on every coalesced publish tick, so a remote session
 would otherwise pay one target round trip per artifact per tick.  The
 small cache is cleared when ApplyPatch settles and whenever the artifact
@@ -67,12 +75,16 @@ store changes.")
 Titles change on store notifications, not on streaming projection ticks.")
 
 (defun mevedel-collaboration--artifact-stat (path)
-  "Return cached (SIZE . MISSING-P) for the artifact at qualified PATH."
+  "Return cached (SIZE . REVISION) for the artifact at qualified PATH.
+Both are nil when it is missing."
   (or (gethash path mevedel-collaboration--artifact-stats)
       (puthash path
                (if-let* ((attributes (file-attributes path)))
-                   (cons (file-attribute-size attributes) nil)
-                 (cons nil t))
+                   (cons (file-attribute-size attributes)
+                         (mevedel-collaboration--artifact-revision
+                          (file-attribute-size attributes)
+                          (file-attribute-modification-time attributes)))
+                 (cons nil nil))
                mevedel-collaboration--artifact-stats)))
 
 (defun mevedel-collaboration--artifact-stat-invalidate ()
@@ -104,17 +116,20 @@ without target I/O on streaming projection ticks."
 (defun mevedel-collaboration--remote-artifact-field (session file)
   "Return the card of settled ApplyPatch FILE in a remote artifact, or nil.
 FILE's path is shared://ALIAS/files/PATH of an artifact SESSION's
-workspace has attached; the card carries no size, which only its origin
-knows."
+workspace has attached.  Its size is that of the bytes ApplyPatch wrote,
+which FILE records."
   (pcase-let* ((path (or (plist-get file :move-path) (plist-get file :path)))
                (`(,alias . ,relative) (mevedel-resource-remote-file path))
                (workspace (mevedel-session-workspace session)))
     (when (and alias (not (eq (plist-get file :kind) 'delete))
                (mevedel-artifact-backend-registered-p workspace alias))
-      (let ((title (plist-get (cl-find alias (mevedel-artifact-backend-catalog workspace 'items)
-                                       :key (lambda (row) (plist-get row :id)) :test #'equal)
-                              :title)))
-        (append (list :artifact (concat alias "/" relative) :store alias)
+      (let* ((row (cl-find alias (mevedel-artifact-backend-catalog workspace 'items)
+                           :key (lambda (row) (plist-get row :id)) :test #'equal))
+             (title (plist-get row :title)))
+        (append (list :artifact (concat alias "/" relative) :store alias
+                      ;; Null until the origin announces a change.
+                      :artifactRevision (plist-get row :revision))
+                (when-let* ((size (plist-get file :size))) (list :size size))
                 (when (and title (not (string-blank-p title)))
                   (list :title (format "%s · %s" title relative))))))))
 
@@ -155,9 +170,9 @@ See `mevedel-collaboration--artifact-field' for SESSION and BASE-DIRECTORY."
                 ;; The store artifact the card belongs to.
                 (when store (list :store store))
                 (when title (list :title title))
-                (if (cdr stat)
+                (if (null (car stat))
                     (list :missing t)
-                  (list :size (car stat))))))))
+                  (list :size (car stat) :artifactRevision (cdr stat))))))))
 
 (defun mevedel-collaboration--artifact-fields (render-data)
   "Return artifact field plists from settled ApplyPatch RENDER-DATA.

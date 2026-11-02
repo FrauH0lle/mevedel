@@ -26,6 +26,10 @@
   white-space: nowrap;
 }
 .artifact-open { flex-shrink: 0; }
+#artifact-reload {
+  padding: .3rem .7rem;
+  white-space: nowrap;
+}
 .artifact-body {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -66,8 +70,11 @@
 #artifact-discussions { display: inline-flex; align-items: center; gap: .4rem; position: relative; }
 #artifact-discussions .count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--on-accent); font: 600 11px/18px var(--font-ui); text-align: center; }
 /* Folded into the header's ⋯, the button's unread dot marks the menu. */
-#artifact-panel .head-more:has(#artifact-discussions.unread) > summary { position: relative; }
+/* A folded Reload, like unread discussions, marks the ⋯ menu. */
+#artifact-panel .head-more:has(#artifact-discussions.unread) > summary,
+#artifact-panel .head-more:has(#artifact-reload:not([hidden])) > summary { position: relative; }
 #artifact-panel .head-more:has(#artifact-discussions.unread) > summary::after,
+#artifact-panel .head-more:has(#artifact-reload:not([hidden])) > summary::after,
 #artifact-discussions.unread::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--surface); }
 .artifact-side { flex: none; width: min(380px, 42vw); display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--line); font-family: var(--font-ui); font-size: 14px; }
 .artifact-side[hidden] { display: none; }
