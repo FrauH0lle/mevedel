@@ -1,0 +1,38 @@
+{
+  "description": "An edit link replaces a file of a shared HTML artifact, naming the SHA-256 hash it read. The origin writes only if the file still has that hash and answers with the new one. A null or missing hash creates a file that must not exist yet; data instead of text carries other bytes as base64.",
+  "tier": "edit",
+  "bindings": {
+    "$ID": "landing"
+  },
+  "frames": [
+    {
+      "from": "consumer",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": {
+          "action": "write-file",
+          "id": "$ID",
+          "file": "index.html",
+          "hash": "28c3689be4e0c696a6a45b9d7df5a41c8328b1c9939e240f27f3c6ac9a635099",
+          "text": "<!doctype html>\n<h1>Hello, world</h1>\n"
+        }
+      }
+    },
+    {
+      "from": "origin",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": {
+          "result": {
+            "file": "index.html",
+            "hash": "073fd2dab8fbabb8765175a26b2ef523268eed95a880556fda9e3cf482df2812",
+            "bytes": 38,
+            "created": false
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "description": "Any link reads one file of a shared HTML artifact, its primary file when no file is named. Text arrives as text, other bytes as base64 data; the SHA-256 hash is what a later write names.",
+  "bindings": {
+    "$ID": "landing"
+  },
+  "frames": [
+    {
+      "from": "consumer",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": { "action": "read", "id": "$ID", "file": "index.html" }
+      }
+    },
+    {
+      "from": "origin",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": {
+          "result": {
+            "file": "index.html",
+            "hash": "28c3689be4e0c696a6a45b9d7df5a41c8328b1c9939e240f27f3c6ac9a635099",
+            "bytes": 31,
+            "text": "<!doctype html>\n<h1>Hello</h1>\n"
+          }
+        }
+      }
+    }
+  ]
+}
