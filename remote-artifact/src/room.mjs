@@ -26,6 +26,9 @@ export class Room {
     this.welcome = null;
   }
 
+  /* True once the connection ended or was closed. */
+  get closed() { return this.#closed !== null; }
+
   /* Send FRAME sealed, in order. */
   send(frame) {
     this.#outbound = this.#outbound.then(async () => {
