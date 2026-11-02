@@ -510,13 +510,21 @@ STATE and PORT are the stub relay's."
     (plist-put consumer :texts nil)
     consumer))
 
-(defun mevedel-artifact-room-test--request (consumer req-id body)
-  "Send editing BODY as request REQ-ID from CONSUMER; return the reply body."
+(defun mevedel-artifact-room-test--request (consumer req-id body &optional timeout)
+  "Send editing BODY as request REQ-ID from CONSUMER; return the reply body.
+Wait at most TIMEOUT seconds, 5 by default, for the reply's last chunk;
+only the newest frame is decoded while waiting, so a large reply costs
+no more than its size."
   (mevedel-artifact-room-test--send
    consumer `((t . "editing") (reqId . ,req-id) (body . ,body)))
   (mevedel-relay-test--pump
-   (lambda () (cl-find req-id (mevedel-artifact-room-test--frames consumer)
-                       :key (lambda (frame) (alist-get 'reqId frame)))))
+   (lambda ()
+     (when-let* ((text (car (last (plist-get consumer :texts))))
+                 (frame (mevedel-artifact-room-test--parse text)))
+       (and (equal req-id (alist-get 'reqId frame))
+            (= (+ (alist-get 'offset frame) (length (alist-get 'data frame)))
+               (alist-get 'total frame)))))
+   timeout)
   (alist-get 'body (cl-find req-id (mevedel-artifact-room-test--frames consumer)
                             :key (lambda (frame) (alist-get 'reqId frame)))))
 
@@ -1633,6 +1641,13 @@ Return the artifact's directory."
                                                 (data . ,(base64-encode-string largest t))))))
             (should (equal largest (mevedel-artifact-room-test--file directory
                                                                      "assets/large.bin")))
+            ;; And reads back whole through the link.
+            (let ((read (alist-get 'result (mevedel-artifact-room-test--request
+                                            consumer 4 '((action . "read")
+                                                         (file . "assets/large.bin"))
+                                            60))))
+              (should (equal (* 16 1024 1024) (alist-get 'bytes read)))
+              (should (equal largest (base64-decode-string (alist-get 'data read)))))
             ;; A larger file placed at the origin is listed but not read.
             (let ((coding-system-for-write 'no-conversion))
               (write-region (concat largest "x") nil
