@@ -12,7 +12,8 @@ contract.
   executes every action.
 - Links are secrets. Only `attach` takes one, and nothing prints it.
 - Tools are entries in `src/tools.mjs`; room connections come from
-  `ctx.connect` so connection reuse can change in one place.
+  `ctx.connect`, which `serve` backs with the idle-closing pool in
+  `src/connections.mjs`; a tool calls `close()` on the room to release it.
 - Protocol changes go with the origin and the shared frame fixtures in
   `test/fixtures/remote-artifact/`: the origin's ERT tests check it produces
   them, the fake room in `test/fake-room.mjs` replays them.
