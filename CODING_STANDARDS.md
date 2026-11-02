@@ -25,9 +25,10 @@ than maintaining a second rule set here:
 - [gptel source rule](docs/development.md#gptel-source-rule): upstream API and
   pattern reuse for changes at the gptel boundary.
 
-Before reviewing `relay/` or `shared-editing/`, also read
-[relay/AGENTS.md](relay/AGENTS.md) or
-[shared-editing/AGENTS.md](shared-editing/AGENTS.md), respectively, for their
+Before reviewing `relay/`, `shared-editing/` or `remote-artifact/`, also read
+[relay/AGENTS.md](relay/AGENTS.md),
+[shared-editing/AGENTS.md](shared-editing/AGENTS.md) or
+[remote-artifact/AGENTS.md](remote-artifact/AGENTS.md), respectively, for their
 scoped contracts and checks. Apply area-specific contracts from the
 [documentation map](docs/index.md#documentation-map) to the changed area.
 

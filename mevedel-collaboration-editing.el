@@ -337,8 +337,11 @@ attaches it to that chat, and read replies carry the item's conversation."
      (lambda (id) (mevedel-artifact-store-attach session id))
      (lambda (id) (mevedel-collaboration-editing--conversation session id)))))
 
-(defun mevedel-collaboration-editing-handle (room peer frame)
-  "Handle bounded editor FRAME from authenticated PEER in ROOM."
+(defun mevedel-collaboration-editing-handle (room peer frame &optional dispatch)
+  "Handle bounded editor FRAME from authenticated PEER in ROOM.
+A completed transfer goes to DISPATCH, called like
+`mevedel-collaboration-editing--dispatch' (the default, for session
+rooms) with ROOM, PEER, the guest, the request id and the decoded args."
   (when-let* ((guest (mevedel-collaboration--guest room peer)))
     (let ((req-id (plist-get frame :reqId)))
       (condition-case err
@@ -382,7 +385,8 @@ attaches it to that chat, and read replies carry the item's conversation."
               (when (= (plist-get transfer :offset) total)
                 (cancel-timer (plist-get transfer :timer))
                 (plist-put guest :editing-transfer nil)
-                (mevedel-collaboration-editing--dispatch
+                (funcall
+                 (or dispatch #'mevedel-collaboration-editing--dispatch)
                  room peer guest req-id
                  (mevedel-shared-editing--parse
                   (decode-coding-string

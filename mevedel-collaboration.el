@@ -53,6 +53,9 @@
                   "mevedel-collaboration-artifact-projection" ())
 (autoload 'mevedel-collaboration--artifact-stat-invalidate "mevedel-collaboration-artifact-projection")
 
+;; `mevedel-collaboration-artifact-room'
+(defvar mevedel-collaboration-artifact-room--rooms)
+
 ;; `mevedel-collaboration-background'
 (declare-function mevedel-collaboration--publish-background
                   "mevedel-collaboration-background" (room))
@@ -1400,9 +1403,9 @@ the caller owns that check."
         (and (< now expiry) expiry)))))
 
 (defun mevedel-collaboration-sleep-reasons (now)
-  "Return stable keep-awake reasons for open shares and lobbies at NOW.
+  "Return stable keep-awake reasons for open shares, lobbies and artifacts at NOW.
 NOW is a float-time.  Transient relay outages do not close a share."
-  (let (share lobby)
+  (let (share lobby artifact)
     (maphash (lambda (_buffer room)
                (when (mevedel-collaboration--keep-awake-state room now)
                  (setq share t)))
@@ -1412,8 +1415,14 @@ NOW is a float-time.  Transient relay outages do not close a share."
                  (when (mevedel-collaboration--keep-awake-state room now)
                    (setq lobby t)))
                mevedel-collaboration-lobby--lobbies))
+    (when (boundp 'mevedel-collaboration-artifact-room--rooms)
+      (maphash (lambda (_key room)
+                 (when (mevedel-collaboration--keep-awake-state room now)
+                   (setq artifact t)))
+               mevedel-collaboration-artifact-room--rooms))
     (delq nil (list (and share "collaboration share active")
-                    (and lobby "collaboration lobby active")))))
+                    (and lobby "collaboration lobby active")
+                    (and artifact "shared artifact active")))))
 
 (defun mevedel-collaboration--keep-awake-status (room now)
   "Return ROOM's keep-awake request status at float-time NOW."

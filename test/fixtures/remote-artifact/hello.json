@@ -1,0 +1,20 @@
+{
+  "description": "A consumer joins an artifact room with an edit link: protocol version, display name, a stable guest id and the write token. No owner token is sent or accepted.",
+  "bindings": {
+    "$NAME": "remote agent",
+    "$GUEST_ID": "consumer-0001",
+    "$WRITE_TOKEN": "d3JpdGUtdG9rZW4tMDAwMQ"
+  },
+  "frames": [
+    {
+      "from": "consumer",
+      "frame": {
+        "t": "hello",
+        "proto": 3,
+        "name": "$NAME",
+        "guestId": "$GUEST_ID",
+        "writeToken": "$WRITE_TOKEN"
+      }
+    }
+  ]
+}

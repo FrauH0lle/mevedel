@@ -41,6 +41,8 @@ jobs:
           node test/collaboration-tool-presentation-test.js
           node test/collaboration-viewer-agent-test.js
           node test/collaboration-viewer-content-links-test.js
+      - name: Test remote-artifact package
+        run: npm test --prefix remote-artifact
       - name: Install Chromium
         run: shared-editing/node_modules/.bin/playwright install --with-deps chromium
       - name: Test editor and viewer integration in Chromium

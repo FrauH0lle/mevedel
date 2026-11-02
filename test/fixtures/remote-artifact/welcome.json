@@ -1,0 +1,21 @@
+{
+  "description": "The origin answers an edit-link hello with the artifact welcome, and nothing else: no session snapshot, roster or store listing.",
+  "bindings": {
+    "$ID": "snt-pipeline",
+    "$TITLE": "SNT analysis pipeline"
+  },
+  "frames": [
+    {
+      "from": "origin",
+      "frame": {
+        "t": "welcome",
+        "proto": 3,
+        "room": "artifact",
+        "id": "$ID",
+        "kind": "whiteboard",
+        "title": "$TITLE",
+        "readOnly": false
+      }
+    }
+  ]
+}

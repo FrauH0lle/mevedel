@@ -697,6 +697,59 @@ for every link; a full or owner link adds a **Files** tab: the
 [project files](#project-files). Refresh and a return to the foreground reload
 whichever tab is shown.
 
+## Artifact rooms
+
+An artifact room shares one artifact with consumers elsewhere, such as Claude
+Code or Codex through the
+[remote-artifact package](../remote-artifact/README.md), without giving them
+the workspace. It is the third room kind beside session rooms and the lobby and
+runs independently of the lobby: starting, stopping or rotating the lobby does
+not touch it. This Emacs, the artifact's origin, stays authoritative and carries
+out every read itself.
+
+`M-x mevedel-collaboration-share-artifact` asks for one of the workspace's
+whiteboards or documents, confirms the first share, copies the edit link to
+the kill ring and shows both links in a help window, never in `*Messages*`. A
+host without a keyboard shares with
+`(mevedel-collaboration-artifact-room-share DIRECTORY ID)`, which returns
+`:link-view` and `:link-edit`. HTML artifacts cannot be shared yet.
+
+Links keep the room shape `WEB-ORIGIN/#ROOM-ID.SECRET`: a view link's secret
+is the 32-byte room key, an edit link's the key and a 16-byte write token. No
+owner token is minted, and one offered in a hello is ignored. The link names no
+artifact. The credentials are generated on the first share and stored in the
+artifact's bookkeeping as `.mevedel/artifacts/.state/ID/link`, readable only by
+the user; their existence is what makes the artifact shared. Sharing again
+returns the same links, also after the room stopped or Emacs restarted. A room
+runs until Emacs exits and does not yet restart on its own; sharing again
+redials it under the same room id.
+
+A consumer's hello is admitted by the room key and write token like any
+room's. The room answers with its own welcome only:
+
+```json
+{"t": "welcome", "proto": 3, "room": "artifact", "id": "ID",
+ "kind": "whiteboard", "title": "TITLE", "readOnly": false}
+```
+
+It sends no session snapshot, roster, models, queue, tasks, goal, agents or
+store listing. A consumer that receives any other welcome, or a lobby
+listing, has a session or lobby link and disconnects.
+
+After the welcome, the room accepts only chunked `editing` requests in the
+editor's transfer format, checked against an allowlist of actions. Today the
+allowlist holds `read`, which returns `{result: {text}}` with the
+hash-prefixed lines `shared://ID` shows at the origin, for any link tier.
+Every request is pinned to the room's artifact: one naming any other id is
+refused, as is any action outside the allowlist (listing, creating,
+deleting, raw CRDT updates, discussions, libraries). All other frame types,
+including prompts, aborts, interaction answers, session requests, files,
+artifact fetches, store listings and actions, and recovery, are dropped
+unanswered. Frames run with `inhibit-interaction`, as in the lobby.
+
+A room with a connected consumer, or within its idle interval, keeps the
+machine awake under the lobby's rule (`shared artifact active`).
+
 ## Project files
 
 A lobby is the project's view, so it also shows the project's files: the
