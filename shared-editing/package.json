@@ -20,7 +20,7 @@
     "@tiptap/starter-kit": "3.32.0",
     "@tiptap/y-tiptap": "3.0.10",
     "dompurify": "3.4.17",
-    "fractional-indexing": "3.2.0",
+    "fractional-indexing": "4.0.0",
     "lib0": "0.2.119",
     "marked": "18.1.1",
     "perfect-freehand": "1.2.3",
