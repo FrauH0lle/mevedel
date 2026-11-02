@@ -11,6 +11,7 @@
           "mevedel-engine-test-support"))
 (require 'mevedel-acp-turn)
 (require 'mevedel-claude-code)
+(require 'mevedel-plan-mode)
 (require 'mevedel-view-render)
 (require 'mevedel-sigpipe-test-support
          (file-name-concat
@@ -190,6 +191,43 @@
       (should (= 9 (plist-get (plist-get (mevedel-engine-info request) :tokens-full) :output)))
       (should (= 1 (mevedel-session-turn-count session)))
       (should (eq 'aborted (plist-get (mevedel-engine-info request) :mevedel-acp-outcome)))))
+
+  :doc "post-response positions keep native Plan proposals readable in published sidecars"
+  (mevedel-engine-test--with-session
+    (setf (mevedel-session-plan-mode session) t
+          (mevedel-session-plan-metadata session)
+          '(:selection (:location here :context current :execution direct
+                        :mode edits :model-provider "Claude Code:sonnet"
+                        :reasoning-effort high)))
+    (let* (bounds
+           (gptel-post-response-functions
+            (list (lambda (start end)
+                    (setq bounds (list start end))
+                    (mevedel-plan-mode--post-response start end)))))
+      (cl-letf (((symbol-function 'mevedel-plan-approval-render) #'ignore))
+        (mevedel-acp-turn-start
+         request
+         (lambda (mcp _hook-command)
+           (list :command (executable-find "python3")
+                 :args (list mevedel-test--acp-peer) :cwd root :mcp mcp
+                 :meta '((responseText . "<proposed_plan>\n# Native plan\n</proposed_plan>\n"))))
+         [((type . "text") (text . "hello"))] nil)
+        (mevedel-test--await 5 "Plan turn did not settle"
+          (not (mevedel-turn-busy-p buffer))))
+      (should bounds)
+      (should (seq-every-p #'integerp bounds))
+      (should (mevedel-session-pending-plan-approval session))
+      (should-not (mevedel-session-pending-publication session))
+      (let* ((sidecar
+              (read (decode-coding-string
+                     (mevedel-session-artifacts-read-artifact
+                      session "session.meta.el" t)
+                     'utf-8-unix)))
+             (metadata (plist-get sidecar :plan-metadata)))
+        (should (eq 'proposed (plist-get metadata :status)))
+        (should (equal (append bounds (list (mevedel-plan-hash "# Native plan")))
+                       (plist-get metadata :proposal-id)))
+        (should (equal metadata (mevedel-session-plan-metadata session))))))
 
   :doc "a failed post-response observer cannot strand successful settlement"
   (mevedel-engine-test--with-session
