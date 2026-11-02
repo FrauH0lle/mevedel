@@ -116,22 +116,25 @@ BODY sees WORKSPACE, SESSION and the local functions `run', `text' and
         (should (string-search "Local notes"
                                (text (run "Read" (list :file_path (concat "shared://" id))))))
         (should (= 2 (length (car log)))))
-      ;; A settled turn's version and a deletion go to the adapter too.
-      (mevedel-artifact-store-save-version workspace "remote-board" "session-1")
-      (let (failure (done nil))
-        (mevedel-artifact-store-delete workspace "remote-board" "Host"
-                                       (lambda (reason) (setq failure reason done t)))
-        (let ((deadline (+ (float-time) 10)))
-          (while (and (not done) (< (float-time) deadline))
-            (accept-process-output nil 0.05)))
-        (should done)
-        (should-not failure))
-      (should (equal '(("delete" "Host") ("version" "session-1"))
-                     (mapcar (lambda (args)
-                               (list (plist-get args :action)
-                                     (or (plist-get args :session) (plist-get args :actor))))
-                             (seq-take (car log) 2))))
+      ;; A settled turn records no version of it: its origin keeps those.
+      (should-not (mevedel-artifact-backend-save-version workspace "remote-board" "session-1"))
+      (should (= 2 (length (car log))))
       (should-not (member "remote-board" (mevedel-artifact-store-ids workspace))))))
+
+(mevedel-deftest mevedel-artifact-backend-save-version
+  (:doc "A turn's version of a local artifact is the store's")
+  (let* ((directory (make-temp-file "mevedel-artifact-backend-" t))
+         (workspace (mevedel-workspace--create :root directory))
+         (mevedel-artifact-backend--registry (make-hash-table :test #'equal))
+         (page (file-name-concat directory ".mevedel/artifacts/page/index.html")))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory page) t)
+          (write-region "<p>page</p>" nil page nil 'silent)
+          (mevedel-artifact-store-create-meta workspace "page" "index.html")
+          (should (= 1 (mevedel-artifact-backend-save-version workspace "page" "s1")))
+          (should (= 1 (length (mevedel-artifact-store-versions workspace "page")))))
+      (delete-directory directory t))))
 
 (mevedel-deftest mevedel-artifact-backend-catalog
   (:doc "Listings, Grep and the cockpit come from the catalog, local and registered" :quiet t)

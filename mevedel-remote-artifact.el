@@ -389,9 +389,9 @@ stale when the file changed since.  A key without a value is not sent.")
 
 (defun mevedel-remote-artifact--translate (alias args)
   "Return how local editing ARGS for the remote artifact ALIAS are served.
-Either (:answer REPLY), answered here, or (:body BODY :shape SHAPE): BODY
-is the origin request and SHAPE (`text', `search', `image', `edit' or
-`file') how its reply maps back.  Signal what a remote artifact cannot do."
+The result is (:body BODY :shape SHAPE): BODY is the origin request and
+SHAPE (`text', `search', `image', `edit' or `file') how its reply maps
+back.  Signal what a remote artifact cannot do."
   (let ((action (plist-get args :action)))
     (pcase action
       ("view"
@@ -405,8 +405,6 @@ is the origin request and SHAPE (`text', `search', `image', `edit' or
            ("discussions"
             (error "Discussions of a remote artifact stay at its origin"))
            (_ (error "Read shared://%s for the elements of a remote artifact" alias)))))
-      ;; The origin records versions of its artifacts itself.
-      ("version" (list :answer (list :result nil)))
       ("delete"
        (error "A remote artifact is deleted at its origin; detach it here instead"))
       ((and (pred stringp) (let file-action (assoc action mevedel-remote-artifact--file-actions))
@@ -531,7 +529,6 @@ reply is discarded, though an edit already sent may land at the origin."
         (let ((plan (mevedel-remote-artifact--translate alias args)))
           (cond
            ((null entry) (funcall refuse "This item no longer exists"))
-           ((plist-get plan :answer) (run-at-time 0 nil deliver (plist-get plan :answer)))
            ((and authorize (not (funcall authorize))) (funcall refuse "Editing authority ended"))
            (t
             (funcall

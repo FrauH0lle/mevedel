@@ -296,9 +296,9 @@ under its origin id."
                              (text (run "Read" '(:file_path "shared://pipeline/discussions")
                                         'error))))
       (let ((sent (length (plist-get origin :requests))) failure)
-        (mevedel-artifact-store-save-version workspace "pipeline" "session-1")
-        (mevedel-artifact-store-delete workspace "pipeline" nil
-                                       (lambda (reason) (setq failure reason)))
+        (should-not (mevedel-artifact-backend-save-version workspace "pipeline" "session-1"))
+        (mevedel-artifact-backend-call workspace '(:action "delete" :id "pipeline" :actor "Host")
+                                       (lambda (reply) (setq failure (plist-get reply :error))))
         (let ((deadline (+ (float-time) 5)))
           (while (and (not failure) (< (float-time) deadline))
             (accept-process-output nil 0.05)))

@@ -729,7 +729,7 @@ metadata records without parsing the item's CRDT state or history.
 
 Every content path reaches items through one artifact-backend interface
 (`mevedel-artifact-backend.el`): the model's tools, `shared://` Read and Grep,
-browser rooms, version records and previews, and deletion. Listings come from
+browser rooms, version previews and a turn's versions. Listings come from
 its catalog: the model's resource roster and bare `shared://` listing, Project
 artifacts, the cockpit count and the browser's store listing. Each request goes
 to the adapter serving its artifact id. The local adapter is the workspace
@@ -738,8 +738,10 @@ another adapter is never read from or written to the store. The other adapter
 today serves [remote artifacts](collaboration.md#remote-artifacts-in-mevedel)
 from their origin; their registrations are restored on the first lookup of a
 workspace. Commits are announced through
-`mevedel-artifact-backend-change-hook`. Discussions and restoring a saved
-version stay with the local adapter.
+`mevedel-artifact-backend-change-hook`. A turn that edited a registered
+artifact records no version of it, since its origin keeps its own versions.
+Discussions, deleting an item and restoring a saved version stay with the
+local store.
 
 Emacs serializes operations per
 workspace in one queue, which every room and session of this Emacs shares,

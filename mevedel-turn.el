@@ -43,6 +43,11 @@
                   "mevedel-agents" (cl-x) t)
 (defvar mevedel--agent-invocation)
 
+;; `mevedel-artifact-backend'
+(declare-function mevedel-artifact-backend-save-version
+                  "mevedel-artifact-backend" (workspace id &optional session-id))
+(autoload 'mevedel-artifact-backend-save-version "mevedel-artifact-backend")
+
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration-notify-request-changed
                   "mevedel-collaboration" (data-buffer))
@@ -209,11 +214,6 @@
 ;; `mevedel-sleep'
 (declare-function mevedel-sleep-update "mevedel-sleep" (&rest _))
 (autoload 'mevedel-sleep-update "mevedel-sleep")
-
-;; `mevedel-artifact-store'
-(declare-function mevedel-artifact-store-save-version
-                  "mevedel-artifact-store" (workspace id &optional session-id))
-(autoload 'mevedel-artifact-store-save-version "mevedel-artifact-store")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-edited-artifacts "mevedel-structs" (cl-x))
@@ -633,7 +633,7 @@ is returned here."
                 ;; A turn that edited store artifacts leaves one version of each.
                 (pcase-dolist (`(,workspace . ,id) (mevedel-request-edited-artifacts request))
                   (condition-case err
-                      (mevedel-artifact-store-save-version
+                      (mevedel-artifact-backend-save-version
                        workspace id (mevedel-session-session-id
                                      (mevedel-request-session request)))
                     (error (message "mevedel: no version of %s was saved: %s"
