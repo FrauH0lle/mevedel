@@ -783,10 +783,14 @@ commands, daemon functions and the browser.  OPERATION is one of:
             Return nil.
   `rotate'  revoke, then share with new links; return them.
 
-Links are a plist of `:link-view' and `:link-edit'."
+Links are a plist of `:link-view' and `:link-edit'.  Starting or ending
+the sharing notifies store observers, so listings show the change."
   (pcase operation
     ('share
-     (let ((room (mevedel-collaboration-artifact-room--start workspace id)))
+     (let* ((shared (mevedel-artifact-store-shared-p workspace id))
+            (room (mevedel-collaboration-artifact-room--start workspace id)))
+       (unless shared
+         (mevedel-artifact-store--changed workspace))
        (list :link-view (plist-get room :link-view)
              :link-edit (plist-get room :link-edit))))
     ('revoke
@@ -795,7 +799,8 @@ Links are a plist of `:link-view' and `:link-edit'."
        (mevedel-collaboration-artifact-room--stop room 'revoked))
      (let ((path (mevedel-collaboration-artifact-room--credentials-path workspace id)))
        (when (file-exists-p path)
-         (delete-file path)))
+         (delete-file path)
+         (mevedel-artifact-store--changed workspace)))
      (mevedel-collaboration-artifact-room--update-record workspace)
      nil)
     ('rotate

@@ -9,7 +9,8 @@ const {navigation, nativeActivations} = require('./collaboration-viewer-content-
 
 const plain = value => JSON.parse(JSON.stringify(value));
 
-function build({writable = true, room = false, connected = true, prompt = null} = {}) {
+function build({writable = true, owner = false, room = false, connected = true,
+                prompt = null} = {}) {
   const list = new Element('ul');
   const empty = new Element('p');
   const creation = new Element('div');
@@ -25,7 +26,8 @@ function build({writable = true, room = false, connected = true, prompt = null} 
   const followed = [];
   const answer = {value: 'copy'};
   const confirmed = {value: false};
-  const state = {writable};
+  const copied = [];
+  const state = {writable, owner};
   const store = window.mevedelStoreView.create({
     send: frame => (connected ? sent.push(frame) : Promise.resolve(false)),
     el: (tag, className, text) => element(document, tag, className, text),
@@ -35,8 +37,10 @@ function build({writable = true, room = false, connected = true, prompt = null} 
     navigate: link => followed.push(link),
     ...(prompt ? {} : {ask: () => answer.value}),
     confirm: () => confirmed.value,
+    copy: text => copied.push(text),
   });
-  return {store, list, empty, creation, state, sent, opened, notices, followed, answer, confirmed};
+  return {store, list, empty, creation, state, sent, opened, notices, followed, answer, confirmed,
+          copied};
 }
 
 const listing = {t: 'store-artifacts', artifacts: [
@@ -215,6 +219,97 @@ const press = (row, label) => {
   assert.equal(sent.length, 1);
 }
 
+// Shared artifacts are marked for everyone; only an owner link shares,
+// shows, rotates and revokes their links.
+async function sharingControls() {
+  const sharing = {t: 'store-artifacts', artifacts: [
+    {id: 'plan', title: 'Plan', kind: 'whiteboard', artifact: 'plan/state.json', size: 9,
+     modified: 30, versions: 1, missing: false, item: true, attached: true, shared: true},
+    {id: 'notes', title: 'Notes', kind: 'document', artifact: 'notes/state.json', size: 4,
+     modified: 20, versions: 1, missing: false, item: true, attached: true, shared: false},
+    {id: 'old', title: 'old.md', kind: 'markdown', artifact: 'old/old.md', size: 3,
+     modified: 10, versions: 1, missing: false, shared: false},
+  ]};
+  const meta = row => textOf(row.children[0].children[1]);
+  for (const tier of [{writable: false}, {writable: true}]) {
+    const {store, list} = build({...tier, room: true});
+    store.show(sharing);
+    assert.match(meta(list.children[0]), /Whiteboard · .* · shared/);
+    assert.doesNotMatch(meta(list.children[1]), /shared/);
+    for (const row of list.children) {
+      assert.deepEqual(buttons(row).filter(label => /link/i.test(label)), []);
+    }
+  }
+  const {store, list, sent, notices, confirmed, copied} = build({owner: true, room: true});
+  store.show(sharing);
+  assert.deepEqual(buttons(list.children[0]),
+                   ['Open', 'Versions', 'Save version', 'Duplicate', 'Conversation',
+                    'Show links', 'Rotate links', 'Revoke links', 'Delete']);
+  assert.deepEqual(buttons(list.children[1]),
+                   ['Open', 'Versions', 'Save version', 'Duplicate', 'Conversation',
+                    'Share', 'Delete']);
+  // Markdown cannot be shared through a link.
+  assert.equal(buttons(list.children[2]).some(label => /share|link/i.test(label)), false);
+  press(list.children[1], 'Share');
+  assert.deepEqual(plain(sent.at(-1)), {t: 'store-action', reqId: 1, action: 'sharing',
+                                        id: 'notes', operation: 'share'});
+  store.handle({t: 'store-action', reqId: 1, ok: true, id: 'notes', shared: true,
+                linkView: 'https://relay/#r.view', linkEdit: 'https://relay/#r.edit'});
+  // The links show under the row, ready to copy, and survive a listing.
+  store.show({...sharing, artifacts: sharing.artifacts.map(
+    row => (row.id === 'notes' ? {...row, shared: true} : row))});
+  const links = list.children[1].children[0].children.at(-1);
+  assert.match(textOf(links), /View link.*Edit link/);
+  assert.deepEqual(links.children.slice(0, 2).map(line => line.children[1].value),
+                   ['https://relay/#r.view', 'https://relay/#r.edit']);
+  links.children[1].children[2].dispatch('click');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(copied, ['https://relay/#r.edit']);
+  assert.deepEqual(notices, ['Copied the edit link.']);
+  // Hiding forgets the links in this tab; Show links asks again.
+  assert.equal(textOf(links.children.at(-1)), 'Hide');
+  links.children.at(-1).dispatch('click');
+  assert.doesNotMatch(textOf(list.children[1]), /View link/);
+  press(list.children[1], 'Show links');
+  assert.deepEqual(plain(sent.at(-1)), {t: 'store-action', reqId: 2, action: 'sharing',
+                                        id: 'notes', operation: 'share'});
+  // Rotating and revoking ask first; a declined confirmation sends nothing.
+  press(list.children[0], 'Rotate links');
+  press(list.children[0], 'Revoke links');
+  assert.equal(sent.length, 2);
+  confirmed.value = true;
+  press(list.children[0], 'Rotate links');
+  assert.deepEqual(plain(sent.at(-1)), {t: 'store-action', reqId: 3, action: 'sharing',
+                                        id: 'plan', operation: 'rotate'});
+  store.handle({t: 'store-action', reqId: 3, ok: true, id: 'plan', shared: true,
+                linkView: 'https://relay/#n.view', linkEdit: 'https://relay/#n.edit'});
+  assert.equal(notices.at(-1), 'New links for Plan; the old ones no longer work.');
+  assert.match(textOf(list.children[0]), /View link/);
+  press(list.children[0], 'Revoke links');
+  assert.deepEqual(plain(sent.at(-1)), {t: 'store-action', reqId: 4, action: 'sharing',
+                                        id: 'plan', operation: 'revoke'});
+  store.handle({t: 'store-action', reqId: 4, ok: true, id: 'plan', shared: false});
+  assert.equal(notices.at(-1), 'Stopped sharing Plan.');
+  assert.doesNotMatch(textOf(list.children[0]), /View link/);
+  // A refusal from the host is reported as is.
+  press(list.children[1], 'Show links');
+  store.handle({t: 'store-action', reqId: 5, ok: false,
+                error: 'Only the host or an owner link can share artifacts'});
+  assert.equal(notices.at(-1), 'Only the host or an owner link can share artifacts');
+  // Links revoked elsewhere disappear with the next listing.
+  press(list.children[1], 'Show links');
+  store.handle({t: 'store-action', reqId: 6, ok: true, id: 'notes', shared: true,
+                linkView: 'v', linkEdit: 'e'});
+  assert.match(textOf(list.children[1]), /View link/);
+  store.show(sharing);
+  assert.doesNotMatch(textOf(list.children[1]), /View link/);
+  // The lobby offers an owner the same controls.
+  const lobby = build({owner: true});
+  lobby.store.show(sharing);
+  assert.deepEqual(buttons(lobby.list.children[0]).filter(label => /link/i.test(label)),
+                   ['Show links', 'Rotate links', 'Revoke links']);
+}
+
 // Writable lobby guests create an item and then open its dedicated editor room.
 {
   const {store, creation, sent, answer, followed} = build();
@@ -311,6 +406,8 @@ const press = (row, label) => {
     assert.match(meta(list.children[0]), /3 here/);
     assert.doesNotMatch(meta(list.children[1]), /here/);
   }
+
+  await sharingControls();
 
   console.log('viewer store passed');
 })().catch(error => {
