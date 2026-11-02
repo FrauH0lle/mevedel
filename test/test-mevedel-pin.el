@@ -299,6 +299,65 @@ FUNCTION receives the directory holding the stub."
         (when (process-live-p (cdr entry)) (delete-process (cdr entry))))
       (delete-directory directory t))))
 
+(mevedel-deftest mevedel-pin--helper ()
+  ,test
+  (test)
+  :doc "remote bootstrap waits until the child owns stdin before sending source"
+  (let ((source (with-temp-buffer
+                  (insert-file-contents mevedel-pin--script)
+                  (buffer-string))))
+    (test-mevedel-pin--call-with-stub-helper
+     source
+     (lambda (directory)
+       (let ((make (symbol-function 'make-process))
+             (gate (file-name-concat directory "exec-ready"))
+             (path (file-name-concat directory "input")))
+         (write-region "DATA" nil path nil 'silent)
+         (cl-letf (((symbol-function 'make-process)
+                    (lambda (&rest arguments)
+                      (let* ((default-directory directory)
+                             (command (plist-get arguments :command))
+                             (wrapper
+                              (concat "import os,select,sys,time\n"
+                                      "while not os.path.exists(sys.argv[1]): time.sleep(.001)\n"
+                                      "if select.select([0],[],[],0)[0]: os.read(0,65536)\n"
+                                      "os.execvp(sys.argv[2],sys.argv[2:])\n"))
+                             (process
+                              (apply make
+                                     (plist-put
+                                      (plist-put arguments :file-handler nil) :command
+                                      (append (list (executable-find "python3") "-I" "-c" wrapper gate)
+                                              command)))))
+                        ;; Model a login shell that can read ahead until exec.
+                        (run-at-time 0 nil (lambda () (write-region "go" nil gate nil 'silent)))
+                        process))))
+           (let ((reply (mevedel-pin--request
+                         "/ssh:bootstrap:" (list :op "file" :path path))))
+             (should (plist-get reply :ok))
+             (mevedel-pin--request "/ssh:bootstrap:"
+                                  (list :op "release" :pin (plist-get reply :pin)))))))))
+  :doc "remote bootstrap timeout kills the unready child"
+  (test-mevedel-pin--call-with-stub-helper
+   ""
+   (lambda (directory)
+     (let ((make (symbol-function 'make-process))
+           (mevedel-pin-timeout .1) process)
+       (cl-letf (((symbol-function 'make-process)
+                  (lambda (&rest arguments)
+                    (let ((default-directory directory))
+                      (setq process
+                            (apply make
+                                   (plist-put
+                                    (plist-put arguments :file-handler nil) :command
+                                    (list (executable-find "python3") "-I" "-c"
+                                          "import time;time.sleep(30)"))))))))
+         (unwind-protect
+             (progn
+               (should-error (mevedel-pin--helper "/ssh:bootstrap:") :type 'mevedel-pin-refused)
+               (should-not (process-live-p process))
+               (should-not mevedel-pin--helpers))
+           (when (process-live-p process) (delete-process process))))))))
+
 (mevedel-deftest mevedel-pin--request ()
   ,test
   (test)
