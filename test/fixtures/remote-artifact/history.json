@@ -1,0 +1,25 @@
+{
+  "description": "Any link reads the artifact's recent contributions as shared://ID/history shows them at the origin: one line per retained contribution, newest first, with its id, revision, actor, time and what it changed.",
+  "bindings": {
+    "$ID": "snt-pipeline",
+    "$TEXT": "f472cbb9bf3b51a2e8716d54f700ae4ea068e995cb1003fc23d711955c16031b · revision 3 · Agent: roland@laptop claude-code (remote) · 2026-11-02T10:15:00.000Z · next (added)\nfixture-box · revision 2 · Host · 2026-11-02T10:00:00.000Z · box (added)\n"
+  },
+  "frames": [
+    {
+      "from": "consumer",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": { "action": "read", "id": "$ID", "history": true }
+      }
+    },
+    {
+      "from": "origin",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": { "result": { "text": "$TEXT" } }
+      }
+    }
+  ]
+}

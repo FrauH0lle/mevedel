@@ -30,6 +30,7 @@
 (require 'mevedel-collaboration-artifact-room)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-shared-editing)
+(require 'mevedel-structs)
 (require 'mevedel-workspace)
 
 (defconst mevedel-artifact-room-test--fixtures
@@ -521,6 +522,32 @@ PART defaults to \"overview\", the lines of `shared://ID'."
                                    (mevedel-artifact-room-test--frames consumer)))))
         (mevedel-artifact-room-test--close consumer)))))
 
+(mevedel-deftest mevedel-collaboration-artifact-room--read-history
+  ()
+  ,test
+  (test)
+  :doc "returns the recent contributions as shared://ID/history shows them, to any link"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (text (mevedel-artifact-room-test--view workspace id "history"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (viewer (mevedel-artifact-room-test--joined state port links 'view))
+           (editor (mevedel-artifact-room-test--joined state port links 'edit))
+           (frames (mevedel-artifact-room-test--fixture
+                    "history" `(("$ID" . ,id) ("$TEXT" . ,text)))))
+      (unwind-protect
+          (progn
+            (should (string-search "fixture-box · revision 2 · Host" text))
+            (dolist (consumer (list viewer editor))
+              (mevedel-artifact-room-test--send consumer (cdr (assoc "consumer" frames)))
+              (mevedel-artifact-room-test--await consumer 1)
+              (should (equal (list (mevedel-artifact-room-test--normal
+                                    (cdr (assoc "origin" frames))))
+                             (mapcar #'mevedel-artifact-room-test--normal
+                                     (mevedel-artifact-room-test--frames consumer))))))
+        (mevedel-artifact-room-test--close viewer)
+        (mevedel-artifact-room-test--close editor)))))
+
 
 ;;
 ;;; Editing
@@ -595,6 +622,113 @@ PART defaults to \"overview\", the lines of `shared://ID'."
   (concat "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQ"
           "DwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
   "A 1x1 PNG, base64.")
+
+(defun mevedel-artifact-room-test--contribution (reply)
+  "Return the contribution id an edit REPLY body names."
+  (let ((text (alist-get 'text (alist-get 'result reply))))
+    (should (stringp text))
+    (alist-get 'contribution (json-parse-string text :object-type 'alist))))
+
+(defconst mevedel-artifact-room-test--next
+  '((action . "patch")
+    (changes . [((id . "next")
+                 (after . ((type . "rectangle") (x . 200) (y . 0)
+                           (width . 120) (height . 60))))]))
+  "A consumer's patch adding the rectangle \"next\".")
+
+(mevedel-deftest mevedel-collaboration-artifact-room--revert
+  ()
+  ,test
+  (test)
+  :doc "reverts a listed contribution through an edit link, as SharedEdit does"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit)))
+      (unwind-protect
+          (let ((contribution (mevedel-artifact-room-test--contribution
+                               (mevedel-artifact-room-test--request
+                                consumer 7 `((id . ,id) ,@mevedel-artifact-room-test--next)))))
+            ;; The contribution read_artifact's history lists is the one reverted.
+            (should (string-search contribution
+                                   (mevedel-artifact-room-test--view workspace id "history")))
+            (plist-put consumer :texts nil)
+            (pcase-let ((`(,expected . ,actual)
+                         (mevedel-artifact-room-test--exchange
+                          consumer "revert" `(("$ID" . ,id)
+                                              ("$TRANSACTION" . ,contribution)))))
+              (should (= 1 (length actual)))
+              (should (mevedel-artifact-room-test--matches (car expected) (car actual))))
+            (should-not (string-match-p "\"id\":\"next\""
+                                        (mevedel-artifact-room-test--view workspace id)))
+            (should (string-match-p "\"id\":\"box\""
+                                    (mevedel-artifact-room-test--view workspace id))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "refuses a revert whose targets changed since, changing nothing"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (contribution (mevedel-artifact-room-test--contribution
+                          (mevedel-artifact-room-test--request
+                           consumer 1 `((id . ,id) ,@mevedel-artifact-room-test--next)))))
+      (unwind-protect
+          (progn
+            ;; The origin moves the consumer's rectangle afterwards.
+            (let* ((lines (mevedel-artifact-room-test--view workspace id))
+                   (hash (and (string-match "^\\([0-9a-f]+\\) {\"id\":\"next\"" lines)
+                              (match-string 1 lines))))
+              (should hash)
+              (should-not (plist-get (mevedel-artifact-room-test--call
+                                      workspace (list :action "patch" :id id :actor "Host"
+                                                      :opId "move-next"
+                                                      :changes (vector (list :id "next" :hash hash
+                                                                             :set (list :x 400)))))
+                                     :error)))
+            (let ((before (mevedel-artifact-room-test--view workspace id))
+                  (reply (mevedel-artifact-room-test--request
+                          consumer 2 `((action . "revert") (id . ,id)
+                                       (transaction . ,contribution)))))
+              (should (stringp (alist-get 'error reply)))
+              (should-not (assq 'result reply))
+              (should (equal before (mevedel-artifact-room-test--view workspace id)))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "refuses a view link's revert as view-only"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (viewer (mevedel-artifact-room-test--joined state port links 'view)))
+      (unwind-protect
+          (should (equal "This artifact link is view-only"
+                         (alist-get 'error (mevedel-artifact-room-test--request
+                                            viewer 1 `((action . "revert") (id . ,id)
+                                                       (transaction . "fixture-box"))))))
+        (mevedel-artifact-room-test--close viewer))))
+
+  :doc "lets the origin revert a consumer's contribution, as its Contributions offers"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (contribution (mevedel-artifact-room-test--contribution
+                          (mevedel-artifact-room-test--request
+                           consumer 1 `((id . ,id) ,@mevedel-artifact-room-test--next)))))
+      (unwind-protect
+          (progn
+            ;; The browser offers Revert for contributions by an "Agent:" actor.
+            (should (string-search (concat contribution " · revision 3 · Agent: ")
+                                   (mevedel-artifact-room-test--view workspace id "history")))
+            ;; Its Revert button sends this request.
+            (should-not (plist-get (mevedel-artifact-room-test--call
+                                    workspace (list :action "revert" :id id
+                                                    :transaction contribution
+                                                    :actor "Guest: Host" :opId "undo-remote"))
+                                   :error))
+            (should-not (string-match-p "\"id\":\"next\""
+                                        (mevedel-artifact-room-test--view workspace id))))
+        (mevedel-artifact-room-test--close consumer)))))
 
 (mevedel-deftest mevedel-collaboration-artifact-room--edit-actions
   ()
@@ -728,6 +862,84 @@ FUNCTION is a step of the editing queue: admission or commit."
                            (plist-get (mevedel-artifact-store-meta workspace id) :title))))
         (mevedel-artifact-room-test--close consumer)))))
 
+;;
+;;; Versions
+
+(defun mevedel-artifact-room-test--versions (workspace id)
+  "Return how many versions WORKSPACE's artifact ID has after queued saves."
+  ;; A whiteboard's version is saved through its editing queue, which is
+  ;; serial: once a later call settles, an earlier save has too.
+  (mevedel-artifact-room-test--view workspace id)
+  (length (mevedel-artifact-store-versions workspace id)))
+
+(defun mevedel-artifact-room-test--rename (consumer req-id id title)
+  "Rename artifact ID to TITLE from CONSUMER as request REQ-ID."
+  (should (assq 'result (mevedel-artifact-room-test--request
+                         consumer req-id `((action . "rename") (id . ,id)
+                                           (title . ,title))))))
+
+(mevedel-deftest mevedel-collaboration-artifact-room--versions
+  ()
+  ,test
+  (test)
+  :doc "records one version once the room's writes pause, each write restarting the wait"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((mevedel-collaboration-artifact-room-version-idle 1.0)
+           (id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (before (mevedel-artifact-room-test--versions workspace id)))
+      (unwind-protect
+          (progn
+            (mevedel-artifact-room-test--rename consumer 1 id "Pipeline v2")
+            (accept-process-output nil 0.6)
+            (mevedel-artifact-room-test--rename consumer 2 id "Pipeline v3")
+            (accept-process-output nil 0.6)
+            ;; Longer than the pause since the first write, not since the last.
+            (should (= before (mevedel-artifact-room-test--versions workspace id)))
+            (should (mevedel-relay-test--pump
+                     (lambda () (> (mevedel-artifact-room-test--versions workspace id)
+                                   before))
+                     5))
+            (accept-process-output nil 1.2)
+            ;; One version for the whole stretch, holding its last write.
+            (should (= (1+ before) (mevedel-artifact-room-test--versions workspace id)))
+            (should (string-search
+                     "Pipeline v3"
+                     (with-temp-buffer
+                       (insert-file-contents
+                        (mevedel-artifact-store-version-path workspace id (1+ before)))
+                       (buffer-string)))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "records the stretch's version when its consumer disconnects"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (before (mevedel-artifact-room-test--versions workspace id)))
+      (mevedel-artifact-room-test--rename consumer 1 id "Pipeline v2")
+      (should (= before (mevedel-artifact-room-test--versions workspace id)))
+      (mevedel-artifact-room-test--close consumer)
+      (should (mevedel-relay-test--pump
+               (lambda () (= (1+ before)
+                             (mevedel-artifact-room-test--versions workspace id)))
+               5))))
+
+  :doc "records no version for a stretch of reads"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((mevedel-collaboration-artifact-room-version-idle 0.2)
+           (id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (before (mevedel-artifact-room-test--versions workspace id)))
+      (should (mevedel-artifact-room-test--request
+               consumer 1 `((action . "read") (id . ,id))))
+      (accept-process-output nil 0.5)
+      (mevedel-artifact-room-test--close consumer)
+      (accept-process-output nil 0.5)
+      (should (= before (mevedel-artifact-room-test--versions workspace id))))))
+
 (mevedel-deftest mevedel-collaboration-artifact-room--changed
   ()
   ,test
@@ -766,6 +978,77 @@ FUNCTION is a step of the editing queue: admission or commit."
                                    (funcall events))))
             (should (equal id (alist-get 'id (car (funcall events))))))
         (mevedel-artifact-room-test--close consumer)))))
+
+(mevedel-deftest mevedel-collaboration-artifact-room--roster
+  ()
+  ,test
+  (test)
+  :doc "lists a connected consumer by name on its artifact for origin browsers"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (session (mevedel-session--create :name "s1" :workspace workspace))
+           ;; An origin browser has the board open in a session room.
+           (browser (list :session session :transport 'browser
+                          :guests (let ((guests (make-hash-table :test #'eql)))
+                                    (puthash 1 (list :name "Host" :guest-id "host-browser"
+                                                     :viewing id :active t)
+                                             guests)
+                                    guests)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry browser))
+           (send (symbol-function 'mevedel-collaboration--transport-send))
+           (roster nil)
+           (names (lambda ()
+                    (mapcar (lambda (person) (plist-get person :name))
+                            (plist-get (car roster) :people)))))
+      (setf (mevedel-session-session-id session) "s1")
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                 (lambda (transport peer frame)
+                   (if (eq transport 'browser)
+                       (when (equal "presence" (plist-get frame :t))
+                         (push frame roster))
+                     (funcall send transport peer frame)))))
+        (let ((consumer (mevedel-artifact-room-test--joined state port links 'edit)))
+          (unwind-protect
+              (progn
+                (should (equal '("remote agent (remote)") (funcall names)))
+                ;; Consumers report no page and hear no presence.
+                (should (mevedel-artifact-room-test--request
+                         consumer 1 `((action . "read") (id . ,id))))
+                (should (equal '(1) (mapcar (lambda (frame) (alist-get 'reqId frame))
+                                            (mevedel-artifact-room-test--frames consumer)))))
+            (mevedel-artifact-room-test--close consumer))
+          (should (mevedel-relay-test--pump (lambda () (null (funcall names))) 5))))))
+
+  :doc "takes its consumers off the roster when the room stops"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (session (mevedel-session--create :name "s1" :workspace workspace))
+           (browser (list :session session :transport 'browser
+                          :guests (let ((guests (make-hash-table :test #'eql)))
+                                    (puthash 1 (list :name "Host" :guest-id "host-browser"
+                                                     :viewing id :active t)
+                                             guests)
+                                    guests)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry browser))
+           (send (symbol-function 'mevedel-collaboration--transport-send))
+           (roster nil))
+      (setf (mevedel-session-session-id session) "s1")
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                 (lambda (transport peer frame)
+                   (if (eq transport 'browser)
+                       (when (equal "presence" (plist-get frame :t))
+                         (push frame roster))
+                     (funcall send transport peer frame)))))
+        (let ((consumer (mevedel-artifact-room-test--joined state port links 'view)))
+          (unwind-protect
+              (progn
+                (should (= 1 (length (plist-get (car roster) :people))))
+                (mevedel-collaboration-artifact-room--stop
+                 (mevedel-collaboration-artifact-room--find root id) 'test)
+                (should (equal [] (plist-get (car roster) :people))))
+            (mevedel-artifact-room-test--close consumer)))))))
 
 
 ;;
@@ -965,6 +1248,10 @@ FUNCTION is a step of the editing queue: admission or commit."
                             ((action . "update") (id . ,id) (opId . "x") (update . ""))
                             ((action . "export") (id . ,id))
                             ((action . "discussion") (id . ,id) (op . "list"))
+                            ;; Versions stay the origin's: none listed, saved or restored.
+                            ((action . "version") (id . ,id))
+                            ((action . "versions") (id . ,id))
+                            ((action . "restore") (id . ,id) (n . 1))
                             ((action . "library-add") (text . "{}"))
                             ((action . "library-remove") (ids . ["a"]))
                             ((action . "library-uninstall") (name . "Built-in"))

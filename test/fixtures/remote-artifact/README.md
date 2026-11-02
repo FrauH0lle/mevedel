@@ -20,10 +20,11 @@ Each file is one JSON object:
 - `frames`: the exchange in order, each `{"from": "consumer"|"origin",
   "frame": FRAME}`.
 
-The exchanges are `hello`, `welcome`, `read`, `patch` (an edit link's
-`SharedEdit` patch and its changed lines and picture), `stale-patch` (a stale
-hash and the targets' current lines) and `view-only` (a view link's edit
-refused).
+The exchanges are `hello`, `welcome`, `read`, `history` (a read of the recent
+contributions), `patch` (an edit link's `SharedEdit` patch and its changed
+lines and picture), `stale-patch` (a stale hash and the targets' current
+lines), `view-only` (a view link's edit refused) and `revert` (an edit link
+reverting one listed contribution).
 
 A frame is the decoded JSON a sealed envelope carries, with one shorthand: an
 editing request or reply, `{"t": "editing", "reqId": N, "body": VALUE}`,
