@@ -242,15 +242,23 @@ deleted it; a guest viewing it is no longer in it."
         (list :conversation (vconcat records)
               :conversationTruncated (if (plist-get history :truncated) t :json-false))))))
 
-(cl-defun mevedel-collaboration-editing--dispatch (room peer guest req-id args)
-  "Authorize and execute assembled ARGS for GUEST's REQ-ID in ROOM."
+(cl-defun mevedel-collaboration-editing-dispatch
+    (room peer guest req-id args workspace authorize attach &optional conversation)
+  "Authorize and execute assembled ARGS for GUEST's REQ-ID in ROOM.
+GUEST is PEER's entry in ROOM, which must still be current.
+Items live in WORKSPACE.  AUTHORIZE, called without arguments, says whether
+ROOM may still act; with GUEST's presence and write permission it is checked
+at dispatch, at queue admission, before commit and before replying.
+ATTACH is called with the ID of each item a successful edit touched.
+CONVERSATION, when non-nil, is called with an item ID and returns
+properties appended to a successful read reply."
   (let* ((action (plist-get args :action))
-         (session (plist-get room :session))
          (read-only (member action '("list" "read" "export" "status")))
+         (room-authorize authorize)
          (authorize (lambda ()
-                      (and (eq room (mevedel-collaboration--room-for-session session))
-                           (eq guest (mevedel-collaboration--guest room peer))
-                           (or read-only (plist-get guest :writable))))))
+                      (and (eq guest (mevedel-collaboration--guest room peer))
+                           (or read-only (plist-get guest :writable))
+                           (funcall room-authorize)))))
     (unless (and (member action '("list" "status" "read" "create" "import" "update"
                                   "rename" "revert" "delete" "export" "discussion"
                                   "library" "library-add" "library-remove" "library-install" "library-uninstall"
@@ -259,7 +267,7 @@ deleted it; a guest viewing it is no longer in it."
       (error "This link does not permit that editing operation"))
     ;; The element library belongs to the host, not to a session item.
     (when (string-prefix-p "library" action)
-      (cl-return-from mevedel-collaboration-editing--dispatch
+      (cl-return-from mevedel-collaboration-editing-dispatch
         (mevedel-shared-library-handle
          args (lambda (reply)
                 (when (funcall authorize)
@@ -267,7 +275,7 @@ deleted it; a guest viewing it is no longer in it."
     ;; Discussions belong to every kind of store item; the editor reaches them
     ;; through its own channel, which also carries its attachments.
     (when (equal action "discussion")
-      (cl-return-from mevedel-collaboration-editing--dispatch
+      (cl-return-from mevedel-collaboration-editing-dispatch
         (mevedel-collaboration-discussions-perform
          room guest
          (append (list :action (plist-get args :op)
@@ -292,24 +300,23 @@ deleted it; a guest viewing it is no longer in it."
         (when (plist-member args key)
           (setq request (plist-put request key (plist-get args key)))))
       (mevedel-artifact-backend-call
-       (mevedel-session-workspace session) request
+       workspace request
        (lambda (reply)
          (when (funcall authorize)
            (condition-case err
                (progn
-                 ;; Editing an item from a chat's room attaches it to that chat.
                  (unless (or read-only (equal action "delete")
                              (plist-get reply :error))
                    (when-let* ((id (or (plist-get (plist-get reply :result) :id)
                                        (plist-get args :id))))
-                     (mevedel-artifact-store-attach session id)))
-                 (when (and (equal action "read") (not (plist-get reply :error)))
+                     (funcall attach id)))
+                 (when (and conversation (equal action "read")
+                            (not (plist-get reply :error)))
                    (setq reply
                          (list :result
                                (append (plist-get reply :result)
                                        (condition-case history-error
-                                           (mevedel-collaboration-editing--conversation
-                                            session (plist-get args :id))
+                                           (funcall conversation (plist-get args :id))
                                          (error (list :conversationError
                                                       (error-message-string history-error))))))))
                  (mevedel-collaboration-editing--send
@@ -319,6 +326,17 @@ deleted it; a guest viewing it is no longer in it."
              (error (mevedel-collaboration-editing--send
                      room peer req-id (list :error (error-message-string err)))))))
        authorize))))
+
+(defun mevedel-collaboration-editing--dispatch (room peer guest req-id args)
+  "Execute ARGS for GUEST's REQ-ID in session ROOM.
+The room must still serve its session.  Editing an item from a chat's room
+attaches it to that chat, and read replies carry the item's conversation."
+  (let ((session (plist-get room :session)))
+    (mevedel-collaboration-editing-dispatch
+     room peer guest req-id args (mevedel-session-workspace session)
+     (lambda () (eq room (mevedel-collaboration--room-for-session session)))
+     (lambda (id) (mevedel-artifact-store-attach session id))
+     (lambda (id) (mevedel-collaboration-editing--conversation session id)))))
 
 (defun mevedel-collaboration-editing-handle (room peer frame)
   "Handle bounded editor FRAME from authenticated PEER in ROOM."
