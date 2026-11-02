@@ -80,9 +80,6 @@ created as a side effect of registration and handles serialization."
   prompt            ; string or function: detailed instructions
   prompt-source     ; plist describing the prompt's registration provenance
   args              ; arg spec list in mevedel format
-  contextualize     ; function or nil: (args summary) -> (args . summary)
-                    ;   resolved for the current owner buffer; see
-                    ;   `mevedel-tool-contextual-contract'
   category          ; string: "mevedel" (default)
   ;; Behavioral declarations
   read-only-p       ; t if tool never modifies state
@@ -119,7 +116,12 @@ created as a side effect of registration and handles serialization."
                     ;   :initially-collapsed-p) for view-buffer display.
                     ;   Called with (name args result render-data) and must be pure.
   ;; Back-reference
-  gptel-tool)       ; the `gptel-tool' struct created during registration
+  gptel-tool        ; the `gptel-tool' struct created during registration
+  ;; Appended last so existing slot indices, which compiled callers inline,
+  ;; stay stable.
+  contextualize)    ; function or nil: (args summary) -> (args . summary)
+                    ;   resolved for the current owner buffer; see
+                    ;   `mevedel-tool-contextual-contract'
 
 
 ;;
