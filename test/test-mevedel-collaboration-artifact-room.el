@@ -769,6 +769,158 @@ FUNCTION is a step of the editing queue: admission or commit."
 
 
 ;;
+;;; Libraries
+
+(defconst mevedel-artifact-room-test--library
+  (concat "{\"type\":\"excalidrawlib\",\"version\":2,\"libraryItems\":"
+          "[{\"id\":\"cube\",\"name\":\"Cube\",\"status\":\"published\","
+          "\"created\":1,\"elements\":[{\"id\":\"lib-a\",\"type\":\"rectangle\","
+          "\"x\":10,\"y\":10,\"width\":50,\"height\":40,\"angle\":0,"
+          "\"strokeColor\":\"#1e1e1e\",\"backgroundColor\":\"transparent\","
+          "\"fillStyle\":\"solid\",\"strokeWidth\":2,\"strokeStyle\":\"solid\","
+          "\"roughness\":1,\"opacity\":100,\"groupIds\":[],\"frameId\":null,"
+          "\"roundness\":null,\"seed\":1,\"version\":1,\"versionNonce\":1,"
+          "\"isDeleted\":false,\"boundElements\":null,\"updated\":1,\"link\":null,"
+          "\"locked\":false,\"index\":\"a0\"}]}]}")
+  "A one-item Excalidraw library, as a user's library file holds it.")
+
+(defmacro mevedel-artifact-room-test--with-library (&rest body)
+  "Run BODY with a private library directory holding the user's library."
+  (declare (indent 0) (debug t))
+  `(let* ((directory (make-temp-file "mevedel-artifact-library-" t))
+          (mevedel-shared-library-directory directory))
+     (unwind-protect
+         (progn
+           (write-region mevedel-artifact-room-test--library nil
+                         (expand-file-name "My library.excalidrawlib" directory)
+                         nil 'silent)
+           ,@body)
+       (delete-directory directory t))))
+
+(defun mevedel-artifact-room-test--document (workspace title)
+  "Create a document TITLE in WORKSPACE; return its id."
+  (let (reply)
+    (mevedel-shared-editing-create workspace "document" title "Host"
+                                   (lambda (value) (setq reply value)))
+    (mevedel-test--await 10 "creation settles" reply)
+    (should-not (plist-get reply :error))
+    (plist-get reply :id)))
+
+(mevedel-deftest mevedel-collaboration-artifact-room--library
+  ()
+  ,test
+  (test)
+  :doc "lists the origin user's libraries and previews them to a view link"
+  (mevedel-artifact-room-test--with-library
+    (mevedel-artifact-room-test--with-origin (root workspace state port)
+      (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+             (links (mevedel-collaboration-artifact-room-share root id))
+             (viewer (mevedel-artifact-room-test--joined state port links 'view)))
+        (unwind-protect
+            (let ((listing (alist-get 'result
+                                      (mevedel-artifact-room-test--request
+                                       viewer 1 '((action . "library")))))
+                  (sheet (alist-get 'result
+                                    (mevedel-artifact-room-test--request
+                                     viewer 2 '((action . "library") (part . "sheet")
+                                                (library . "My library"))))))
+              (should (string-search "My library/cube" (alist-get 'text listing)))
+              (should (string-search "Built-in" (alist-get 'text listing)))
+              (should (equal "image/png" (alist-get 'mime sheet)))
+              (should (string-prefix-p "\x89PNG" (base64-decode-string
+                                                  (alist-get 'png sheet)))))
+          (mevedel-artifact-room-test--close viewer)))))
+
+  :doc "reports an unknown library as an error"
+  (mevedel-artifact-room-test--with-library
+    (mevedel-artifact-room-test--with-origin (root workspace state port)
+      (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+             (links (mevedel-collaboration-artifact-room-share root id))
+             (viewer (mevedel-artifact-room-test--joined state port links 'view)))
+        (unwind-protect
+            (should (string-match-p
+                     "No element library"
+                     (alist-get 'error
+                                (mevedel-artifact-room-test--request
+                                 viewer 1 '((action . "library") (library . "Nope"))))))
+          (mevedel-artifact-room-test--close viewer)))))
+
+  :doc "inserts a library item through an edit link and refuses a view link"
+  (mevedel-artifact-room-test--with-library
+    (mevedel-artifact-room-test--with-origin (root workspace state port)
+      (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+             (links (mevedel-collaboration-artifact-room-share root id))
+             (editor (mevedel-artifact-room-test--joined state port links 'edit))
+             (viewer (mevedel-artifact-room-test--joined state port links 'view)))
+        (unwind-protect
+            (let ((before (mevedel-artifact-room-test--view workspace id)))
+              (should (equal "This artifact link is view-only"
+                             (alist-get 'error
+                                        (mevedel-artifact-room-test--request
+                                         viewer 1 `((action . "insert") (id . ,id)
+                                                    (item . "My library/cube")
+                                                    (x . 300) (y . 0))))))
+              (should (equal before (mevedel-artifact-room-test--view workspace id)))
+              (let ((reply (mevedel-artifact-room-test--request
+                            editor 1 `((action . "insert") (id . ,id)
+                                       (item . "My library/cube") (x . 300) (y . 0)))))
+                (should (assq 'result reply))
+                (should (alist-get 'png (alist-get 'result reply))))
+              (should (string-search "\"type\":\"rectangle\""
+                                     (mevedel-artifact-room-test--view workspace id)))
+              (should (string-search "Agent: remote agent (remote)"
+                                     (mevedel-artifact-room-test--view workspace id "history")))
+              (should (string-match-p
+                       "No element library"
+                       (alist-get 'error
+                                  (mevedel-artifact-room-test--request
+                                   editor 2 `((action . "insert") (id . ,id)
+                                              (item . "Nope/cube") (x . 0) (y . 0)))))))
+          (mevedel-artifact-room-test--close editor)
+          (mevedel-artifact-room-test--close viewer)))))
+
+  :doc "gives a document room no library access, even to an edit link"
+  (mevedel-artifact-room-test--with-library
+    (mevedel-artifact-room-test--with-origin (root workspace state port)
+      (let* ((id (mevedel-artifact-room-test--document workspace "Notes"))
+             (links (mevedel-collaboration-artifact-room-share root id))
+             (editor (mevedel-artifact-room-test--joined state port links 'edit))
+             (req-id 0))
+        (unwind-protect
+            (dolist (body `(((action . "library"))
+                            ((action . "library") (part . "sheet"))
+                            ((action . "insert") (id . ,id) (item . "My library/cube"))))
+              (let ((reply (mevedel-artifact-room-test--request
+                            editor (cl-incf req-id) body)))
+                (should (stringp (alist-get 'error reply)))
+                (should-not (assq 'result reply))))
+          (mevedel-artifact-room-test--close editor)))))
+
+  :doc "never lets a link change the origin user's libraries"
+  (mevedel-artifact-room-test--with-library
+    (mevedel-artifact-room-test--with-origin (root workspace state port)
+      (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+             (links (mevedel-collaboration-artifact-room-share root id))
+             (editor (mevedel-artifact-room-test--joined state port links 'edit))
+             (file (expand-file-name "My library.excalidrawlib"
+                                     mevedel-shared-library-directory))
+             (req-id 0))
+        (unwind-protect
+            (progn
+              (dolist (body `(((action . "library-add")
+                               (text . ,mevedel-artifact-room-test--library))
+                              ((action . "library-remove") (ids . ["cube"]))
+                              ((action . "library-uninstall") (name . "My library"))))
+                (should (stringp (alist-get 'error
+                                            (mevedel-artifact-room-test--request
+                                             editor (cl-incf req-id) body)))))
+              (should (equal mevedel-artifact-room-test--library
+                             (with-temp-buffer (insert-file-contents file)
+                                               (buffer-string)))))
+          (mevedel-artifact-room-test--close editor))))))
+
+
+;;
 ;;; Authority
 
 (mevedel-deftest mevedel-collaboration-artifact-room--dispatch
@@ -813,7 +965,13 @@ FUNCTION is a step of the editing queue: admission or commit."
                             ((action . "update") (id . ,id) (opId . "x") (update . ""))
                             ((action . "export") (id . ,id))
                             ((action . "discussion") (id . ,id) (op . "list"))
-                            ((action . "library"))
+                            ((action . "library-add") (text . "{}"))
+                            ((action . "library-remove") (ids . ["a"]))
+                            ((action . "library-uninstall") (name . "Built-in"))
+                            ((action . "library-install") (source . "a/b.excalidrawlib"))
+                            ((action . "library-catalog"))
+                            ((action . "library-fetch") (path . "x"))
+                            ((action . "library-view") (part . "list"))
                             ((action . "read") (id . ,other))
                             ((action . "read") (id . "no-such-item"))))
               (let ((reply (mevedel-artifact-room-test--request

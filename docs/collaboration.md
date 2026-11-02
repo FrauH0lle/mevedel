@@ -753,13 +753,26 @@ keys are dropped. An edit answers what `SharedEdit` tells the model:
 whiteboard, the picture. A stale hash rejects the whole edit with
 `{error, code: "stale", targets, revision}`, each target carrying its current
 line. A view link asking for an edit gets `This artifact link is view-only`.
-Edits are attributed `Agent: NAME (remote)`, NAME being the display name the
+
+A whiteboard room (never a document room) also serves the origin user's
+element libraries -- their own, installed ones and the built-in one -- to any
+link tier. `library` takes an optional `library` name and `part`: `list` (the
+default) answers `{result: {text}}`, the listing `shared://library` shows with
+each item as `LIBRARY/ITEM-ID`; `sheet` answers `{result: {png, mime}}`, the
+library's (or every library's) picture. An edit link's `insert` (`item` as
+`LIBRARY/ITEM-ID`, `x`, `y`) places that item as `SharedEdit` does; the origin
+resolves the reference to its own library text, so the consumer never sends
+library content. Library management (`library-add`, `-remove`, `-install`,
+`-uninstall`, `-catalog`, `-fetch`) is not in the allowlist. **Sharing a
+whiteboard exposes the origin user's libraries** to whoever holds a link to it,
+read-only; the libraries are not part of the shared artifact, so consider that
+before sharing a board next to a private library. Edits are attributed `Agent: NAME (remote)`, NAME being the display name the
 consumer's hello declared (unverified), so the Revert button applies as to
 any agent's edit; they attach the item to no session.
 
 Every request is pinned to the room's artifact: one naming any other id is
 refused, as is any action outside the allowlist (listing, creating,
-deleting, raw CRDT updates, discussions, libraries). The room's authority
+deleting, raw CRDT updates, discussions, library management). The room's authority
 check -- the consumer still admitted, an edit link for an edit, the id the
 room's own, the room still running -- runs at dispatch and again when the
 editing queue admits the request and before it commits, so a link narrowed
