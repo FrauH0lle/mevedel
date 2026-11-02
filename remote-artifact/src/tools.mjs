@@ -73,6 +73,7 @@ const EDIT_ACTIONS = {
   rename: ['title'],
   background: ['background'],
   insert: ['item', 'x', 'y'],
+  revert: ['transaction'],
 };
 
 /* A PNG picture as MCP image content, when DATA is there. */
@@ -110,15 +111,20 @@ export const tools = [
   {
     name: 'read_artifact',
     description: 'Read a remote whiteboard or document as its origin shows it: a header, then one line '
-      + 'per element or block, HASH then its JSON. Every read is live from the origin.',
+      + 'per element or block, HASH then its JSON. With history, read its recent contributions '
+      + 'instead, newest first: each line gives the contribution id edit_artifact\'s revert names, its '
+      + 'revision, who made it, when, and what it changed. Every read is live from the origin.',
     inputSchema: {
       type: 'object',
-      properties: { name: nameArgument },
+      properties: {
+        name: nameArgument,
+        history: { type: 'boolean', description: 'Read the recent contributions instead of the content.' },
+      },
       required: ['name'],
       additionalProperties: false,
     },
-    async run({ name }, ctx) {
-      return (await onRoom(name, { action: 'read' }, ctx)).text;
+    async run({ name, history }, ctx) {
+      return (await onRoom(name, { action: 'read', ...(history === true ? { history } : {}) }, ctx)).text;
     },
   },
   {
@@ -134,8 +140,10 @@ export const tools = [
       + 'of at most 4.7 MB: on a board at x,y, in a document after afterId; width sets its display width '
       + 'and alt describes a document image. rename sets the title; background sets a board\'s canvas '
       + 'colour (#rrggbb, or empty for the theme). insert places a library item of a whiteboard '
-      + '(item as LIBRARY/ITEM-ID from whiteboard_libraries) with its top-left at x,y. Returns the stored lines of what changed and, for a '
-      + 'whiteboard, the board as drawn.',
+      + '(item as LIBRARY/ITEM-ID from whiteboard_libraries) with its top-left at x,y. revert undoes '
+      + 'one contribution, named by its id from read_artifact with history, and is refused if its '
+      + 'targets changed since. Returns the stored lines of what changed and, for a whiteboard, the '
+      + 'board as drawn.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -152,6 +160,8 @@ export const tools = [
         width: { type: 'number', description: 'Display width of an added image, 1 to 8192; its height follows.' },
         alt: { type: 'string', description: 'Description of an added document image.' },
         afterId: { type: 'string', description: 'Document block the added image follows; default the end.' },
+        transaction: { type: 'string',
+          description: 'Contribution id for revert, from read_artifact with history.' },
       },
       required: ['name', 'action'],
       additionalProperties: false,
