@@ -43,6 +43,9 @@ export class Room {
   /* True once the connection ended or was closed. */
   get closed() { return this.#closed !== null; }
 
+  /* Why the connection ended, such as the origin's goodbye, or null. */
+  get ended() { return this.#closed; }
+
   /* Send FRAME sealed, in order. */
   send(frame) {
     this.#outbound = this.#outbound.then(async () => {
