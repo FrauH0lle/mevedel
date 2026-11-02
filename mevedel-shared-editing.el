@@ -7,11 +7,14 @@
 ;; serves every room and session that edits them.  A private Node helper
 ;; computes candidates; Emacs checks authority, proves its item lease and
 ;; commits them before notifying browsers.  The helper owns no user files.
+;; This is the local adapter behind `mevedel-artifact-backend': content
+;; callers go through that interface, which sends local ids here.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'json)
+(require 'mevedel-artifact-backend)
 (require 'mevedel-artifact-lease)
 (require 'mevedel-artifact-store)
 (require 'mevedel-structs)
@@ -29,11 +32,6 @@
   (file-name-concat
    (file-name-directory (or load-file-name buffer-file-name)) "shared-editing")
   "Directory containing the packaged editing helper and renderer resources.")
-
-(defvar mevedel-shared-editing-change-hook nil
-  "Functions called with WORKSPACE, STATE, RESULT after an editing commit.
-A deleted item arrives as a STATE with `:deleted' and `:actor' and a nil
-RESULT.  Observers cannot change whether the preceding commit succeeded.")
 
 (defvar mevedel-shared-editing--runtimes (make-hash-table :test #'equal)
   "Helper process, operation queue and active operation per workspace root.")
@@ -124,12 +122,6 @@ A stale entry is dropped."
         (remhash id table)
         nil))))
 
-(defun mevedel-shared-editing--notify (workspace state result)
-  "Tell `mevedel-shared-editing-change-hook' about WORKSPACE's STATE and RESULT."
-  (dolist (observer mevedel-shared-editing-change-hook)
-    (condition-case nil (funcall observer workspace state result)
-      (error nil))))
-
 (defun mevedel-shared-editing--delete (workspace args)
   "Delete WORKSPACE's shared item named by ARGS and return the reply.
 The item's whole artifact goes with it: content, images, discussions,
@@ -140,14 +132,9 @@ state with `:deleted' and the deleting `:actor'."
       (error "This item no longer exists"))
     (mevedel-artifact-store--delete workspace id)
     (mevedel-artifact-lease-forget-item workspace id)
-    (mevedel-shared-editing--notify
+    (mevedel-artifact-backend-notify
      workspace (list :id id :deleted t :actor (plist-get args :actor)) nil)
     (list :result (list :id id :deleted t))))
-
-(defun mevedel-shared-editing-ids (workspace)
-  "Return the ids of WORKSPACE's shared items, reading only their metadata."
-  (mapcar (lambda (item) (plist-get item :id))
-          (mevedel-shared-editing-list workspace)))
 
 (defun mevedel-shared-editing-list (workspace)
   "Return WORKSPACE's shared item catalog from small, target-proved metadata.
@@ -271,10 +258,11 @@ Once the lease was released, another Emacs may have edited the item."
            (mevedel-shared-editing--read workspace id)))))))
 
 (defun mevedel-shared-editing-save-version-later (workspace id &optional session-id)
-  "Record WORKSPACE's shared item ID as a version through its editing queue.
-It follows any save in progress and waits while the store's connection is
-busy.  SESSION-ID names the session that edited it; a failure is a message."
-  (mevedel-shared-editing-call
+  "Record WORKSPACE's shared item ID as a version through its backend.
+Locally it follows any save in progress and waits while the store's
+connection is busy.  SESSION-ID names the session that edited it; a
+failure is a message."
+  (mevedel-artifact-backend-call
    workspace (list :action "version" :id id :session session-id)
    (lambda (reply)
      (when-let* ((failure (plist-get reply :error)))
@@ -488,7 +476,7 @@ META-BYTES are those the batch's first edit started from."
       (condition-case nil
           (mevedel-shared-editing--in-job job
             (unless error
-              (mevedel-shared-editing--notify
+              (mevedel-artifact-backend-notify
                (plist-get runtime :workspace)
                (plist-get reply :state) (plist-get reply :result)))
             (funcall (plist-get job :callback) (if error (list :error error) reply)))
@@ -542,7 +530,7 @@ The edit that was to continue them did not commit."
                                  (car (plist-get job :committed))))
                            ;; The batch this edit continued is in that commit.
                            (mevedel-shared-editing--settle-batch runtime)
-                           (mevedel-shared-editing--notify
+                           (mevedel-artifact-backend-notify
                             (plist-get runtime :workspace) state (plist-get reply :result)))
                          (mevedel-shared-editing--finish runtime job reply))
                      (plist-put runtime :committing nil)

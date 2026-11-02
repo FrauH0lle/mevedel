@@ -42,6 +42,14 @@
 (autoload 'mevedel--ensure-chat-preset "mevedel-chat")
 (autoload 'mevedel--workspace-sessions "mevedel-chat")
 
+;; `mevedel-artifact-backend'
+(declare-function mevedel-artifact-backend-call "mevedel-artifact-backend"
+                  (workspace args callback &optional authorize commit))
+(declare-function mevedel-artifact-backend-registered-p "mevedel-artifact-backend"
+                  (workspace id))
+(autoload 'mevedel-artifact-backend-call "mevedel-artifact-backend")
+(autoload 'mevedel-artifact-backend-registered-p "mevedel-artifact-backend")
+
 ;; `mevedel-collaboration'
 (defvar mevedel-collaboration-stop-reason)
 
@@ -84,11 +92,8 @@
                   "mevedel-shared-editing" (workspace id n actor callback))
 (declare-function mevedel-shared-editing-save-version
                   "mevedel-shared-editing" (workspace id &optional session-id))
-(declare-function mevedel-shared-editing-call "mevedel-shared-editing"
-                  (workspace args callback &optional authorize commit))
 (declare-function mevedel-shared-editing-save-version-later
                   "mevedel-shared-editing" (workspace id &optional session-id))
-(autoload 'mevedel-shared-editing-call "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-save-version-later "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-duplicate "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-restore "mevedel-shared-editing")
@@ -447,9 +452,10 @@ write CONTENT to the primary file in the same program.  Return its number."
 (defun mevedel-artifact-store-save-version (workspace id &optional session-id)
   "Record artifact ID's current state as a new version and return its number.
 A file artifact records its primary file.  A whiteboard or document
-records its reduced state through its editing queue, after any save in
+records its reduced state through its backend, after any save in
 progress; that returns nil.  SESSION-ID names the session whose work it is."
-  (if (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
+  (if (or (mevedel-artifact-backend-registered-p workspace id)
+          (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id)))
       (progn (mevedel-shared-editing-save-version-later workspace id session-id)
              nil)
     (mevedel-artifact-store-record-version workspace id session-id)))
@@ -589,16 +595,17 @@ The copy starts with one version and its own metadata."
 
 (defun mevedel-artifact-store-delete (workspace id &optional actor callback)
   "Delete artifact ID with its metadata, versions and dedicated session.
-A whiteboard or document is deleted through its editing queue, after any
-save in progress, so its editors learn of it from ACTOR (default
-\"Host\").  CALLBACK receives nil once the artifact is gone or the
-reason it was not deleted; without one, a refusal is a message."
+A whiteboard or document is deleted through its backend, after any save
+in progress, so its editors learn of it from ACTOR (default \"Host\").
+CALLBACK receives nil once the artifact is gone or the reason it was not
+deleted; without one, a refusal is a message."
   (let ((callback (or callback
                       (lambda (failure)
                         (when failure
                           (message "mevedel: %s was not deleted: %s" id failure))))))
-    (if (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
-        (mevedel-shared-editing-call
+    (if (or (mevedel-artifact-backend-registered-p workspace id)
+            (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id)))
+        (mevedel-artifact-backend-call
          workspace (list :action "delete" :id id :actor (or actor "Host"))
          (lambda (reply) (funcall callback (plist-get reply :error))))
       (funcall callback (condition-case err

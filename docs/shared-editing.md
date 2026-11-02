@@ -726,6 +726,19 @@ typing, posting without **Ask assistant**, and synchronization never start model
 An item is `<workspace>/.mevedel/artifacts/.state/ID/state.json`, with `meta.el`
 naming its kind, title and revision, and `versions/`. Catalogs read these small
 metadata records without parsing the item's CRDT state or history.
+
+Every content path reaches items through one artifact-backend interface
+(`mevedel-artifact-backend.el`): the model's tools, `shared://` Read and Grep,
+browser rooms, version records and previews, and deletion. Listings come from
+its catalog: the model's resource roster and bare `shared://` listing, Project
+artifacts, the cockpit count and the browser's store listing. Each request goes
+to the adapter serving its artifact id. The local adapter is the workspace
+store with the queue, lease and helper described here; an id registered with
+another adapter is never read from or written to the store. The local adapter
+is currently the only one. Commits are announced through
+`mevedel-artifact-backend-change-hook`. Discussions and restoring a saved
+version stay with the local adapter.
+
 Emacs serializes operations per
 workspace in one queue, which every room and session of this Emacs shares,
 validates candidates in the helper, checks continuing authority, and commits

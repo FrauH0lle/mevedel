@@ -7,6 +7,7 @@
 
 ;;; Code:
 
+(require 'mevedel-artifact-backend)
 (require 'mevedel-shared-editing)
 (require 'mevedel-shared-conversation)
 (require 'mevedel-shared-library)
@@ -290,7 +291,7 @@ deleted it; a guest viewing it is no longer in it."
       (dolist (key '(:id :kind :title :data :format :update :opId :transaction :range))
         (when (plist-member args key)
           (setq request (plist-put request key (plist-get args key)))))
-      (mevedel-shared-editing-call
+      (mevedel-artifact-backend-call
        (mevedel-session-workspace session) request
        (lambda (reply)
          (when (funcall authorize)
@@ -378,7 +379,7 @@ deleted it; a guest viewing it is no longer in it."
            (mevedel-collaboration-editing--send
             room peer req-id (list :error (error-message-string err)))))))))
 
-(add-hook 'mevedel-shared-editing-change-hook #'mevedel-collaboration-editing--changed)
+(add-hook 'mevedel-artifact-backend-change-hook #'mevedel-collaboration-editing--changed)
 
 (provide 'mevedel-collaboration-editing)
 ;;; mevedel-collaboration-editing.el ends here
