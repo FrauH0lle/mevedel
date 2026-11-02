@@ -1,12 +1,13 @@
 // The MCP tools, as a registry: each entry is { name, description,
 // inputSchema, run }.  RUN receives the validated arguments and a context
-// { env, client, connect } and returns the text result, or a full MCP tool
-// result { content, isError? }, or throws an Error whose message the agent
-// sees.  New tools are new entries.
+// { env, client, connect }; connect(entry, ctx) returns a room whose
+// close() releases it (see connections.mjs).  RUN returns the text result,
+// or a full MCP tool result { content, isError? }, or throws an Error whose
+// message the agent sees.  New tools are new entries.
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { displayName } from './identity.mjs';
-import { UNAVAILABLE, openRoom } from './room.mjs';
+import { openEntry } from './connections.mjs';
+import { UNAVAILABLE } from './room.mjs';
 import { entry, readStore } from './store.mjs';
 
 const nameArgument = {
@@ -14,15 +15,10 @@ const nameArgument = {
   description: 'Name of the attached artifact, as list_artifacts shows it.',
 };
 
-/* A fresh connection to ENTRY's room. */
-function connect(entry, ctx) {
-  return openRoom(entry.link, { name: displayName(entry, ctx.env, ctx.client), guestId: entry.guestId });
-}
-
 /* Run BODY on the artifact NAME's room; return the origin's reply. */
 async function exchange(name, body, ctx) {
   const found = entry(ctx.env, name);
-  const room = await (ctx.connect ?? connect)(found, ctx);
+  const room = await (ctx.connect ?? openEntry)(found, ctx);
   try {
     return await room.request({ ...body, id: room.welcome.id });
   } finally {
@@ -98,7 +94,7 @@ export const tools = [
         let { title, kind } = found;
         let reach = 'origin reachable';
         try {
-          const room = await (ctx.connect ?? connect)(found, ctx);
+          const room = await (ctx.connect ?? openEntry)(found, ctx);
           ({ title, kind } = room.welcome);
           room.close();
         } catch (error) {
