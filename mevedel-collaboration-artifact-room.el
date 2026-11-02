@@ -36,6 +36,14 @@
 ;; working stretches instead and records one version when a stretch
 ;; ends.  Connected consumers are listed by name on the artifact's page
 ;; for origin browsers, and are told no presence themselves.
+;;
+;; `mevedel-collaboration-artifact-room-sharing' is the one host
+;; operation to share, revoke or rotate.  Revoking deletes the
+;; credentials and tells consumers `revoked'; deleting the artifact tells
+;; them `artifact-deleted', and an exiting Emacs `origin-stopped'.  The
+;; roots with shared artifacts are recorded per user, and
+;; `mevedel-collaboration-artifact-room-restore' shares them again at
+;; startup under their stored room ids.
 
 ;;; Code:
 
@@ -46,8 +54,13 @@
 (require 'mevedel-artifact-store)
 (require 'mevedel-collaboration)
 (require 'mevedel-resource)
-(require 'mevedel-shared-library)
 (require 'mevedel-workspace)
+
+;; `mevedel-shared-library'
+;; Restoring shared artifacts at startup loads this file; the libraries
+;; load only when a consumer asks for them.
+(declare-function mevedel-shared-library-libraries "mevedel-shared-library" ())
+(autoload 'mevedel-shared-library-libraries "mevedel-shared-library")
 
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--admit-hello
@@ -83,6 +96,8 @@
 (declare-function mevedel-sleep-update "mevedel-sleep" (&rest _))
 (autoload 'mevedel-sleep-update "mevedel-sleep")
 
+(defvar mevedel-user-dir)
+
 
 ;;
 ;;; Credentials
@@ -93,8 +108,7 @@
 
 (defun mevedel-collaboration-artifact-room--credentials-path (workspace id)
   "Return the file holding the credentials of WORKSPACE's shared artifact ID."
-  (file-name-concat (mevedel-artifact-store-bookkeeping-directory workspace id)
-                    "link"))
+  (mevedel-artifact-store-link-path workspace id))
 
 (defun mevedel-collaboration-artifact-room--read-credentials (path)
   "Return the valid artifact room credentials stored at PATH, or nil.
@@ -154,6 +168,104 @@ link's secret is the view link's followed by the write token."
     (list :link-view (funcall link (plist-get credentials :key))
           :link-edit (funcall link (concat (plist-get credentials :key)
                                            (plist-get credentials :write-token))))))
+
+
+;;
+;;; Running across restarts
+
+(defun mevedel-collaboration-artifact-room--record-path ()
+  "Return the per-user file listing the roots with shared artifacts."
+  (file-name-concat mevedel-user-dir "artifact-rooms.el"))
+
+(defun mevedel-collaboration-artifact-room--recorded ()
+  "Return the workspace roots recorded to have shared artifacts.
+An unreadable or malformed record yields nil."
+  (let ((path (mevedel-collaboration-artifact-room--record-path)))
+    (when-let* (((file-readable-p path))
+                (stored (condition-case nil
+                            (with-temp-buffer
+                              (insert-file-contents path)
+                              (read (current-buffer)))
+                          (error nil)))
+                ((proper-list-p stored)))
+      (seq-filter #'stringp stored))))
+
+(defun mevedel-collaboration-artifact-room--set-recorded (root shared)
+  "Record whether workspace ROOT has SHARED artifacts.
+A recorded root's shared artifacts are shared again when mevedel next
+starts.  A record that cannot be written is reported, since sharing
+itself is unaffected."
+  (let* ((roots (mevedel-collaboration-artifact-room--recorded))
+         (updated (if shared
+                      (if (member root roots) roots (append roots (list root)))
+                    (remove root roots)))
+         (path (mevedel-collaboration-artifact-room--record-path)))
+    (unless (equal updated roots)
+      (condition-case err
+          (if (null updated)
+              (delete-file path)
+            (make-directory (file-name-directory path) t)
+            (with-file-modes #o600
+              (with-temp-file path
+                (prin1 updated (current-buffer)))))
+        (error
+         (display-warning
+          'mevedel
+          (format "Could not record the shared artifacts of %s for the next start: %s"
+                  root (error-message-string err))))))))
+
+(defun mevedel-collaboration-artifact-room--shared-ids (workspace)
+  "Return the ids of WORKSPACE's artifacts that hold valid credentials."
+  (let ((state (file-name-concat (mevedel-artifact-store-directory workspace) ".state")))
+    (when (file-directory-p state)
+      (seq-filter
+       (lambda (id)
+         (and (mevedel-artifact-store-id-p id)
+              (mevedel-artifact-store-meta workspace id)
+              (mevedel-collaboration-artifact-room--read-credentials
+               (mevedel-collaboration-artifact-room--credentials-path workspace id))))
+       (directory-files state nil "\\`[A-Za-z0-9_-]+\\'")))))
+
+(defun mevedel-collaboration-artifact-room--update-record (workspace)
+  "Record WORKSPACE's root while it has shared artifacts, and drop it after."
+  (mevedel-collaboration-artifact-room--set-recorded
+   (mevedel-workspace-root workspace)
+   (and (mevedel-collaboration-artifact-room--shared-ids workspace) t)))
+
+(defun mevedel-collaboration-artifact-room-restore ()
+  "Share again the artifacts that were shared when Emacs last exited.
+Each recorded workspace root's shared artifacts get their rooms back
+under their stored room ids, so every link handed out keeps working.  A
+root that has no shared artifacts left, or whose directory is gone, is
+dropped.  A room that cannot start is reported as a warning and its root
+stays recorded for the next start."
+  (dolist (root (mevedel-collaboration-artifact-room--recorded))
+    (condition-case err
+        (let ((inhibit-interaction t))
+          (if (not (file-directory-p root))
+              (progn
+                (mevedel-collaboration-artifact-room--set-recorded root nil)
+                (display-warning
+                 'mevedel (format "Shared artifacts of %s forgotten: the directory is gone"
+                                  root)))
+            (let* ((workspace (mevedel-collaboration-artifact-room--workspace root))
+                   (ids (mevedel-collaboration-artifact-room--shared-ids workspace)))
+              (unless ids
+                (mevedel-collaboration-artifact-room--set-recorded root nil))
+              (dolist (id ids)
+                (condition-case err
+                    (mevedel-collaboration-artifact-room--start workspace id)
+                  (error
+                   (display-warning
+                    'mevedel
+                    (format (concat "Shared artifact %s of %s not restarted: %s "
+                                    "(revoking it ends the retries)")
+                            id root (error-message-string err)))))))))
+      (error
+       (display-warning
+        'mevedel
+        (format "Shared artifacts of %s not restarted: %s"
+                root (error-message-string err)))))))
 
 
 ;;
@@ -752,6 +864,9 @@ Return the live room when one is already running."
                  (mevedel-collaboration-artifact-room--links
                   (cdr origins) credentials))))
           (puthash key room mevedel-collaboration-artifact-room--rooms)
+          (add-hook 'mevedel-artifact-store-deleted-functions
+                    #'mevedel-collaboration-artifact-room--deleted)
+          (add-hook 'kill-emacs-hook #'mevedel-collaboration-artifact-room--stop-for-emacs)
           (condition-case error-data
               (plist-put
                room :transport
@@ -772,6 +887,7 @@ Return the live room when one is already running."
             (error
              (remhash key mevedel-collaboration-artifact-room--rooms)
              (signal (car error-data) (cdr error-data))))
+          (mevedel-collaboration-artifact-room--set-recorded root t)
           (mevedel-sleep-update)
           room))))
 
@@ -782,6 +898,8 @@ working stretch ends with the connections."
   (remhash (cons (plist-get room :directory) (plist-get room :artifact))
            mevedel-collaboration-artifact-room--rooms)
   (mevedel-collaboration-artifact-room--settle room)
+  (when (zerop (hash-table-count mevedel-collaboration-artifact-room--rooms))
+    (remove-hook 'kill-emacs-hook #'mevedel-collaboration-artifact-room--stop-for-emacs))
   (when-let* ((transport (plist-get room :transport)))
     (ignore-errors
       (when (> (hash-table-count (plist-get room :guests)) 0)
@@ -800,9 +918,55 @@ working stretch ends with the connections."
     (dolist (room rooms)
       (mevedel-collaboration-artifact-room--stop room reason))))
 
+(defun mevedel-collaboration-artifact-room--stop-for-emacs ()
+  "Stop every artifact room before Emacs exits, telling consumers why.
+Credentials and the record stay, so the next start shares them again."
+  (mevedel-collaboration-artifact-room-stop-all 'origin-stopped))
+
+(defun mevedel-collaboration-artifact-room--deleted (workspace id)
+  "End the sharing of WORKSPACE's artifact ID, which was just deleted.
+Its connected consumers are told `artifact-deleted'.  Its credentials
+went with its bookkeeping."
+  (when-let* ((room (mevedel-collaboration-artifact-room--find
+                     (mevedel-workspace-root workspace) id)))
+    (mevedel-collaboration-artifact-room--stop room 'artifact-deleted))
+  (mevedel-collaboration-artifact-room--update-record workspace))
+
 
 ;;
 ;;; Sharing
+
+(defun mevedel-collaboration-artifact-room-sharing (workspace id operation)
+  "Apply sharing OPERATION to WORKSPACE's artifact ID.
+This is the one host operation behind every way of sharing: Emacs
+commands, daemon functions and the browser.  OPERATION is one of:
+
+  `share'   start sharing ID, or keep its existing links; return them.
+  `revoke'  stop sharing ID: every connected consumer is told `revoked'
+            and disconnected, and its links stop working for good.
+            Return nil.
+  `rotate'  revoke, then share with new links; return them.
+
+Links are a plist of `:link-view' and `:link-edit'."
+  (pcase operation
+    ('share
+     (let ((room (mevedel-collaboration-artifact-room--start workspace id)))
+       (list :link-view (plist-get room :link-view)
+             :link-edit (plist-get room :link-edit))))
+    ('revoke
+     (when-let* ((room (mevedel-collaboration-artifact-room--find
+                        (mevedel-workspace-root workspace) id)))
+       (mevedel-collaboration-artifact-room--stop room 'revoked))
+     (let ((path (mevedel-collaboration-artifact-room--credentials-path workspace id)))
+       (when (file-exists-p path)
+         (delete-file path)))
+     (mevedel-collaboration-artifact-room--update-record workspace)
+     nil)
+    ('rotate
+     (mevedel-collaboration-artifact-room--meta workspace id)
+     (mevedel-collaboration-artifact-room-sharing workspace id 'revoke)
+     (mevedel-collaboration-artifact-room-sharing workspace id 'share))
+    (_ (error "Unknown sharing operation: %S" operation))))
 
 ;;;###autoload
 (defun mevedel-collaboration-artifact-room-share (directory id)
@@ -811,28 +975,67 @@ The result is a plist of `:link-view' and `:link-edit', bearer links of
 the form WEB-ORIGIN/#ROOM-ID.SECRET that reach only this artifact.
 Sharing an artifact that is already shared returns its existing links.
 An Emacs daemon shares this way, for example through emacsclient."
-  (let* ((workspace (mevedel-collaboration-artifact-room--workspace directory))
-         (room (mevedel-collaboration-artifact-room--start workspace id)))
-    (list :link-view (plist-get room :link-view)
-          :link-edit (plist-get room :link-edit))))
+  (mevedel-collaboration-artifact-room-sharing
+   (mevedel-collaboration-artifact-room--workspace directory) id 'share))
+
+;;;###autoload
+(defun mevedel-collaboration-artifact-room-revoke (directory id)
+  "Stop sharing artifact ID of DIRECTORY's workspace; return nil.
+Connected consumers are disconnected with the reason `revoked', and the
+artifact's links stop working for good.  Sharing it again mints new
+ones.  An Emacs daemon revokes this way, for example through
+emacsclient."
+  (mevedel-collaboration-artifact-room-sharing
+   (mevedel-collaboration-artifact-room--workspace directory) id 'revoke))
+
+;;;###autoload
+(defun mevedel-collaboration-artifact-room-rotate (directory id)
+  "Replace the links of artifact ID of DIRECTORY's workspace; return them.
+This revokes the old links, as `mevedel-collaboration-artifact-room-revoke'
+does, and shares the artifact again.  The result is a plist of
+`:link-view' and `:link-edit'."
+  (mevedel-collaboration-artifact-room-sharing
+   (mevedel-collaboration-artifact-room--workspace directory) id 'rotate))
 
 (defconst mevedel-collaboration-artifact-room--links-buffer
   "*mevedel artifact links*"
   "Buffer showing an artifact's links, kept out of *Messages*.")
 
-(defun mevedel-collaboration-artifact-room--choose ()
-  "Read one of the current workspace's shareable artifacts; return its id."
+(defun mevedel-collaboration-artifact-room--choose (&optional shared)
+  "Read one of the current workspace's shareable artifacts; return its id.
+With SHARED, offer only the shared ones."
   (let* ((workspace (or (mevedel-workspace)
                         (user-error "No mevedel workspace here")))
          (choices (cl-loop for row in (mevedel-artifact-store-list workspace)
-                           when (memq (plist-get row :kind)
-                                      mevedel-collaboration-artifact-room--kinds)
+                           for id = (plist-get row :id)
+                           when (and (memq (plist-get row :kind)
+                                           mevedel-collaboration-artifact-room--kinds)
+                                     (or (not shared)
+                                         (mevedel-artifact-store-shared-p workspace id)))
                            collect (cons (format "%s (%s %s)" (plist-get row :title)
-                                                 (plist-get row :kind) (plist-get row :id))
-                                         (plist-get row :id)))))
+                                                 (plist-get row :kind) id)
+                                         id))))
     (unless choices
-      (user-error "This workspace has no whiteboard, document or HTML artifact to share"))
-    (cdr (assoc (completing-read "Share artifact: " choices nil t) choices))))
+      (user-error (if shared "No artifact of this workspace is shared"
+                    "This workspace has no whiteboard, document or HTML artifact to share")))
+    (cdr (assoc (completing-read (if shared "Shared artifact: " "Share artifact: ")
+                                 choices nil t)
+                choices))))
+
+(defun mevedel-collaboration-artifact-room--present (meta links)
+  "Show the artifact LINKS of the artifact described by META.
+The edit link goes to the kill ring; neither goes to *Messages*."
+  (kill-new (plist-get links :link-edit))
+  (with-help-window mevedel-collaboration-artifact-room--links-buffer
+    (princ (format "%s (%s) is shared.\n\n" (plist-get meta :title)
+                   (plist-get meta :kind)))
+    (princ (format "View link, to read it:\n  %s\n\n" (plist-get links :link-view)))
+    (princ (format "Edit link, to read and change it:\n  %s\n\n"
+                   (plist-get links :link-edit)))
+    (princ (concat "The edit link is in the kill ring.  Attach a link where "
+                   "you work, never in a chat:\n"
+                   "  npx mevedel-remote-artifact attach LINK\n")))
+  (message "mevedel: edit link copied to kill ring"))
 
 ;;;###autoload
 (defun mevedel-collaboration-share-artifact (id)
@@ -852,19 +1055,40 @@ already keeps its links."
                                  "link change it, until you revoke them. ")
                          (plist-get meta :title) (plist-get meta :kind))))
       (user-error "Artifact not shared"))
-    (let ((links (mevedel-collaboration-artifact-room-share
-                  (mevedel-workspace-root workspace) id)))
-      (kill-new (plist-get links :link-edit))
-      (with-help-window mevedel-collaboration-artifact-room--links-buffer
-        (princ (format "%s (%s) is shared.\n\n" (plist-get meta :title)
-                       (plist-get meta :kind)))
-        (princ (format "View link, to read it:\n  %s\n\n" (plist-get links :link-view)))
-        (princ (format "Edit link, to read and change it:\n  %s\n\n"
-                       (plist-get links :link-edit)))
-        (princ (concat "The edit link is in the kill ring.  Attach a link where "
-                       "you work, never in a chat:\n"
-                       "  npx mevedel-remote-artifact attach LINK\n")))
-      (message "mevedel: edit link copied to kill ring"))))
+    (mevedel-collaboration-artifact-room--present
+     meta (mevedel-collaboration-artifact-room-sharing workspace id 'share))))
+
+;;;###autoload
+(defun mevedel-collaboration-revoke-artifact (id)
+  "Stop sharing the current workspace's artifact ID.
+Every connected consumer is disconnected and its links stop working
+for good."
+  (interactive (list (mevedel-collaboration-artifact-room--choose t)))
+  (let* ((workspace (or (mevedel-workspace)
+                        (user-error "No mevedel workspace here")))
+         (title (or (plist-get (mevedel-artifact-store-meta workspace id) :title) id)))
+    (unless (yes-or-no-p
+             (format "Whoever holds its links loses access.  Revoke the links of \"%s\"? "
+                     title))
+      (user-error "Artifact still shared"))
+    (mevedel-collaboration-artifact-room-sharing workspace id 'revoke)
+    (message "mevedel: %s is no longer shared" title)))
+
+;;;###autoload
+(defun mevedel-collaboration-rotate-artifact (id)
+  "Replace the links of the current workspace's shared artifact ID.
+The old links stop working; the new ones are shown, the edit link
+copied to the kill ring."
+  (interactive (list (mevedel-collaboration-artifact-room--choose t)))
+  (let* ((workspace (or (mevedel-workspace)
+                        (user-error "No mevedel workspace here")))
+         (meta (mevedel-collaboration-artifact-room--meta workspace id)))
+    (unless (yes-or-no-p
+             (format "The old links stop working.  Replace the links of \"%s\"? "
+                     (plist-get meta :title)))
+      (user-error "Links unchanged"))
+    (mevedel-collaboration-artifact-room--present
+     meta (mevedel-collaboration-artifact-room-sharing workspace id 'rotate))))
 
 (provide 'mevedel-collaboration-artifact-room)
 ;;; mevedel-collaboration-artifact-room.el ends here

@@ -5,7 +5,7 @@
 // the pool, close() only releases: the connection stays open until IDLE-MS pass
 // with no call using it, so an open client does not keep the origin awake.
 import { displayName } from './identity.mjs';
-import { openRoom } from './room.mjs';
+import { UNAVAILABLE, openRoom } from './room.mjs';
 
 export const IDLE_MS = 5 * 60 * 1000;
 
@@ -21,6 +21,8 @@ export function openEntry(entry, ctx) {
 export function connectionPool({ open = openEntry, idleMs = IDLE_MS } = {}) {
   /* link -> { opening, room, users, timer } */
   const slots = new Map();
+  /* link -> the goodbye its last room ended with, until a reconnect works */
+  const goodbyes = new Map();
 
   const drop = (link, slot) => {
     clearTimeout(slot.timer);
@@ -37,11 +39,22 @@ export function connectionPool({ open = openEntry, idleMs = IDLE_MS } = {}) {
   async function connect(entry, ctx) {
     const link = entry.link;
     let slot = slots.get(link);
-    if (slot?.room?.closed) { drop(link, slot); slot = undefined; }
+    if (slot?.room?.closed) {
+      if (slot.room.ended && slot.room.ended !== UNAVAILABLE) goodbyes.set(link, slot.room.ended);
+      drop(link, slot);
+      slot = undefined;
+    }
     if (!slot) {
       slot = { users: 0, timer: undefined, room: undefined };
       const made = slot;
-      made.opening = Promise.resolve(open(entry, ctx)).then((room) => (made.room = room));
+      // A room that said goodbye has no host now; reconnecting can only say
+      // so generically, so report the goodbye instead.
+      made.opening = Promise.resolve(open(entry, ctx)).then((room) => {
+        goodbyes.delete(link);
+        return (made.room = room);
+      }, (error) => {
+        throw goodbyes.has(link) && error.message === UNAVAILABLE ? new Error(goodbyes.get(link)) : error;
+      });
       slots.set(link, made);
       made.opening.catch(() => { if (slots.get(link) === made) slots.delete(link); });
     }

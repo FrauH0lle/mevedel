@@ -722,9 +722,45 @@ owner token is minted, and one offered in a hello is ignored. The link names no
 artifact. The credentials are generated on the first share and stored in the
 artifact's bookkeeping as `.mevedel/artifacts/.state/ID/link`, readable only by
 the user; their existence is what makes the artifact shared. Sharing again
-returns the same links, also after the room stopped or Emacs restarted. A room
-runs until Emacs exits and does not yet restart on its own; sharing again
-redials it under the same room id.
+returns the same links, also after the room stopped or Emacs restarted.
+
+### Revoking, rotating, deleting, restarting
+
+Sharing, revoking and rotating are one host operation,
+`(mevedel-collaboration-artifact-room-sharing WORKSPACE ID OPERATION)` with
+OPERATION `share`, `revoke` or `rotate`; the commands, the daemon functions and
+the browser all go through it.
+
+- **Revoke** (`M-x mevedel-collaboration-revoke-artifact`, or
+  `(mevedel-collaboration-artifact-room-revoke DIRECTORY ID)`) stops the room
+  and deletes the credentials. Every connected consumer receives
+  `{"t": "bye", "reason": "revoked"}` and is disconnected; the links never
+  work again, and sharing afterwards mints new ones.
+- **Rotate** (`M-x mevedel-collaboration-rotate-artifact`, or
+  `(mevedel-collaboration-artifact-room-rotate DIRECTORY ID)`) is revoke then
+  share: consumers are told `revoked`, and the new links are returned or shown.
+- **Deleting** a shared artifact revokes it with reason `artifact-deleted`; the
+  credentials go with its bookkeeping. A **duplicate** gets fresh bookkeeping,
+  so it starts unshared.
+- **Exiting** Emacs stops every artifact room with reason `origin-stopped` and
+  keeps the credentials.
+
+The roots of workspaces with shared artifacts are recorded per user in
+`mevedel-user-dir` as `artifact-rooms.el`. Beside the lobby restore,
+`mevedel-install` runs `mevedel-collaboration-artifact-room-restore` once
+startup is done. It scans each recorded root's bookkeeping for credentials and
+redials every shared artifact's room under its stored room id, so links handed
+out before the restart keep working. A root with no shared artifacts left, or
+whose directory is gone, is dropped; a room that cannot start is reported and
+its root stays recorded. There is no paused state: an artifact is shared or
+not.
+
+A consumer that dials a room with no host -- revoked, deleted or the origin
+offline -- is closed by the relay and reports one generic "Origin unavailable
+(revoked, deleted, or offline)". The browser viewer opening an artifact link
+gets the artifact welcome and shows only "Paste this link into mevedel or an
+MCP client." Project artifacts (`M-x mevedel-artifacts`) marks shared
+artifacts in its Link column and details.
 
 A consumer's hello is admitted by the room key and write token like any
 room's. The room answers with its own welcome only:

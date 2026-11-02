@@ -4,10 +4,24 @@
 // welcome -- a session room's or a lobby's -- is refused and the connection
 // closed at once, without sending another frame, so a wrong link never
 // exposes more than the hello.
+//
+// An origin that ends the room says goodbye with a reason first; every
+// pending and later request fails with what that reason means.
 import { parseLink } from './link.mjs';
 import { EditingAssembler, PROTOCOL, editingFrames, importKey, seal, unseal } from './protocol.mjs';
 
 export const UNAVAILABLE = 'Origin unavailable (revoked, deleted, or offline)';
+
+const GOODBYES = {
+  revoked: 'Origin unavailable: the host revoked this artifact link; ask them for a new one',
+  'artifact-deleted': 'Origin unavailable: the artifact was deleted at its origin',
+  'origin-stopped': 'Origin unavailable: the origin Emacs stopped; try again once it is back',
+};
+
+/* What the origin's goodbye for REASON means to the user. */
+export function goodbye(reason) {
+  return Object.hasOwn(GOODBYES, reason) ? GOODBYES[reason] : UNAVAILABLE;
+}
 
 export class Room {
   #ws;
@@ -28,6 +42,9 @@ export class Room {
 
   /* True once the connection ended or was closed. */
   get closed() { return this.#closed !== null; }
+
+  /* Why the connection ended, such as the origin's goodbye, or null. */
+  get ended() { return this.#closed; }
 
   /* Send FRAME sealed, in order. */
   send(frame) {
@@ -74,8 +91,14 @@ export class Room {
           pending.resolve(body);
         }
       }
+      if (frame.t === 'bye') this.end(goodbye(frame.reason));
       this.onFrame?.(frame);
     });
+  }
+
+  /* Resolve once every frame received so far was handled. */
+  drained() {
+    return this.#inbound;
   }
 
   /* Fail every pending request, and every later one, with MESSAGE. */
@@ -125,6 +148,8 @@ export async function openRoom(link, { name, guestId, timeoutMs = 10000 } = {}) 
       } else if (frame.t === 'welcome' || frame.t === 'lobby') {
         fail('This is a session or lobby link, not an artifact link. Share the artifact at its '
           + 'origin and attach the link that gives.');
+      } else if (frame.t === 'bye') {
+        fail(goodbye(frame.reason));
       }
     };
     ws.addEventListener('open', () => {
@@ -135,7 +160,8 @@ export async function openRoom(link, { name, guestId, timeoutMs = 10000 } = {}) 
       // Unsealed text frames are relay controls such as room-closed.
       if (typeof event.data !== 'string') room.receive(event.data);
     });
-    ws.addEventListener('close', () => fail(UNAVAILABLE));
-    ws.addEventListener('error', () => fail(UNAVAILABLE));
+    // A goodbye arrives just before the close; let it be read first.
+    ws.addEventListener('close', () => room.drained().then(() => fail(UNAVAILABLE)));
+    ws.addEventListener('error', () => room.drained().then(() => fail(UNAVAILABLE)));
   });
 }

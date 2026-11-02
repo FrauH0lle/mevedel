@@ -28,8 +28,10 @@
 (require 'mevedel-artifact-store)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-artifact-room)
+(require 'mevedel-collaboration-share)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-shared-editing)
+(require 'mevedel-shared-library)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 
@@ -361,6 +363,69 @@ An editing transfer appears once, complete, as its `body' shorthand."
                    (file-name-concat
                     (mevedel-artifact-store-bookkeeping-directory workspace id)
                     "link"))))))
+
+(defun mevedel-artifact-room-test--kill-links-buffer ()
+  "Close the artifact links buffer and its windows."
+  (when-let* ((buffer (get-buffer mevedel-collaboration-artifact-room--links-buffer)))
+    (dolist (window (get-buffer-window-list buffer nil t))
+      (quit-window t window))
+    (when (buffer-live-p buffer) (kill-buffer buffer))))
+
+(mevedel-deftest mevedel-collaboration-revoke-artifact
+  ()
+  ,test
+  (test)
+  :doc "offers only shared artifacts and revokes the chosen one once confirmed"
+  (mevedel-artifact-room-test--with-origin (root workspace _state _port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (_other (mevedel-artifact-room-test--board workspace "Private"))
+           (default-directory root)
+           candidates confirm)
+      (mevedel-collaboration-artifact-room-share root id)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt collection &rest _)
+                   (setq candidates (all-completions "" collection))
+                   (car candidates)))
+                ((symbol-function 'yes-or-no-p) (lambda (&rest _) confirm)))
+        (should-error (call-interactively #'mevedel-collaboration-revoke-artifact)
+                      :type 'user-error)
+        (should (mevedel-artifact-store-shared-p workspace id))
+        (setq confirm t)
+        (mevedel-test--with-captured-messages nil
+          (call-interactively #'mevedel-collaboration-revoke-artifact)))
+      (should (equal 1 (length candidates)))
+      (should (string-match-p "Pipeline" (car candidates)))
+      (should-not (mevedel-artifact-store-shared-p workspace id))
+      ;; Nothing is left to revoke.
+      (should-error (call-interactively #'mevedel-collaboration-revoke-artifact)
+                    :type 'user-error))))
+
+(mevedel-deftest mevedel-collaboration-rotate-artifact
+  ()
+  ,test
+  (test)
+  :doc "replaces the chosen artifact's links and shows the new ones"
+  (mevedel-artifact-room-test--with-origin (root workspace _state _port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (old (mevedel-collaboration-artifact-room-share root id))
+           (kill-ring nil)
+           (default-directory root))
+      (unwind-protect
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (_prompt collection &rest _)
+                       (car (all-completions "" collection))))
+                    ((symbol-function 'yes-or-no-p) #'always))
+            (mevedel-test--with-captured-messages nil
+              (call-interactively #'mevedel-collaboration-rotate-artifact))
+            (let ((links (mevedel-collaboration-artifact-room-share root id))
+                  (shown (with-current-buffer
+                             mevedel-collaboration-artifact-room--links-buffer
+                           (buffer-string))))
+              (should-not (equal old links))
+              (should (equal (plist-get links :link-edit) (car kill-ring)))
+              (should (string-search (plist-get links :link-view) shown))
+              (should-not (string-search (plist-get old :link-view) shown))))
+        (mevedel-artifact-room-test--kill-links-buffer)))))
 
 
 ;;
@@ -1621,6 +1686,276 @@ Return the artifact's directory."
                              (mevedel-artifact-store-version-path workspace "landing" 1))
                             (file-name-nondirectory
                              (mevedel-artifact-store-version-path workspace "landing" 1))))))
+        (mevedel-artifact-room-test--close consumer)))))
+
+
+;;
+;;; Revoking, rotating, deleting
+
+(defun mevedel-artifact-room-test--goodbye (consumer reason)
+  "Check that CONSUMER was told goodbye for REASON, as the fixture shows."
+  (mevedel-artifact-room-test--await consumer 1)
+  (should (equal (mapcar #'mevedel-artifact-room-test--normal
+                         (mapcar #'cdr (mevedel-artifact-room-test--fixture
+                                        "goodbye" `(("$REASON" . ,reason)))))
+                 (mapcar #'mevedel-artifact-room-test--normal
+                         (mevedel-artifact-room-test--frames consumer)))))
+
+(mevedel-deftest mevedel-collaboration-artifact-room-revoke
+  ()
+  ,test
+  (test)
+  :doc "disconnects connected consumers with revoked and ends the links for good"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'view)))
+      (unwind-protect
+          (progn
+            (should-not (mevedel-collaboration-artifact-room-revoke root id))
+            (mevedel-artifact-room-test--goodbye consumer "revoked")
+            (should-not (mevedel-artifact-store-shared-p workspace id))
+            ;; Sharing again mints new links; the old ones stay dead.
+            (let ((again (mevedel-collaboration-artifact-room-share root id)))
+              (should-not (equal (plist-get links :link-view) (plist-get again :link-view)))
+              (should-not (equal (plist-get links :link-edit) (plist-get again :link-edit)))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "leaves an artifact that is not shared unshared"
+  (mevedel-artifact-room-test--with-origin (root workspace _state _port)
+    (let ((id (mevedel-artifact-room-test--board workspace "Pipeline")))
+      (should-not (mevedel-collaboration-artifact-room-revoke root id))
+      (should-not (mevedel-artifact-store-shared-p workspace id)))))
+
+(mevedel-deftest mevedel-collaboration-artifact-room-rotate
+  ()
+  ,test
+  (test)
+  :doc "replaces the links, telling connected consumers revoked"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (rotated (mevedel-collaboration-artifact-room-rotate root id)))
+      (unwind-protect
+          (progn
+            (mevedel-artifact-room-test--goodbye consumer "revoked")
+            (should-not (equal (car (mevedel-artifact-room-test--secret
+                                     (plist-get links :link-view)))
+                               (car (mevedel-artifact-room-test--secret
+                                     (plist-get rotated :link-view)))))
+            (should (mevedel-artifact-store-shared-p workspace id))
+            ;; The new links work and are what sharing returns from now on.
+            (should (equal rotated (mevedel-collaboration-artifact-room-share root id)))
+            (let ((fresh (mevedel-artifact-room-test--joined state port rotated 'view)))
+              (unwind-protect
+                  (should (alist-get 'result
+                                     (mevedel-artifact-room-test--request
+                                      fresh 1 `((action . "read") (id . ,id)))))
+                (mevedel-artifact-room-test--close fresh))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "refuses an artifact that does not exist"
+  (mevedel-artifact-room-test--with-origin (root _workspace _state _port)
+    (should-error (mevedel-collaboration-artifact-room-rotate root "missing")
+                  :type 'user-error)))
+
+(mevedel-deftest mevedel-collaboration-artifact-room-sharing
+  ()
+  ,test
+  (test)
+  :doc "is one host operation for sharing, revoking and rotating"
+  (mevedel-artifact-room-test--with-origin (_root workspace _state _port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-sharing workspace id 'share)))
+      (should (equal links (mevedel-collaboration-artifact-room-sharing workspace id 'share)))
+      (let ((rotated (mevedel-collaboration-artifact-room-sharing workspace id 'rotate)))
+        (should (plist-get rotated :link-edit))
+        (should-not (equal links rotated)))
+      (should-not (mevedel-collaboration-artifact-room-sharing workspace id 'revoke))
+      (should-not (mevedel-artifact-store-shared-p workspace id))
+      (should-error (mevedel-collaboration-artifact-room-sharing workspace id 'publish)))))
+
+(mevedel-deftest mevedel-collaboration-artifact-room--deleted
+  ()
+  ,test
+  (test)
+  :doc "deleting a shared artifact disconnects its consumers with artifact-deleted"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'view))
+           (deleted 'pending))
+      (unwind-protect
+          (progn
+            (mevedel-artifact-store-delete workspace id "Host"
+                                           (lambda (failure) (setq deleted failure)))
+            (mevedel-test--await 10 "deletion" (not (eq deleted 'pending)))
+            (should-not deleted)
+            (mevedel-artifact-room-test--goodbye consumer "artifact-deleted")
+            (should-not (mevedel-collaboration-artifact-room--find root id))
+            (should-not (mevedel-artifact-store-meta workspace id)))
+        (mevedel-artifact-room-test--close consumer)))))
+
+(mevedel-deftest mevedel-collaboration-artifact-room--duplicate
+  ()
+  ,test
+  (test)
+  :doc "a duplicate of a shared artifact starts unshared"
+  (mevedel-artifact-room-test--with-origin (root workspace _state _port)
+    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id)))
+      (mevedel-artifact-store-duplicate workspace id "pipeline-copy")
+      (should (mevedel-artifact-store-meta workspace "pipeline-copy"))
+      (should-not (mevedel-artifact-store-shared-p workspace "pipeline-copy"))
+      (should-not (mevedel-collaboration-artifact-room--find root "pipeline-copy"))
+      (should (equal links (mevedel-collaboration-artifact-room-share root id))))))
+
+
+;;
+;;; Origin restarts
+
+(mevedel-deftest mevedel-collaboration-artifact-room--stop-for-emacs
+  ()
+  ,test
+  (test)
+  :doc "an exiting origin tells consumers origin-stopped and stays shared"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((kill-emacs-hook nil)
+           (id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'view)))
+      (unwind-protect
+          (progn
+            (should (memq #'mevedel-collaboration-artifact-room--stop-for-emacs
+                          kill-emacs-hook))
+            (run-hooks 'kill-emacs-hook)
+            (mevedel-artifact-room-test--goodbye consumer "origin-stopped")
+            (should-not (mevedel-collaboration-artifact-room--find root id))
+            (should (mevedel-artifact-store-shared-p workspace id))
+            (should (equal (list root) (mevedel-collaboration-artifact-room--recorded))))
+        (mevedel-artifact-room-test--close consumer)))))
+
+(mevedel-deftest mevedel-collaboration-artifact-room-restore
+  ()
+  ,test
+  (test)
+  :doc "redials each recorded root's shared artifacts under their stored room ids"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((kill-emacs-hook nil)
+           (id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id)))
+      (mevedel-artifact-room-test--host-joined state)
+      (run-hooks 'kill-emacs-hook)
+      (should (mevedel-relay-test--pump (lambda () (not (plist-get (car state) :host)))))
+      ;; The next Emacs knows nothing but the record and the bookkeeping.
+      (clrhash mevedel-collaboration-artifact-room--rooms)
+      (mevedel-collaboration-artifact-room-restore)
+      (let ((room (mevedel-collaboration-artifact-room--find root id)))
+        (should room)
+        (should (equal (car (mevedel-artifact-room-test--secret (plist-get links :link-view)))
+                       (plist-get room :room-id))))
+      ;; The links handed out before the restart work again.
+      (let ((consumer (mevedel-artifact-room-test--joined state port links 'edit)))
+        (unwind-protect
+            (should (alist-get 'result
+                               (mevedel-artifact-room-test--request
+                                consumer 1 `((action . "read") (id . ,id)))))
+          (mevedel-artifact-room-test--close consumer)))))
+
+  :doc "drops roots that have no shared artifacts left or no longer exist"
+  (mevedel-artifact-room-test--with-origin (root workspace _state _port)
+    (let* ((kill-emacs-hook nil)
+           (id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (gone (file-name-as-directory (file-name-concat root "gone"))))
+      (mevedel-collaboration-artifact-room-share root id)
+      (should (equal (list root) (mevedel-collaboration-artifact-room--recorded)))
+      ;; Revoking the last shared artifact drops the root at once.
+      (mevedel-collaboration-artifact-room-revoke root id)
+      (should-not (mevedel-collaboration-artifact-room--recorded))
+      ;; A record that outlived its shares or its directory is cleaned up.
+      (mevedel-collaboration-artifact-room--set-recorded root t)
+      (mevedel-collaboration-artifact-room--set-recorded gone t)
+      (cl-letf (((symbol-function 'display-warning) #'ignore))
+        (mevedel-collaboration-artifact-room-restore))
+      (should-not (mevedel-collaboration-artifact-room--recorded))
+      (should (zerop (hash-table-count mevedel-collaboration-artifact-room--rooms)))))
+
+  :doc "keeps a root recorded when its rooms cannot start yet"
+  (mevedel-artifact-room-test--with-origin (root workspace _state _port)
+    (let* ((kill-emacs-hook nil)
+           (id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           warnings)
+      (mevedel-collaboration-artifact-room-share root id)
+      (run-hooks 'kill-emacs-hook)
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-open)
+                 (lambda (&rest _) (error "Relay unavailable")))
+                ((symbol-function 'display-warning)
+                 (lambda (&rest args) (push args warnings))))
+        (mevedel-collaboration-artifact-room-restore))
+      (should warnings)
+      (should (equal (list root) (mevedel-collaboration-artifact-room--recorded)))
+      (should (mevedel-artifact-store-shared-p workspace id))))
+
+  :doc "deleting the last shared artifact drops its root"
+  (mevedel-artifact-room-test--with-origin (root workspace _state _port)
+    (let* ((kill-emacs-hook nil)
+           (id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (deleted 'pending))
+      (mevedel-collaboration-artifact-room-share root id)
+      (mevedel-artifact-store-delete workspace id "Host"
+                                     (lambda (failure) (setq deleted failure)))
+      (mevedel-test--await 10 "deletion" (not (eq deleted 'pending)))
+      (should-not (mevedel-collaboration-artifact-room--recorded)))))
+
+
+;;
+;;; Independence from the lobby
+
+(mevedel-deftest mevedel-collaboration-artifact-room--lobby
+  ()
+  ,test
+  (test)
+  :doc "starting, rotating and stopping the lobby leaves artifact rooms alone"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (require 'mevedel-collaboration-lobby)
+    (let* ((kill-emacs-hook nil)
+           (mevedel-collaboration-lobby--lobbies (make-hash-table :test #'equal))
+           (id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (consumer (mevedel-artifact-room-test--joined state port links 'view))
+           (room (mevedel-collaboration-artifact-room--find root id))
+           (open (symbol-function 'mevedel-collaboration--transport-open))
+           (stop (symbol-function 'mevedel-collaboration--transport-stop))
+           (default-directory root))
+      (unwind-protect
+          ;; The stub relay hosts one room, the artifact's; the lobby
+          ;; gets a transport of its own that goes nowhere.
+          (cl-letf (((symbol-function 'mevedel-collaboration--transport-open)
+                     (lambda (url &rest args)
+                       (if (string-search (plist-get room :room-id) url)
+                           (apply open url args)
+                         (list :fake-lobby t))))
+                    ((symbol-function 'mevedel-collaboration--transport-stop)
+                     (lambda (transport)
+                       (unless (plist-get transport :fake-lobby)
+                         (funcall stop transport))))
+                    ((symbol-function 'mevedel-collaboration-share-present) #'ignore)
+                    ((symbol-function 'yes-or-no-p) #'always))
+            (mevedel-test--with-captured-messages nil
+              (mevedel-collaboration-lobby)
+              (should (mevedel-collaboration-lobby--find workspace))
+              (mevedel-collaboration-lobby-rotate)
+              (should (mevedel-collaboration-lobby--find workspace))
+              (mevedel-collaboration-lobby-stop))
+            (should-not (mevedel-collaboration-lobby--find workspace))
+            (should (eq room (mevedel-collaboration-artifact-room--find root id)))
+            (should (equal links (mevedel-collaboration-artifact-room-share root id)))
+            (should (alist-get 'result
+                               (mevedel-artifact-room-test--request
+                                consumer 1 `((action . "read") (id . ,id)))))
+            (should-not (cl-some (lambda (frame) (equal "bye" (alist-get 't frame)))
+                                 (mevedel-artifact-room-test--frames consumer))))
         (mevedel-artifact-room-test--close consumer)))))
 
 (provide 'test-mevedel-collaboration-artifact-room)

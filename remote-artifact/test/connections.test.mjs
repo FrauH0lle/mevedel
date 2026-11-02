@@ -76,6 +76,38 @@ test('a connection the origin dropped is replaced on the next call', async (t) =
   assert.equal(opened.length, 2);
 });
 
+test('a goodbye on an idle connection is what the next call reports', async (t) => {
+  const env = tempEnv(t);
+  const fake = await startFakeRoom();
+  t.after(() => fake.close());
+  const err = sink();
+  assert.equal(await main(['attach', fake.link()], { env, stdout: sink(), stderr: err }), 0, err.text);
+  const pool = connectionPool({ idleMs: 1000 });
+  t.after(() => pool.closeAll());
+  const ctx = { env, connect: pool.connect };
+  assert.ok(!(await callTool('read_artifact', { name: 'snt-pipeline' }, ctx)).isError);
+  // The host revokes while the connection idles; the room then has no host.
+  await fake.goodbye('revoked');
+  const revoked = await callTool('read_artifact', { name: 'snt-pipeline' }, ctx);
+  assert.ok(revoked.isError);
+  assert.equal(revoked.content[0].text,
+    'Origin unavailable: the host revoked this artifact link; ask them for a new one');
+});
+
+test('an origin that stopped and came back is reached again', async (t) => {
+  const env = tempEnv(t);
+  const fake = await startFakeRoom();
+  t.after(() => fake.close());
+  const err = sink();
+  assert.equal(await main(['attach', fake.link()], { env, stdout: sink(), stderr: err }), 0, err.text);
+  const pool = connectionPool({ idleMs: 1000 });
+  t.after(() => pool.closeAll());
+  const ctx = { env, connect: pool.connect };
+  assert.ok(!(await callTool('read_artifact', { name: 'snt-pipeline' }, ctx)).isError);
+  await fake.goodbye('origin-stopped', { back: true });
+  assert.ok(!(await callTool('read_artifact', { name: 'snt-pipeline' }, ctx)).isError);
+});
+
 test('concurrent first calls open one connection', async (t) => {
   const { open, opened } = stubOpen();
   const pool = connectionPool({ open, idleMs: 1000 });

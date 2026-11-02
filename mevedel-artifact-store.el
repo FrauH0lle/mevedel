@@ -123,6 +123,10 @@ even when it alone exceeds this size."
   "Functions called with a WORKSPACE after its artifact store changed.
 Live collaboration rooms follow the store through it.")
 
+(defvar mevedel-artifact-store-deleted-functions nil
+  "Functions called with WORKSPACE and ID after artifact ID was deleted.
+Artifact rooms end the deleted artifact's sharing through it.")
+
 (defvar mevedel-artifact-store--pending-changes nil
   "Workspace changes collected by the current store mutation, or nil.")
 
@@ -201,6 +205,17 @@ browser names and the migration all follow."
   (mevedel-artifact-store-artifact-directory workspace id)
   (mevedel-artifact-store--path (mevedel-artifact-store-directory workspace)
                                (file-name-concat ".state" id)))
+
+(defun mevedel-artifact-store-link-path (workspace id)
+  "Return the file holding WORKSPACE's artifact-link credentials for ID.
+It lives in the protected bookkeeping, so deleting the artifact removes
+it and a duplicate starts without one."
+  (file-name-concat (mevedel-artifact-store-bookkeeping-directory workspace id)
+                    "link"))
+
+(defun mevedel-artifact-store-shared-p (workspace id)
+  "Return non-nil when WORKSPACE's artifact ID is shared through artifact links."
+  (file-exists-p (mevedel-artifact-store-link-path workspace id)))
 
 (defun mevedel-artifact-store-primary-path (workspace id &optional meta)
   "Return artifact ID's primary file, using META when already read."
@@ -659,6 +674,7 @@ not record ID as its own, such as one a copied `meta.el' names, is kept."
         (mevedel-session-control-fs-program-value result)))
     (when item
       (mevedel-artifact-lease--forget (mevedel-artifact-lease-directory workspace id))))
+  (run-hook-with-args 'mevedel-artifact-store-deleted-functions workspace id)
   (mevedel-artifact-store--changed workspace))
 
 (defun mevedel-artifact-store-list (workspace)

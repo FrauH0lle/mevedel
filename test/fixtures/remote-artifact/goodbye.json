@@ -1,0 +1,15 @@
+{
+  "description": "The origin ends an artifact room and tells every connected consumer why, then leaves the relay. $REASON is revoked when the host revokes or rotates the links, artifact-deleted when the artifact is deleted, and origin-stopped when the origin Emacs exits.",
+  "bindings": {
+    "$REASON": "revoked"
+  },
+  "frames": [
+    {
+      "from": "origin",
+      "frame": {
+        "t": "bye",
+        "reason": "$REASON"
+      }
+    }
+  ]
+}
