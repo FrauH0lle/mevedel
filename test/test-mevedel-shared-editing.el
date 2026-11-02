@@ -67,7 +67,7 @@
                    (id (plist-get reply :id)))
               (should-not (plist-get reply :error))
               (should (mevedel-artifact-store-id-p id))
-              (should (equal (list id) (mevedel-shared-editing-ids workspace)))
+              (should (equal (list id) (mapcar (lambda (item) (plist-get item :id)) (mevedel-shared-editing-list workspace))))
               (should (equal '(:kind document :title "Notes")
                              (cl-subseq (mevedel-artifact-store-meta workspace id) 0 4)))
               (should (equal (list id) (mevedel-session-attached-artifacts session)))
@@ -110,7 +110,7 @@
                 (setq-local mevedel-session--read-only-mode t))
               (mevedel-test--await 10 "creation settles" reply)
               (should (plist-get reply :error))
-              (should-not (mevedel-shared-editing-ids workspace))
+              (should-not (mapcar (lambda (item) (plist-get item :id)) (mevedel-shared-editing-list workspace)))
               (should-not (mevedel-session-attached-artifacts session))))
         (kill-buffer data))))
 
@@ -119,7 +119,7 @@
     (should (plist-get (mevedel-shared-editing-test--create
                         workspace "whiteboard" "Board" :authorize (lambda () nil))
                        :error))
-    (should-not (mevedel-shared-editing-ids workspace)))
+    (should-not (mapcar (lambda (item) (plist-get item :id)) (mevedel-shared-editing-list workspace))))
 
   :doc "keeps a created item and reports a failed attachment instead of failing"
   (mevedel-shared-editing-test--with-workspace
@@ -131,7 +131,7 @@
           (should-not (plist-get reply :error))
           (should (equal "Disk full" (plist-get reply :attach-error)))
           (should (equal (list (plist-get reply :id))
-                         (mevedel-shared-editing-ids workspace))))))))
+                         (mapcar (lambda (item) (plist-get item :id)) (mevedel-shared-editing-list workspace)))))))))
 
 (mevedel-deftest mevedel-shared-editing--send
   (:doc "Large helper requests use small UTF-8 writes without changing JSON framing")
@@ -190,7 +190,7 @@
       (should (equal '(:kind whiteboard :title "Architecture" :file "state.json")
                      (cl-subseq (mevedel-artifact-store-meta workspace "board1") 0 6)))
       (should (mevedel-artifact-lease-held workspace "board1"))
-      (should (equal '("board1") (mevedel-shared-editing-ids workspace)))
+      (should (equal '("board1") (mapcar (lambda (item) (plist-get item :id)) (mevedel-shared-editing-list workspace))))
       (should (equal "Architecture"
                      (plist-get (car (mevedel-shared-editing-list workspace)) :title)))
       (mevedel-shared-editing-stop)
@@ -482,7 +482,7 @@
   :doc "Stopping during a commit settles it once and then stops the helper"
   (mevedel-shared-editing-test--with-workspace
     (let* ((calls 0) reply runtime
-           (mevedel-shared-editing-change-hook
+           (mevedel-artifact-backend-change-hook
             (list (lambda (&rest _) (mevedel-shared-editing-stop runtime)))))
       (setq runtime (mevedel-shared-editing--runtime workspace))
       (mevedel-shared-editing-call
@@ -499,8 +499,8 @@
       (should (= 1 (plist-get (mevedel-shared-editing--read workspace "committed")
                               :revision))))))
 
-(mevedel-deftest mevedel-shared-editing-ids
-  (:doc "Names committed whiteboards and documents, skipping unreadable metadata")
+(mevedel-deftest mevedel-shared-editing-present-p
+  (:doc "Finds committed whiteboards and documents, skipping unreadable metadata")
   (mevedel-shared-editing-test--with-workspace
     (dolist (spec '(("board" whiteboard "state.json") ("page" html "index.html")))
       (make-directory (mevedel-artifact-store-artifact-directory workspace (car spec)) t)
@@ -517,7 +517,7 @@
                                 (mevedel-artifact-store-bookkeeping-directory workspace "bad")
                                 "meta.el")
                   nil 'silent)
-    (should (equal '("board") (mevedel-shared-editing-ids workspace)))
+    (should (equal '("board") (mapcar (lambda (item) (plist-get item :id)) (mevedel-shared-editing-list workspace))))
     (should (mevedel-shared-editing-present-p workspace "board"))
     (should-not (mevedel-shared-editing-present-p workspace "page"))))
 
@@ -545,7 +545,7 @@
       (mevedel-shared-editing-test--call
        workspace '(:action "create" :id "board" :kind "whiteboard" :title "Board"
                    :actor "Alice" :opId "one"))
-      (let ((mevedel-shared-editing-change-hook
+      (let ((mevedel-artifact-backend-change-hook
              (list (lambda (_workspace state _result) (push state observed)))))
         (should (equal '(:id "board" :deleted t)
                        (plist-get (mevedel-shared-editing-test--call
@@ -658,7 +658,7 @@
           announced replies)
       (cl-letf (((symbol-function 'mevedel-shared-editing--commit)
                  (lambda (&rest args) (cl-incf commits) (apply commit args))))
-        (let ((mevedel-shared-editing-change-hook
+        (let ((mevedel-artifact-backend-change-hook
                (list (lambda (_workspace state _result)
                        (push (list (plist-get state :title) commits) announced)))))
           (dolist (title '("A" "B" "C"))
