@@ -18,6 +18,11 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-turn)
 
+;; `mevedel-agents'
+(declare-function mevedel-agents-agent-contract
+                  "mevedel-agents" (args summary))
+(autoload 'mevedel-agents-agent-contract "mevedel-agents")
+
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-active-tool-use-id
                   "mevedel-pipeline" ())
@@ -334,6 +339,7 @@
     :description "Start a retained asynchronous child agent; omit role for general-purpose delegation with inherited capabilities."
     :prompt-file "prompts/tools/agent.md"
     :handler #'mevedel-tool-ui--agent
+    :contextualize #'mevedel-agents-agent-contract
     :args ((task_name string :required
                       "Free-form task name. The harness derives a unique lowercase ASCII path segment and returns the canonical path; collisions get numeric suffixes.")
            (message string :required

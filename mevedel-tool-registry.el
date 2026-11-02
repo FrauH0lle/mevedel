@@ -80,6 +80,9 @@ created as a side effect of registration and handles serialization."
   prompt            ; string or function: detailed instructions
   prompt-source     ; plist describing the prompt's registration provenance
   args              ; arg spec list in mevedel format
+  contextualize     ; function or nil: (args summary) -> (args . summary)
+                    ;   resolved for the current owner buffer; see
+                    ;   `mevedel-tool-contextual-contract'
   category          ; string: "mevedel" (default)
   ;; Behavioral declarations
   read-only-p       ; t if tool never modifies state
@@ -177,6 +180,16 @@ CATEGORY is nil, search all entries for the first matching NAME."
         (mevedel-tool-get (substring name (1+ separator))
                           (substring name 0 separator))
       (mevedel-tool-get name "mevedel"))))
+
+(defun mevedel-tool-contextual-contract (tool)
+  "Return (ARGS . SUMMARY) of TOOL as the current buffer should see them.
+A tool without a `contextualize' function shows its registered
+specification.  The result may share structure with TOOL, so do not
+edit it."
+  (let ((args (mevedel-tool-args tool))
+        (summary (mevedel-tool-summary tool))
+        (fn (mevedel-tool-contextualize tool)))
+    (if fn (funcall fn args summary) (cons args summary))))
 
 (defun mevedel-tool-ensure (name)
   "Return tool NAME, loading its built-in registrar when necessary."
@@ -782,6 +795,11 @@ Optional (both forms):
                                  A `path-or-resource' spec may add `:access
                                  read' when the tool only reads that file or
                                  resource; see `mevedel-tool-arg-access'.
+  :contextualize    FN           Native only.  Called in the owner's buffer as
+                                 (fn args summary) with the registered
+                                 specification; returns (ARGS . SUMMARY)
+                                 for what ToolSearch and the specialist
+                                 listing show.  Must not edit its inputs.
   :category         STRING       Tool category (default \"mevedel\")
   :groups           LIST         Group symbols: (read edit tasks agents ...)
   :read-only-p      BOOL         Tool never modifies state
@@ -842,7 +860,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
                           :get-paths :get-pattern :groups :handler
                           :max-result-size :name :prompt :prompt-file
                           :read-only-p :renderer :render-transform :snapshot-p
-                          :summary :wrap))
+                          :summary :wrap :contextualize))
            do (error "Unknown tool property: %S" key))
   (let* ((wrap (plist-get props :wrap)))
     (if wrap
@@ -866,6 +884,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
            ((plist-member props :prompt) '(:kind inline))
            (t '(:kind description))))
          (args (plist-get props :args))
+         (contextualize (plist-get props :contextualize))
          (category (or (plist-get props :category) "mevedel"))
          (groups (plist-get props :groups))
          (read-only-p (plist-get props :read-only-p))
@@ -904,6 +923,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :prompt resolved-prompt
               :prompt-source ',prompt-source
               :args ',args
+              :contextualize ,contextualize
               :category ,category
               :read-only-p ,read-only-p
               :snapshot-p ,snapshot-p
@@ -980,6 +1000,8 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
       (when (plist-member props k)
         (error "mevedel-define-tool: %s is derived from :wrap, do not supply"
                k)))
+    (when (plist-member props :contextualize)
+      (error "Tool property :contextualize is not supported with :wrap"))
     (when prompt-file
       (let ((path (expand-file-name prompt-file
                                     mevedel-tool-registry--source-dir)))

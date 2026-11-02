@@ -790,6 +790,35 @@ be called in the chat buffer."
   (mevedel-agents-install-agent-schema)
   nil)
 
+(defun mevedel-agents-agent-contract (args summary)
+  "Return the Agent tool's (ARGS . SUMMARY) for the current buffer.
+ARGS and SUMMARY are the registered specification.  The `role' and `model'
+enums list this buffer's roster and model tiers, the `model' description
+resolves each tier, and SUMMARY names the tier models.  The registered
+specification is not edited."
+  (cons
+   (mapcar
+    (lambda (arg)
+      (pcase (car arg)
+        ('role
+         (mevedel-agents--arg-with
+          arg (nth 3 arg) (vconcat (mapcar #'car (mevedel-agents-specs)))))
+        ('model
+         (mevedel-agents--arg-with
+          arg (mevedel-model-agent-tool-description)
+          (vconcat (mapcar (lambda (entry) (symbol-name (car entry)))
+                           mevedel-model-tiers))))
+        (_ arg)))
+    args)
+   (concat summary " Model tiers: " (mevedel-model-tier-guide t) ".")))
+
+(defun mevedel-agents--arg-with (arg description enum)
+  "Return a copy of tool argument spec ARG with DESCRIPTION and ENUM.
+ARG is (NAME TYPE REQUIREMENT DESCRIPTION [KEY VALUE]...); the first three
+elements are kept and the trailing keys, such as `:enum', are copied."
+  (append (seq-take arg 3) (list description)
+          (plist-put (copy-sequence (nthcdr 4 arg)) :enum enum)))
+
 (defun mevedel-agents-install-agent-schema ()
   "Give the current buffer its own Agent schema for its role roster.
 When `gptel-tools' offers the native Agent tool directly, replace it with a
@@ -805,21 +834,19 @@ schema here."
               (agent-p (lambda (tool)
                          (eq native (mevedel-tool-for-gptel tool))))
               ((cl-some agent-p gptel-tools)))
-    (let ((roles (vconcat (mapcar #'car (mevedel-agents-specs))))
-          (models (vconcat (mapcar (lambda (entry) (symbol-name (car entry)))
-                                   mevedel-model-tiers)))
-          (local (gptel--copy-tool registered))
+    (let ((local (gptel--copy-tool registered))
           installed)
       (setf (gptel-tool-args local)
-            (mapcar (lambda (arg)
-                      (pcase (plist-get arg :name)
-                        ("role" (plist-put (copy-sequence arg) :enum roles))
-                        ("model"
-                         (plist-put (plist-put (copy-sequence arg) :enum models)
-                                    :description
-                                    (mevedel-model-agent-tool-description)))
-                        (_ arg)))
-                    (gptel-tool-args registered)))
+            ;; Only description and enum differ from the registered schema.
+            (cl-mapcar
+             (lambda (old fresh)
+               (let ((arg (copy-sequence old)))
+                 (dolist (key '(:description :enum) arg)
+                   (when (plist-member fresh key)
+                     (setq arg (plist-put arg key (plist-get fresh key)))))))
+             (gptel-tool-args registered)
+             (mevedel-tool--args-to-gptel
+              (car (mevedel-tool-contextual-contract native)))))
       (setq-local gptel-tools
                   (delq nil
                         (mapcar (lambda (tool)

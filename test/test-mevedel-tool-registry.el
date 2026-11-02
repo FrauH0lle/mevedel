@@ -1137,5 +1137,33 @@
     (should-not (mevedel-tool--default-summary nil))
     (should-not (mevedel-tool--default-summary "  \n"))))
 
+(mevedel-deftest mevedel-tool-contextual-contract ()
+  ,test
+  (test)
+  :doc "returns the registered arguments and summary without a contextualizer"
+  (let ((tool (mevedel-tool--create
+               :name "Plain" :summary "Plain summary"
+               :args '((x string :required "x")))))
+    (should (equal '(((x string :required "x")) . "Plain summary")
+                   (mevedel-tool-contextual-contract tool))))
+
+  :doc "lets the tool resolve its arguments and summary for the current buffer"
+  (let* ((static '((x string :required "static")))
+         (tool (mevedel-tool--create
+                :name "Contextual" :summary "Static" :args static
+                :contextualize
+                (lambda (args summary)
+                  (cons (list (list (car (car args)) 'string :required
+                                    (buffer-name)))
+                        (concat summary " here"))))))
+    (with-temp-buffer
+      (rename-buffer "contextual-buffer" t)
+      (let ((resolved (mevedel-tool-contextual-contract tool)))
+        (should (string-prefix-p "contextual-buffer"
+                                 (nth 3 (car (car resolved)))))
+        (should (equal "Static here" (cdr resolved)))))
+    ;; The registered specification is never edited.
+    (should (equal '((x string :required "static")) (mevedel-tool-args tool)))))
+
 (provide 'test-mevedel-tool-registry)
 ;;; test-mevedel-tool-registry.el ends here

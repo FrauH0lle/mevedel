@@ -589,14 +589,76 @@ the workload's tier, exact provider and effort, followed by explicit overrides."
 ;;
 ;;; Agent tool description
 
+(defconst mevedel-model--tier-hints
+  '((fast . "search, lookup and mechanical edits")
+    (balanced . "routine implementation and verification")
+    (strong . "hard design, debugging and review"))
+  "Usage hint for each basic tier in the Agent tool's model description.")
+
+(defun mevedel-model--policy-label (policy &optional model-only)
+  "Return POLICY's BACKEND:MODEL label, or only the model with MODEL-ONLY."
+  (let ((model (gptel--model-name (plist-get policy :model))))
+    (if model-only
+        model
+      (format "%s:%s" (gptel-backend-name (plist-get policy :backend)) model))))
+
+(defun mevedel-model--effort-label (effort)
+  "Return the label for reasoning EFFORT, where nil is the provider default."
+  (if effort (format "%s" effort) "default effort"))
+
+(defun mevedel-model-tier-guide (&optional compact)
+  "Return the current buffer's resolved model tiers as prose for the model.
+Each tier shows the provider and effort it selects, with a usage hint for
+the basic tiers `fast', `balanced' and `strong'.  A tier that cannot be
+resolved is `unavailable'.  When every tier is the session model the guide
+says so instead of repeating it.  COMPACT returns only tier=model pairs."
+  (let* ((session (list :backend gptel-backend :model gptel-model
+                        :effort (bound-and-true-p gptel-reasoning-effort)))
+         (tiers (mapcar (lambda (entry)
+                          (let ((policy (mevedel-model-resolve-tier
+                                         (car entry) t)))
+                            (cons (car entry)
+                                  (and (plist-get policy :backend)
+                                       (plist-get policy :model)
+                                       policy))))
+                        mevedel-model-tiers))
+         (session-label
+          (format "%s (%s)" (mevedel-model-current-provider-label)
+                  (mevedel-model--effort-label (plist-get session :effort)))))
+    (cond
+     ((cl-every (lambda (tier) (equal (cdr tier) session)) tiers)
+      (if compact
+          "all tiers use the session model"
+        (format "All tiers use the session model (%s)." session-label)))
+     (compact
+      (mapconcat (lambda (tier)
+                   (format "%s=%s" (car tier)
+                           (if (cdr tier)
+                               (mevedel-model--policy-label (cdr tier) t)
+                             "unavailable")))
+                 tiers ", "))
+     (t
+      (format
+       (concat "Tiers: %s. Omit model to use the role's workload tier; "
+               "without a role the child inherits the session model (%s).")
+       (mapconcat
+        (lambda (tier)
+          (let ((policy (cdr tier))
+                (hint (alist-get (car tier) mevedel-model--tier-hints)))
+            (cond
+             ((null policy) (format "%s = unavailable" (car tier)))
+             (t (format "%s = %s (%s)%s" (car tier)
+                        (mevedel-model--policy-label policy)
+                        (mevedel-model--effort-label (plist-get policy :effort))
+                        (if hint (concat ", for " hint) ""))))))
+        tiers "; ")
+       session-label)))))
+
 (defun mevedel-model-agent-tool-description ()
-  "Return the Agent tool model-argument description."
+  "Return the Agent tool model-argument description for the current buffer."
   (concat
-   "Optional model tier for this agent invocation. Available tiers: "
-   (mapconcat (lambda (entry) (symbol-name (car entry)))
-              mevedel-model-tiers ", ")
-   ". Omit this argument to use the agent workload declared by the current "
-   "session preset."))
+   "Optional model tier for this agent. "
+   (mevedel-model-tier-guide)))
 
 (provide 'mevedel-models)
 ;;; mevedel-models.el ends here

@@ -277,6 +277,16 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
                       :read-only-p t))
                   :type 'error))
 
+  :doc "rejects :contextualize, which only native tools support"
+  (let* ((name "test-wrap-wrap_reject_contextualize")
+         (src (test-mevedel-tool-wrap--make-source :name name)))
+    (should-error (macroexpand
+                   `(mevedel-define-tool
+                      :wrap ,src
+                      :contextualize ,#'ignore
+                      :read-only-p t))
+                  :type 'error))
+
   :doc "double-wrap at the same (category name) replaces the registry entry"
   (let* ((name "test-wrap-wrap_double")
          (src (test-mevedel-tool-wrap--make-source :name name)))

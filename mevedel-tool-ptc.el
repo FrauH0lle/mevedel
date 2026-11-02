@@ -45,13 +45,13 @@
 (declare-function mevedel-tool-args "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-call-name "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-callable-p "mevedel-tool-registry" (tool))
+(declare-function mevedel-tool-contextual-contract "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-description "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-for-call "mevedel-tool-registry" (name))
 (declare-function mevedel-tool-for-gptel "mevedel-tool-registry" (provider))
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
 (declare-function mevedel-tool-groups "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (tool))
-(declare-function mevedel-tool-summary "mevedel-tool-registry" (tool))
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--ctx-tool-catalog "mevedel-tools" (ctx))
@@ -153,7 +153,7 @@ inheritance.  Capability membership and skill restrictions still apply."
                                 (mevedel-tool-ptc--arg-type-name (cadr spec)))))
                (if (eq (nth 2 spec) :required) arg (format "[%s]" arg))))
            (and tool (mevedel-tool-args tool))))
-         (summary (and tool (or (mevedel-tool-summary tool)
+         (summary (and tool (or (cdr (mevedel-tool-contextual-contract tool))
                                 (mevedel-tool-description tool)))))
     (format "- (%s%s)%s%s"
             name
