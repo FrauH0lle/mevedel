@@ -346,9 +346,10 @@ for it; duplicate or late continuations cannot start a cancelled turn."
                                          :error (error-message-string err))))))
                    (condition-case err
                        (run-hook-with-args 'gptel-post-response-functions
-                                           (plist-get info :position)
-                                           (or (plist-get info :tracking-marker)
-                                               (plist-get info :position)))
+                                           (marker-position (plist-get info :position))
+                                           (marker-position
+                                            (or (plist-get info :tracking-marker)
+                                                (plist-get info :position))))
                      (error
                       (display-warning
                        'mevedel (format "Post-response hook failed: %s"
