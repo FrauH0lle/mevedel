@@ -15,21 +15,51 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    concurrency:
+      group: dependabot-merge-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
     permissions:
+      actions: write
       contents: write
       pull-requests: write
     steps:
       # Query metadata only; never check out or execute the PR's code here.
-      - name: Enable auto-merge for same-repository Dependabot PRs
+      - name: Queue Dependabot merges and start missing master workflows
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           REPO_OWNER: ${{ github.repository_owner }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
+          set -euo pipefail
           gh api --method GET "repos/$GH_REPO/pulls" \
-            -f head="$REPO_OWNER:$HEAD_BRANCH" -f state=open \
-            --jq '.[] | select(.user.login == "dependabot[bot]" and .base.ref == "master" and .head.repo.full_name == .base.repo.full_name) | .html_url' \
+            -f head="$REPO_OWNER:$HEAD_BRANCH" -f state=all \
+            | jq -r --arg sha "$HEAD_SHA" \
+              '.[] | select(.user.login == "dependabot[bot]" and .base.ref == "master" and .head.repo.full_name == .base.repo.full_name and .head.sha == $sha) | .html_url' \
             | while IFS= read -r pr; do
-              gh pr merge --auto --merge "$pr"
+              state=$(gh pr view "$pr" --json state --jq '.state')
+              if [ "$state" = OPEN ]; then
+                gh pr merge --auto --merge "$pr" || {
+                  state=$(gh pr view "$pr" --json state --jq '.state') || exit 1
+                  [ "$state" = MERGED ] || exit 1
+                }
+              fi
+              merge_sha=$(gh pr view "$pr" --json mergeCommit --jq '.mergeCommit.oid // empty')
+              [ -n "$merge_sha" ] || continue
+              # Workflow-token merges do not emit push workflow runs. Dispatch
+              # only trusted master, including when it advanced after this merge.
+              master_sha=$(gh api "repos/$GH_REPO/git/ref/heads/master" --jq '.object.sha')
+              relay_changed=$(gh pr view "$pr" --json files --jq \
+                '[.files[].path | select(startswith("relay/") or . == ".github/workflows/relay.yml")] | length > 0')
+              for workflow in test.yml dependencies.yml relay.yml; do
+                if [ "$workflow" = relay.yml ] && [ "$relay_changed" = false ]; then
+                  continue
+                fi
+                runs=$(gh api --method GET "repos/$GH_REPO/actions/workflows/$workflow/runs" \
+                  -f head_sha="$master_sha" --jq '.total_count')
+                if [ "$runs" -eq 0 ]; then
+                  gh workflow run "$workflow" --ref master
+                fi
+              done
             done

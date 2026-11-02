@@ -101,6 +101,7 @@ jobs:
     - name: Check test infrastructure
       run: |
         python3 test/test_run_tests.py
+        python3 test/test_dependabot_auto_merge.py
         python3 -m unittest test/test_check.py
         python3 -m unittest test/test_check_standards.py
         python3 -m unittest test/test_graphical_check_private_kwin.py
