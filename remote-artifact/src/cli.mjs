@@ -45,7 +45,7 @@ async function attach(args, { env, stdout }) {
   const guestId = existing?.guestId ?? randomBytes(12).toString('base64url');
   const as = flags.as ?? existing?.as;
   const room = await openRoom(parsed.link, { name: as || defaultName(env), guestId });
-  const { id, kind, title } = room.welcome;
+  const { id, kind, title, origin } = room.welcome;
   room.close();
   const name = flags.name ?? id;
   const clash = store.artifacts[name];
@@ -55,7 +55,8 @@ async function attach(args, { env, stdout }) {
   for (const [other, e] of Object.entries(store.artifacts)) {
     if (e.link === parsed.link && other !== name) delete store.artifacts[other];
   }
-  store.artifacts[name] = { link: parsed.link, id, kind, title, guestId, ...(as ? { as } : {}) };
+  store.artifacts[name] = { link: parsed.link, id, kind, title, guestId, ...(as ? { as } : {}),
+    ...(typeof origin === 'string' && origin ? { origin } : {}) };
   writeStore(env, store);
   stdout.write(`Attached ${name}: ${title} (${kind}, ${parsed.tier} link). Stored in ${storePath(env)}.\n`);
 }
