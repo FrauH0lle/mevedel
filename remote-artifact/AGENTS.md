@@ -28,3 +28,6 @@ npm test --prefix remote-artifact
 
 Origin-side changes also run
 `python3 test/run_tests.py test/test-mevedel-collaboration-artifact-room.el`.
+Before merging, run the end-to-end check with a real relay, origin and browser:
+`node --test test/remote-artifact.browser.mjs` (see
+[artifact-link acceptance](../docs/development.md#artifact-link-acceptance)).

@@ -95,6 +95,20 @@
                  (mevedel-collaboration--stop-internal
                   (mevedel-collaboration--room-for-session editing-test-session) 'test)
                  (write-region "{}" nil (file-name-concat editing-test-root "reply.json") nil 'silent))
+                ;; The host operation behind sharing an artifact through a
+                ;; link: `share', `revoke' or `rotate' one of the session's items.
+                ("ArtifactSharing"
+                 (require 'mevedel-collaboration-artifact-room)
+                 (let* ((args (plist-get command :args))
+                        (links (mevedel-collaboration-artifact-room-sharing
+                                (mevedel-session-workspace editing-test-session)
+                                (plist-get args :id) (intern (plist-get args :operation)))))
+                   (write-region (if links
+                                     (mevedel-shared-editing--json
+                                      (list :view (plist-get links :link-view)
+                                            :edit (plist-get links :link-edit)))
+                                   "{}")
+                                 nil (file-name-concat editing-test-root "reply.json") nil 'silent)))
                 ("FenceHost"
                  ;; Model a paused former host waking after another Emacs
                  ;; took its items over: its remembered leases are stale.
