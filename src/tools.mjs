@@ -145,7 +145,7 @@ export const tools = [
     description: 'List the remote artifacts attached on this machine: whiteboards, documents and HTML '
       + 'artifacts that '
       + 'live in a mevedel workspace elsewhere (their origin). Shows each one\'s name, title, kind, '
-      + 'the origin it comes from (workspace and host), whether this link may only view or also edit '
+      + 'its configured origin name (or relay host), whether this link may only view or also edit '
       + 'it, and whether its origin is reachable now.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     async run(_args, ctx) {
@@ -160,14 +160,15 @@ export const tools = [
         try {
           const room = await (ctx.connect ?? openEntry)(found, ctx);
           ({ title, kind } = room.welcome);
-          if (typeof room.welcome.origin === 'string' && room.welcome.origin) ({ origin } = room.welcome);
+          origin = typeof room.welcome.origin === 'string' ? room.welcome.origin : undefined;
           room.close();
         } catch (error) {
           // The generic error and the goodbyes already say so; others get the prefix.
           reach = error.message.startsWith('Origin unavailable')
             ? `o${error.message.slice(1)}` : `origin unavailable: ${error.message}`;
         }
-        return `${name}: ${JSON.stringify(title)} ${kind}${origin ? ` from ${origin}` : ''}, `
+        origin ||= new URL(found.link).hostname;
+        return `${name}: ${JSON.stringify(title)} ${kind} from ${origin}, `
           + `${tierOf(found.link)} link, ${reach}`;
       }));
       return lines.join('\n');

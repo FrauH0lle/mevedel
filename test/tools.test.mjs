@@ -30,11 +30,12 @@ test('the registry offers list_artifacts and read_artifact with input schemas', 
 
 test('list_artifacts shows name, title, kind, origin, tier and whether the origin is reachable', async (t) => {
   const env = tempEnv(t);
-  const board = await room(t);
+  const boardBindings = {};
+  const board = await room(t, { bindings: boardBindings });
   const notes = await room(t, { bindings: { $ID: 'notes', $TITLE: 'Meeting notes', $ORIGIN: 'minutes on laptop' } });
   const gone = await room(t, { bindings: { $ID: 'old-board', $TITLE: 'Old board' } });
   // An origin whose welcome names no origin.
-  const older = await room(t, { bindings: { $ID: 'older', $TITLE: 'Older', $ORIGIN: undefined } });
+  const older = await room(t, { welcome: 'welcome-private', bindings: { $ID: 'older', $TITLE: 'Older' } });
   await attach(env, board.link('edit'));
   await attach(env, notes.link('view'));
   await attach(env, gone.link('edit'));
@@ -48,8 +49,16 @@ test('list_artifacts shows name, title, kind, origin, tier and whether the origi
     // An unreachable origin is named as attach stored it.
     'old-board: "Old board" whiteboard from snt-app on mevedel-host, edit link, '
       + 'origin unavailable (revoked, deleted, or offline)',
-    'older: "Older" whiteboard, view link, origin reachable',
+    'older: "Older" whiteboard from 127.0.0.1, view link, origin reachable',
   ]);
+  await older.close();
+  const offline = await callTool('list_artifacts', {}, { env });
+  assert.ok(offline.content[0].text.includes(
+    'older: "Older" whiteboard from 127.0.0.1, view link, origin unavailable (revoked, deleted, or offline)'));
+  boardBindings.$ORIGIN = undefined;
+  const unnamed = await callTool('list_artifacts', {}, { env });
+  assert.ok(unnamed.content[0].text.startsWith(
+    'snt-pipeline: "SNT analysis pipeline" whiteboard from 127.0.0.1, edit link, origin reachable'));
 });
 
 test('list_artifacts says how to attach when nothing is attached', async (t) => {
