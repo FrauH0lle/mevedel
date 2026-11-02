@@ -20,7 +20,11 @@ Each file is one JSON object:
 - `frames`: the exchange in order, each `{"from": "consumer"|"origin",
   "frame": FRAME}`.
 
-The exchanges are `hello`, `welcome`, `read`, `history` (a read of the recent
+The welcomes are `welcome-private` (the default, with no origin name) and
+`welcome` (the host explicitly configured `$ORIGIN`). Consumers use the relay
+host when `origin` is absent; neither workspace nor machine names are generated.
+
+The other exchanges are `hello`, `read`, `history` (a read of the recent
 contributions), `patch` (an edit link's `SharedEdit` patch and its changed
 lines and picture), `stale-patch` (a stale hash and the targets' current
 lines), `view-only` (a view link's edit refused), `revert` (an edit link
@@ -57,6 +61,11 @@ stale answer it may reapply them to the returned content. `delete-file`
 takes `file` and `hash` (required) and answers `{"result": {"file",
 "deleted": true}}` or the same stale refusal; it refuses the primary file.
 `files` lists `{"result": {"primary", "files": [{"file", "bytes"}]}}`.
+`write-files` takes `changes`, each a `write-file` body's `file`, `hash` and
+content or `{"file", "hash", "delete": true}`, checks every hash before it
+changes any file and makes all changes or none (`write-files.json`). It
+answers `{"result": {"files": [...]}}`, one entry per change as the single
+actions answer, or the stale refusal of the first file that changed.
 
 A frame is the decoded JSON a sealed envelope carries, with one shorthand: an
 editing request or reply, `{"t": "editing", "reqId": N, "body": VALUE}`,

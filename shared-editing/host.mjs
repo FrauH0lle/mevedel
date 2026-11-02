@@ -139,12 +139,12 @@ async function exportSVG(elements, files, background) {
 const retainedFiles = (transactions) => new Set(transactions.flatMap((tx) =>
   (tx.changes || []).flatMap((c) => [c.before?.fileId, c.after?.fileId]).filter(Boolean)));
 /* Items of LIBRARIES ({name, text}) as the model reads them at
-   shared://library[/NAME]: a listing of references, or a numbered PNG
-   sheet of the first items. */
+   shared://library[/NAME]: a listing of references, a numbered PNG
+   sheet of the first items, or a PNG of the one item ITEM refers to. */
 const SHEET_ITEMS = 60;
-async function libraryView(libraries, part, at) {
+async function libraryView(libraries, part, at, ref) {
   check(Array.isArray(libraries) && libraries.length <= 100, 'Invalid libraries');
-  check(['list', 'sheet'].includes(part), 'Unknown library view');
+  check(['list', 'sheet', 'item'].includes(part), 'Unknown library view');
   const errors = [];
   const items = libraries.flatMap(({ name, text }) => {
     try {
@@ -159,10 +159,17 @@ async function libraryView(libraries, part, at) {
     }
   });
   const warnings = errors.length ? errors.join('\n') + '\n' : '';
+  if (part === 'item') {
+    const found = items.find((candidate) => candidate.ref === ref);
+    check(found, `No library item ${ref}; list the libraries for current refs`);
+    return { png: await png(boardSVG(found.item.elements, { maxEdge: 400, maxScale: 2 })),
+      mime: 'image/png' };
+  }
   if (part === 'list') {
     if (!items.length) return { text: 'No library items.\n' + warnings };
+    const root = at.replace(/^(.*library)(\/.*)?$/, '$1');
     return { text: `${items.length} library item${items.length === 1 ? '' : 's'}; insert one with SharedEdit insert and its ref. ` +
-      `The sheet ${at}/sheet.png numbers items 1-${Math.min(SHEET_ITEMS, items.length)}.\n` +
+      `The sheet ${at}/sheet.png numbers items 1-${Math.min(SHEET_ITEMS, items.length)}; ${root}/REF/view.png shows one.\n` +
       items.map(({ ref, name, library, elements, size }, i) =>
         `${i + 1}. ${ref} · ${JSON.stringify(name)} · ${library} · ${elements} element${elements === 1 ? '' : 's'} · ${size[0]}×${size[1]}`).join('\n') + '\n' + warnings };
   }
@@ -334,7 +341,7 @@ export async function handle(request) {
     }
   }
   if (action === 'library-view') {
-    const result = await libraryView(request.libraries, request.part, request.at);
+    const result = await libraryView(request.libraries, request.part, request.at, request.item);
     return { result: request.search && result.text
       ? {documents: [searchDocument(request.at, result.text)]} : result };
   }

@@ -24,16 +24,21 @@
 ;; through `mevedel-artifact-store-changed-functions'.  Registering or
 ;; unregistering an artifact announces a listing change.
 ;;
-;; Registrations outlive Emacs where their owner persists them: the first
-;; lookup of a workspace asks `mevedel-artifact-backend-restore-function'
-;; for that workspace's registrations, which today are the remote
-;; artifacts attached there (`mevedel-remote-artifact').
+;; A registered artifact keeps its versions where it is served, so a turn
+;; that edited one records none here.
+;;
+;; Registrations outlive Emacs: the first lookup of a workspace restores
+;; the remote artifacts attached there (`mevedel-remote-artifact').
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'mevedel-artifact-store)
 (require 'mevedel-structs)
+
+;; `mevedel-remote-artifact'
+(declare-function mevedel-remote-artifact-registrations "mevedel-remote-artifact" (workspace))
+(autoload 'mevedel-remote-artifact-registrations "mevedel-remote-artifact")
 
 ;; `mevedel-shared-editing'
 (declare-function mevedel-shared-editing-call "mevedel-shared-editing"
@@ -44,10 +49,6 @@
 (autoload 'mevedel-shared-editing-list "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-present-p "mevedel-shared-editing")
 
-;; `mevedel-remote-artifact'
-(declare-function mevedel-remote-artifact-registrations "mevedel-remote-artifact" (workspace))
-(autoload 'mevedel-remote-artifact-registrations "mevedel-remote-artifact")
-
 (defvar mevedel-artifact-backend-change-hook nil
   "Functions called with WORKSPACE, STATE, RESULT after an editing commit.
 A deleted item arrives as a STATE with `:deleted' and `:actor' and a nil
@@ -56,11 +57,20 @@ RESULT.  Observers cannot change whether the preceding commit succeeded.")
 (defvar mevedel-artifact-backend--registry (make-hash-table :test #'equal)
   "Workspace root -> alist of (ID . ADAPTER) for artifacts served elsewhere.")
 
-(defvar mevedel-artifact-backend-restore-function #'mevedel-remote-artifact-registrations
-  "Function returning a WORKSPACE's persisted registrations as (ID . ADAPTER).
-It is called once per workspace root, on the first lookup.  A returned id
-that is invalid, names a local artifact or is registered already is
-skipped.")
+(defconst mevedel-artifact-backend-edit-keys
+  '(("patch" :changes)
+    ("rename" :title)
+    ("background" :background)
+    ("image" :data :x :y :width :alt :afterId)
+    ("insert" :item :x :y)
+    ("revert" :transaction))
+  "`SharedEdit' actions an artifact link carries, with the keys each passes on.
+The origin's artifact room accepts these and the remote adapter sends
+them; anything else a request carries is dropped.  An image travels as
+`:data', its base64 content, since the origin cannot read the consumer's
+files; an insert names its library item as LIBRARY/ITEM-ID, which the
+origin resolves in its own libraries; a revert names the contribution,
+from the history a read returns, as its `:transaction'.")
 
 (defvar mevedel-artifact-backend--restored (make-hash-table :test #'equal)
   "Workspace roots whose persisted registrations were restored.")
@@ -74,11 +84,13 @@ A failing observer does not keep the others from hearing it."
 
 (defun mevedel-artifact-backend--registered (workspace)
   "Return WORKSPACE's alist of registered (ID . ADAPTER).
-The first lookup of WORKSPACE restores its persisted registrations."
+The first lookup of WORKSPACE restores its attached remote artifacts.  A
+restored id that is invalid, names a local artifact or is registered
+already is skipped."
   (let ((root (mevedel-workspace-root workspace)))
     (unless (gethash root mevedel-artifact-backend--restored)
       (puthash root t mevedel-artifact-backend--restored)
-      (when-let* ((restored (funcall mevedel-artifact-backend-restore-function workspace)))
+      (when-let* ((restored (mevedel-remote-artifact-registrations workspace)))
         (let ((local (mevedel-artifact-store-ids workspace))
               (registered (gethash root mevedel-artifact-backend--registry)))
           (dolist (pair restored)
@@ -105,7 +117,7 @@ ID follows the store's id rule and must not name a local artifact."
     (puthash (mevedel-workspace-root workspace)
              (cons (cons id adapter) (assoc-delete-all id (copy-sequence registered)))
              mevedel-artifact-backend--registry))
-  (mevedel-artifact-store--changed workspace))
+  (mevedel-artifact-store-changed workspace))
 
 (defun mevedel-artifact-backend-unregister (workspace id)
   "Stop serving WORKSPACE's artifact ID through a registered adapter."
@@ -115,7 +127,7 @@ ID follows the store's id rule and must not name a local artifact."
     (if remaining
         (puthash root remaining mevedel-artifact-backend--registry)
       (remhash root mevedel-artifact-backend--registry)))
-  (mevedel-artifact-store--changed workspace))
+  (mevedel-artifact-store-changed workspace))
 
 ;;;###autoload
 (defun mevedel-artifact-backend-call (workspace args callback &optional authorize commit)
@@ -134,6 +146,16 @@ AUTHORIZE, COMMIT, the reply and the returned cancellation function."
   "Return non-nil when WORKSPACE has the whiteboard or document ID."
   (or (mevedel-artifact-backend-registered-p workspace id)
       (mevedel-shared-editing-present-p workspace id)))
+
+;;;###autoload
+(defun mevedel-artifact-backend-save-version (workspace id &optional session-id)
+  "Record WORKSPACE's artifact ID as a version after a turn edited it.
+A local artifact is versioned by the store for the session SESSION-ID,
+as `mevedel-artifact-store-save-version' describes, and its result is
+returned.  A registered artifact records nothing here and returns nil:
+where it is served keeps its versions, an origin one per working stretch."
+  (unless (mevedel-artifact-backend-registered-p workspace id)
+    (mevedel-artifact-store-save-version workspace id session-id)))
 
 (defun mevedel-artifact-backend--local-catalog (workspace detail)
   "Return the rows of WORKSPACE's local store at DETAIL."

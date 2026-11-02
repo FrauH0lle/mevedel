@@ -195,7 +195,10 @@ attaches the edit link and its stdio MCP server talks to the origin, while
 headless Chromium has the same board open through the origin's room. The test
 checks that an MCP edit appears in the browser without a reload, that a browser
 edit is in the next MCP read, and that revoking the link ends the package's
-connection with the `revoked` reason. It needs Go, Emacs with the Eask
+connection with the `revoked` reason. It then shares an HTML artifact: the
+package reads its primary file, lists its files and edits one, the edit is
+checked at the origin, and a write after an origin-side change is refused as
+stale with the current content. It needs Go, Emacs with the Eask
 dependencies, and Playwright Chromium in `shared-editing/node_modules`
 (see [shared editing checks](shared-editing.md#checks)); it runs locally on a
 localhost relay and is not part of the ERT tiers or CI.

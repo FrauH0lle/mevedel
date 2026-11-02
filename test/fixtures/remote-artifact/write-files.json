@@ -1,0 +1,65 @@
+{
+  "description": "An edit link changes several files of a shared HTML artifact at once, as a patch does: each change names the hash it read, none to create a file, and delete to remove one. The origin checks every hash before it changes anything, then makes all the changes, under one lock; one stale hash changes nothing.",
+  "tier": "edit",
+  "bindings": {
+    "$ID": "landing"
+  },
+  "frames": [
+    {
+      "from": "consumer",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": {
+          "action": "write-files",
+          "id": "$ID",
+          "changes": [
+            {
+              "file": "index.html",
+              "hash": "28c3689be4e0c696a6a45b9d7df5a41c8328b1c9939e240f27f3c6ac9a635099",
+              "text": "<!doctype html>\n<h1>Hello, world</h1>\n"
+            },
+            {
+              "file": "styles/site.css",
+              "text": "h1 { color: teal; }\n"
+            },
+            {
+              "file": "assets/logo.png",
+              "hash": "f8f2b591d7caf2e2c63b84559ff537ab60edf6457dbf48495a20579c4c4dc3bd",
+              "delete": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "from": "origin",
+      "frame": {
+        "t": "editing",
+        "reqId": 1,
+        "body": {
+          "result": {
+            "files": [
+              {
+                "file": "index.html",
+                "hash": "073fd2dab8fbabb8765175a26b2ef523268eed95a880556fda9e3cf482df2812",
+                "bytes": 38,
+                "created": false
+              },
+              {
+                "file": "styles/site.css",
+                "hash": "c5d674ffb3cd445f2bd80f3943577b3a4778c033b056a5ec08948bfe7bf95dfb",
+                "bytes": 20,
+                "created": true
+              },
+              {
+                "file": "assets/logo.png",
+                "deleted": true
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

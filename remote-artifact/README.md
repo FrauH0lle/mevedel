@@ -58,8 +58,13 @@ package (or the origin's mevedel) so both match.
 
 Tools:
 
-- `list_artifacts`: each attached artifact's name, title, kind, link tier
-  (view or edit) and whether its origin is reachable.
+- `list_artifacts`: each attached artifact's name, title, kind, origin (its
+  explicitly configured welcome name, or the relay host when none is supplied;
+  an unreachable origin uses the name attach stored, or the relay host), link
+  tier (view or edit) and whether its origin is reachable. Origins omit their
+  name by default; only `mevedel-collaboration-artifact-room-origin-name`
+  explicitly set at the origin discloses one, never a generated workspace or
+  machine name.
 - `read_artifact(name, file?, history?)`: the whiteboard or document as
   hash-prefixed lines, exactly as `shared://ID` shows it at the origin. With
   `history: true`, its recent contributions instead, as `shared://ID/history`
@@ -67,9 +72,11 @@ Tools:
   the primary page unless `file` names another, text as is, PNG, JPEG, GIF
   and WebP files as images, other bytes as a note of their size. Any link may
   read.
-- `view_artifact(name, image?)`: the whiteboard as drawn, or with `image` one
-  embedded image (a board image by its `fileId`, a document image by the key
-  its `src` shows).
+- `view_artifact(name, image?, item?)`: the whiteboard as drawn, or with
+  `image` one embedded image (a board image by its `fileId`, a document image
+  by the key its `src` shows), or with `item` the preview of one library item
+  of a whiteboard (`LIBRARY/ITEM-ID` from `whiteboard_libraries`; not with
+  `image`).
 - `edit_artifact(name, action, ...)`: `patch`, `image`, `rename`,
   `background`, `insert` and `revert` with mevedel `SharedEdit`'s argument
   names and results: the stored lines of what changed and, for a whiteboard,

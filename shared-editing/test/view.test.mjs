@@ -223,9 +223,15 @@ test('discussions, history and libraries read as text', async () => {
     { id: 'cloud', name: 'Cloud', status: 'published', elements: [{ id: 'c', type: 'ellipse', x: 0, y: 0, width: 80, height: 40 }] }] });
   const listing = (await handle({ action: 'library-view', part: 'list', at: 'shared://library',
     libraries: [{ name: 'Weather', text: library }] })).result.text;
-  assert.match(listing, /^1 library item; insert one with SharedEdit insert and its ref\. The sheet shared:\/\/library\/sheet\.png numbers items 1-1\.\n1\. Weather\/cloud · "Cloud" · Weather · 1 element · 80×40\n$/);
+  assert.match(listing, /^1 library item; insert one with SharedEdit insert and its ref\. The sheet shared:\/\/library\/sheet\.png numbers items 1-1; shared:\/\/library\/REF\/view\.png shows one\.\n1\. Weather\/cloud · "Cloud" · Weather · 1 element · 80×40\n$/);
   const sheet = (await handle({ action: 'library-view', part: 'sheet', libraries: [{ name: 'Weather', text: library }] })).result;
   assert.equal(sheet.mime, 'image/png');
+  const item = (await handle({ action: 'library-view', part: 'item', item: 'Weather/cloud',
+    libraries: [{ name: 'Weather', text: library }] })).result;
+  assert.equal(item.mime, 'image/png');
+  assert.notEqual(item.png, sheet.png);
+  await assert.rejects(handle({ action: 'library-view', part: 'item', item: 'Weather/rain',
+    libraries: [{ name: 'Weather', text: library }] }), /No library item Weather\/rain/);
 });
 
 test('an unsupported installed library does not hide valid libraries or their sheet', async () => {

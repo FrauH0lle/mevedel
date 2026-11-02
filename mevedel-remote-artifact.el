@@ -46,15 +46,22 @@
 (require 'mevedel-artifact-backend)
 (require 'mevedel-artifact-store)
 (require 'mevedel-structs)
+(require 'mevedel-utilities)
+
+;; `mevedel-resource'
+(declare-function mevedel-resource-encode-component "mevedel-resource" (component))
+(autoload 'mevedel-resource-encode-component "mevedel-resource")
 
 ;; `mevedel-shared-editing'
 (declare-function mevedel-shared-editing--json "mevedel-shared-editing" (value))
+(declare-function mevedel-shared-editing-op-id "mevedel-shared-editing" ())
 (defvar mevedel-shared-editing-node-program)
 (autoload 'mevedel-shared-editing--json "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-op-id "mevedel-shared-editing")
 
 ;; `mevedel-workspace'
-(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-(autoload 'mevedel-workspace "mevedel-workspace")
+(declare-function mevedel-workspace-current "mevedel-workspace" ())
+(autoload 'mevedel-workspace-current "mevedel-workspace")
 
 (defcustom mevedel-remote-artifact-command nil
   "Command running the remote-artifact package's bridge, as a list of strings.
@@ -97,8 +104,9 @@ nil means USER@HOST.  An agent's edit is attributed at the origin to
 (defvar mevedel-remote-artifact--records :unread
   "Attached links by workspace root, or `:unread' before the record is read.
 An alist (ROOT . ENTRIES); ENTRIES is an alist (ALIAS . ENTRY) and ENTRY
-a plist with `:link', the origin's `:id', `:kind', `:title', `:tier'
-\(\"view\" or \"edit\"), `:guest-id' and `:attached' (a float time).")
+a plist with `:link', the origin's `:id', `:kind', `:title', the
+`:origin' name its welcome gave, `:tier' (\"view\" or \"edit\"),
+`:guest-id' and `:attached' (a float time).")
 
 (defun mevedel-remote-artifact--record-path ()
   "Return the per-user file of attached links."
@@ -109,18 +117,12 @@ a plist with `:link', the origin's `:id', `:kind', `:title', `:tier'
 An unreadable or malformed record yields none."
   (when (eq mevedel-remote-artifact--records :unread)
     (setq mevedel-remote-artifact--records
-          (let ((path (mevedel-remote-artifact--record-path)))
-            (when (file-readable-p path)
-              (let ((stored (condition-case nil
-                                (with-temp-buffer
-                                  (insert-file-contents path)
-                                  (read (current-buffer)))
-                              (error nil))))
-                (and (proper-list-p stored)
-                     (cl-every (lambda (cell) (and (consp cell) (stringp (car cell))
-                                                   (proper-list-p (cdr cell))))
-                               stored)
-                     stored))))))
+          (let ((stored (mevedel--read-data-file (mevedel-remote-artifact--record-path))))
+            (and (proper-list-p stored)
+                 (cl-every (lambda (cell) (and (consp cell) (stringp (car cell))
+                                               (proper-list-p (cdr cell))))
+                           stored)
+                 stored))))
   mevedel-remote-artifact--records)
 
 (defun mevedel-remote-artifact--save (records)
@@ -129,12 +131,7 @@ An unreadable or malformed record yields none."
   (let ((path (mevedel-remote-artifact--record-path)))
     (if (null records)
         (when (file-exists-p path) (delete-file path))
-      (make-directory (file-name-directory path) t)
-      (with-file-modes #o600
-        (with-temp-file path
-          (let ((print-length nil) (print-level nil))
-            (prin1 records (current-buffer)))))
-      (set-file-modes path #o600))))
+      (mevedel--write-private-data-file path records))))
 
 (defun mevedel-remote-artifact--records-of (workspace)
   "Return WORKSPACE's attached links, an alist (ALIAS . ENTRY)."
@@ -168,8 +165,8 @@ The artifact backend calls this once per workspace to restore them."
 (defvar mevedel-remote-artifact--status (make-hash-table :test #'equal)
   "What this Emacs last learned of each link, keyed by its ref.
 A plist: `:reachable' is `yes' or `no', `:error' the last failure,
-`:checked' its float time, and `:title' and `:revision' the artifact's
-as the origin last reported them.")
+`:checked' its float time, and `:title', `:revision' and `:origin' the
+artifact's as the origin last reported them.")
 
 (defvar mevedel-remote-artifact--workspaces (make-hash-table :test #'equal)
   "Workspace objects by root, for announcing origin changes to them.")
@@ -196,6 +193,7 @@ Return non-nil when the link's reachability changed."
                                :error (plist-get outcome :error))
                          (when welcome
                            (list :title (plist-get welcome :title)
+                                 :origin (plist-get welcome :origin)
                                  :revision (plist-get status :revision))))
              mevedel-remote-artifact--status)
     (not (eq reachable (plist-get status :reachable)))))
@@ -216,7 +214,7 @@ Return non-nil when the link's reachability changed."
                              :title (plist-get event :title)
                              :revision (plist-get event :revision))
              nil)
-            (mevedel-artifact-store--changed workspace)))))))
+            (mevedel-artifact-store-changed workspace)))))))
 
 
 ;;
@@ -365,33 +363,25 @@ attributes the edit to that agent."
 ;;
 ;;; The remote adapter
 
-(defconst mevedel-remote-artifact--edit-keys
-  '(("patch" :changes)
-    ("rename" :title)
-    ("background" :background)
-    ("image" :data :x :y :width :alt :afterId)
-    ("insert" :item :x :y)
-    ("revert" :transaction))
-  "SharedEdit actions an artifact link carries, with the keys each sends.
-An image travels as `:data', its base64 content; an insert names its
-library item as LIBRARY/ITEM-ID, resolved by the origin.")
-
 (defconst mevedel-remote-artifact--file-actions
   '(("file" "read" :file)
     ("files" "files")
     ("write-file" "write-file" :file :hash :text :data)
-    ("delete-file" "delete-file" :file :hash))
+    ("delete-file" "delete-file" :file :hash)
+    ("write-files" "write-files" :changes))
   "HTML file actions, each with the origin action and the keys it sends.
 `file' reads one file, the primary one without `:file', with its
 `:hash'; `files' lists them.  A write or deletion names the `:hash' the
 file was read with, none to create it, and the origin refuses it as
-stale when the file changed since.  A key without a value is not sent.")
+stale when the file changed since.  `write-files' makes several such
+`:changes' at once, all or none.  A key without a value is not sent.")
 
 (defun mevedel-remote-artifact--translate (alias args)
   "Return how local editing ARGS for the remote artifact ALIAS are served.
-Either (:answer REPLY), answered here, or (:body BODY :shape SHAPE): BODY
-is the origin request and SHAPE (`text', `search', `image', `edit' or
-`file') how its reply maps back.  Signal what a remote artifact cannot do."
+The result is (:body BODY :shape SHAPE): BODY is the origin request and
+SHAPE (`text', `search', `image', `library', `library-search', `edit' or
+`file') how its reply maps back.  Signal what a remote artifact cannot
+do."
   (let ((action (plist-get args :action)))
     (pcase action
       ("view"
@@ -405,8 +395,12 @@ is the origin request and SHAPE (`text', `search', `image', `edit' or
            ("discussions"
             (error "Discussions of a remote artifact stay at its origin"))
            (_ (error "Read shared://%s for the elements of a remote artifact" alias)))))
-      ;; The origin records versions of its artifacts itself.
-      ("version" (list :answer (list :result nil)))
+      ;; The origin's own libraries, as shared://ALIAS/library shows them.
+      ("library-view"
+       (list :body (append (list :action "library" :part (plist-get args :part))
+                           (when-let* ((name (plist-get args :library))) (list :library name))
+                           (when-let* ((item (plist-get args :item))) (list :item item)))
+             :shape (if (plist-get args :search) 'library-search 'library)))
       ("delete"
        (error "A remote artifact is deleted at its origin; detach it here instead"))
       ((and (pred stringp) (let file-action (assoc action mevedel-remote-artifact--file-actions))
@@ -417,7 +411,7 @@ is the origin request and SHAPE (`text', `search', `image', `edit' or
              (setq body (plist-put body key (plist-get args key)))))
          (list :body body :shape 'file)))
       (_
-       (if-let* ((keys (cdr (assoc action mevedel-remote-artifact--edit-keys))))
+       (if-let* ((keys (cdr (assoc action mevedel-artifact-backend-edit-keys))))
            (let ((body (list :action action)))
              (dolist (key keys)
                (when (plist-member args key)
@@ -477,8 +471,13 @@ the model knows the artifact by its alias here."
 (defun mevedel-remote-artifact--reply (alias entry args shape reply)
   "Return the local editing reply to the origin's REPLY.
 ALIAS, ENTRY and the local ARGS name the request; SHAPE is from
-`mevedel-remote-artifact--translate'."
-  (let ((result (plist-get reply :result)))
+`mevedel-remote-artifact--translate'.  The origin names its libraries
+shared://library, which here are ALIAS's."
+  (let* ((result (plist-get reply :result))
+         (library (concat "shared://" alias "/library"))
+         (library-text (lambda ()
+                         (string-replace "shared://library" library
+                                         (or (plist-get result :text) "")))))
     (cond
      ((plist-get reply :error)
       (cond
@@ -492,6 +491,16 @@ ALIAS, ENTRY and the local ARGS name the request; SHAPE is from
        (t (list :error (plist-get reply :error) :code "stale"
                 :targets (plist-get reply :targets) :revision (plist-get reply :revision)))))
      ((eq shape 'file) (list :result result))
+     ((and (eq shape 'library) (plist-get result :text))
+      (list :result (list :text (funcall library-text))))
+     ((eq shape 'library-search)
+      (list :result
+            (list :documents
+                  (vector (mevedel-remote-artifact--search-document
+                           (if-let* ((name (plist-get args :library)))
+                               (concat library "/" (mevedel-resource-encode-component name))
+                             library)
+                           (funcall library-text))))))
      ((eq shape 'text) (list :result (list :text (plist-get result :text))))
      ((eq shape 'search)
       (list :result
@@ -500,7 +509,7 @@ ALIAS, ENTRY and the local ARGS name the request; SHAPE is from
                            (concat "shared://" alias
                                    (if (equal (plist-get args :part) "history") "/history" ""))
                            (or (plist-get result :text) ""))))))
-     ((eq shape 'image)
+     ((memq shape '(image library))
       (list :result (list :png (plist-get result :png)
                           :mime (or (plist-get result :mime) "image/png"))))
      (t
@@ -531,7 +540,6 @@ reply is discarded, though an edit already sent may land at the origin."
         (let ((plan (mevedel-remote-artifact--translate alias args)))
           (cond
            ((null entry) (funcall refuse "This item no longer exists"))
-           ((plist-get plan :answer) (run-at-time 0 nil deliver (plist-get plan :answer)))
            ((and authorize (not (funcall authorize))) (funcall refuse "Editing authority ended"))
            (t
             (funcall
@@ -539,7 +547,7 @@ reply is discarded, though an edit already sent may land at the origin."
              (mevedel-remote-artifact--request entry (plist-get args :actor) (plist-get plan :body))
              (lambda (outcome)
                (when (mevedel-remote-artifact--note (plist-get entry :link) outcome)
-                 (mevedel-artifact-store--changed workspace))
+                 (mevedel-artifact-store-changed workspace))
                (cond
                 (cancelled (funcall deliver (list :error "Editing operation cancelled")))
                 ((plist-get outcome :error)
@@ -572,14 +580,15 @@ A change of reachability is announced as a change of WORKSPACE's listing."
              (mevedel-remote-artifact--request entry)
              (lambda (outcome)
                (when (mevedel-remote-artifact--note link outcome)
-                 (mevedel-artifact-store--changed workspace))))))
+                 (mevedel-artifact-store-changed workspace))))))
 
 (defun mevedel-remote-artifact--catalog (workspace detail)
   "Return WORKSPACE's remote artifacts as catalog rows at DETAIL.
 See `mevedel-artifact-backend-catalog'.  A full row adds `:remote' t,
-the relay host as `:origin', the `:origin-id', the link's `:tier' and
-`:reachable' (`yes', `no' or nil while unknown).  Listing them in full
-checks, in the background, the reachability of links not checked lately."
+the `:origin' name (the relay host while the origin gave none), the
+`:relay' host, the `:origin-id', the link's `:tier' and `:reachable'
+\(`yes', `no' or nil while unknown).  Listing them in full checks, in the
+background, the reachability of links not checked lately."
   (mevedel-remote-artifact--remember workspace)
   (mapcar
    (lambda (cell)
@@ -596,25 +605,26 @@ checks, in the background, the reachability of links not checked lately."
           (when (< (or (plist-get status :checked) 0)
                    (- (float-time) mevedel-remote-artifact--check-interval))
             (mevedel-remote-artifact--check workspace entry))
-          (list :id alias :kind (intern (plist-get entry :kind)) :title title
-                :file "state.json" :path nil :size 0 :versions 0
-                :modified (plist-get entry :attached)
-                :remote t
-                :origin (url-host (url-generic-parse-url (plist-get entry :link)))
-                :origin-id (plist-get entry :id)
-                :tier (plist-get entry :tier)
-                :reachable (plist-get status :reachable)
-                :error (plist-get status :error))))))
+          (let ((relay (url-host (url-generic-parse-url (plist-get entry :link)))))
+            (list :id alias :kind (intern (plist-get entry :kind)) :title title
+                  :file "state.json" :path nil :size 0 :versions 0
+                  :modified (plist-get entry :attached)
+                  :remote t
+                  :origin (or (if (plist-member status :origin)
+                                  (plist-get status :origin)
+                                (plist-get entry :origin))
+                              relay)
+                  :relay relay
+                  :origin-id (plist-get entry :id)
+                  :tier (plist-get entry :tier)
+                  :reachable (plist-get status :reachable)
+                  :error (plist-get status :error)))))))
    (cl-remove-if-not (lambda (cell) (mevedel-artifact-backend-registered-p workspace (car cell)))
                      (mevedel-remote-artifact--records-of workspace))))
 
 
 ;;
 ;;; Commands
-
-(defun mevedel-remote-artifact--command-workspace ()
-  "Return the workspace of the current buffer for a command, or signal."
-  (or (mevedel-workspace) (user-error "No mevedel workspace here")))
 
 (defun mevedel-remote-artifact--check-alias (workspace alias link)
   "Signal unless WORKSPACE may attach LINK under ALIAS."
@@ -636,7 +646,7 @@ or the minibuffer history, and a prefix argument asks for the name.
 Attaching connects to the origin once to learn what the link shares.
 Attaching a link again refreshes it and may rename it."
   (interactive
-   (list (mevedel-remote-artifact--command-workspace)
+   (list (mevedel-workspace-current)
          (read-passwd "Artifact link: ")
          (when current-prefix-arg (read-string "Attach as: "))))
   (let* ((link (string-trim (or link "")))
@@ -644,8 +654,7 @@ Attaching a link again refreshes it and may rename it."
          (previous (cl-find link entries :key (lambda (cell) (plist-get (cdr cell) :link))
                             :test #'equal))
          (guest-id (or (plist-get (cdr previous) :guest-id)
-                       (substring (secure-hash 'sha256 (format "%s%s" (current-time) (random t)))
-                                  0 16))))
+                       (substring (mevedel-shared-editing-op-id) 0 16))))
     (when (string-empty-p link) (user-error "No artifact link given"))
     (let* ((outcome (mevedel-remote-artifact--request-sync
                      (list :link link :guestId guest-id
@@ -674,6 +683,7 @@ Attaching a link again refreshes it and may rename it."
        workspace
        (cons (cons alias (list :link link :id (plist-get welcome :id) :kind kind
                                :title (plist-get welcome :title)
+                               :origin (plist-get welcome :origin)
                                :tier (if (eq t (plist-get welcome :readOnly)) "view" "edit")
                                :guest-id guest-id
                                :attached (or (plist-get (cdr previous) :attached) (float-time))))
@@ -693,7 +703,7 @@ Attaching a link again refreshes it and may rename it."
 The origin and every other holder of its link are unaffected.  Sessions
 that attached it no longer list it."
   (interactive
-   (let ((workspace (mevedel-remote-artifact--command-workspace)))
+   (let ((workspace (mevedel-workspace-current)))
      (list workspace
            (completing-read "Detach remote artifact: "
                             (or (mapcar #'car (mevedel-remote-artifact--records-of workspace))

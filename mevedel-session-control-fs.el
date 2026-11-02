@@ -485,13 +485,69 @@ before the operation ran."
    ;; header is a word where an operation's is a number, so no operation can
    ;; be confused with it -- which is the separation that keeps a tool writing
    ;; to stderr from presenting itself as a result.
+   ;; File transactions keep before-images on the locked filesystem and pinned
+   ;; parent descriptors until commit.  Only successful, individually atomic
+   ;; mutations enter the undo list; a failed write-mode never replaced its leaf.
+   "finish_files() {\n"
+   "  test -n \"$undo_directory\" || return 0\n"
+   "  failed=0\n"
+   "  if test \"$files_committed\" = 0; then\n"
+   "    for ((i=${#undo_parents[@]}-1; i>=0; i--)); do\n"
+   "      cd -- /proc/self/fd/${undo_parents[i]} || { failed=1; continue; }\n"
+   "      if test \"${undo_kinds[i]}\" = mkdir; then\n"
+   "        rmdir -- \"${undo_leaves[i]}\" || failed=1\n"
+   "      elif test -f \"$undo_directory/${undo_indices[i]}\"; then\n"
+   "        mv -fT -- \"$undo_directory/${undo_indices[i]}\" \"${undo_leaves[i]}\" || failed=1\n"
+   "      else\n"
+   "        rm -f -- \"${undo_leaves[i]}\" || failed=1\n"
+   "      fi\n"
+   "    done\n"
+   "    if test \"$failed\" = 1; then\n"
+   "      echo \"File batch rollback FAILED; before-images retained at $undo_directory\" >&2\n"
+   "      exit 80\n"
+   "    fi\n"
+   "    echo 'File batch aborted; all changes rolled back' >&2\n"
+   "  fi\n"
+   "  rm -rf -- \"$undo_directory\"\n"
+   "}\n"
+   "snapshot_file() {\n"
+   "  pin_parent \"$parent\"\n"
+   "  test ! -L \"$leaf\" || return 69\n"
+   "  exec {undo_pin}</proc/self/fd/9 || return 70\n"
+   "  if test -e \"$leaf\"; then\n"
+   "    if test \"$op\" = mkdir && test -d \"$leaf\"; then return 0; fi\n"
+   "    test -f \"$leaf\" || return 69\n"
+   "    cp -p --no-dereference --reflink=auto -- \"$leaf\" \"$undo_directory/$index\" || return 66\n"
+   "    test ! -L \"$undo_directory/$index\" && test -f \"$undo_directory/$index\" || return 69\n"
+   "  fi\n"
+   "}\n"
    "emit() {\n"
    "  index=$((index + 1))\n"
    "  status=0\n"
+   "  case \"$op\" in\n"
+   "    begin-files)\n"
+   "      test -n \"$lock_directory\" && test -z \"$undo_directory\" || exit 71\n"
+   "      undo_directory=$(mktemp -d -- \"$lock_directory/.file-batch-XXXXXX\") || exit 66\n"
+   "      trap finish_files EXIT\n"
+   "      printf '\\0%s 0\\0' \"$index\"; return 0 ;;\n"
+   "    commit-files) files_committed=1; printf '\\0%s 0\\0' \"$index\"; return 0 ;;\n"
+   "  esac\n"
+   "  if test -n \"$undo_directory\"; then\n"
+   "    case \"$op\" in\n"
+   "      write-mode|delete-file|mkdir) snapshot_file || status=$? ;;\n"
+   "    esac\n"
+   "  fi\n"
    ;; A streamed write consumes only its framed field from shared stdin.
    ;; Stream the encoded payload, then acknowledge its status.  Command
    ;; substitution would copy large manifests through a shell variable.
-   "  (run_op) || status=$?\n"
+   "  if test \"$status\" = 0; then (trap - EXIT; run_op) || status=$?; fi\n"
+   "  if test -n \"$undo_directory\" && test \"$status\" = 0; then\n"
+   "    case \"$op\" in\n"
+   "      write-mode|delete-file|mkdir)\n"
+   "        undo_parents+=(\"$undo_pin\"); undo_leaves+=(\"$leaf\")\n"
+   "        undo_kinds+=(\"$op\"); undo_indices+=(\"$index\") ;;\n"
+   "    esac\n"
+   "  fi\n"
    "  printf '\\0%s %s\\0' \"$index\" \"$status\"\n"
    ;; A failed operation ends the program: a caller expresses a precondition
    ;; as an earlier operation, so later ones must not run.  An
@@ -510,6 +566,8 @@ before the operation ran."
    ;; one; payload fields may carry newline-wrapped base64.
    "run_program() {\n"
    "index=0\n"
+   "undo_directory=; files_committed=0\n"
+   "undo_parents=(); undo_leaves=(); undo_kinds=(); undo_indices=()\n"
    "payload_stream=0\n"
    "if test \"$archive_reads\" = 1; then\n"
    "  if test \"$#\" -eq 0; then\n"
@@ -679,7 +737,9 @@ parent must not turn into a `Setting current directory' failure."
     (verify-list . "verify-list")
     (tree-size . "tree-size")
     (file-hash . "hash")
-    (verify-hash . "verify-hash"))
+    (verify-hash . "verify-hash")
+    (begin-files . "begin-files")
+    (commit-files . "commit-files"))
   "Program operation names mapped to their target-side verbs.")
 
 (defun mevedel-session-control-fs--program-status (code)
@@ -1178,6 +1238,12 @@ precondition as a `verify' its writes depend on.  Without LOCK-DIRECTORY,
 this narrows the window between proof and write but does not close it:
 another client can change the leaf in between.  With LOCK-DIRECTORY,
 cooperating callers serialize the entire program under the same target lock.
+With a lock, `begin-files' and `commit-files' bracket a file transaction:
+`write-mode', `delete-file' and newly made directories are snapshotted and
+undone in reverse order if the program ends before commit.  Before-images
+preserve file bytes, modes and timestamps.  Rollback failure signals an
+error and retains the before-images in the lock directory for recovery.
+This handles operation errors, not uncatchable process death or power loss.
 Each result carries
 `:status' from the shared vocabulary -- `ok', `conflict', `absent',
 `mismatch', `failed', `skipped' -- so a caller reproduces the nil-versus-

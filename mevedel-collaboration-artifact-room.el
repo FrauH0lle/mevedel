@@ -54,17 +54,8 @@
 (require 'mevedel-artifact-store)
 (require 'mevedel-collaboration)
 (require 'mevedel-resource)
+(require 'mevedel-utilities)
 (require 'mevedel-workspace)
-
-;; `mevedel-shared-library'
-;; Restoring shared artifacts at startup loads this file; the libraries
-;; load only when a consumer asks for them.
-(declare-function mevedel-shared-library-libraries "mevedel-shared-library" ())
-(autoload 'mevedel-shared-library-libraries "mevedel-shared-library")
-
-;; `mevedel-collaboration-guest'
-(declare-function mevedel-collaboration--admit-hello
-                  "mevedel-collaboration-guest" (room peer frame))
 
 ;; `mevedel-collaboration-editing'
 (declare-function mevedel-collaboration-editing--send
@@ -72,17 +63,16 @@
 (declare-function mevedel-collaboration-editing-handle
                   "mevedel-collaboration-editing" (room peer frame &optional dispatch))
 
-;; `mevedel-collaboration-projection'
-(defvar mevedel-collaboration--protocol-version)
+;; `mevedel-collaboration-guest'
+(declare-function mevedel-collaboration--admit-hello
+                  "mevedel-collaboration-guest" (room peer frame))
 
 ;; `mevedel-collaboration-presence'
 (declare-function mevedel-collaboration-presence-publish
                   "mevedel-collaboration-presence" (room))
 
-;; `mevedel-shared-editing'
-(declare-function mevedel-shared-editing-call "mevedel-shared-editing"
-                  (workspace args callback &optional authorize commit))
-(declare-function mevedel-shared-editing--json "mevedel-shared-editing" (value))
+;; `mevedel-collaboration-projection'
+(defvar mevedel-collaboration--protocol-version)
 
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-open
@@ -92,34 +82,31 @@
 (declare-function mevedel-collaboration--transport-stop
                   "mevedel-collaboration-transport" (transport))
 
+;; `mevedel-shared-editing'
+(declare-function mevedel-shared-editing--json "mevedel-shared-editing" (value))
+(declare-function mevedel-shared-editing-call "mevedel-shared-editing"
+                  (workspace args callback &optional authorize commit))
+(declare-function mevedel-shared-editing-op-id "mevedel-shared-editing" ())
+
+;; `mevedel-shared-library'
+;; Restoring shared artifacts at startup loads this file; the libraries
+;; load only when a consumer asks for them.
+(declare-function mevedel-shared-library-libraries "mevedel-shared-library" ())
+(autoload 'mevedel-shared-library-libraries "mevedel-shared-library")
+
 ;; `mevedel-sleep'
 (declare-function mevedel-sleep-update "mevedel-sleep" (&rest _))
 (autoload 'mevedel-sleep-update "mevedel-sleep")
-
-(defvar mevedel-user-dir)
 
 
 ;;
 ;;; Credentials
 
-(defvar mevedel-collaboration-artifact-room--rooms
-  (make-hash-table :test #'equal)
-  "Live artifact rooms, keyed by (WORKSPACE-ROOT . ARTIFACT-ID).")
-
-(defun mevedel-collaboration-artifact-room--credentials-path (workspace id)
-  "Return the file holding the credentials of WORKSPACE's shared artifact ID."
-  (mevedel-artifact-store-link-path workspace id))
-
 (defun mevedel-collaboration-artifact-room--read-credentials (path)
   "Return the valid artifact room credentials stored at PATH, or nil.
 The result is a plist of `:room-id' and the unibyte `:key' and
 `:write-token'."
-  (when-let* (((file-readable-p path))
-              (stored (condition-case nil
-                          (with-temp-buffer
-                            (insert-file-contents path)
-                            (read (current-buffer)))
-                        (error nil)))
+  (when-let* ((stored (mevedel--read-data-file path))
               ((proper-list-p stored))
               (room-id (plist-get stored :room-id))
               ((stringp room-id))
@@ -137,25 +124,18 @@ The result is a plist of `:room-id' and the unibyte `:key' and
 Missing or unreadable credentials are generated and stored readable only
 by this user; existing ones are returned unchanged, so sharing again
 keeps every link working."
-  (let ((path (mevedel-collaboration-artifact-room--credentials-path
-               workspace id)))
+  (let ((path (mevedel-artifact-store-link-path workspace id)))
     (or (mevedel-collaboration-artifact-room--read-credentials path)
         (let ((credentials
                (list :room-id (mevedel-collaboration--base64url
                                (mevedel-collaboration--random-bytes 16))
                      :key (mevedel-collaboration--random-bytes 32)
                      :write-token (mevedel-collaboration--random-bytes 16))))
-          ;; The modes apply on creation only, so an old file goes first.
-          (when (file-exists-p path)
-            (delete-file path))
-          (with-file-modes #o600
-            (with-temp-file path
-              (prin1 (list :room-id (plist-get credentials :room-id)
-                           :key (mevedel-collaboration--base64url
-                                 (plist-get credentials :key))
-                           :write-token (mevedel-collaboration--base64url
-                                         (plist-get credentials :write-token)))
-                     (current-buffer))))
+          (mevedel--write-private-data-file
+           path (list :room-id (plist-get credentials :room-id)
+                      :key (mevedel-collaboration--base64url (plist-get credentials :key))
+                      :write-token (mevedel-collaboration--base64url
+                                    (plist-get credentials :write-token))))
           credentials))))
 
 (defun mevedel-collaboration-artifact-room--links (web-origin credentials)
@@ -175,19 +155,14 @@ link's secret is the view link's followed by the write token."
 
 (defun mevedel-collaboration-artifact-room--record-path ()
   "Return the per-user file listing the roots with shared artifacts."
-  (file-name-concat mevedel-user-dir "artifact-rooms.el"))
+  (file-name-concat mevedel-user-dir "artifact-rooms.eld"))
 
 (defun mevedel-collaboration-artifact-room--recorded ()
   "Return the workspace roots recorded to have shared artifacts.
 An unreadable or malformed record yields nil."
-  (let ((path (mevedel-collaboration-artifact-room--record-path)))
-    (when-let* (((file-readable-p path))
-                (stored (condition-case nil
-                            (with-temp-buffer
-                              (insert-file-contents path)
-                              (read (current-buffer)))
-                          (error nil)))
-                ((proper-list-p stored)))
+  (let ((stored (mevedel--read-data-file
+                 (mevedel-collaboration-artifact-room--record-path))))
+    (when (proper-list-p stored)
       (seq-filter #'stringp stored))))
 
 (defun mevedel-collaboration-artifact-room--set-recorded (root shared)
@@ -204,10 +179,7 @@ itself is unaffected."
       (condition-case err
           (if (null updated)
               (delete-file path)
-            (make-directory (file-name-directory path) t)
-            (with-file-modes #o600
-              (with-temp-file path
-                (prin1 updated (current-buffer)))))
+            (mevedel--write-private-data-file path updated))
         (error
          (display-warning
           'mevedel
@@ -223,7 +195,7 @@ itself is unaffected."
          (and (mevedel-artifact-store-id-p id)
               (mevedel-artifact-store-meta workspace id)
               (mevedel-collaboration-artifact-room--read-credentials
-               (mevedel-collaboration-artifact-room--credentials-path workspace id))))
+               (mevedel-artifact-store-link-path workspace id))))
        (directory-files state nil "\\`[A-Za-z0-9_-]+\\'")))))
 
 (defun mevedel-collaboration-artifact-room--update-record (workspace)
@@ -313,31 +285,47 @@ artifact deleted meanwhile records nothing."
   "Return the live room of artifact ID in the workspace at ROOT, or nil."
   (gethash (cons root id) mevedel-collaboration-artifact-room--rooms))
 
+(defcustom mevedel-collaboration-artifact-room-origin-name nil
+  "Name the consumers of this Emacs's artifact links know it by.
+nil omits the origin name entirely; consumers use the relay host instead.
+Only an explicitly configured name is disclosed, never a generated
+workspace directory or machine name."
+  :type '(choice (const :tag "Do not disclose an origin name" nil) string)
+  :group 'mevedel)
+
 (defun mevedel-collaboration-artifact-room--welcome (room guest)
   "Return ROOM's artifact welcome for GUEST.
-It names the room kind and the artifact, as it is now, and nothing of
-the workspace beyond it."
+It names the room kind and the artifact as it is now, and includes an
+origin name only when explicitly configured."
   (let ((meta (mevedel-artifact-store-meta (plist-get room :workspace)
-                                           (plist-get room :artifact))))
-    (list :t "welcome"
-          :proto mevedel-collaboration--protocol-version
-          :room "artifact"
-          :id (plist-get room :artifact)
-          :kind (symbol-name (plist-get room :artifact-kind))
-          :title (plist-get meta :title)
-          :readOnly (if (plist-get guest :writable) :json-false t))))
+                                         (plist-get room :artifact))))
+    (append (list :t "welcome"
+                  :proto mevedel-collaboration--protocol-version
+                  :room "artifact"
+                  :id (plist-get room :artifact)
+                  :kind (symbol-name (plist-get room :artifact-kind))
+                  :title (plist-get meta :title))
+            (when mevedel-collaboration-artifact-room-origin-name
+              (list :origin mevedel-collaboration-artifact-room-origin-name))
+            (list :readOnly (if (plist-get guest :writable) :json-false t)))))
 
 (defun mevedel-collaboration-artifact-room--hello (room peer frame)
   "Admit PEER to ROOM from its hello FRAME and send it the welcome.
 The consumer is on the artifact's page from then on, so origin browsers
-showing the artifact list it; whatever page FRAME reports is ignored."
-  (when-let* ((guest (mevedel-collaboration--admit-hello room peer frame)))
-    (plist-put guest :viewing (plist-get room :artifact))
-    (plist-put guest :active t)
-    (mevedel-collaboration--transport-send
-     (plist-get room :transport) peer
-     (mevedel-collaboration-artifact-room--welcome room guest))
-    (mevedel-collaboration-presence-publish room)))
+showing the artifact list it; whatever page FRAME reports is ignored.
+The first consumer of an HTML room starts from its files as they are, so
+only later changes are announced."
+  (let ((first (zerop (hash-table-count (plist-get room :guests)))))
+    (when-let* ((guest (mevedel-collaboration--admit-hello room peer frame)))
+      (when (and first (eq 'html (plist-get room :artifact-kind)))
+        (plist-put room :files-fingerprint
+                   (mevedel-collaboration-artifact-room--files-fingerprint room)))
+      (plist-put guest :viewing (plist-get room :artifact))
+      (plist-put guest :active t)
+      (mevedel-collaboration--transport-send
+       (plist-get room :transport) peer
+       (mevedel-collaboration-artifact-room--welcome room guest))
+      (mevedel-collaboration-presence-publish room))))
 
 (defun mevedel-collaboration-artifact-room--read (room _guest args authorize reply)
   "Read ROOM's whiteboard or document as `shared://ID' shows it.
@@ -450,6 +438,17 @@ only the primary file is versioned."
                                :file))
     (mevedel-collaboration-artifact-room-wrote room)))
 
+(defun mevedel-collaboration-artifact-room--content (args)
+  "Return the bytes ARGS give a file as `:text' or base64 `:data'."
+  (let ((text (plist-get args :text))
+        (data (plist-get args :data)))
+    (cond
+     ((and (stringp text) (null data)) (encode-coding-string text 'utf-8-unix))
+     ((and (stringp data) (null text))
+      (condition-case nil (base64-decode-string data)
+        (error (error "The data must be the file's bytes as base64"))))
+     (t (error "Give the file's content as text or as base64 data")))))
+
 (defun mevedel-collaboration-artifact-room--write-file (room _guest args _authorize reply)
   "Write the file ARGS name in ROOM's HTML artifact, if its hash still matches.
 ARGS carry the relative `:file', its content as `:text' or base64
@@ -458,14 +457,7 @@ receives (:result (:file :hash :bytes :created)) or a stale refusal
 with the current hash and, for a small file, its content.  The store's
 observers hear of the change as of a local write."
   (let* ((file (plist-get args :file))
-         (text (plist-get args :text))
-         (data (plist-get args :data))
-         (content (cond
-                   ((and (stringp text) (null data)) (encode-coding-string text 'utf-8-unix))
-                   ((and (stringp data) (null text))
-                    (condition-case nil (base64-decode-string data)
-                      (error (error "The data must be the file's bytes as base64"))))
-                   (t (error "Give the file's content as text or as base64 data")))))
+         (content (mevedel-collaboration-artifact-room--content args)))
     (unless (stringp file)
       (error "A file is named by its path in the artifact"))
     (let ((outcome (mevedel-artifact-store-write-file
@@ -504,22 +496,65 @@ or a stale refusal as a write gets."
                     room file (plist-get outcome :hash) (plist-get args :hash))
                  (list :result (list :file file :deleted t)))))))
 
+(defun mevedel-collaboration-artifact-room--write-files (room _guest args _authorize reply)
+  "Change several files of ROOM's HTML artifact if every hash still matches.
+ARGS carry `:changes', each naming a relative `:file' and the `:hash' it
+was read with, nil to create it, and either its content as `:text' or
+base64 `:data', or `:delete' t.  Every hash is checked before any file
+changes, under the store's lock, so all changes are made or none: a
+patch of several files lands whole.  The primary file is never deleted.
+REPLY receives (:result (:files RESULTS)), RESULTS in the order of the
+changes as `write-file' and `delete-file' answer them, or the stale
+refusal of the first file that changed since it was read."
+  (let* ((workspace (plist-get room :workspace))
+         (id (plist-get room :artifact))
+         (primary (plist-get (mevedel-artifact-store-meta workspace id) :file))
+         (changes (plist-get args :changes)))
+    (unless (and (vectorp changes) (> (length changes) 0))
+      (error "'write-files' needs changes: the files to write or delete"))
+    (let* ((requested
+            (mapcar (lambda (change)
+                      (let ((file (plist-get change :file))
+                            (hash (plist-get change :hash)))
+                        (unless (stringp file)
+                          (error "A file is named by its path in the artifact"))
+                        ;; The guard first, so a refused path is reported as such.
+                        (mevedel-artifact-store-file-path workspace id file)
+                        (if (eq t (plist-get change :delete))
+                            (progn
+                              (when (equal file primary)
+                                (error "%s is the artifact's primary file; an artifact link cannot delete it"
+                                       file))
+                              (list :file file :hash hash :delete t))
+                          (list :file file :hash hash
+                                :content (mevedel-collaboration-artifact-room--content change)))))
+                    changes))
+           (outcome (mevedel-artifact-store-write-files workspace id requested)))
+      (if-let* ((stale (and (plist-get outcome :stale) (plist-get outcome :file))))
+          (funcall reply (mevedel-collaboration-artifact-room--stale
+                          room stale (plist-get outcome :hash)
+                          (plist-get (cl-find stale requested
+                                              :key (lambda (change) (plist-get change :file))
+                                              :test #'equal)
+                                     :hash)))
+        (dolist (change requested)
+          (mevedel-collaboration-artifact-room--changed-file room (plist-get change :file)))
+        (funcall reply
+                 (list :result
+                       (list :files
+                             (vconcat
+                              (cl-mapcar
+                               (lambda (change result)
+                                 (if (plist-get change :delete)
+                                     (list :file (plist-get change :file) :deleted t)
+                                   (list :file (plist-get change :file)
+                                         :hash (plist-get result :hash)
+                                         :bytes (length (plist-get change :content))
+                                         :created (if (plist-get result :created) t :json-false))))
+                               requested (plist-get outcome :files))))))))))
+
 (defconst mevedel-collaboration-artifact-room--image-max-bytes 4700000
   "Largest image an artifact link may upload, as SharedEdit's limit.")
-
-(defconst mevedel-collaboration-artifact-room--edit-keys
-  '(("patch" :changes)
-    ("rename" :title)
-    ("background" :background)
-    ("image" :data :x :y :width :alt :afterId)
-    ("insert" :item :x :y)
-    ("revert" :transaction))
-  "SharedEdit actions an edit link may request, with the keys each passes on.
-Anything else a request carries is dropped; the origin adds the pinned
-id and the attribution itself.  An image arrives as `:data', the file's
-base64 content, since the origin cannot read the consumer's files.  A
-revert names the contribution, from the history a read returns, as its
-`:transaction'; the helper refuses it when its targets changed since.")
 
 (defun mevedel-collaboration-artifact-room--edit-reply (value)
   "Return the consumer's reply to the editing helper's VALUE.
@@ -553,7 +588,7 @@ origin user's, resolved here since the consumer cannot read it."
 
 (defun mevedel-collaboration-artifact-room--edit (room guest args authorize reply)
   "Run GUEST's SharedEdit action ARGS on ROOM's artifact.
-Only the keys `mevedel-collaboration-artifact-room--edit-keys' names
+Only the keys `mevedel-artifact-backend-edit-keys' names
 for the action pass, with the room's artifact id and the actor
 \"Agent: NAME (remote)\", NAME being the one GUEST declared in its
 hello.  AUTHORIZE and REPLY are as in
@@ -562,9 +597,8 @@ to no session."
   (let* ((action (plist-get args :action))
          (request (list :action action :id (plist-get room :artifact) :image t
                         :actor (format "Agent: %s (remote)" (plist-get guest :name))
-                        :opId (secure-hash 'sha256 (format "%s%s" (current-time)
-                                                           (random t))))))
-    (dolist (key (cdr (assoc action mevedel-collaboration-artifact-room--edit-keys)))
+                        :opId (mevedel-shared-editing-op-id))))
+    (dolist (key (cdr (assoc action mevedel-artifact-backend-edit-keys)))
       (when (plist-member args key)
         (setq request (plist-put request key (plist-get args key)))))
     (when (equal action "insert")
@@ -614,32 +648,41 @@ With `:image' in ARGS, show that embedded image instead, as
 (defun mevedel-collaboration-artifact-room--library (room _guest args authorize reply)
   "Show the origin user's whiteboard libraries to ROOM's guest.
 They are shown as `shared://library' shows them.  ARGS may name one
-`:library'; with `:part' \"sheet\" the reply is the
-picture of the library (or of all of them) as `:png' and `:mime', else
-the listing as `:text'.  Only reading is offered: the libraries are never
-changed.  AUTHORIZE and REPLY are as in
+`:library'; with `:part' \"sheet\" the reply is the picture of the
+library (or of all of them) as `:png' and `:mime', with \"item\" the
+picture of the one `:item' LIBRARY/ITEM-ID names, else the listing as
+`:text'.  Only reading is offered: the libraries are never changed.
+AUTHORIZE and REPLY are as in
 `mevedel-collaboration-artifact-room--actions'."
-  (let* ((name (plist-get args :library))
-         (part (plist-get args :part))
+  (let* ((part (plist-get args :part))
+         (item (plist-get args :item))
+         (name (if (equal part "item")
+                   (if-let* (((stringp item))
+                             (slash (string-search "/" item)))
+                       (substring item 0 slash)
+                     (error "An item preview needs item as LIBRARY/ITEM-ID from the library listing"))
+                 (plist-get args :library)))
          (libraries (cl-remove-if-not
                      (lambda (library) (or (null name) (equal name (plist-get library :name))))
                      (mevedel-shared-library-libraries))))
     (unless (or (null name) (stringp name))
       (error "A library is named by a string"))
-    (unless (member part '(nil "list" "sheet"))
-      (error "The library part is list or sheet"))
+    (unless (member part '(nil "list" "sheet" "item"))
+      (error "The library part is list, sheet or item"))
     (when (and name (null libraries))
       (error "No element library %s; list the libraries for installed ones" name))
     (mevedel-shared-editing-call
      (plist-get room :workspace)
-     (list :action "library-view" :part (if (equal part "sheet") "sheet" "list")
-           :at (if name
-                   (concat "shared://library/" (mevedel-resource-encode-component name))
-                 "shared://library")
-           :libraries (vconcat (mapcar (lambda (library)
-                                         (list :name (plist-get library :name)
-                                               :text (plist-get library :text)))
-                                       libraries)))
+     (append
+      (list :action "library-view" :part (if (member part '("sheet" "item")) part "list")
+            :at (if name
+                    (concat "shared://library/" (mevedel-resource-encode-component name))
+                  "shared://library")
+            :libraries (vconcat (mapcar (lambda (library)
+                                          (list :name (plist-get library :name)
+                                                :text (plist-get library :text)))
+                                        libraries)))
+      (when (equal part "item") (list :item item)))
      (lambda (value)
        (funcall reply
                 (if-let* ((failure (plist-get value :error)))
@@ -661,6 +704,8 @@ changed.  AUTHORIZE and REPLY are as in
      :run mevedel-collaboration-artifact-room--write-file)
     ("delete-file" :kinds (html) :write t
      :run mevedel-collaboration-artifact-room--delete-file)
+    ("write-files" :kinds (html) :write t
+     :run mevedel-collaboration-artifact-room--write-files)
     ("view" :kinds (whiteboard document)
      :run mevedel-collaboration-artifact-room--view)
     ("patch" :kinds (whiteboard document) :write t
@@ -697,7 +742,8 @@ PEER is GUEST's relay peer.  The request is refused unless its action
 is in `mevedel-collaboration-artifact-room--actions' for the room's
 artifact kind, it names no artifact but the room's own, and GUEST may
 still act: admitted, holding an edit link for a writing action, in a
-room that is still running."
+room that is still running.  The id is checked once: every action runs
+on the room's own artifact, pinned below, so it cannot change later."
   (let* ((action (plist-get args :action))
          (entry (cdr (assoc action mevedel-collaboration-artifact-room--actions)))
          (id (plist-get args :id))
@@ -706,7 +752,6 @@ room that is still running."
           (lambda ()
             (and (eq guest (mevedel-collaboration--guest room peer))
                  (or (not (plist-get entry :write)) (plist-get guest :writable))
-                 (or (null id) (equal id (plist-get room :artifact)))
                  (eq room (gethash key mevedel-collaboration-artifact-room--rooms)))))
          (reply (lambda (value)
                   (when (eq guest (mevedel-collaboration--guest room peer))
@@ -784,6 +829,48 @@ a deletion is left to the room's own lifecycle."
 
 (add-hook 'mevedel-artifact-backend-change-hook
           #'mevedel-collaboration-artifact-room--changed)
+
+(defun mevedel-collaboration-artifact-room--files-fingerprint (room)
+  "Return a fingerprint of the files of ROOM's HTML artifact.
+It changes when a file is added, removed, resized or modified, and is
+nil while the artifact's directory is gone."
+  (let ((directory (mevedel-artifact-store-artifact-directory
+                    (plist-get room :workspace) (plist-get room :artifact))))
+    (when (file-directory-p directory)
+      (secure-hash
+       'sha1
+       (prin1-to-string
+        (mapcar (lambda (path)
+                  (let ((attributes (file-attributes path)))
+                    (list path (file-attribute-size attributes)
+                          (file-attribute-modification-time attributes))))
+                (directory-files-recursively directory "")))))))
+
+(defun mevedel-collaboration-artifact-room--files-changed (workspace)
+  "Tell the consumers of WORKSPACE's HTML artifact rooms whose files changed.
+The store announces a change of WORKSPACE, not which artifact changed,
+so each HTML room with connected consumers compares its files with what
+it saw last and sends a `changed' event naming its artifact when they
+differ.  Rooms of other artifacts hear nothing."
+  (let ((root (mevedel-workspace-root workspace)))
+    (maphash
+     (lambda (key room)
+       (when-let* (((equal root (car key)))
+                   ((eq 'html (plist-get room :artifact-kind)))
+                   ((> (hash-table-count (plist-get room :guests)) 0))
+                   (fingerprint (mevedel-collaboration-artifact-room--files-fingerprint room))
+                   ((not (equal fingerprint (plist-get room :files-fingerprint)))))
+         (plist-put room :files-fingerprint fingerprint)
+         (mevedel-collaboration-editing--send
+          room 0 "event"
+          (list :event "changed" :id (plist-get room :artifact) :kind "html"
+                :title (plist-get (mevedel-artifact-store-meta workspace (plist-get room :artifact))
+                                  :title))
+          t)))
+     mevedel-collaboration-artifact-room--rooms)))
+
+(add-hook 'mevedel-artifact-store-changed-functions
+          #'mevedel-collaboration-artifact-room--files-changed)
 
 (defun mevedel-collaboration-artifact-room--on-state (root id state)
   "Track relay transport STATE for the room of ROOT's artifact ID.
@@ -954,17 +1041,17 @@ the sharing notifies store observers, so listings show the change."
      (let* ((shared (mevedel-artifact-store-shared-p workspace id))
             (room (mevedel-collaboration-artifact-room--start workspace id)))
        (unless shared
-         (mevedel-artifact-store--changed workspace))
+         (mevedel-artifact-store-changed workspace))
        (list :link-view (plist-get room :link-view)
              :link-edit (plist-get room :link-edit))))
     ('revoke
      (when-let* ((room (mevedel-collaboration-artifact-room--find
                         (mevedel-workspace-root workspace) id)))
        (mevedel-collaboration-artifact-room--stop room 'revoked))
-     (let ((path (mevedel-collaboration-artifact-room--credentials-path workspace id)))
+     (let ((path (mevedel-artifact-store-link-path workspace id)))
        (when (file-exists-p path)
          (delete-file path)
-         (mevedel-artifact-store--changed workspace)))
+         (mevedel-artifact-store-changed workspace)))
      (mevedel-collaboration-artifact-room--update-record workspace)
      nil)
     ('rotate
@@ -1009,8 +1096,7 @@ does, and shares the artifact again.  The result is a plist of
 (defun mevedel-collaboration-artifact-room--choose (&optional shared)
   "Read one of the current workspace's shareable artifacts; return its id.
 With SHARED, offer only the shared ones."
-  (let* ((workspace (or (mevedel-workspace)
-                        (user-error "No mevedel workspace here")))
+  (let* ((workspace (mevedel-workspace-current))
          (choices (cl-loop for row in (mevedel-artifact-store-list workspace)
                            for id = (plist-get row :id)
                            when (and (memq (plist-get row :kind)
@@ -1049,11 +1135,9 @@ ID names a whiteboard, document or HTML artifact.
 The edit link is copied to the kill ring.  An artifact that is shared
 already keeps its links."
   (interactive (list (mevedel-collaboration-artifact-room--choose)))
-  (let* ((workspace (or (mevedel-workspace)
-                        (user-error "No mevedel workspace here")))
+  (let* ((workspace (mevedel-workspace-current))
          (meta (mevedel-collaboration-artifact-room--meta workspace id)))
-    (unless (or (file-exists-p (mevedel-collaboration-artifact-room--credentials-path
-                                workspace id))
+    (unless (or (mevedel-artifact-store-shared-p workspace id)
                 (yes-or-no-p
                  (format (concat "Share \"%s\" through the relay? Its view link "
                                  "lets whoever holds it read this %s, its edit "
@@ -1069,8 +1153,7 @@ already keeps its links."
 Every connected consumer is disconnected and its links stop working
 for good."
   (interactive (list (mevedel-collaboration-artifact-room--choose t)))
-  (let* ((workspace (or (mevedel-workspace)
-                        (user-error "No mevedel workspace here")))
+  (let* ((workspace (mevedel-workspace-current))
          (title (or (plist-get (mevedel-artifact-store-meta workspace id) :title) id)))
     (unless (yes-or-no-p
              (format "Whoever holds its links loses access.  Revoke the links of \"%s\"? "
@@ -1085,8 +1168,7 @@ for good."
 The old links stop working; the new ones are shown, the edit link
 copied to the kill ring."
   (interactive (list (mevedel-collaboration-artifact-room--choose t)))
-  (let* ((workspace (or (mevedel-workspace)
-                        (user-error "No mevedel workspace here")))
+  (let* ((workspace (mevedel-workspace-current))
          (meta (mevedel-collaboration-artifact-room--meta workspace id)))
     (unless (yes-or-no-p
              (format "The old links stop working.  Replace the links of \"%s\"? "

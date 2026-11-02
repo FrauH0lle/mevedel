@@ -2,7 +2,10 @@
  * relay/ (so it embeds the current viewer), an isolated origin Emacs, the
  * remote-artifact package's own CLI and stdio MCP server, and Chromium,
  * all on one whiteboard.  The browser joins through the origin's session
- * room; the package through the artifact's edit link.
+ * room; the package through the artifact's edit link.  The package then
+ * edits an HTML artifact's files through its own link; the viewer shows an
+ * HTML artifact only as fetched when opened, so that part is checked at
+ * the origin.
  *
  * The origin is shared-editing/test/room.el: it runs real tools and the
  * real sharing operation on request through files in its directory.
@@ -217,6 +220,37 @@ test(
       assert.equal(after.isError, true, after.text);
       assert.match(after.text, /revoked this artifact link/);
       assert.equal((await elements()).length, 2);
+
+      // An HTML artifact through its edit link: the primary file reads,
+      // an edit lands at the origin, and a write after an origin-side
+      // change is refused as stale with the current content.
+      const html = '<!doctype html>\n<h1>Hello</h1>\n';
+      await origin('HtmlFile', { id: 'landing', file: 'index.html', title: 'Landing', content: html });
+      const site = await origin('ArtifactSharing', { id: 'landing', operation: 'share' });
+      assert.match(site.edit, /^http:\/\/127\.0\.0\.1:\d+\/#/);
+      assert.match(execFileSync(process.execPath, [cli, 'attach', site.edit, '--name', 'site'],
+        { env: consumer, encoding: 'utf8' }), /Attached site: Landing \(html, edit link\)/);
+      const listed = await mcp.call('list_artifacts', {});
+      assert.match(listed.text, /^site: "Landing" html from 127\.0\.0\.1, edit link, origin reachable$/m, listed.text);
+      const primary = await mcp.call('read_artifact', { name: 'site' });
+      assert.equal(primary.isError, false, primary.text);
+      assert.equal(primary.text, html);
+      const files = await mcp.call('list_artifact_files', { name: 'site' });
+      assert.equal(files.text, `index.html (${Buffer.byteLength(html)} bytes, primary)`);
+      const fileEdit = await mcp.call('edit_artifact_file', { name: 'site', file: 'index.html',
+        old_string: '<h1>Hello</h1>', new_string: '<h1>Hello, world</h1>' });
+      assert.equal(fileEdit.isError, false, fileEdit.text);
+      assert.match(fileEdit.text, /^Edited index\.html/);
+      const htmlEdited = '<!doctype html>\n<h1>Hello, world</h1>\n';
+      assert.equal((await origin('HtmlFile', { id: 'landing', file: 'index.html' })).text, htmlEdited);
+      const changed = '<!doctype html>\n<h1>Changed at the origin</h1>\n';
+      await origin('HtmlFile', { id: 'landing', file: 'index.html', content: changed });
+      const stale = await mcp.call('write_artifact_file', { name: 'site', file: 'index.html',
+        content: '<!doctype html>\n<h1>Overwritten</h1>\n' });
+      assert.equal(stale.isError, true, stale.text);
+      assert.equal(stale.text, 'index.html changed since it was read; redo the change on its current '
+        + `content.\nCurrent content of index.html:\n${changed}`);
+      assert.equal((await origin('HtmlFile', { id: 'landing', file: 'index.html' })).text, changed);
       assert.deepEqual(errors, []);
     } catch (error) {
       throw new Error(`${error.stack}\n${errors.join('\n')}\n${logs.join('\n').slice(-10000)}`);

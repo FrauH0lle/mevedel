@@ -23,6 +23,7 @@
 (autoload 'mevedel-artifact-backend-registered-p "mevedel-artifact-backend")
 (autoload 'mevedel-shared-editing--json "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-create "mevedel-shared-editing")
+(autoload 'mevedel-shared-editing-op-id "mevedel-shared-editing")
 (autoload 'mevedel-shared-library-libraries "mevedel-shared-library")
 (autoload 'mevedel-shared-library-text "mevedel-shared-library")
 
@@ -49,6 +50,7 @@
 (declare-function mevedel-resource-execute "mevedel-resource" (attempt &optional executor options))
 (declare-function mevedel-resource-parse-address "mevedel-resource" (address))
 (autoload 'mevedel-resource-address-like-p "mevedel-resource")
+(autoload 'mevedel-resource-encode-component "mevedel-resource")
 (autoload 'mevedel-resource-execute "mevedel-resource")
 (autoload 'mevedel-resource-parse-address "mevedel-resource")
 
@@ -90,7 +92,7 @@ encode these as vectors so the host does not mistake them for objects."
   (unless mevedel--session (error "No active session"))
   (mevedel-session-workspace mevedel--session))
 
-(defun mevedel-tool-editing--actor ()
+(defun mevedel-tool-editing-actor ()
   "Return the attribution of the agent calling an editing tool."
   (concat "Agent: "
           (if (bound-and-true-p mevedel--agent-invocation)
@@ -140,32 +142,42 @@ versions it when the current request settles."
 (defun mevedel-tool-editing--call (callback args)
   "Run validated editing ARGS and deliver a pipeline result to CALLBACK."
   (unless mevedel--session (error "No active session"))
-  (setq args (plist-put (copy-sequence args) :actor (mevedel-tool-editing--actor)))
-  (setq args (plist-put args :opId (secure-hash 'sha256 (format "%s%s" (current-time) (random t)))))
+  (setq args (plist-put (copy-sequence args) :actor (mevedel-tool-editing-actor)))
+  (setq args (plist-put args :opId (mevedel-shared-editing-op-id)))
   (setq args (mevedel-tool-editing--restore-nulls args))
   (mevedel-artifact-backend-call
    (mevedel-tool-editing--workspace) args
    (mevedel-tool-editing--deliver callback nil)
    mevedel-pipeline--handler-active-p mevedel-pipeline--handler-commit))
 
-(defun mevedel-tool-editing--library-args (rest)
-  "Return the host request for `shared://library' components REST."
-  (let* ((sheet (equal (car (last rest)) "sheet.png"))
-         (name (car (if sheet (butlast rest) rest)))
-         (libraries (cl-remove-if-not
-                     (lambda (library) (or (null name) (equal name (plist-get library :name))))
-                     (mevedel-shared-library-libraries))))
-    (when (and name (null libraries))
-      (error "No element library %s; Read shared://library for installed libraries" name))
-    (list :action "library-view" :part (if sheet "sheet" "list")
-          :at (if name
-                  (concat "shared://library/" (mevedel-resource-encode-component name))
-                "shared://library")
-          :libraries (vconcat
-                      (mapcar (lambda (library)
-                                (list :name (plist-get library :name)
-                                      :text (plist-get library :text)))
-                              libraries)))))
+(defun mevedel-tool-editing--library-args (rest &optional id)
+  "Return the host request for `shared://library' components REST.
+With ID, REST follows `shared://ID/library' and names the libraries of
+remote whiteboard ID's origin, which serves them."
+  (let* ((item (and (equal (car (last rest)) "view.png") (nth 1 rest)))
+         (part (cond (item "item") ((equal (car (last rest)) "sheet.png") "sheet") (t "list")))
+         (name (car (if (equal part "sheet") (butlast rest) rest)))
+         (ref (and item (concat name "/" item))))
+    (if id
+        (append (list :action "library-view" :id id :part part)
+                (when name (list :library name))
+                (when ref (list :item ref)))
+      (let ((libraries (cl-remove-if-not
+                        (lambda (library) (or (null name) (equal name (plist-get library :name))))
+                        (mevedel-shared-library-libraries))))
+        (when (and name (null libraries))
+          (error "No element library %s; Read shared://library for installed libraries" name))
+        (append
+         (list :action "library-view" :part part
+               :at (if name
+                       (concat "shared://library/" (mevedel-resource-encode-component name))
+                     "shared://library")
+               :libraries (vconcat
+                           (mapcar (lambda (library)
+                                     (list :name (plist-get library :name)
+                                           :text (plist-get library :text)))
+                                   libraries)))
+         (when ref (list :item ref)))))))
 
 (defun mevedel-tool-editing-view (components callback &optional search)
   "Fetch the current workspace's `shared://' view named by COMPONENTS.
@@ -174,11 +186,15 @@ CALLBACK once with (:text TEXT), (:data BASE64 :mime MIME) or
 \(:error MESSAGE).  SEARCH instead returns mapped search documents derived
 from the same Read lines, joining output string chunks only for matching.
 A remote HTML artifact's `files' lists its files and `files/PATH' is one
-file's text."
+file's text; searched, they are every text file at or under the path."
   (condition-case err
-      (let ((args
-             (pcase components
+      (if-let* ((search)
+                (files (pcase components (`(,id "files" . ,path) (cons id path)))))
+          (mevedel-tool-editing--search-files (car files) (string-join (cdr files) "/") callback)
+        (let ((args
+               (pcase components
                (`("library" . ,rest) (mevedel-tool-editing--library-args rest))
+               (`(,id "library" . ,rest) (mevedel-tool-editing--library-args rest id))
                (`(,id) (list :action "view" :id id :part "overview"))
                (`(,id "view.png") (list :action "view" :id id :part "png"))
                (`(,id ,(and part (or "discussions" "history")))
@@ -189,8 +205,6 @@ file's text."
                 (list :action "view" :id id :part "image" :image image))
                (`(,id "files") (list :action "files" :id id))
                (`(,id "files" . ,path)
-                (when search
-                  (error "Grep does not search a remote artifact's files; Read them"))
                 (list :action "file" :id id :file (string-join path "/")))
                (_ (error "Unknown shared:// address")))))
         (when search (setq args (plist-put args :search t)))
@@ -210,8 +224,57 @@ file's text."
                          ((equal (plist-get args :action) "file")
                           (list :error (format "%s is not text" (plist-get args :file))))
                          (t (list :data (plist-get result :png)
-                                  :mime (plist-get result :mime))))))))))
+                                  :mime (plist-get result :mime)))))))))))
     (error (funcall callback (list :error (error-message-string err))))))
+
+(defun mevedel-tool-editing--text-document (address text)
+  "Return file TEXT, read at ADDRESS, as a search document of its Read lines."
+  (let ((lines (split-string (string-remove-suffix "\n" text) "\n"))
+        (bytes 0) (line 0) spans)
+    (dolist (value lines)
+      (let ((end (+ bytes (string-bytes value) 1)))
+        (push (vector bytes end (cl-incf line)) spans)
+        (setq bytes end)))
+    (list :address address :text text :lines (vconcat lines) :spans (vconcat (nreverse spans)))))
+
+(defun mevedel-tool-editing--search-files (id prefix callback)
+  "Call CALLBACK with search documents of remote artifact ID's files.
+They are the text files at PREFIX or beneath it, every one for an empty
+PREFIX, each read from the origin in turn; other files are skipped.
+CALLBACK receives (:documents DOCUMENTS) or (:error MESSAGE)."
+  (let ((workspace (mevedel-tool-editing--workspace))
+        (documents nil))
+    (cl-labels
+        ((address (file)
+           (format "shared://%s/files/%s" id
+                   (mapconcat #'mevedel-resource-encode-component (split-string file "/") "/")))
+         (next (files)
+           (if (null files)
+               (funcall callback (list :documents (vconcat (nreverse documents))))
+             (mevedel-artifact-backend-call
+              workspace (list :action "file" :id id :file (car files))
+              (lambda (reply)
+                (if-let* ((message (plist-get reply :error)))
+                    (funcall callback (list :error message))
+                  (when-let* ((text (plist-get (plist-get reply :result) :text)))
+                    (push (mevedel-tool-editing--text-document (address (car files)) text)
+                          documents))
+                  (next (cdr files))))))))
+      (mevedel-artifact-backend-call
+       workspace (list :action "files" :id id)
+       (lambda (reply)
+         (if-let* ((message (plist-get reply :error)))
+             (funcall callback (list :error message))
+           (let ((files (cl-loop for entry across (plist-get (plist-get reply :result) :files)
+                                 for file = (plist-get entry :file)
+                                 when (or (string-empty-p prefix) (equal file prefix)
+                                          (string-prefix-p (concat prefix "/") file))
+                                 collect file)))
+             (if files
+                 (next files)
+               (funcall callback
+                        (list :error (format "No file %s in this artifact"
+                                             (address prefix))))))))))))
 
 (defun mevedel-tool-editing--files-text (id result)
   "Return the files RESULT lists for remote artifact ID, one address a line."
@@ -227,7 +290,7 @@ file's text."
   (unless mevedel--session (error "No active session"))
   (mevedel-shared-editing-create
    (mevedel-tool-editing--workspace) (plist-get args :kind) (plist-get args :title)
-   (mevedel-tool-editing--actor) (mevedel-tool-editing--deliver callback t)
+   (mevedel-tool-editing-actor) (mevedel-tool-editing--deliver callback t)
    :session mevedel--session
    :authorize mevedel-pipeline--handler-active-p
    :commit mevedel-pipeline--handler-commit))
@@ -375,7 +438,7 @@ Deliver the outcome to CALLBACK."
   (mevedel-define-tool
    :name "SharedEdit" :handler #'mevedel-tool-editing--edit
    :summary "Draw on a shared whiteboard or edit a shared document."
-   :description "Edit a shared whiteboard or document. Read shared://ID first: each line is HASH then an element's or block's JSON. patch: changes are {id,hash,set?,unset?,after?}; set merges fields and unset removes them, after replaces the whole element or block and null deletes it; a new element has no hash. A stale hash rejects the whole patch and returns current lines; unrelated edits survive. Whiteboards hold Excalidraw elements {id,type,x,y,width,height,...} of type rectangle/diamond/ellipse/text/arrow/line/freedraw/image/stickynote/frame, with Excalidraw's field names and values. Absent fields take Excalidraw defaults (strokeColor #1e1e1e, backgroundColor transparent, fillStyle solid, strokeWidth 2, roughness 1, opacity 100); omit version, versionNonce, updated, isDeleted and boundElements, which are derived. Label a shape or arrow with a text element whose containerId is that element; the label wraps and centres inside it. Connect shapes with an arrow whose startBinding/endBinding are {elementId,fixedPoint:[0.5,0.5],mode:\"orbit\"}; bound ends follow their shapes. Line, arrow and freedraw points are relative to x,y and stored at 0.1 units. Elements draw in fractional index order; new ones without an index go on top in the order listed. Existing images are referenced by fileId. image adds a new one from source: a file path, or an artifact://, work:// or shared:// address (shared://ID/images/KEY or shared://ID/view.png) the model can read. PNG, JPEG, WebP or SVG up to 4.7 MB; an SVG is rasterized. A board image goes at x,y (default below the content) and a document image after afterId (default the end); width sets its display width and alt describes a document image. insert places a library item (ref from shared://library) with its top-left at x,y as new elements. A document is a list of top-level ProseMirror blocks, each with a unique attrs.id (nested nodes get theirs); a new block goes after afterId, default the end. Blocks: paragraph, heading (attrs.level 1-6), blockquote, codeBlock (attrs.language), horizontalRule, image, bulletList or orderedList (attrs.start) of listItem (a paragraph, then blocks), table of tableRow of tableHeader or tableCell (each holds blocks). Inline content is {type:\"text\",text,marks} and hardBreak; marks: bold, italic, underline, strike, code, link (attrs.href http(s), mailto or #). Images keep their shared://ID/images/KEY src. rename uses title. background sets a whiteboard's canvas colour (#rrggbb; empty for the room theme). revert uses a contribution ID from shared://ID/history and refuses if its targets changed. All mutations are attributed and committed on the host. Results list the stored lines of changed elements; whiteboard edits also return the resulting PNG."
+   :description "Edit a shared whiteboard or document. Read shared://ID first: each line is HASH then an element's or block's JSON. patch: changes are {id,hash,set?,unset?,after?}; set merges fields and unset removes them, after replaces the whole element or block and null deletes it; a new element has no hash. A stale hash rejects the whole patch and returns current lines; unrelated edits survive. Whiteboards hold Excalidraw elements {id,type,x,y,width,height,...} of type rectangle/diamond/ellipse/text/arrow/line/freedraw/image/stickynote/frame, with Excalidraw's field names and values. Absent fields take Excalidraw defaults (strokeColor #1e1e1e, backgroundColor transparent, fillStyle solid, strokeWidth 2, roughness 1, opacity 100); omit version, versionNonce, updated, isDeleted and boundElements, which are derived. Label a shape or arrow with a text element whose containerId is that element; the label wraps and centres inside it. Connect shapes with an arrow whose startBinding/endBinding are {elementId,fixedPoint:[0.5,0.5],mode:\"orbit\"}; bound ends follow their shapes. Line, arrow and freedraw points are relative to x,y and stored at 0.1 units. Elements draw in fractional index order; new ones without an index go on top in the order listed. Existing images are referenced by fileId. image adds a new one from source: a file path, or an artifact://, work:// or shared:// address (shared://ID/images/KEY or shared://ID/view.png) the model can read. PNG, JPEG, WebP or SVG up to 4.7 MB; an SVG is rasterized. A board image goes at x,y (default below the content) and a document image after afterId (default the end); width sets its display width and alt describes a document image. insert places a library item (ref from shared://library; a remote whiteboard uses its origin's, from shared://ID/library) with its top-left at x,y as new elements. A document is a list of top-level ProseMirror blocks, each with a unique attrs.id (nested nodes get theirs); a new block goes after afterId, default the end. Blocks: paragraph, heading (attrs.level 1-6), blockquote, codeBlock (attrs.language), horizontalRule, image, bulletList or orderedList (attrs.start) of listItem (a paragraph, then blocks), table of tableRow of tableHeader or tableCell (each holds blocks). Inline content is {type:\"text\",text,marks} and hardBreak; marks: bold, italic, underline, strike, code, link (attrs.href http(s), mailto or #). Images keep their shared://ID/images/KEY src. rename uses title. background sets a whiteboard's canvas colour (#rrggbb; empty for the room theme). revert uses a contribution ID from shared://ID/history and refuses if its targets changed. All mutations are attributed and committed on the host. Results list the stored lines of changed elements; whiteboard edits also return the resulting PNG."
    :args ((id string :required "Item ID.")
           (action string :required "Operation." :enum ["patch" "insert" "image" "rename" "background" "revert"])
           (changes array :optional "Targeted changes: {id,hash,set,unset,after,afterId}." :items (:type object))

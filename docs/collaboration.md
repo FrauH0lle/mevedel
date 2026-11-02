@@ -747,7 +747,7 @@ observers, so browser listings and Project artifacts update.
   keeps the credentials.
 
 The roots of workspaces with shared artifacts are recorded per user in
-`mevedel-user-dir` as `artifact-rooms.el`. Beside the lobby restore,
+`mevedel-user-dir` as `artifact-rooms.eld` (mode 0600). Beside the lobby restore,
 `mevedel-install` runs `mevedel-collaboration-artifact-room-restore` once
 startup is done. It scans each recorded root's bookkeeping for credentials and
 redials every shared artifact's room under its stored room id, so links handed
@@ -772,9 +772,13 @@ room's. The room answers with its own welcome only:
  "kind": "whiteboard", "title": "TITLE", "readOnly": false}
 ```
 
-It sends no session snapshot, roster, models, queue, tasks, goal, agents or
-store listing. A consumer that receives any other welcome, or a lobby
-listing, has a session or lobby link and disconnects.
+The welcome omits `origin` by default. Only an explicitly configured
+`mevedel-collaboration-artifact-room-origin-name` adds `"origin": "NAME"`;
+no workspace directory or machine name is generated. Consumers use the relay
+host when no origin name is supplied. The welcome sends no session snapshot,
+roster, models, queue,
+tasks, goal, agents or store listing. A consumer that receives any other
+welcome, or a lobby listing, has a session or lobby link and disconnects.
 
 After the welcome, the room accepts only chunked `editing` requests in the
 editor's transfer format, checked against an allowlist of actions. The origin
@@ -804,7 +808,9 @@ element libraries -- their own, installed ones and the built-in one -- to any
 link tier. `library` takes an optional `library` name and `part`: `list` (the
 default) answers `{result: {text}}`, the listing `shared://library` shows with
 each item as `LIBRARY/ITEM-ID`; `sheet` answers `{result: {png, mime}}`, the
-library's (or every library's) picture. An edit link's `insert` (`item` as
+library's (or every library's) picture; `item` with `item` as `LIBRARY/ITEM-ID`
+answers `{result: {png, mime}}`, that one item's picture. An edit link's
+`insert` (`item` as
 `LIBRARY/ITEM-ID`, `x`, `y`) places that item as `SharedEdit` does; the origin
 resolves the reference to its own library text, so the consumer never sends
 library content. Library management (`library-add`, `-remove`, `-install`,
@@ -830,6 +836,16 @@ An edit link may also run:
   bytes, created}}` with the new hash.
 - `delete-file` (`file`, `hash`): delete the file if it still has `hash`. The
   primary file is refused, since without it the artifact is gone.
+- `write-files` (`changes`, each a `write-file` change or `{file, hash,
+  delete: true}`): make several such changes at once. Every hash is checked
+  before any file changes, in one program under the store's lock, so either
+  all changes are made or none; a patch of several files lands whole. File
+  operation errors restore prior bytes, modes and timestamps and remove newly
+  created files and directories before releasing the lock. A fully rolled-back
+  batch sends no change event and records no working-stretch version. This
+  rollback handles operation errors, not power loss or an uncatchable process
+  kill. Success answers `{result: {files}}`, each as `write-file` or
+  `delete-file` answers; a stale refusal names the first file that changed.
 
 A refused write or deletion changes nothing and answers `{error, code:
 "stale", file, hash}`: the file's current hash (null when it does not exist)
@@ -848,8 +864,7 @@ artifact or creates another one.
 A committed file change fires the store's change notification
 (`mevedel-artifact-store-changed-functions`), so origin session rooms, the
 lobby and their viewers refresh their listings as after a local `ApplyPatch`.
-Consumers get no change event for files; the hash check tells them of a
-change.
+The room's consumers get a change event for it, as below.
 
 Consumers cannot list, save or restore versions; versions stay the origin's
 tool for larger damage. Instead the origin records one version per working
@@ -875,8 +890,11 @@ unanswered. Frames run with `inhibit-interaction`, as in the lobby.
 
 Every committed change of a whiteboard or document, whoever made it, reaches
 its room's consumers as `{t: "editing", reqId: "event", body: {event:
-"changed", id, kind, title, revision}}`. Changes of other artifacts never
-reach the room, and
+"changed", id, kind, title, revision}}`. A change of an HTML artifact's files,
+through a link or at the origin, reaches them the same way without a
+`revision`: on each store change notification, an HTML room with connected
+consumers compares its files' names, sizes and modification times with what it
+saw last. Changes of other artifacts never reach the room, and
 artifact rooms are not among the workspace rooms that receive store listings.
 
 While connected, a consumer is on its artifact's page in
@@ -916,7 +934,11 @@ vocabulary onto the room's allowlist: `shared://ID` and its `/history` become
 `read`, `view.png` and `images/KEY` become `view`, and `SharedEdit`'s
 `patch`, `rename`, `background`, `image`, `insert` (the origin resolves
 `LIBRARY/ITEM-ID` in its own libraries) and `revert` pass their arguments
-through. Replies name the alias, not the origin id, so the stale-hash
+through. A remote whiteboard's origin libraries are read at
+`shared://ID/library`, `shared://ID/library/NAME`, their `sheet.png` and an
+item's `shared://ID/library/LIBRARY/ITEM-ID/view.png` (the room's `library`),
+so an agent inserts references the origin knows; `shared://library` stays this
+user's own. Replies name the alias, not the origin id, so the stale-hash
 contract and Grep's line mapping work unchanged. Discussions and element
 addresses (`/discussions`, `/elements/ID`) stay at the origin; deleting it
 here is refused (detach instead), and turn-settle versions are left to the
@@ -927,13 +949,14 @@ A remote HTML artifact's files have addresses of their own,
 them and `shared://ID/files/PATH` reads one (the room's `files` and `read`
 with `file`). `ApplyPatch` takes them as operands. It reads each file it
 updates, deletes or moves with its hash, applies the hunks to that content and
-sends the whole result as `write-file` with the hash it read; an added file
-or a move's destination is written without a hash, so it is only created, and
-a deletion is `delete-file` with the hash. A stale answer undoes the patch's
-earlier writes the same way, so nothing stays applied. Applied without review,
+sends every result in one `write-files` with the hash it read; an added file
+or a move's destination goes without a hash, so it is only created, and a
+deletion carries the hash. The origin checks every hash before it writes any
+file, so a stale answer leaves nothing applied. Applied without review,
 the patch is then applied once more to the current content, where a hunk that
 no longer matches fails as for a local file. A reviewed patch shows the
-conflict and stays open. One patch cannot mix remote files with other files.
+conflict and stays open. One patch changes the files of one remote artifact,
+and nothing else, since only one origin can write them at once.
 Permission treats the operands as remote content: they contribute no local
 path, Edits applies them as it applies `SharedEdit`, and Plan mode denies them.
 
@@ -960,10 +983,12 @@ its reply arrives, and a cancelled request discards its reply: an edit
 already sent may still land at the origin, attributed and revertible there.
 An unreachable, revoked or deleted origin answers with the package's generic
 `Origin unavailable (revoked, deleted, or offline)`. Project artifacts shows a
-remote artifact's Link as `remote HOST, reachable` (or `unavailable`, or `not
-checked yet`), HOST being the relay's, and its details name the origin id and
-link tier; listing it checks a link not checked in the last minute in the
-background. Deleting it there detaches it; opening a remote whiteboard or
+remote artifact's Link as `remote ORIGIN, reachable` (or `unavailable`, or
+`not checked yet`), ORIGIN being the name the origin's welcome gave, or the
+relay host when none was supplied, and its
+details name the origin, the relay host, the origin id and link tier; listing
+it checks a link not checked in the last minute in the background. Deleting it
+there detaches it; opening a remote whiteboard or
 document, versions, duplicates and conversations are refused. Origin change
 events arriving while connected update its title and are announced through the
 backend's change events.

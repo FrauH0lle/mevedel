@@ -433,18 +433,43 @@ An editing transfer appears once, complete, as its `body' shorthand."
 ;;
 ;;; Joining
 
+(mevedel-deftest mevedel-collaboration-artifact-room-origin-privacy
+  ()
+  ,test
+  (test)
+  :doc "default welcome omits origin rather than disclosing workspace or host"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((mevedel-collaboration-artifact-room-origin-name nil)
+           (id (mevedel-artifact-room-test--board workspace "Pipeline"))
+           (links (mevedel-collaboration-artifact-room-share root id))
+           (_ (mevedel-artifact-room-test--host-joined state))
+           (consumer (mevedel-artifact-room-test--consumer
+                      port (plist-get links :link-view))))
+      (unwind-protect
+          (progn
+            (mevedel-artifact-room-test--send
+             consumer '((t . "hello") (proto . 3) (name . "viewer")
+                        (guestId . "privacy-consumer")))
+            (should
+             (equal (mapcar #'cdr (mevedel-artifact-room-test--fixture
+                                  "welcome-private" `(("$ID" . ,id))))
+                    (mevedel-artifact-room-test--await consumer 1))))
+        (mevedel-artifact-room-test--close consumer)))))
+
 (mevedel-deftest mevedel-collaboration-artifact-room--on-frame
   ()
   ,test
   (test)
   :doc "answers an edit link's hello with the artifact welcome only"
   (mevedel-artifact-room-test--with-origin (root workspace state port)
-    (let* ((id (mevedel-artifact-room-test--board workspace "Pipeline"))
+    (let* ((mevedel-collaboration-artifact-room-origin-name "Shared studio")
+           (id (mevedel-artifact-room-test--board workspace "Pipeline"))
            (links (mevedel-collaboration-artifact-room-share root id))
            (_ (mevedel-artifact-room-test--host-joined state))
            (consumer (mevedel-artifact-room-test--consumer
                       port (plist-get links :link-edit)))
            (bindings `(("$ID" . ,id) ("$TITLE" . "Pipeline")
+                       ("$ORIGIN" . "Shared studio")
                        ("$WRITE_TOKEN"
                         . ,(mevedel-artifact-room-test--write-token consumer)))))
       (unwind-protect
@@ -506,13 +531,21 @@ STATE and PORT are the stub relay's."
     (plist-put consumer :texts nil)
     consumer))
 
-(defun mevedel-artifact-room-test--request (consumer req-id body)
-  "Send editing BODY as request REQ-ID from CONSUMER; return the reply body."
+(defun mevedel-artifact-room-test--request (consumer req-id body &optional timeout)
+  "Send editing BODY as request REQ-ID from CONSUMER; return the reply body.
+Wait at most TIMEOUT seconds, 5 by default, for the reply's last chunk;
+only the newest frame is decoded while waiting, so a large reply costs
+no more than its size."
   (mevedel-artifact-room-test--send
    consumer `((t . "editing") (reqId . ,req-id) (body . ,body)))
   (mevedel-relay-test--pump
-   (lambda () (cl-find req-id (mevedel-artifact-room-test--frames consumer)
-                       :key (lambda (frame) (alist-get 'reqId frame)))))
+   (lambda ()
+     (when-let* ((text (car (last (plist-get consumer :texts))))
+                 (frame (mevedel-artifact-room-test--parse text)))
+       (and (equal req-id (alist-get 'reqId frame))
+            (= (+ (alist-get 'offset frame) (length (alist-get 'data frame)))
+               (alist-get 'total frame)))))
+   timeout)
   (alist-get 'body (cl-find req-id (mevedel-artifact-room-test--frames consumer)
                             :key (lambda (frame) (alist-get 'reqId frame)))))
 
@@ -1044,6 +1077,34 @@ FUNCTION is a step of the editing queue: admission or commit."
                                             (assq-delete-all 'id (copy-sequence event)))))
                                    (funcall events))))
             (should (equal id (alist-get 'id (car (funcall events))))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "tells an HTML room's consumers when its files change, and of no other artifact's"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (mevedel-artifact-room-test--site workspace "landing")
+    (mevedel-artifact-room-test--site workspace "other")
+    (let* ((links (mevedel-collaboration-artifact-room-share root "landing"))
+           (consumer (mevedel-artifact-room-test--joined state port links 'view))
+           (events (lambda ()
+                     (mapcar (lambda (frame)
+                               (mevedel-artifact-room-test--normal (alist-get 'body frame)))
+                             (cl-remove-if-not
+                              (lambda (frame) (equal "event" (alist-get 'reqId frame)))
+                              (mevedel-artifact-room-test--frames consumer))))))
+      (unwind-protect
+          (progn
+            ;; A store change that leaves this artifact's files alone says nothing.
+            (mevedel-artifact-store-write-file workspace "other" "index.html" "<p>other</p>"
+                                               mevedel-artifact-room-test--page-hash)
+            (accept-process-output nil 0.2)
+            (should-not (funcall events))
+            ;; A write at the origin, as its own ApplyPatch makes, reaches it.
+            (mevedel-artifact-store-write-file workspace "landing" "site.css" "h1 {}" nil)
+            (should (mevedel-relay-test--pump (lambda () (funcall events))))
+            (accept-process-output nil 0.2)
+            (should (equal '(((event . "changed") (id . "landing") (kind . "html")
+                              (title . "Landing")))
+                           (funcall events))))
         (mevedel-artifact-room-test--close consumer)))))
 
 (mevedel-deftest mevedel-collaboration-artifact-room--roster
@@ -1173,12 +1234,26 @@ FUNCTION is a step of the editing queue: admission or commit."
                   (sheet (alist-get 'result
                                     (mevedel-artifact-room-test--request
                                      viewer 2 '((action . "library") (part . "sheet")
-                                                (library . "My library"))))))
+                                                (library . "My library")))))
+                  (item (alist-get 'result
+                                   (mevedel-artifact-room-test--request
+                                    viewer 3 '((action . "library") (part . "item")
+                                               (item . "My library/cube"))))))
               (should (string-search "My library/cube" (alist-get 'text listing)))
               (should (string-search "Built-in" (alist-get 'text listing)))
               (should (equal "image/png" (alist-get 'mime sheet)))
               (should (string-prefix-p "\x89PNG" (base64-decode-string
-                                                  (alist-get 'png sheet)))))
+                                                  (alist-get 'png sheet))))
+              ;; One item previews alone, unlike the library's sheet.
+              (should (equal "image/png" (alist-get 'mime item)))
+              (should (string-prefix-p "\x89PNG" (base64-decode-string (alist-get 'png item))))
+              (should-not (equal (alist-get 'png sheet) (alist-get 'png item)))
+              (should (string-match-p
+                       "No library item My library/sphere"
+                       (alist-get 'error
+                                  (mevedel-artifact-room-test--request
+                                   viewer 4 '((action . "library") (part . "item")
+                                              (item . "My library/sphere")))))))
           (mevedel-artifact-room-test--close viewer)))))
 
   :doc "reports an unknown library as an error"
@@ -1587,6 +1662,13 @@ Return the artifact's directory."
                                                 (data . ,(base64-encode-string largest t))))))
             (should (equal largest (mevedel-artifact-room-test--file directory
                                                                      "assets/large.bin")))
+            ;; And reads back whole through the link.
+            (let ((read (alist-get 'result (mevedel-artifact-room-test--request
+                                            consumer 4 '((action . "read")
+                                                         (file . "assets/large.bin"))
+                                            60))))
+              (should (equal (* 16 1024 1024) (alist-get 'bytes read)))
+              (should (equal largest (base64-decode-string (alist-get 'data read)))))
             ;; A larger file placed at the origin is listed but not read.
             (let ((coding-system-for-write 'no-conversion))
               (write-region (concat largest "x") nil
@@ -1654,6 +1736,144 @@ Return the artifact's directory."
                                                            (file . "assets/logo.png")
                                                            (hash . "0"))))))
             (should (file-exists-p (file-name-concat directory "assets/logo.png"))))
+        (mevedel-artifact-room-test--close consumer)))))
+
+(mevedel-deftest mevedel-collaboration-artifact-room--html-write-files
+  ()
+  ,test
+  (test)
+  :doc "changes several files at once when every hash still matches"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
+           (links (mevedel-collaboration-artifact-room-share root "landing"))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit)))
+      (unwind-protect
+          (pcase-let ((`(,expected . ,actual)
+                       (mevedel-artifact-room-test--exchange
+                        consumer "write-files" '(("$ID" . "landing")))))
+            (should (equal (mapcar #'mevedel-artifact-room-test--normal expected)
+                           (mapcar #'mevedel-artifact-room-test--normal actual)))
+            (should (equal "<!doctype html>\n<h1>Hello, world</h1>\n"
+                           (mevedel-artifact-room-test--file directory "index.html")))
+            (should (equal "h1 { color: teal; }\n"
+                           (mevedel-artifact-room-test--file directory "styles/site.css")))
+            (should-not (file-exists-p (file-name-concat directory "assets/logo.png"))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "changes nothing when one hash is stale, and names that file"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
+           (links (mevedel-collaboration-artifact-room-share root "landing"))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (reply (mevedel-artifact-room-test--request
+                   consumer 1 `((action . "write-files")
+                                (changes . [((file . "index.html")
+                                             (hash . ,mevedel-artifact-room-test--page-hash)
+                                             (text . "<p>mine</p>"))
+                                            ((file . "new.css") (text . "p {}"))
+                                            ((file . "assets/logo.png")
+                                             (hash . ,mevedel-artifact-room-test--page-hash)
+                                             (delete . t))])))))
+      (unwind-protect
+          (progn
+            (should (equal "stale" (alist-get 'code reply)))
+            (should (equal "assets/logo.png" (alist-get 'file reply)))
+            (should (equal mevedel-artifact-room-test--page
+                           (mevedel-artifact-room-test--file directory "index.html")))
+            (should-not (file-exists-p (file-name-concat directory "new.css")))
+            (should (file-exists-p (file-name-concat directory "assets/logo.png"))))
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "refuses the primary file's deletion and a view link, changing nothing"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
+           (links (mevedel-collaboration-artifact-room-share root "landing"))
+           (editor (mevedel-artifact-room-test--joined state port links 'edit))
+           (viewer (mevedel-artifact-room-test--joined state port links 'view))
+           (changes `[((file . "new.css") (text . "p {}"))
+                      ((file . "index.html")
+                       (hash . ,mevedel-artifact-room-test--page-hash) (delete . t))]))
+      (unwind-protect
+          (progn
+            (should (string-search "primary file"
+                                   (alist-get 'error (mevedel-artifact-room-test--request
+                                                      editor 1 `((action . "write-files")
+                                                                 (changes . ,changes))))))
+            (should (equal "This artifact link is view-only"
+                           (alist-get 'error (mevedel-artifact-room-test--request
+                                              viewer 1 `((action . "write-files")
+                                                         (changes . ,changes))))))
+            (should-not (file-exists-p (file-name-concat directory "new.css")))
+            (should (file-exists-p (file-name-concat directory "index.html"))))
+        (mevedel-artifact-room-test--close editor)
+        (mevedel-artifact-room-test--close viewer)))))
+
+(mevedel-deftest mevedel-collaboration-artifact-room--html-write-files-rollback
+  ()
+  ,test
+  (test)
+  :doc "rolls back a batch when a later file's directory is unwritable"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
+           (assets (file-name-concat directory "assets"))
+           (links (mevedel-collaboration-artifact-room-share root "landing"))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit))
+           (changed nil)
+           (mevedel-artifact-store-changed-functions
+            (cons (lambda (_workspace) (setq changed t))
+                  mevedel-artifact-store-changed-functions))
+           (versions (mevedel-artifact-store-versions workspace "landing")))
+      (unwind-protect
+          (progn
+            (set-file-modes assets #o555)
+            (should-not (file-writable-p assets))
+            (let ((reply (mevedel-artifact-room-test--request
+                          consumer 1 `((action . "write-files")
+                                       (changes . [((file . "index.html")
+                                                    (hash . ,mevedel-artifact-room-test--page-hash)
+                                                    (text . "<p>must roll back</p>"))
+                                                   ((file . "assets/new.css")
+                                                    (text . "p {}"))])))))
+              (should (string-search "all changes rolled back" (alist-get 'error reply)))
+              (should-not (assq 'result reply)))
+            (should (equal mevedel-artifact-room-test--page
+                           (mevedel-artifact-room-test--file directory "index.html")))
+            (should-not (file-exists-p (file-name-concat assets "new.css")))
+            (should-not changed)
+            (accept-process-output nil 0.1)
+            (should-not (cl-find "event" (mevedel-artifact-room-test--frames consumer)
+                                 :key (lambda (frame) (alist-get 'reqId frame))
+                                 :test #'equal))
+            (mevedel-artifact-room-test--close consumer)
+            (should (equal versions (mevedel-artifact-store-versions workspace "landing"))))
+        (set-file-modes assets #o755)
+        (mevedel-artifact-room-test--close consumer))))
+
+  :doc "also restores deleted bytes and modes, and removes created directories"
+  (mevedel-artifact-room-test--with-origin (root workspace state port)
+    (let* ((directory (mevedel-artifact-room-test--site workspace "landing"))
+           (blocked (file-name-concat directory "blocked"))
+           (logo (file-name-concat directory "assets/logo.png"))
+           (bytes (mevedel-artifact-room-test--file directory "assets/logo.png"))
+           (links (mevedel-collaboration-artifact-room-share root "landing"))
+           (consumer (mevedel-artifact-room-test--joined state port links 'edit)))
+      (unwind-protect
+          (progn
+            (make-directory blocked)
+            (set-file-modes blocked #o555)
+            (set-file-modes logo #o640)
+            (let ((reply (mevedel-artifact-room-test--request
+                          consumer 1 `((action . "write-files")
+                                       (changes . [((file . "new/nested/site.css") (text . "p {}"))
+                                                   ((file . "assets/logo.png")
+                                                    (hash . ,(secure-hash 'sha256 bytes))
+                                                    (delete . t))
+                                                   ((file . "blocked/new.css") (text . "p {}"))])))))
+              (should (string-search "all changes rolled back" (alist-get 'error reply))))
+            (should (equal bytes (mevedel-artifact-room-test--file directory "assets/logo.png")))
+            (should (= #o640 (file-modes logo)))
+            (should-not (file-exists-p (file-name-concat directory "new"))))
+        (set-file-modes blocked #o755)
         (mevedel-artifact-room-test--close consumer)))))
 
 (mevedel-deftest mevedel-collaboration-artifact-room--html-versions
@@ -1903,6 +2123,10 @@ Return the artifact's directory."
       (mevedel-artifact-room-test--host-joined state)
       (run-hooks 'kill-emacs-hook)
       (should (mevedel-relay-test--pump (lambda () (not (plist-get (car state) :host)))))
+      ;; The per-user record is a private data file.
+      (let ((record (file-name-concat mevedel-user-dir "artifact-rooms.eld")))
+        (should (file-exists-p record))
+        (should (= #o600 (file-modes record))))
       ;; The next Emacs knows nothing but the record and the bookkeeping.
       (clrhash mevedel-collaboration-artifact-room--rooms)
       (mevedel-collaboration-artifact-room-restore)

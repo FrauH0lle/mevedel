@@ -52,14 +52,15 @@ function shared(body) {
 test('the registry offers edit_artifact and view_artifact', () => {
   const edit = tools.find((tool) => tool.name === 'edit_artifact');
   const view = tools.find((tool) => tool.name === 'view_artifact');
-  for (const action of ['patch', 'image', 'rename', 'background', 'revert']) {
-    assert.ok(edit.inputSchema.properties.action.enum.includes(action), action);
-  }
+  // Exactly SharedEdit's content actions: an action added here reaches the origin.
+  assert.deepEqual(edit.inputSchema.properties.action.enum,
+    ['patch', 'image', 'rename', 'background', 'insert', 'revert']);
   for (const name of ['changes', 'title', 'background', 'source', 'x', 'y', 'width', 'alt', 'afterId',
-    'transaction']) {
+    'item', 'transaction']) {
     assert.ok(edit.inputSchema.properties[name], name);
   }
   assert.deepEqual(view.inputSchema.required, ['name']);
+  assert.deepEqual(Object.keys(view.inputSchema.properties), ['name', 'image', 'item']);
 });
 
 test('edit_artifact reverts a contribution from the history with SharedEdit\'s argument', async (t) => {
@@ -176,14 +177,22 @@ test('image refuses anything but a PNG, JPEG, WebP or SVG of at most 4.7 MB, bef
   assert.ok(!(await edit(path.join(dir, 'limit.png'))).isError);
 });
 
-test('edit_artifact refuses an unknown action without contacting the origin', async (t) => {
-  const origin = await room(t);
+test('edit_artifact refuses every other SharedEdit action without contacting the origin', async (t) => {
+  // The fake origin would answer these (shared answers anything), so a
+  // refusal here comes from the package's own allowlist.
+  const origin = await room(t, { onEditing: shared });
   const env = await attached(t, origin);
   const before = origin.connections;
-  const result = await callTool('edit_artifact', { name: 'snt-pipeline', action: 'delete' }, { env });
-  assert.ok(result.isError);
-  assert.match(result.content[0].text, /action must be one of patch, image, rename, background/);
+  for (const action of ['delete', 'version', 'versions', 'restore', 'library-add', 'library-remove',
+    'list', 'create', 'duplicate', 'import', 'view', 'read', 'library', 'discussion-post', 'write-file',
+    'toString', 'constructor', '__proto__', '']) {
+    const result = await callTool('edit_artifact', { name: 'snt-pipeline', action }, { env });
+    assert.ok(result.isError, action);
+    assert.equal(result.content[0].text,
+      'action must be one of patch, image, rename, background, insert, revert', action);
+  }
   assert.equal(origin.connections, before);
+  assert.deepEqual(origin.received.filter((frame) => frame.t === 'editing'), []);
 });
 
 test('view_artifact returns the board picture, or an embedded image by its key', async (t) => {
@@ -199,4 +208,45 @@ test('view_artifact returns the board picture, or an embedded image by its key',
   assert.deepEqual(image.content, [{ type: 'image', data: Buffer.from('image file-1').toString('base64'),
     mimeType: 'image/webp' }]);
   assert.deepEqual(origin.received.at(-1).body, { action: 'view', id: $ID, image: 'file-1' });
+});
+
+test('view_artifact previews one library item of a whiteboard', async (t) => {
+  const origin = await room(t, {
+    onEditing: (body) => (body.action === 'library' && body.part === 'item'
+      ? { result: { png: Buffer.from(`item ${body.item}`).toString('base64'), mime: 'image/png' } }
+      : undefined),
+  });
+  const env = await attached(t, origin, 'view');
+  const { $ID } = fixture('welcome').bindings;
+  const result = await callTool('view_artifact', { name: 'snt-pipeline', item: 'Flowchart/diamond' }, { env });
+  assert.ok(!result.isError, result.content[0]?.text);
+  assert.deepEqual(result.content, [{ type: 'image', data: Buffer.from('item Flowchart/diamond').toString('base64'),
+    mimeType: 'image/png' }]);
+  assert.deepEqual(origin.received.at(-1).body,
+    { action: 'library', id: $ID, part: 'item', item: 'Flowchart/diamond' });
+});
+
+test('view_artifact refuses an item with an image or without a library, before connecting', async (t) => {
+  const origin = await room(t, { onEditing: shared });
+  const env = await attached(t, origin);
+  const before = origin.connections;
+  const both = await callTool('view_artifact', { name: 'snt-pipeline', image: 'file-1', item: 'Flowchart/diamond' },
+    { env });
+  assert.ok(both.isError);
+  assert.equal(both.content[0].text,
+    'Give image or item, not both: image views an embedded image, item a library item');
+  const bare = await callTool('view_artifact', { name: 'snt-pipeline', item: 'diamond' }, { env });
+  assert.ok(bare.isError);
+  assert.equal(bare.content[0].text, 'item needs LIBRARY/ITEM-ID from whiteboard_libraries');
+  assert.equal(origin.connections, before);
+});
+
+test('the origin\'s refusal of an item preview reaches the agent as is', async (t) => {
+  const origin = await room(t, { kind: 'document',
+    onEditing: (body) => (body.action === 'library' ? { error: 'An artifact link does not permit library' }
+      : undefined) });
+  const env = await attached(t, origin);
+  const result = await callTool('view_artifact', { name: 'snt-pipeline', item: 'Flowchart/diamond' }, { env });
+  assert.ok(result.isError);
+  assert.equal(result.content[0].text, 'An artifact link does not permit library');
 });

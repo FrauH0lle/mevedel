@@ -17,6 +17,16 @@
           "helpers"))
 
 
+(mevedel-deftest mevedel-workspace-current ()
+  ,test
+  (test)
+  :doc "returns the buffer's workspace and refuses a buffer without one"
+  (cl-letf (((symbol-function 'mevedel-workspace) (lambda (&rest _) 'workspace)))
+    (should (eq 'workspace (mevedel-workspace-current))))
+  (cl-letf (((symbol-function 'mevedel-workspace) #'ignore))
+    (should-error (mevedel-workspace-current) :type 'user-error)))
+
+
 ;;
 ;;; Workspace detection helpers
 

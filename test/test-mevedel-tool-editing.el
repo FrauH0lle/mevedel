@@ -161,6 +161,9 @@
       (should (string-match-p "Unsupported.*Not an Excalidraw library" listing))
       (should legacy)
       (should (plist-get (run "Read" '(:file_path "shared://library/Legacy/sheet.png")) :media))
+      ;; One item previews at its ref.
+      (should (plist-get (run "Read" (list :file_path (format "shared://library/%s/view.png" legacy)))
+                         :media))
       (should (string-match-p "No element library Missing"
                               (text (run "Read" '(:file_path "shared://library/Missing") 'error))))
       (let* ((board (parse (run "SharedCreate" '(:kind "whiteboard" :title "Stores"))))

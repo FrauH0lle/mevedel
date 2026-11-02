@@ -457,6 +457,36 @@
   (should-not (mevedel--plain-data-p (lambda () t)))
   (should-not (mevedel--plain-data-p (make-hash-table))))
 
+(mevedel-deftest mevedel--write-private-data-file ()
+  ,test
+  (test)
+  :doc "writes a value readable only by this user, replacing a looser file"
+  (let* ((directory (make-temp-file "mevedel-data-file-" t))
+         (path (file-name-concat directory "nested" "record.eld")))
+    (unwind-protect
+        (progn
+          (mevedel--write-private-data-file path '(:roots ("/a" "/b") :n 1))
+          (should (= #o600 (file-modes path)))
+          (should (equal '(:roots ("/a" "/b") :n 1) (mevedel--read-data-file path)))
+          (set-file-modes path #o644)
+          (mevedel--write-private-data-file path '("/c"))
+          (should (= #o600 (file-modes path)))
+          (should (equal '("/c") (mevedel--read-data-file path))))
+      (delete-directory directory t))))
+
+(mevedel-deftest mevedel--read-data-file ()
+  ,test
+  (test)
+  :doc "yields nil for a missing or malformed file"
+  (let* ((directory (make-temp-file "mevedel-data-file-" t))
+         (path (file-name-concat directory "record.eld")))
+    (unwind-protect
+        (progn
+          (should-not (mevedel--read-data-file path))
+          (write-region "(unbalanced" nil path nil 'silent)
+          (should-not (mevedel--read-data-file path)))
+      (delete-directory directory t))))
+
 (mevedel-deftest mevedel--ordered-completion-table ()
   ,test
   (test)

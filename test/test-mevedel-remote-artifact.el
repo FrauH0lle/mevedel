@@ -21,6 +21,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-report-test-support"))
+(require 'gptel-request)
 (require 'mevedel-artifact-backend)
 (require 'mevedel-artifact-store)
 (require 'mevedel-artifacts-list)
@@ -49,11 +50,11 @@
 (defun mevedel-remote-artifact-test--origin ()
   "Return a fake origin: a plist the fake bridge answers from.
 `:requests' collects every request, newest first; `:reachable',
-`:writable' and `:title' shape the answers.  An HTML origin (`:kind'
+`:writable', `:title' and `:origin' shape the answers.  An HTML origin (`:kind'
 \"html\") keeps its `:files' as an alist (FILE . TEXT) and names its
 `:primary' one."
   (list :requests nil :reachable t :writable t :title "SNT analysis pipeline"
-        :kind "whiteboard" :files nil :primary nil))
+        :origin "snt-app on mevedel-host" :kind "whiteboard" :files nil :primary nil))
 
 (defun mevedel-remote-artifact-test--hash (text)
   "Return the hash an origin gives the file content TEXT."
@@ -96,7 +97,43 @@
         ((not (and current (equal (plist-get body :hash) (mevedel-remote-artifact-test--hash current))))
          (funcall stale))
         (t (plist-put origin :files (assoc-delete-all file (copy-sequence files)))
-           (list :result (list :file file :deleted t))))))))
+           (list :result (list :file file :deleted t)))))
+      ;; Every hash is checked before any file changes, as the origin does.
+      ("write-files"
+       (let* ((changes (append (plist-get body :changes) nil))
+              (current-hash (lambda (change)
+                              (when-let* ((text (cdr (assoc (plist-get change :file) files))))
+                                (mevedel-remote-artifact-test--hash text))))
+              (refused (cl-find-if (lambda (change)
+                                     (not (equal (plist-get change :hash)
+                                                 (funcall current-hash change))))
+                                   changes)))
+         (cond
+          ((cl-find-if (lambda (change) (and (plist-get change :delete)
+                                             (equal (plist-get change :file) primary)))
+                       changes)
+           (list :error (format "%s is the artifact's primary file; an artifact link cannot delete it"
+                                primary)))
+          (refused
+           (mevedel-remote-artifact-test--file-answer
+            origin (list :action "write-file" :file (plist-get refused :file)
+                         :hash (plist-get refused :hash))))
+          (t
+           (list :result
+                 (list :files
+                       (vconcat
+                        (mapcar (lambda (change)
+                                  (let ((name (plist-get change :file)))
+                                    (if (plist-get change :delete)
+                                        (progn (plist-put origin :files
+                                                          (assoc-delete-all
+                                                           name (copy-sequence (plist-get origin :files))))
+                                               (list :file name :deleted t))
+                                      (setf (alist-get name (plist-get origin :files) nil nil #'equal)
+                                            (plist-get change :text))
+                                      (list :file name
+                                            :hash (mevedel-remote-artifact-test--hash (plist-get change :text))))))
+                                changes)))))))))))
 
 (defun mevedel-remote-artifact-test--answer (origin body)
   "Return ORIGIN's reply to request BODY, as an artifact room gives it."
@@ -108,6 +145,14 @@
                                             "contribution c1 revision 2 Host"
                                           mevedel-remote-artifact-test--overview))))
       ("view" (list :result (list :png "iVBORw0KGgo=" :mime "image/png")))
+      ("library"
+       (if (member (plist-get body :part) '("sheet" "item"))
+           (list :result (list :png "iVBORw0KGgo=" :mime "image/png"))
+         (list :result
+               (list :text (concat "1 library item; insert one with SharedEdit insert and its ref. "
+                                   "The sheet shared://library/sheet.png numbers items 1-1; "
+                                   "shared://library/REF/view.png shows one.\n"
+                                   "1. Origin kit/cube · \"Cube\" · Origin kit · 1 element · 50×40\n")))))
       ((or "patch" "rename" "background" "image" "insert" "revert")
        (cond
         ((not (plist-get origin :writable)) (list :error "This artifact link is view-only"))
@@ -131,6 +176,7 @@
          (list :error "Origin unavailable (revoked, deleted, or offline)")
        (append (list :welcome (list :id "snt-pipeline" :kind (plist-get origin :kind)
                                     :title (plist-get origin :title)
+                                    :origin (plist-get origin :origin)
                                     :readOnly (if (plist-get origin :writable) :json-false t)))
                (when-let* ((body (plist-get request :body)))
                  (list :reply (mevedel-remote-artifact-test--answer origin body))))))))
@@ -296,9 +342,9 @@ under its origin id."
                              (text (run "Read" '(:file_path "shared://pipeline/discussions")
                                         'error))))
       (let ((sent (length (plist-get origin :requests))) failure)
-        (mevedel-artifact-store-save-version workspace "pipeline" "session-1")
-        (mevedel-artifact-store-delete workspace "pipeline" nil
-                                       (lambda (reason) (setq failure reason)))
+        (should-not (mevedel-artifact-backend-save-version workspace "pipeline" "session-1"))
+        (mevedel-artifact-backend-call workspace '(:action "delete" :id "pipeline" :actor "Host")
+                                       (lambda (reply) (setq failure (plist-get reply :error))))
         (let ((deadline (+ (float-time) 5)))
           (while (and (not failure) (< (float-time) deadline))
             (accept-process-output nil 0.05)))
@@ -362,6 +408,45 @@ under its origin id."
                                                  :id)))
         (should (= 1 committed))))))
 
+(mevedel-deftest mevedel-tool-editing-view/remote-library
+  (:doc "A remote whiteboard's agents read its origin's libraries at shared://ALIAS/library"
+   :quiet t)
+  (mevedel-remote-artifact-test--with-session
+    (attach "pipeline")
+    (cl-letf (((symbol-function 'gptel--model-capable-p)
+               (lambda (capability &optional _model) (eq capability 'media)))
+              ((symbol-function 'gptel--model-mime-capable-p)
+               (lambda (_mime &optional _model) t)))
+      (cl-flet ((sent () (plist-get (car (plist-get origin :requests)) :body)))
+        ;; The listing names the origin's items, at addresses of the alias.
+        (let ((listing (text (run "Read" '(:file_path "shared://pipeline/library")))))
+          (should (string-search "Origin kit/cube" listing))
+          (should (string-search "shared://pipeline/library/sheet.png" listing))
+          (should (string-search "shared://pipeline/library/REF/view.png" listing))
+          (should-not (string-search "shared://library" listing)))
+        (should (equal '(:action "library" :part "list") (sent)))
+        (run "Read" '(:file_path "shared://pipeline/library/Origin%20kit"))
+        (should (equal '(:action "library" :part "list" :library "Origin kit") (sent)))
+        (should (plist-get (run "Read" '(:file_path "shared://pipeline/library/Origin%20kit/sheet.png"))
+                           :media))
+        (should (equal '(:action "library" :part "sheet" :library "Origin kit") (sent)))
+        ;; One item previews from the origin by its ref.
+        (should (plist-get (run "Read" '(:file_path "shared://pipeline/library/Origin%20kit/cube/view.png"))
+                           :media))
+        (should (equal '(:action "library" :part "item" :library "Origin kit" :item "Origin kit/cube")
+                       (sent)))
+        ;; Grep searches the origin's listing.
+        (should (string-search "Origin kit/cube"
+                               (text (run "Grep" '(:pattern "cube" :path "shared://pipeline/library"
+                                                            :output_mode "content")))))
+        ;; The local libraries never ask the origin.
+        (let ((sent-before (length (plist-get origin :requests))))
+          (run "Read" '(:file_path "shared://library"))
+          (should (= sent-before (length (plist-get origin :requests)))))))
+    ;; A local or unknown id has no libraries of its own.
+    (should (string-search "Shared item not found"
+                           (text (run "Read" '(:file_path "shared://other/library") 'error))))))
+
 (mevedel-deftest mevedel-remote-artifact-registrations
   (:doc "Attached artifacts come back in a fresh Emacs; origin changes are announced"
    :quiet t)
@@ -409,12 +494,13 @@ under its origin id."
                        :origin-buffer view :workspace workspace))
               (should (equal "SNT analysis pipeline" (cell 0)))
               (should (equal "whiteboard" (cell 1)))
-              (should (equal "remote relay.example.org, reachable" (cell 6)))
+              (should (equal "remote snt-app on mevedel-host, reachable" (cell 6)))
               (mevedel-cockpit-goto-id "pipeline")
               (let ((details (mevedel-report-test-text
                               (mevedel-artifacts-list--details
                                (mevedel-cockpit-surface-selected) nil))))
-                (should (string-match-p "Origin +relay.example.org" details))
+                (should (string-match-p "Origin +snt-app on mevedel-host" details))
+                (should (string-match-p "Relay +relay.example.org" details))
                 (should (string-match-p "Origin id +snt-pipeline" details))
                 (should (string-match-p "Link +edit" details)))
               ;; A listing checks a link not checked lately, and shows the outcome.
@@ -424,7 +510,7 @@ under its origin id."
               (mevedel-cockpit-surface-refresh "pipeline")
               (settle)
               (mevedel-cockpit-surface-refresh "pipeline")
-              (should (equal "remote relay.example.org, unavailable" (cell 6)))
+              (should (equal "remote snt-app on mevedel-host, unavailable" (cell 6)))
               ;; What only a local artifact has is refused, not created.
               (mevedel-cockpit-goto-id "pipeline")
               (dolist (command '(mevedel-artifacts-list-open-browser
@@ -446,6 +532,23 @@ under its origin id."
         (when-let* ((cockpit (get-buffer mevedel-artifacts-list-buffer-name)))
           (kill-buffer cockpit))
         (kill-buffer view)))))
+
+(mevedel-deftest mevedel-remote-artifact-origin-privacy
+  (:doc "Catalog uses relay host for an unnamed welcome, including after a named one"
+   :quiet t)
+  (mevedel-remote-artifact-test--with-session
+    (plist-put origin :origin nil)
+    (attach "private")
+    (should (equal "relay.example.org"
+                   (plist-get (car (mevedel-artifact-backend-catalog workspace 'full))
+                              :origin)))
+    (plist-put origin :origin "Shared studio")
+    (attach "named")
+    (plist-put origin :origin nil)
+    (run "Read" '(:file_path "shared://named"))
+    (should (equal "relay.example.org"
+                   (plist-get (car (mevedel-artifact-backend-catalog workspace 'full))
+                              :origin)))))
 
 (defconst mevedel-remote-artifact-test--fake-room
   (file-name-concat (file-name-directory
@@ -548,8 +651,9 @@ body of the last request that reached the origin."
       (should (equal "<!doctype html>\n<h1>Hi</h1>\n" (file "index.html")))
       ;; The whole file went back with the hash it was read with, attributed
       ;; to the agent.
-      (should (equal (list :action "write-file" :file "index.html" :hash read-hash
-                           :text "<!doctype html>\n<h1>Hi</h1>\n")
+      (should (equal (list :action "write-files"
+                           :changes (vector (list :file "index.html" :hash read-hash
+                                                  :text "<!doctype html>\n<h1>Hi</h1>\n")))
                      (sent)))
       (should (equal "tester@host /root" (plist-get (car (plist-get origin :requests)) :name))))
     ;; Nothing reached the local store or the filesystem under the address.
@@ -576,6 +680,31 @@ body of the last request that reached the origin."
                            (text (run "Read" '(:file_path "shared://landing/files/missing.css")
                                       'error))))))
 
+(mevedel-deftest mevedel-tool-fs-search--shared/remote-files
+  (:doc "Grep searches a remote HTML artifact's files, one or all of them, by their read lines"
+   :quiet t)
+  (mevedel-remote-artifact-test--with-html
+    (plist-put origin :files (append (plist-get origin :files)
+                                     (list (cons "assets/app.js" "const h1 = 'Hello';\n"))))
+    ;; One file, its matches at the lines Read shows.
+    (let ((found (text (run "Grep" '(:pattern "Hello" :path "shared://landing/files/index.html"
+                                              :output_mode "content")))))
+      (should (string-search "shared://landing/files/index.html" found))
+      (should (string-match-p ":2:<h1>Hello</h1>" found)))
+    ;; Every file of the artifact, or those under a directory.
+    (let ((found (text (run "Grep" '(:pattern "h1" :path "shared://landing/files"
+                                              :output_mode "files_with_matches")))))
+      (should (string-search "shared://landing/files/index.html" found))
+      (should (string-search "shared://landing/files/site.css" found))
+      (should (string-search "shared://landing/files/assets/app.js" found)))
+    (let ((found (text (run "Grep" '(:pattern "h1" :path "shared://landing/files/assets"
+                                              :output_mode "files_with_matches")))))
+      (should (string-search "shared://landing/files/assets/app.js" found))
+      (should-not (string-search "index.html" found)))
+    (should (string-search "No file shared://landing/files/nope"
+                           (text (run "Grep" '(:pattern "h1" :path "shared://landing/files/nope")
+                                      'error))))))
+
 (defun mevedel-remote-artifact-test--edit-before-write (origin file edit &optional times)
   "Make ORIGIN's FILE change by EDIT just before each of its next TIMES writes.
 EDIT maps the file's text to the text another writer leaves there."
@@ -583,8 +712,9 @@ EDIT maps the file's text to the text another writer leaves there."
         (left (or times 1)))
     (lambda (request callback)
       (let ((body (plist-get request :body)))
-        (when (and (> left 0) (equal "write-file" (plist-get body :action))
-                   (equal file (plist-get body :file)))
+        (when (and (> left 0) (equal "write-files" (plist-get body :action))
+                   (cl-find file (plist-get body :changes)
+                            :key (lambda (change) (plist-get change :file)) :test #'equal))
           (cl-decf left)
           (setf (alist-get file (plist-get origin :files) nil nil #'equal)
                 (funcall edit (alist-get file (plist-get origin :files) nil nil #'equal)))))
@@ -599,7 +729,7 @@ EDIT maps the file's text to the text another writer leaves there."
              "hunk 1 (patch line [0-9]+) does not match shared://landing/files/index.html"
              (text (patch 'error "*** Update File: shared://landing/files/index.html"
                           "@@" "-<h1>Bye</h1>" "+<h1>Hi</h1>"))))
-    (should-not (equal "write-file" (plist-get (sent) :action)))
+    (should-not (equal "write-files" (plist-get (sent) :action)))
     ;; A change at the origin after the read: applied once more on the
     ;; current content, the hunks still match and land there.
     (let ((mevedel-remote-artifact--transport
@@ -627,36 +757,42 @@ EDIT maps the file's text to the text another writer leaves there."
     (should-not (string-search "Mine" (file "index.html")))))
 
 (mevedel-deftest mevedel-tool-patch-handler/remote-assets
-  (:doc "ApplyPatch creates, deletes and moves a remote HTML artifact's files, all or nothing"
+  (:doc "ApplyPatch creates, deletes and moves a remote HTML artifact's files in one write, all or nothing"
    :quiet t)
   (mevedel-remote-artifact-test--with-html
     ;; A new file is written without a hash, so it is only ever created.
     (patch 'success "*** Add File: shared://landing/files/assets/logo.svg"
            "+<svg xmlns=\"http://www.w3.org/2000/svg\"/>")
-    (should (equal '(:action "write-file" :file "assets/logo.svg"
-                             :text "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n")
+    (should (equal '(:action "write-files"
+                             :changes [(:file "assets/logo.svg"
+                                              :text "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n")])
                    (sent)))
     (should (equal "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n" (file "assets/logo.svg")))
     (should (string-search "Cannot add existing file: shared://landing/files/site.css"
                            (text (patch 'error "*** Add File: shared://landing/files/site.css"
                                         "+p {}"))))
     (should (equal "h1 { color: red; }\n" (file "site.css")))
-    ;; A move is a deletion with the read hash and a creation.
-    (patch 'success "*** Update File: shared://landing/files/site.css"
-           "*** Move to: shared://landing/files/assets/site.css"
-           "@@" "-h1 { color: red; }" "+h1 { color: blue; }")
+    ;; A move is a deletion with the read hash and a creation, in one write.
+    (let ((sent-before (length (plist-get origin :requests))))
+      (patch 'success "*** Update File: shared://landing/files/site.css"
+             "*** Move to: shared://landing/files/assets/site.css"
+             "@@" "-h1 { color: red; }" "+h1 { color: blue; }")
+      ;; One read and one write.
+      (should (= (+ 2 sent-before) (length (plist-get origin :requests)))))
     (should-not (file "site.css"))
     (should (equal "h1 { color: blue; }\n" (file "assets/site.css")))
     ;; A deletion names the hash it was read with.
     (let ((hash (mevedel-remote-artifact-test--hash (file "assets/logo.svg"))))
       (patch 'success "*** Delete File: shared://landing/files/assets/logo.svg")
-      (should (equal (list :action "delete-file" :file "assets/logo.svg" :hash hash) (sent))))
+      (should (equal (list :action "write-files"
+                           :changes (vector (list :file "assets/logo.svg" :hash hash :delete t)))
+                     (sent))))
     (should-not (file "assets/logo.svg"))
     ;; The origin keeps its primary file.
     (should (string-search "primary file"
                            (text (patch 'error "*** Delete File: shared://landing/files/index.html"))))
     (should (file "index.html"))
-    ;; When a later file is refused, the files already written are restored.
+    ;; When one file is refused, no file is written.
     (let ((mevedel-remote-artifact--transport
            (mevedel-remote-artifact-test--edit-before-write
             origin "assets/site.css" (lambda (text) (concat text "p { margin: 0; }\n")) 2)))
@@ -668,6 +804,18 @@ EDIT maps the file's text to the text another writer leaves there."
                                           "@@" "-h1 { color: blue; }" "+h1 { color: green; }")))))
     (should (equal "<!doctype html>\n<h1>Hello</h1>\n" (file "index.html")))
     (should-not (string-search "green" (file "assets/site.css")))
+    ;; One patch changes the files of one remote artifact, which its origin
+    ;; writes at once.
+    (mevedel-remote-artifact-attach
+     workspace "https://relay.example.org/#room-2.c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LXNlY3JldC0y"
+     "second")
+    (should (string-search "one remote artifact"
+                           (text (patch 'error
+                                        "*** Update File: shared://landing/files/index.html"
+                                        "@@" "-<h1>Hello</h1>" "+<h1>Hi</h1>"
+                                        "*** Add File: shared://second/files/new.css"
+                                        "+p {}"))))
+    (should (equal "<!doctype html>\n<h1>Hello</h1>\n" (file "index.html")))
     ;; A view-only link refuses every write.
     (plist-put origin :writable nil)
     (should (string-search "view-only"

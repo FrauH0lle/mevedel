@@ -88,7 +88,7 @@
                   "mevedel-tool-patch" (operation))
 (declare-function mevedel-tool-patch-physical-path
                   "mevedel-tool-patch" (operation))
-(declare-function mevedel-tool-patch--remote-p "mevedel-tool-patch" (path))
+(declare-function mevedel-tool-patch-remote-p "mevedel-tool-patch" (path))
 (declare-function mevedel-tool-patch-planned-changes
                   "mevedel-tool-patch" (proposal))
 (declare-function mevedel-tool-patch-proposal-stats
@@ -817,7 +817,7 @@ On an Update file row this toggles every hunk in the file at once."
     (when (eq (plist-get operation :kind) 'add)
       (user-error "File is not created until the patch is applied"))
     (let ((path (mevedel-tool-patch-physical-path operation)))
-      (when (mevedel-tool-patch--remote-p path)
+      (when (mevedel-tool-patch-remote-p path)
         (user-error "%s lives at its artifact's origin; Read it at that address" path))
       (unless (file-exists-p path)
         (user-error "File does not exist: %s" path))

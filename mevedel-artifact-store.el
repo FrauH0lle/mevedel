@@ -46,14 +46,6 @@
 (autoload 'mevedel--ensure-chat-preset "mevedel-chat")
 (autoload 'mevedel--workspace-sessions "mevedel-chat")
 
-;; `mevedel-artifact-backend'
-(declare-function mevedel-artifact-backend-call "mevedel-artifact-backend"
-                  (workspace args callback &optional authorize commit))
-(declare-function mevedel-artifact-backend-registered-p "mevedel-artifact-backend"
-                  (workspace id))
-(autoload 'mevedel-artifact-backend-call "mevedel-artifact-backend")
-(autoload 'mevedel-artifact-backend-registered-p "mevedel-artifact-backend")
-
 ;; `mevedel-collaboration'
 (defvar mevedel-collaboration-stop-reason)
 
@@ -96,8 +88,11 @@
                   "mevedel-shared-editing" (workspace id n actor callback))
 (declare-function mevedel-shared-editing-save-version
                   "mevedel-shared-editing" (workspace id &optional session-id))
+(declare-function mevedel-shared-editing-call "mevedel-shared-editing"
+                  (workspace args callback &optional authorize commit))
 (declare-function mevedel-shared-editing-save-version-later
                   "mevedel-shared-editing" (workspace id &optional session-id))
+(autoload 'mevedel-shared-editing-call "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-save-version-later "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-duplicate "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-restore "mevedel-shared-editing")
@@ -140,7 +135,7 @@ Artifact rooms end the deleted artifact's sharing through it.")
          (let ((workspaces (cdr mevedel-artifact-store--pending-changes))
                (mevedel-artifact-store--pending-changes nil))
            (dolist (workspace workspaces)
-             (mevedel-artifact-store--changed workspace)))))))
+             (mevedel-artifact-store-changed workspace)))))))
 
 (defconst mevedel-artifact-store--content-change-delay 2
   "Seconds content-only changes of a workspace wait to be announced together.
@@ -151,7 +146,7 @@ room reread every artifact's metadata and republish after each one.")
 (defvar mevedel-artifact-store--content-changes (make-hash-table :test #'equal)
   "Pending content-change notification timers, by workspace root.")
 
-(defun mevedel-artifact-store--changed (workspace)
+(defun mevedel-artifact-store-changed (workspace)
   "Notify observers of WORKSPACE, after the current mutation if collecting.
 The notice also carries WORKSPACE's content changes awaiting theirs."
   (if mevedel-artifact-store--pending-changes
@@ -177,7 +172,7 @@ Further content changes until then share that notification."
   "Announce WORKSPACE's content changes, unless a notice carried them already."
   (when (gethash (mevedel-workspace-root workspace)
                  mevedel-artifact-store--content-changes)
-    (mevedel-artifact-store--changed workspace)))
+    (mevedel-artifact-store-changed workspace)))
 
 (defun mevedel-artifact-store-directory (workspace)
   "Return WORKSPACE's artifact store directory, with trailing slash."
@@ -366,7 +361,7 @@ just index.html."
     (make-directory (file-name-directory path) t)
     (if (mevedel-artifact-store--compare-and-write
          workspace path nil (list (list :op 'write :path path :content (let ((print-length nil) (print-level nil)) (prin1-to-string meta)))))
-        (progn (mevedel-artifact-store--changed workspace) meta)
+        (progn (mevedel-artifact-store-changed workspace) meta)
       (or (mevedel-artifact-store-meta workspace id)
           (error "Artifact %s disappeared during creation" id)))))
 
@@ -465,16 +460,15 @@ write CONTENT to the primary file in the same program.  Return its number."
                                        :path (mevedel-artifact-store--path directory (plist-get row :file))))))
           (setq number n))))
     (unless number (error "Artifact %s version index is busy; retry" id))
-    (mevedel-artifact-store--changed workspace)
+    (mevedel-artifact-store-changed workspace)
     number))
 
 (defun mevedel-artifact-store-save-version (workspace id &optional session-id)
   "Record artifact ID's current state as a new version and return its number.
 A file artifact records its primary file.  A whiteboard or document
-records its reduced state through its backend, after any save in
+records its reduced state through its editing queue, after any save in
 progress; that returns nil.  SESSION-ID names the session whose work it is."
-  (if (or (mevedel-artifact-backend-registered-p workspace id)
-          (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id)))
+  (if (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
       (progn (mevedel-shared-editing-save-version-later workspace id session-id)
              nil)
     (mevedel-artifact-store-record-version workspace id session-id)))
@@ -614,17 +608,16 @@ The copy starts with one version and its own metadata."
 
 (defun mevedel-artifact-store-delete (workspace id &optional actor callback)
   "Delete artifact ID with its metadata, versions and dedicated session.
-A whiteboard or document is deleted through its backend, after any save
-in progress, so its editors learn of it from ACTOR (default \"Host\").
-CALLBACK receives nil once the artifact is gone or the reason it was not
-deleted; without one, a refusal is a message."
+A whiteboard or document is deleted through its editing queue, after any
+save in progress, so its editors learn of it from ACTOR (default
+\"Host\").  CALLBACK receives nil once the artifact is gone or the
+reason it was not deleted; without one, a refusal is a message."
   (let ((callback (or callback
                       (lambda (failure)
                         (when failure
                           (message "mevedel: %s was not deleted: %s" id failure))))))
-    (if (or (mevedel-artifact-backend-registered-p workspace id)
-            (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id)))
-        (mevedel-artifact-backend-call
+    (if (mevedel-artifact-store-item-p (mevedel-artifact-store-meta workspace id))
+        (mevedel-shared-editing-call
          workspace (list :action "delete" :id id :actor (or actor "Host"))
          (lambda (reply) (funcall callback (plist-get reply :error))))
       (funcall callback (condition-case err
@@ -675,7 +668,7 @@ not record ID as its own, such as one a copied `meta.el' names, is kept."
     (when item
       (mevedel-artifact-lease--forget (mevedel-artifact-lease-directory workspace id))))
   (run-hook-with-args 'mevedel-artifact-store-deleted-functions workspace id)
-  (mevedel-artifact-store--changed workspace))
+  (mevedel-artifact-store-changed workspace))
 
 (defun mevedel-artifact-store-list (workspace)
   "Return WORKSPACE's artifacts as plists, newest modification first.
@@ -770,7 +763,7 @@ otherwise the next session save carries the attachment."
           (append (mevedel-session-attached-artifacts session) (list id)))
     (when buffer
       (mevedel-session-persistence-write-sidecar-now session buffer))
-    (mevedel-artifact-store--changed (mevedel-session-workspace session))))
+    (mevedel-artifact-store-changed (mevedel-session-workspace session))))
 
 (defun mevedel-artifact-store-update-meta (workspace id &rest properties)
   "Set PROPERTIES in artifact ID's metadata, retaining concurrent updates.
@@ -793,7 +786,7 @@ Return the new metadata."
           (setq updated meta))))
     (unless updated (error "Artifact %s metadata is busy; retry" id))
     ;; A new title or conversation shows in every listing.
-    (mevedel-artifact-store--changed workspace)
+    (mevedel-artifact-store-changed workspace)
     updated))
 
 (defun mevedel-artifact-store-dedicated-p (workspace session-id id)
@@ -1002,39 +995,89 @@ explains, or larger than `mevedel-artifact-store-file-max-bytes'."
     (unless (eq (plist-get result :status) 'absent)
       (plist-get (mevedel-session-control-fs-program-value result) :sha256))))
 
-(defun mevedel-artifact-store--file-change (workspace id file hash operations
-                                                      &optional directories)
-  "Run OPERATIONS on FILE of WORKSPACE's artifact ID if it still has HASH.
-HASH is the file's SHA-256 as hex, or nil for a file that must not exist.
-OPERATIONS is a function of FILE's path returning the program to run
-after that check, under the store's lock.  DIRECTORIES are FILE's
-directories, relative to the artifact's, to create before the check
-where missing.  Return non-nil when OPERATIONS ran, or (:stale t :hash
-CURRENT) when FILE no longer matched, CURRENT being nil for an absent
-file.  A change notifies the store's observers."
-  (unless (or (null hash) (and (stringp hash) (string-match-p "\\`[0-9a-f]\\{64\\}\\'" hash)))
-    (error "A file's hash is the SHA-256 of its bytes, as 64 lowercase hex digits"))
-  (let* ((path (mevedel-artifact-store-file-path workspace id file))
-         (prepare (mapcar (lambda (directory)
-                            (list :op 'make-directory :optional t
-                                  :path (mevedel-artifact-store-file-path
-                                         workspace id directory)))
-                          directories))
-         (program (append prepare
-                          (list (if hash (list :op 'verify-hash :path path :content hash)
-                                  (list :op 'absent :path path)))
-                          (funcall operations path)))
-         (results (mevedel-session-control-fs-run-program
-                   program (mevedel-artifact-store--lock-directory workspace))))
-    (if (memq (plist-get (nth (length prepare) results) :status) '(mismatch absent))
-        (list :stale t :hash (mevedel-artifact-store--file-hash path))
-      ;; An optional step, such as a directory that exists already, may fail.
-      (cl-mapc (lambda (operation result)
-                 (unless (plist-get operation :optional)
-                   (mevedel-session-control-fs-program-value result)))
-               program results)
-      (mevedel-artifact-store--changed workspace)
-      t)))
+(defun mevedel-artifact-store-write-files (workspace id changes)
+  "Make CHANGES to the files of WORKSPACE's artifact ID if each still matches.
+Each change is a plist naming a `:file' relative to the artifact's
+directory and the `:hash' its writer last saw, the SHA-256 of its bytes
+as hex, or nil for a file that must not exist yet.  With `:delete' t
+the file is deleted, which needs its hash; otherwise it is replaced by,
+or created with its missing directories as, `:content', a unibyte
+string of at most `mevedel-artifact-store-file-max-bytes'.  Every check
+and then every change run as one program under the store's lock, so
+either all changes are made or none.
+
+Return (:files RESULTS), a result per change in order: (:file FILE :hash
+NEW :created CREATED) or (:file FILE :deleted t).  When a file no longer
+matches, change nothing and return (:stale t :file FILE :hash CURRENT)
+for the first such FILE, CURRENT being nil for an absent file.  Signal
+when a change is refused.  A change notifies the store's observers."
+  (let (files prepare checks operations)
+    (dolist (change changes)
+      (let* ((file (plist-get change :file))
+             (hash (plist-get change :hash))
+             (content (plist-get change :content))
+             (path (mevedel-artifact-store-file-path workspace id file)))
+        (when (member file files)
+          (error "%s is changed twice; give each file one change" file))
+        (push file files)
+        (unless (or (null hash)
+                    (and (stringp hash) (string-match-p "\\`[0-9a-f]\\{64\\}\\'" hash)))
+          (error "A file's hash is the SHA-256 of its bytes, as 64 lowercase hex digits"))
+        (push (if hash
+                  (list :op 'verify-hash :path path :content hash)
+                (list :op 'absent :path path))
+              checks)
+        (if (plist-get change :delete)
+            (progn
+              (unless hash
+                (error "Deleting %s needs the hash it was read with" file))
+              (push (list :op 'delete-file :path path) operations))
+          (unless (and (stringp content) (not (multibyte-string-p content)))
+            (error "File content must be bytes"))
+          (when (> (length content) mevedel-artifact-store-file-max-bytes)
+            (error "%s would be larger than %d bytes" file mevedel-artifact-store-file-max-bytes))
+          ;; Only a new file can lack its directories.
+          (unless hash
+            (let ((parents (butlast (split-string file "/"))))
+              (dotimes (depth (length parents))
+                (push (list :op 'make-directory :optional t
+                            :path (mevedel-artifact-store-file-path
+                                   workspace id (string-join (take (1+ depth) parents) "/")))
+                      prepare))))
+          (push (list :op 'write-mode :path path
+                      :content (concat (format "%o\n" (or (file-modes path)
+                                                          (logand #o666 (default-file-modes))))
+                                       content))
+                operations))))
+    (let* ((prepare (nreverse prepare))
+           (boundary (mevedel-artifact-store-artifact-directory workspace id))
+           (program (append (list (list :op 'begin-files :path boundary))
+                            prepare (nreverse checks) (nreverse operations)
+                            (list (list :op 'commit-files :path boundary))))
+           (results (mevedel-session-control-fs-run-program
+                     program (mevedel-artifact-store--lock-directory workspace)))
+           (stale (cl-loop for change in changes
+                           for result in (nthcdr (1+ (length prepare)) results)
+                           when (memq (plist-get result :status) '(mismatch absent))
+                           return (plist-get change :file))))
+      (if stale
+          (list :stale t :file stale
+                :hash (mevedel-artifact-store--file-hash
+                       (mevedel-artifact-store-file-path workspace id stale)))
+        ;; An optional step, such as a directory that exists already, may fail.
+        (cl-mapc (lambda (operation result)
+                   (unless (plist-get operation :optional)
+                     (mevedel-session-control-fs-program-value result)))
+                 program results)
+        (mevedel-artifact-store-changed workspace)
+        (list :files
+              (mapcar (lambda (change)
+                        (if (plist-get change :delete)
+                            (list :file (plist-get change :file) :deleted t)
+                          (list :file (plist-get change :file)
+                                :hash (secure-hash 'sha256 (plist-get change :content))
+                                :created (null (plist-get change :hash)))))
+                      changes))))))
 
 (defun mevedel-artifact-store-write-file (workspace id file content hash)
   "Replace FILE of WORKSPACE's artifact ID with CONTENT if it still has HASH.
@@ -1045,37 +1088,23 @@ exist yet; its missing directories are created.  The check and the write
 are one step under the store's lock.  Return (:hash NEW :created
 CREATED), or (:stale t :hash CURRENT) without writing, CURRENT being nil
 for an absent file.  Signal when FILE is refused."
-  (when (multibyte-string-p content)
-    (error "File content must be bytes"))
-  (when (> (length content) mevedel-artifact-store-file-max-bytes)
-    (error "%s would be larger than %d bytes" file mevedel-artifact-store-file-max-bytes))
-  (let* ((parents (butlast (split-string file "/")))
-         (outcome
-          (mevedel-artifact-store--file-change
-           workspace id file hash
-           (lambda (path)
-             (list (list :op 'write-mode :path path
-                         :content (concat (format "%o\n" (or (file-modes path)
-                                                              (logand #o666 (default-file-modes))))
-                                          content))))
-           ;; Only a new file can lack its directories.
-           (unless hash
-             (cl-loop for depth from 1 to (length parents)
-                      collect (string-join (take depth parents) "/"))))))
-    (if (eq outcome t)
-        (list :hash (secure-hash 'sha256 content) :created (null hash))
-      outcome)))
+  (let ((outcome (mevedel-artifact-store-write-files
+                  workspace id (list (list :file file :hash hash :content content)))))
+    (if (plist-get outcome :stale)
+        (list :stale t :hash (plist-get outcome :hash))
+      (let ((result (car (plist-get outcome :files))))
+        (list :hash (plist-get result :hash) :created (plist-get result :created))))))
 
 (defun mevedel-artifact-store-delete-file (workspace id file hash)
   "Delete FILE of WORKSPACE's artifact ID if it still has HASH.
 HASH is the SHA-256 of the bytes the deleter last saw, as hex.  Return
 t, or (:stale t :hash CURRENT) without deleting, as
 `mevedel-artifact-store-write-file' does."
-  (unless hash
-    (error "Deleting %s needs the hash it was read with" file))
-  (mevedel-artifact-store--file-change
-   workspace id file hash
-   (lambda (path) (list (list :op 'delete-file :path path)))))
+  (let ((outcome (mevedel-artifact-store-write-files
+                  workspace id (list (list :file file :hash hash :delete t)))))
+    (if (plist-get outcome :stale)
+        (list :stale t :hash (plist-get outcome :hash))
+      t)))
 
 (provide 'mevedel-artifact-store)
 ;;; mevedel-artifact-store.el ends here

@@ -33,11 +33,23 @@ test('attach stores the link once per user, private, named by the origin id', as
   const entry = stored(env).artifacts['snt-pipeline'];
   assert.equal(entry.link, origin.link('edit'));
   assert.equal(entry.as, 'Roland at laptop');
+  // The welcome names the origin; the entry keeps it for listings.
+  assert.equal(entry.origin, fixture('welcome').bindings.$ORIGIN);
   // The origin saw the hello the fixtures record, with the chosen name.
   const [hello] = origin.received;
   assert.ok(matches(fixture('hello').frames[0].frame, hello));
   assert.equal(hello.name, 'Roland at laptop');
   assert.equal(hello.writeToken, origin.writeToken);
+});
+
+test('attach stores no origin when the welcome names none', async (t) => {
+  const env = tempEnv(t);
+  const named = await room(t);
+  assert.equal((await run(env, 'attach', named.link())).code, 0);
+  assert.equal(stored(env).artifacts['snt-pipeline'].origin, 'snt-app on mevedel-host');
+  const older = await room(t, { bindings: { $ORIGIN: undefined } });
+  assert.equal((await run(env, 'attach', older.link(), '--name', 'older')).code, 0);
+  assert.ok(!Object.hasOwn(stored(env).artifacts.older, 'origin'));
 });
 
 test('attach refuses a name collision unless --name chooses another', async (t) => {

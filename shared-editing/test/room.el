@@ -109,6 +109,28 @@
                                             :edit (plist-get links :link-edit)))
                                    "{}")
                                  nil (file-name-concat editing-test-root "reply.json") nil 'silent)))
+                ;; An HTML artifact's file as the origin's own editor sees
+                ;; it: with `content', write it first, creating the artifact
+                ;; (that file its primary one, titled `title') if needed.
+                ;; Reply with the file's text, null when it is absent.
+                ("HtmlFile"
+                 (let* ((args (plist-get command :args))
+                        (workspace (mevedel-session-workspace editing-test-session))
+                        (id (plist-get args :id))
+                        (file (plist-get args :file))
+                        (content (plist-get args :content)))
+                   (when (stringp content)
+                     (unless (mevedel-artifact-store-meta workspace id)
+                       (mevedel-artifact-store-create-meta workspace id file 'html
+                                                           (plist-get args :title)))
+                     (let ((path (mevedel-artifact-store-file-path workspace id file))
+                           (coding-system-for-write 'utf-8-unix))
+                       (make-directory (file-name-directory path) t)
+                       (write-region content nil path nil 'silent)))
+                   (let ((bytes (mevedel-artifact-store-read-file workspace id file)))
+                     (write-region (mevedel-shared-editing--json
+                                    (list :text (and bytes (decode-coding-string bytes 'utf-8-unix))))
+                                   nil (file-name-concat editing-test-root "reply.json") nil 'silent))))
                 ("FenceHost"
                  ;; Model a paused former host waking after another Emacs
                  ;; took its items over: its remembered leases are stale.

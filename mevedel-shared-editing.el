@@ -229,7 +229,7 @@ current the commit reads it and retries.  Return the metadata's bytes."
           (mevedel-session-control-fs-program-value result))
         (if listed
             (progn
-              (mevedel-artifact-store--changed workspace)
+              (mevedel-artifact-store-changed workspace)
               ;; A renamed item renames its open conversation.
               (mevedel-artifact-store-name-conversation workspace id))
           (mevedel-artifact-store--content-changed workspace))
@@ -268,7 +268,7 @@ failure is a message."
      (when-let* ((failure (plist-get reply :error)))
        (message "mevedel: no version of %s was saved: %s" id failure)))))
 
-(defun mevedel-shared-editing--op-id ()
+(defun mevedel-shared-editing-op-id ()
   "Return a fresh operation identity."
   (secure-hash 'sha256 (format "%s%s" (current-time) (random t))))
 
@@ -284,7 +284,7 @@ CALLBACK receives the edit's reply."
                     (buffer-string)))))
     (mevedel-shared-editing-call
      workspace (list :action "restore" :id id :target (plist-get version :crdt)
-                     :actor actor :opId (mevedel-shared-editing--op-id))
+                     :actor actor :opId (mevedel-shared-editing-op-id))
      callback)))
 
 (defun mevedel-shared-editing-duplicate (workspace id new-id)
@@ -813,7 +813,7 @@ signal before anything is queued.  Return a cancellation function."
   (unless (mevedel-shared-editing-session-writable-p buffer)
     (user-error "This session is read-only here; take control to create items"))
   ;; The id doubles as the operation id, so a retried create is idempotent.
-  (let ((id (mevedel-shared-editing--op-id)))
+  (let ((id (mevedel-shared-editing-op-id)))
     (mevedel-shared-editing-call
      workspace (list :action "create" :id id :opId id :kind kind
                      :title title :actor actor)

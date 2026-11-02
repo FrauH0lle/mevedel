@@ -285,6 +285,10 @@ registry, creating one lazily if needed."
                (name (when name-fn (funcall name-fn id))))
           (mevedel-workspace-get-or-create type id root name)))))))
 
+(defun mevedel-workspace-current ()
+  "Return the current buffer's workspace for a command, or signal `user-error'."
+  (or (mevedel-workspace) (user-error "No mevedel workspace here")))
+
 
 ;;
 ;;; Generated state ignore
