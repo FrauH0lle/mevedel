@@ -30,7 +30,7 @@
 (mevedel-deftest mevedel-memory-investigation--documents ()
   ,test
   (test)
-  :doc "root tools reach sibling and nested directories despite 293 root entries"
+  :doc "root tools reach sibling and nested directories despite 253 root entries"
   (let* ((directory (make-temp-file "mevedel-investigation-reach-" t))
          (mevedel-memory-dirs '("memory"))
          (mevedel-sandbox-mode 'off)
@@ -38,8 +38,9 @@
          state)
     (unwind-protect
         (progn
-          ;; Pending root files reproduce the old descendant slot starvation.
-          (dotimes (n 289)
+          ;; Fit the root listing so filesystem order cannot omit a directory.
+          ;; Pending siblings still exhaust the descendant visit allowance.
+          (dotimes (n 249)
             (with-temp-file (file-name-concat directory (format "zroot%03d.el" n))
               (insert ";; Root only.\n")))
           (dolist (name '("docs" "src" "memory" ".mevedel"))
@@ -91,7 +92,7 @@
                 (should (<= (length (car snapshot)) 256))
                 ;; One resolution initializes the queue; each visit revalidates.
                 (should (= visits 257))
-                (should-not (assoc "zroot288.el" (car snapshot)))))
+                (should-not (assoc "zroot248.el" (car snapshot)))))
             ;; Negative controls: a missing match remains absent; targeted
             ;; exclusion cannot become readable through the fair traversal.
             (should-error (mevedel-test-investigation-reach--documents state "workspace" "memory" t))

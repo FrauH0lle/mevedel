@@ -52,8 +52,13 @@ Setup output stays in `*mevedel worktree setup*`; failure retains the checkout.
 and lockfile in `shared-editing/`, the Go module in `relay/`, and GitHub
 Actions references. Tiptap updates are grouped, including major releases;
 the dependency test checks that its schema packages remain synchronized.
-`@tiptap/y-tiptap` has its own version series. Updates are reviewed, not
-automatically merged. Dependabot security updates also depend on the
+`@tiptap/y-tiptap` has its own version series. Dependabot PRs automatically
+merge after all required checks pass against the current base. The metadata-only
+`Dependabot auto-merge` workflow enables GitHub's native auto-merge after a
+successful PR workflow; it never checks out or executes PR code. Repository
+auto-merge and the required partitioned, fresh-file, remote-transport,
+browser-assets and relay checks on `master` enforce the gate. A failing check
+keeps the PR open, including major updates. Dependabot security updates also depend on the
 repository's dependency graph, alerts, and security-update settings.
 
 The read-only `dependencies` workflow installs the lockfile, rebuilds the
