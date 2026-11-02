@@ -13,8 +13,8 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.experimental }}
-    # Hosted tests can take 28 minutes; leave room for setup and packaging.
-    timeout-minutes: 40
+    # Hosted tests have taken 38 minutes; leave room for setup and packaging.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
