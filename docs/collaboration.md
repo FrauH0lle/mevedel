@@ -709,11 +709,12 @@ not touch it. This Emacs, the artifact's origin, stays authoritative and carries
 out every read itself.
 
 `M-x mevedel-collaboration-share-artifact` asks for one of the workspace's
-whiteboards or documents, confirms the first share, copies the edit link to
-the kill ring and shows both links in a help window, never in `*Messages*`. A
-host without a keyboard shares with
+whiteboards, documents or HTML artifacts, confirms the first share, copies the
+edit link to the kill ring and shows both links in a help window, never in
+`*Messages*`. A host without a keyboard shares with
 `(mevedel-collaboration-artifact-room-share DIRECTORY ID)`, which returns
-`:link-view` and `:link-edit`. HTML artifacts cannot be shared yet.
+`:link-view` and `:link-edit`. Markdown, image and other file artifacts
+cannot be shared.
 
 Links keep the room shape `WEB-ORIGIN/#ROOM-ID.SECRET`: a view link's secret
 is the 32-byte room key, an edit link's the key and a 16-byte write token. No
@@ -812,15 +813,52 @@ before sharing a board next to a private library. Edits are attributed `Agent: N
 consumer's hello declared (unverified), so the Revert button applies as to
 any agent's edit; they attach the item to no session.
 
+An HTML artifact's room serves its files instead: everything in its directory
+`.mevedel/artifacts/ID/`, pages and assets alike. Any link tier may run
+`files`, answered `{result: {primary, files: [{file, bytes}]}}`, and `read`
+with an optional `file` (default the primary file), answered `{result: {file,
+hash, bytes, text}}` for UTF-8 text or with base64 `data` in place of `text`
+for other bytes; `hash` is the SHA-256 of the file's bytes as lowercase hex.
+An edit link may also run:
+
+- `write-file` (`file`, `text` or base64 `data`, `hash`): replace the file
+  if its bytes still have `hash`, or create it, with missing directories, when
+  `hash` is null or absent. Check and write are one step under the store's
+  lock, as for every store mutation. Success answers `{result: {file, hash,
+  bytes, created}}` with the new hash.
+- `delete-file` (`file`, `hash`): delete the file if it still has `hash`. The
+  primary file is refused, since without it the artifact is gone.
+
+A refused write or deletion changes nothing and answers `{error, code:
+"stale", file, hash}`: the file's current hash (null when it does not exist)
+and, for a file under 256 KiB, its `bytes` and `text` or `data` as a read
+returns them, so the consumer can redo its change without reading again. There
+is no patch engine at the origin; consumers apply edits to the content they
+read and send the result. File names are relative to the artifact's directory,
+without `.` or `..` components, and no component on the way may be a symbolic
+link; anything else is refused with `Refused path ...`. Listings leave links
+out. The bookkeeping in `.state/ID/` lies beside the artifact's directory, so
+no file name reaches it. Each file read or written is at most 16 MiB, which
+is why artifact rooms accept editing transfers of up to 30 MiB of base64
+(`:editing-max-bytes`) instead of the usual 24 MiB. No action deletes the
+artifact or creates another one.
+
+A committed file change fires the store's change notification
+(`mevedel-artifact-store-changed-functions`), so origin session rooms, the
+lobby and their viewers refresh their listings as after a local `ApplyPatch`.
+Consumers get no change event for files; the hash check tells them of a
+change.
+
 Consumers cannot list, save or restore versions; versions stay the origin's
 tool for larger damage. Instead the origin records one version per working
 stretch of a room: once the room has committed no write for
 `mevedel-collaboration-artifact-room-version-idle` seconds (300), or when its
 last consumer leaves, its transport drops or the room stops. The version is
-the store's own, as after a local turn (an HTML artifact's would be its
-primary file). Every committed write from the room calls
-`mevedel-collaboration-artifact-room-wrote`, which restarts the wait; reads
-record nothing.
+the store's own, as after a local turn (an HTML artifact's is its primary
+file). Every committed write from the room calls
+`mevedel-collaboration-artifact-room-wrote`, which restarts the wait; for an
+HTML artifact only writes of the primary file count, as locally only the
+primary file is versioned. Reads record nothing.
 
 Every request is pinned to the room's artifact: one naming any other id is
 refused, as is any action outside the allowlist (listing, creating,
@@ -833,9 +871,10 @@ including prompts, aborts, interaction answers, session requests, files,
 artifact fetches, store listings and actions, and recovery, are dropped
 unanswered. Frames run with `inhibit-interaction`, as in the lobby.
 
-Every committed change of the artifact, whoever made it, reaches its room's
-consumers as `{t: "editing", reqId: "event", body: {event: "changed", id,
-kind, title, revision}}`. Changes of other artifacts never reach the room, and
+Every committed change of a whiteboard or document, whoever made it, reaches
+its room's consumers as `{t: "editing", reqId: "event", body: {event:
+"changed", id, kind, title, revision}}`. Changes of other artifacts never
+reach the room, and
 artifact rooms are not among the workspace rooms that receive store listings.
 
 While connected, a consumer is on its artifact's page in
