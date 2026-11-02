@@ -13,6 +13,11 @@
 ;; Lobby guests also learn how many people are in each live session
 ;; room and on each artifact.
 ;;
+;; Consumers of an artifact room -- remote agents working on the
+;; artifact through an artifact link -- are on that artifact's page for
+;; as long as they are connected, listed by name marked as remote.  They
+;; report no page and are told no presence.
+;;
 ;; The browser reports its page and whether its tab is visible in its
 ;; hello and in a `viewing' frame on every change.  Admission, departure
 ;; and renames republish too.
@@ -42,7 +47,7 @@
 
 
 (defun mevedel-collaboration-presence--rooms (key)
-  "Return the live session rooms and lobby of the workspace with KEY."
+  "Return the live session rooms, lobby and artifact rooms of workspace KEY."
   (let ((rooms (cl-remove-if-not
                 (lambda (room)
                   (equal key (mevedel-collaboration--workspace-key room)))
@@ -52,7 +57,19 @@
                  (when (equal key (mevedel-collaboration--workspace-key lobby))
                    (push lobby rooms)))
                mevedel-collaboration-lobby--lobbies))
+    (when (boundp 'mevedel-collaboration-artifact-room--rooms)
+      (maphash (lambda (_key room)
+                 (when (equal key (mevedel-collaboration--workspace-key room))
+                   (push room rooms)))
+               mevedel-collaboration-artifact-room--rooms))
     rooms))
+
+(defun mevedel-collaboration-presence--name (room guest)
+  "Return the name GUEST of ROOM is listed under.
+An artifact room's consumer is marked as remote."
+  (if (eq (plist-get room :room-kind) 'artifact)
+      (format "%s (remote)" (plist-get guest :name))
+    (plist-get guest :name)))
 
 (defun mevedel-collaboration-presence--people (rooms)
   "Return (ROOM PEER GUEST IDENTITY) for every admitted guest of ROOMS.
@@ -97,7 +114,8 @@ result is a vector of `(:id KEY :n COUNT)' plists."
         (let ((known (gethash identity others)))
           (puthash identity
                    (list :name (if known (plist-get known :name)
-                                 (plist-get other :name))
+                                 (mevedel-collaboration-presence--name
+                                  other-room other))
                          :active (if (or (eq t (plist-get known :active))
                                          (plist-get other :active))
                                      t :json-false))
@@ -122,19 +140,21 @@ result is a vector of `(:id KEY :n COUNT)' plists."
 (defun mevedel-collaboration-presence-publish (room)
   "Tell every guest of ROOM's workspace who else is on its page.
 A guest is sent a frame only when its content changed.  ROOM need not
-be live any more: a stopped room's workspace is told it is gone."
+be live any more: a stopped room's workspace is told it is gone.  An
+artifact room's consumers are listed but sent nothing."
   (when-let* ((key (mevedel-collaboration--workspace-key room)))
     ;; ponytail: every change recomputes the workspace, quadratic in its
     ;; guests; index pages per workspace if rooms ever hold hundreds.
     (let ((people (mevedel-collaboration-presence--people
                    (mevedel-collaboration-presence--rooms key))))
       (dolist (person people)
-        (let ((frame (mevedel-collaboration-presence--frame person people))
-              (guest (nth 2 person)))
-          (unless (equal frame (plist-get guest :presence-sent))
-            (plist-put guest :presence-sent frame)
-            (mevedel-collaboration--transport-send
-             (plist-get (car person) :transport) (nth 1 person) frame)))))))
+        (unless (eq (plist-get (car person) :room-kind) 'artifact)
+          (let ((frame (mevedel-collaboration-presence--frame person people))
+                (guest (nth 2 person)))
+            (unless (equal frame (plist-get guest :presence-sent))
+              (plist-put guest :presence-sent frame)
+              (mevedel-collaboration--transport-send
+               (plist-get (car person) :transport) (nth 1 person) frame))))))))
 
 (defun mevedel-collaboration-presence-state (frame)
   "Return the `(:viewing PAGE :active ACTIVE)' a guest FRAME reports.

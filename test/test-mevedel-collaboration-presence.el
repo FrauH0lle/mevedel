@@ -20,6 +20,8 @@
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 
+(defvar mevedel-collaboration-artifact-room--rooms)
+
 (defun mevedel-collaboration-presence-test--room (transport workspace id &rest guests)
   "Return a room on TRANSPORT for a WORKSPACE session ID holding GUESTS.
 Each of GUESTS is (PEER NAME GUEST-ID VIEWING ACTIVE).  A nil ID makes
@@ -127,7 +129,34 @@ the room a lobby of WORKSPACE."
                    nil))
     (should (equal (plist-get (mevedel-collaboration-presence-test--frame sent 'lobby 1)
                               :sessions)
-                   [(:id "s2" :n 1)]))))
+                   [(:id "s2" :n 1)])))
+
+  :doc "lists an artifact room's consumers by name on their artifact, sending them nothing"
+  (mevedel-collaboration-presence-test--with-rooms
+    (let* ((consumers (plist-put
+                       (mevedel-collaboration-presence-test--room
+                        'artifact ws nil '(1 "laptop agent" "agent-0001" "board" t))
+                       :room-kind 'artifact))
+           (mevedel-collaboration-artifact-room--rooms
+            (let ((table (make-hash-table :test #'equal)))
+              (puthash '("/a/" . "board") consumers table)
+              table)))
+      (mevedel-collaboration-presence-publish consumers)
+      ;; The board's page lists the consumer, marked remote, beside Cleo.
+      (should (equal (mevedel-collaboration-presence-test--names
+                      (mevedel-collaboration-presence-test--frame sent 'r1 3))
+                     '(("Cleo" . :json-false) ("laptop agent (remote)" . t))))
+      ;; The room page and other workspaces do not.
+      (should (equal (mevedel-collaboration-presence-test--names
+                      (mevedel-collaboration-presence-test--frame sent 'r1 1))
+                     '(("Bob" . t))))
+      (should-not (mevedel-collaboration-presence-test--names
+                   (mevedel-collaboration-presence-test--frame sent 'r3 1)))
+      (should (equal (plist-get (mevedel-collaboration-presence-test--frame sent 'lobby 1)
+                                :artifacts)
+                     [(:id "board" :n 3)]))
+      ;; Consumers hear no presence at all.
+      (should-not (cl-find 'artifact sent :key #'car)))))
 
 (mevedel-deftest mevedel-collaboration-presence-state
   (:doc "reads a reported page and visibility, refusing a page that is no artifact id")

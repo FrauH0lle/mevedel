@@ -48,7 +48,7 @@ export function matches(expected, actual) {
 const b64url = (bytes) => Buffer.from(bytes).toString('base64url');
 
 /* The editing exchanges the fake room replays, by fixture name. */
-const EDITING_FIXTURES = ['read', 'patch', 'stale-patch', 'view-only'];
+const EDITING_FIXTURES = ['read', 'history', 'patch', 'stale-patch', 'view-only', 'revert'];
 
 /* Frames of RFC 6455 from a byte stream. */
 function frameReader(onFrame) {

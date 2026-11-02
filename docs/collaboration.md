@@ -392,7 +392,8 @@ from its own conversation's; a room page is that room's alone. A browser counts
 once per page however many of its tabs are there, and is faded while all of
 them are hidden. Lobby session rows show how many people are in each live
 session, and artifact rows how many have the artifact open. Only browsers
-count; the host at Emacs does not appear.
+count, and the consumers of an [artifact room](#artifact-rooms) while
+connected, marked `NAME (remote)`; the host at Emacs does not appear.
 
 Each hello carries the tab's page and visibility, and a sealed `viewing`
 frame reports every later change. `mevedel-collaboration-presence` recomputes
@@ -778,13 +779,18 @@ executes them itself with the editing helper, as `SharedEdit` and
 `shared://` do; consumers send no CRDT updates. Any link tier may:
 
 - `read`: `{result: {text}}`, the hash-prefixed lines `shared://ID` shows.
+  With `history: true` it returns the recent contributions instead, as
+  `shared://ID/history` shows them: one line per retained contribution with
+  the id a revert names, its revision, actor, time and what it changed.
 - `view`: `{result: {png, mime}}`, the board as drawn (`shared://ID/view.png`),
   or with `image: KEY` that embedded image (`shared://ID/images/KEY`).
 
 An edit link may also run `SharedEdit`'s `patch` (`changes`), `rename`
-(`title`), `background` (`background`) and `image` (`data`, the file's base64
-content of at most 4.7 MB, with `x`, `y`, `width`, `alt`, `afterId`). Other
-keys are dropped. An edit answers what `SharedEdit` tells the model:
+(`title`), `background` (`background`), `image` (`data`, the file's base64
+content of at most 4.7 MB, with `x`, `y`, `width`, `alt`, `afterId`) and
+`revert` (`transaction`, a contribution id from the history; refused when its
+targets changed since, as locally). Other keys are dropped. An edit answers
+what `SharedEdit` tells the model:
 `{result: {text, png?}}`, the JSON of the stored lines it changed and, for a
 whiteboard, the picture. A stale hash rejects the whole edit with
 `{error, code: "stale", targets, revision}`, each target carrying its current
@@ -806,9 +812,19 @@ before sharing a board next to a private library. Edits are attributed `Agent: N
 consumer's hello declared (unverified), so the Revert button applies as to
 any agent's edit; they attach the item to no session.
 
+Consumers cannot list, save or restore versions; versions stay the origin's
+tool for larger damage. Instead the origin records one version per working
+stretch of a room: once the room has committed no write for
+`mevedel-collaboration-artifact-room-version-idle` seconds (300), or when its
+last consumer leaves, its transport drops or the room stops. The version is
+the store's own, as after a local turn (an HTML artifact's would be its
+primary file). Every committed write from the room calls
+`mevedel-collaboration-artifact-room-wrote`, which restarts the wait; reads
+record nothing.
+
 Every request is pinned to the room's artifact: one naming any other id is
 refused, as is any action outside the allowlist (listing, creating,
-deleting, raw CRDT updates, discussions, library management). The room's authority
+deleting, raw CRDT updates, discussions, library management, versions). The room's authority
 check -- the consumer still admitted, an edit link for an edit, the id the
 room's own, the room still running -- runs at dispatch and again when the
 editing queue admits the request and before it commits, so a link narrowed
@@ -821,6 +837,12 @@ Every committed change of the artifact, whoever made it, reaches its room's
 consumers as `{t: "editing", reqId: "event", body: {event: "changed", id,
 kind, title, revision}}`. Changes of other artifacts never reach the room, and
 artifact rooms are not among the workspace rooms that receive store listings.
+
+While connected, a consumer is on its artifact's page in
+[presence](#who-else-is-here): origin browsers showing the artifact list it as
+`NAME (remote)`, and lobby counts include it. A consumer reports no page and
+receives no presence, cursor or selection frames; those it sends are dropped
+like any frame outside the allowlist.
 
 A room with a connected consumer, or within its idle interval, keeps the
 machine awake under the lobby's rule (`shared artifact active`).
