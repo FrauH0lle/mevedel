@@ -172,6 +172,7 @@ Chat / view
   mevedel-collaboration-presence.el who else is on each guest's page; lobby counts
   mevedel-shared-conversation.el item-scoped request history from canonical live/archive turns
   mevedel-artifact-backend.el adapter registry, content calls, catalog and change events for items
+  mevedel-remote-artifact.el  remote artifacts: attach/detach links, the remote adapter, the package bridge
   mevedel-shared-editing.el   private editor engine queue, leased store commits, item creation
   mevedel-shared-library.el   host whiteboard element library and public Excalidraw collection
   mevedel-collaboration-projection.el canonical, retained browser transcript projection

@@ -72,6 +72,8 @@
 (autoload 'mevedel-claude-code-setup "mevedel-claude-code" nil t)
 (autoload 'mevedel-clear-patch-buffer "mevedel-chat" nil t)
 (autoload 'mevedel-collaboration-share-artifact "mevedel-collaboration-artifact-room" nil t)
+(autoload 'mevedel-remote-artifact-attach "mevedel-remote-artifact" nil t)
+(autoload 'mevedel-remote-artifact-detach "mevedel-remote-artifact" nil t)
 (autoload 'mevedel-collaboration-status "mevedel-collaboration" nil t)
 (autoload 'mevedel-collaboration-stop "mevedel-collaboration" nil t)
 (autoload 'mevedel-collaboration-stop-all "mevedel-collaboration" nil t)

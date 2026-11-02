@@ -811,6 +811,62 @@ like any frame outside the allowlist.
 A room with a connected consumer, or within its idle interval, keeps the
 machine awake under the lobby's rule (`shared artifact active`).
 
+### Remote artifacts in mevedel
+
+Another mevedel consumes an artifact link as a **remote artifact**: the
+whiteboard or document is listed with the workspace's own artifacts and
+agents use it through the same `shared://` addresses and `SharedEdit`, while
+every read and edit goes live to the origin. Nothing about it is written into
+the local artifact store and nothing is cached.
+
+`M-x mevedel-remote-artifact-attach` reads the link without echo (it never
+enters a chat, `*Messages*` or the minibuffer history), connects once to read
+the welcome, and registers the artifact with the current workspace under its
+origin id, so both sides call it the same thing. With a prefix argument, or
+when that id names a local artifact or another attached one, it asks for
+another name, the artifact's alias here. Attaching the same link again
+refreshes it, and under a new name renames it. `M-x
+mevedel-remote-artifact-detach` forgets it; the origin and other holders are
+unaffected. Links are kept per user, outside the project, in
+`mevedel-user-dir`'s `remote-artifacts.eld` (mode 0600), by workspace root;
+the artifact backend restores a workspace's attachments on its first lookup
+of that workspace. HTML artifacts cannot be attached yet.
+
+The remote adapter behind the
+[artifact-backend interface](shared-editing.md#durability-and-recovery) maps the local editing
+vocabulary onto the room's allowlist: `shared://ID` and its `/history` become
+`read`, `view.png` and `images/KEY` become `view`, and `SharedEdit`'s
+`patch`, `rename`, `background`, `image`, `insert` (the origin resolves
+`LIBRARY/ITEM-ID` in its own libraries) and `revert` pass their arguments
+through. Replies name the alias, not the origin id, so the stale-hash
+contract and Grep's line mapping work unchanged. Discussions and element
+addresses (`/discussions`, `/elements/ID`) stay at the origin; deleting it
+here is refused (detach instead), and turn-settle versions are left to the
+origin's working-stretch versions.
+
+mevedel does not reimplement the relay transport: it runs the
+[remote-artifact package's](../remote-artifact/README.md#the-bridge-for-mevedel)
+`bridge` command as one private subprocess, by default the copy shipped with
+mevedel under `mevedel-shared-editing-node-program`
+(`mevedel-remote-artifact-command` chooses another). The package's pool
+connects on first use and closes a connection after 5 idle minutes. Each
+agent's edits use their own connection whose display name is
+`mevedel-remote-artifact-display-name` (default `USER@HOST`) followed by the
+agent path, so the origin attributes them as `Agent: USER@HOST /root/worker
+(remote)`; reads use the plain display name.
+
+A request is checked against the caller's authority when it is sent and when
+its reply arrives, and a cancelled request discards its reply: an edit
+already sent may still land at the origin, attributed and revertible there.
+An unreachable, revoked or deleted origin answers with the package's generic
+`Origin unavailable (revoked, deleted, or offline)`. Project artifacts shows a
+remote artifact's Link as `remote HOST, reachable` (or `unavailable`, or `not
+checked yet`), HOST being the relay's, and its details name the origin id and
+link tier; listing it checks a link not checked in the last minute in the
+background. Deleting it there detaches it, and opening, versions, duplicates
+and conversations are refused. Origin change events arriving while connected
+update its title and are announced through the backend's change events.
+
 ## Project files
 
 A lobby is the project's view, so it also shows the project's files: the

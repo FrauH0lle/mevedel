@@ -104,6 +104,7 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly
   const received = [];
   let connections = 0;
   const sockets = new Set();
+  const senders = new Set();
   const examples = (name) => ({ ...fixture(name).bindings, ...bindings });
 
   const seal = async (frame) => {
@@ -151,6 +152,8 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly
       return;
     }
     const send = async (frame) => { for (const f of wire(frame)) socket.write(wsFrame(2, await seal(f))); };
+    senders.add(send);
+    socket.on('close', () => senders.delete(send));
     const transfers = new Map();
     let writable = false;
     let inbound = Promise.resolve();
@@ -215,6 +218,10 @@ export async function startFakeRoom({ mode = 'artifact', bindings = {}, readOnly
     writeToken: b64url(writeToken),
     received,
     get connections() { return connections; },
+    /* Send every connected consumer a change event BODY, as the origin does. */
+    event: async (body) => {
+      for (const send of senders) await send({ t: 'editing', reqId: 'event', body });
+    },
     link: (tier = 'edit') => `${origin}/#${roomId}.${b64url(tier === 'edit'
       ? Buffer.concat([keyBytes, writeToken]) : tier === 'owner'
         ? Buffer.concat([keyBytes, writeToken, randomBytes(16)]) : keyBytes)}`,

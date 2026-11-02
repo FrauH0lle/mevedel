@@ -9,6 +9,11 @@
 ;; rooms of the workspace learn of each change.  It also creates whiteboards
 ;; and documents (`mevedel-artifacts-new-shared-item'), which open in their
 ;; browser editor.
+;;
+;; Remote artifacts attached to the workspace are listed too, marked with
+;; their origin and whether it was reachable; they attach to sessions like
+;; local ones, deleting one detaches it, and what only a local artifact has
+;; (files, versions, a conversation, copies) is refused.
 
 ;;; Code:
 
@@ -102,6 +107,10 @@
 (autoload 'mevedel-collaboration-item-opener "mevedel-collaboration")
 (autoload 'mevedel-collaboration-open-shared-item "mevedel-collaboration")
 
+;; `mevedel-remote-artifact'
+(declare-function mevedel-remote-artifact-detach "mevedel-remote-artifact" (workspace alias))
+(autoload 'mevedel-remote-artifact-detach "mevedel-remote-artifact" nil t)
+
 ;; `mevedel-shared-editing'
 (declare-function mevedel-shared-editing-check-new "mevedel-shared-editing" (kind title))
 (declare-function mevedel-shared-editing-create "mevedel-shared-editing"
@@ -190,7 +199,22 @@
     (if (plist-get item :missing) "missing"
       (format-time-string "%Y-%m-%d %H:%M" (plist-get item :modified)))
     (let ((size (or (plist-get item :size) 0)))
-      (mevedel-cockpit-number-cell (file-size-human-readable size) size)))))
+      (mevedel-cockpit-number-cell (file-size-human-readable size) size))
+    (mevedel-artifacts-list--link-cell item))))
+
+(defun mevedel-artifacts-list--reachability (item)
+  "Return what is known of remote artifact ITEM's origin, as text."
+  (pcase (plist-get item :reachable)
+    ('yes "reachable")
+    ('no "unavailable")
+    (_ "not checked yet")))
+
+(defun mevedel-artifacts-list--link-cell (item)
+  "Return the Link cell of artifact ITEM: a remote artifact's origin."
+  (if (plist-get item :remote)
+      (format "remote %s, %s" (plist-get item :origin)
+              (mevedel-artifacts-list--reachability item))
+    ""))
 
 (defun mevedel-artifacts-list--header (items context)
   "Return cockpit header for artifact ITEMS and CONTEXT."
@@ -209,26 +233,45 @@
   (list :title "Artifact" :subtitle (plist-get item :id)
         :identity (plist-get item :id)
         :sections
-        (list
-         (list :id 'artifact :title "Artifact"
-               :body (mevedel-report-fields
-                      (list "Id" (plist-get item :id))
-                      (list "Title" (plist-get item :title))
-                      (list "Kind" (format "%s" (plist-get item :kind)))
-                      (list "Attached" (if (plist-get item :attached) "yes" "no"))
-                      (list "Versions" (number-to-string (plist-get item :versions)))
-                      (list "Size" (file-size-human-readable (or (plist-get item :size) 0)))
-                      (list "Modified"
-                            (if (plist-get item :missing)
-                                "file missing"
-                              (format-time-string "%Y-%m-%d %H:%M:%S"
-                                                  (plist-get item :modified))))))
-         (list :id 'location :title "Location"
-               :body (mevedel-report-fields (list "Path" (plist-get item :path)))))))
+        (delq
+         nil
+         (list
+          (list :id 'artifact :title "Artifact"
+		:body (mevedel-report-fields
+                       (list "Id" (plist-get item :id))
+                       (list "Title" (plist-get item :title))
+                       (list "Kind" (format "%s" (plist-get item :kind)))
+                       (list "Attached" (if (plist-get item :attached) "yes" "no"))
+                       (list "Versions" (number-to-string (plist-get item :versions)))
+                       (list "Size" (file-size-human-readable (or (plist-get item :size) 0)))
+                       (list "Modified"
+                             (if (plist-get item :missing)
+                                 "file missing"
+                               (format-time-string "%Y-%m-%d %H:%M:%S"
+                                                   (plist-get item :modified))))))
+          (if (plist-get item :remote)
+              (list :id 'origin :title "Origin"
+                    :body (mevedel-report-fields
+                           (list "Origin" (plist-get item :origin))
+                           (list "Origin id" (plist-get item :origin-id))
+                           (list "Link" (plist-get item :tier))
+                           (list "Reachable" (mevedel-artifacts-list--reachability item))
+                           (when-let* ((failure (plist-get item :error)))
+                             (list "Last error" failure))))
+            (list :id 'location :title "Location"
+                  :body (mevedel-report-fields (list "Path" (plist-get item :path)))))))))
+
+(defun mevedel-artifacts-list--local-selected ()
+  "Return the selected artifact, refusing a remote one."
+  (let ((item (mevedel-cockpit-surface-selected)))
+    (when (plist-get item :remote)
+      (user-error "%s lives at its origin; agents reach it as shared://%s"
+                  (plist-get item :title) (plist-get item :id)))
+    item))
 
 (defun mevedel-artifacts-list--selected-path ()
   "Return the selected artifact's still-existing path."
-  (let ((item (mevedel-cockpit-surface-selected)))
+  (let ((item (mevedel-artifacts-list--local-selected)))
     (when (plist-get item :item)
       (user-error "Whiteboards and documents open in their editor; use o"))
     (unless (and (plist-get item :path) (file-exists-p (plist-get item :path)))
@@ -250,7 +293,7 @@ is started after confirmation when the session is not shared.  Without a
 session it opens in the room of the item's own conversation."
   (interactive)
   (let ((context (mevedel-cockpit-surface-context)))
-    (if-let* ((id (plist-get (mevedel-cockpit-surface-selected) :item)))
+    (if-let* ((id (plist-get (mevedel-artifacts-list--local-selected) :item)))
         (mevedel-collaboration-open-shared-item
          (or (mevedel-cockpit-context-data-buffer context)
              (mevedel-artifact-store-conversation
@@ -290,7 +333,7 @@ Restoring copies the version over the artifact as a new version."
          (context (mevedel-cockpit-surface-context))
          (workspace (mevedel-artifacts-list--workspace context))
          (session (mevedel-cockpit-context-session context))
-         (id (plist-get (mevedel-cockpit-surface-selected) :id))
+         (id (plist-get (mevedel-artifacts-list--local-selected) :id))
          (choices
           (mapcar (lambda (row)
                     (cons (format "%d  %s  %s" (plist-get row :n)
@@ -332,7 +375,7 @@ Restoring copies the version over the artifact as a new version."
   (let* ((context (mevedel-cockpit-surface-context))
          (workspace (mevedel-artifacts-list--workspace context))
          (session (mevedel-cockpit-context-session context))
-         (id (or (plist-get (mevedel-cockpit-surface-selected) :item)
+         (id (or (plist-get (mevedel-artifacts-list--local-selected) :item)
                  (user-error "File artifacts keep a version of every saved change")))
          (n (mevedel-shared-editing-save-version
              workspace id (and session (mevedel-session-session-id session)))))
@@ -345,7 +388,7 @@ Restoring copies the version over the artifact as a new version."
   (let* ((context (mevedel-cockpit-surface-context))
          (workspace (mevedel-artifacts-list--workspace context))
          (session (mevedel-cockpit-context-session context))
-         (id (plist-get (mevedel-cockpit-surface-selected) :id))
+         (id (plist-get (mevedel-artifacts-list--local-selected) :id))
          (new-id (read-string "New artifact id: " (concat id "-copy"))))
     (mevedel-artifact-store-duplicate workspace id new-id)
     (when session
@@ -358,22 +401,28 @@ Restoring copies the version over the artifact as a new version."
   "Open the selected artifact's own conversation, creating it on first use."
   (interactive)
   (let ((workspace (mevedel-artifacts-list--workspace))
-        (id (plist-get (mevedel-cockpit-surface-selected) :id)))
+        (id (plist-get (mevedel-artifacts-list--local-selected) :id)))
     (mevedel--display-chat-buffer
      (mevedel-artifact-store-conversation workspace id))))
 
 (defun mevedel-artifacts-list-delete ()
   "Delete the selected artifact with its versions, discussions and conversation.
 A whiteboard or document is deleted as a shared item, after any save in
-progress, together with its discussions and history."
+progress, together with its discussions and history.  A remote artifact
+is detached instead: its origin keeps it."
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
          (workspace (mevedel-artifacts-list--workspace context))
          (item (mevedel-cockpit-surface-selected))
          (name (or (plist-get item :title) (plist-get item :id)))
          (buffer (current-buffer)))
-    (when (yes-or-no-p (format "Delete %s with its versions, discussions and conversation? "
-                               name))
+    (cond
+     ((plist-get item :remote)
+      (when (yes-or-no-p (format "Detach %s (its origin keeps it)? " name))
+        (mevedel-remote-artifact-detach workspace (plist-get item :id))
+        (mevedel-cockpit-surface-refresh)))
+     ((yes-or-no-p (format "Delete %s with its versions, discussions and conversation? "
+                           name))
       (mevedel-artifact-store-delete
        workspace (plist-get item :id) nil
        (lambda (failure)
@@ -381,7 +430,7 @@ progress, together with its discussions and history."
              (message "mevedel: %s was not deleted: %s" name failure)
            (when (buffer-live-p buffer)
              (with-current-buffer buffer (mevedel-cockpit-surface-refresh)))
-           (message "mevedel: %s deleted" name)))))))
+           (message "mevedel: %s deleted" name))))))))
 
 (defun mevedel-artifacts-list-quit ()
   "Quit the artifacts cockpit."
@@ -470,7 +519,8 @@ share it.  Nothing is created when that is declined."
              ("Att" 4 t)
              ("Ver" 4 ,(mevedel-cockpit-sort-by-number 3))
              ("Modified" 17 t)
-             ("Size" 0 ,(mevedel-cockpit-sort-by-number 5))]
+             ("Size" 8 ,(mevedel-cockpit-sort-by-number 5))
+             ("Link" 0 t)]
     :sort-key ("Modified" . t)
     :collect mevedel-artifacts-list--collect
     :entry mevedel-artifacts-list--entry
