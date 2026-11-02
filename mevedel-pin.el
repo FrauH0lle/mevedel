@@ -70,12 +70,14 @@ changes the real path behind TRAMP's back.  DIRECTORY-P flushes a subtree."
         (setq pending (substring pending (match-end 0)))
         (when-let* ((reply (ignore-errors
                              (json-parse-string line :object-type 'plist
-                                                :false-object nil :null-object nil)))
-                    (id (plist-get reply :id)))
-          ;; Only an awaited id is recorded: a reply that arrives after its
-          ;; request gave up must not linger or answer a later request.
-          (when (eq (gethash id replies) :awaiting)
-            (puthash id reply replies)))))
+                                                :false-object nil :null-object nil))))
+          (when (plist-get reply :ready)
+            (process-put process 'mevedel-pin-ready t))
+          (when-let* ((id (plist-get reply :id)))
+            ;; Only an awaited id is recorded: a reply that arrives after its
+            ;; request gave up must not linger or answer a later request.
+            (when (eq (gethash id replies) :awaiting)
+              (puthash id reply replies))))))
     (process-put process 'mevedel-pin-pending pending)))
 
 (defun mevedel-pin--helper (prefix)
@@ -96,7 +98,8 @@ changes the real path behind TRAMP's back.  DIRECTORY-P flushes a subtree."
                ;; base64 ending at a blank line, then serves on that stdin.
                (prefix
                 (list python "-I" "-c"
-                      (concat "import base64,sys;exec(base64.b64decode(''.join("
+                      (concat "import base64,sys;print('{\"ready\":true}',flush=True);"
+                              "exec(base64.b64decode(''.join("
                               "iter(sys.stdin.readline,'\\n'))))")))
                (t (list python "-I" mevedel-pin--script))))
              (process
@@ -104,7 +107,16 @@ changes the real path behind TRAMP's back.  DIRECTORY-P flushes a subtree."
                :name "mevedel-pin" :command command
                :connection-type 'pipe :coding 'utf-8-unix :noquery t
                :file-handler t :filter #'mevedel-pin--filter :sentinel #'ignore)))
+        (process-put process 'mevedel-pin-replies (make-hash-table))
         (when prefix
+          ;; TRAMP can return before exec; the login shell can swallow early input.
+          (let ((deadline (+ (float-time) mevedel-pin-timeout)))
+            (while (and (not (process-get process 'mevedel-pin-ready))
+                        (process-live-p process) (< (float-time) deadline))
+              (accept-process-output process .05))
+            (unless (process-get process 'mevedel-pin-ready)
+              (when (process-live-p process) (delete-process process))
+              (signal 'mevedel-pin-refused '("Path pin helper did not become ready"))))
           (process-send-string
            process
            (with-temp-buffer
@@ -114,7 +126,6 @@ changes the real path behind TRAMP's back.  DIRECTORY-P flushes a subtree."
              (goto-char (point-max))
              (insert "\n\n")
              (buffer-string))))
-        (process-put process 'mevedel-pin-replies (make-hash-table))
         (setf (alist-get prefix mevedel-pin--helpers nil nil #'equal) process)
         process))))
 
