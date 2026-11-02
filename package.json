@@ -10,12 +10,34 @@
   "files": [
     "bin",
     "src",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "NOTICE.md"
   ],
   "engines": {
     "node": ">=22.4"
   },
   "scripts": {
     "test": "node --test test/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FrauH0lle/mevedel.git",
+    "directory": "remote-artifact"
+  },
+  "homepage": "https://github.com/FrauH0lle/mevedel/tree/master/remote-artifact#readme",
+  "bugs": {
+    "url": "https://github.com/FrauH0lle/mevedel/issues"
+  },
+  "keywords": [
+    "mcp",
+    "mevedel",
+    "whiteboard",
+    "collaboration",
+    "claude-code",
+    "codex"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }
