@@ -447,7 +447,7 @@ BOUNDARY returns reminder text, or nil, after each completed tool batch."
                     (if (or (not (mevedel-claude-code-context-hook-fits-p context))
                             ;; Only an undelivered continuation reaches here.
                             (equal "PreToolUse" name)
-                            ;; Steering images cannot ride hook text.
+                            ;; Authored steering cannot ride hook context.
                             (and (equal "PostToolBatch" name)
                                  (eq 'continuation
                                      (plist-get (plist-get (mevedel-engine-info request)

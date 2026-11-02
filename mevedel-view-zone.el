@@ -905,7 +905,8 @@ COMPOSER-ANCHORS identify other windows whose visible composer stays still."
               (and region (mevedel-view-zone--fragment-position-state
                            zone region (window-start window) window))
               composer visit y
-              (and y (or (mevedel-view--window-blank-pixels window) 0)))))
+              (and y (eq (car visit) 'interaction)
+                   (or (mevedel-view--window-blank-pixels window) 0)))))
     (get-buffer-window-list (current-buffer) nil t))))
 
 (defun mevedel-view-zone--restore-logical-state (zone state)
@@ -938,8 +939,10 @@ Other windows retain their logical or marker-backed reading starts."
               (set-window-point window visited)
               (mevedel-view--set-viewport
                window (mevedel-view--viewport-at-y window visited y))
-              ;; Shrink below the visited row must not leave new empty space.
-              (mevedel-view--restore-window-blank-pixels window blank)
+              ;; Only interaction shrink repairs blank space.  Status shrink
+              ;; must not move the row the user is reading or toggling.
+              (when blank
+                (mevedel-view--restore-window-blank-pixels window blank))
               (push window visited-windows))
              ((not composer)
               (when-let* ((position (or start

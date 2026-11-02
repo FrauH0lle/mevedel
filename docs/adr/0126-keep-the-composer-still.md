@@ -12,8 +12,10 @@ priority; otherwise a previously visible composer keeps
 its position only when that window's caret is in the composer. A history reader
 keeps its reading position even if the composer is still visible. Logical
 positions are restored before applying
-that anchor. A visited card retains its screen position unless its shrink creates
-new blank space below the buffer; repairing only that excess takes priority over
+that anchor. A visited status row retains its screen position even when its
+details shrink: the resulting blank space belongs below the composer, not above
+the reader. A visited interaction card retains its screen position unless its
+shrink creates new blank space below the buffer; repairing only that excess takes priority over
 the visited row. Existing blank space is retained.
 
 Chrome above the composer (background work, tasks and interaction prompts)
@@ -31,7 +33,8 @@ and its character tail. After logical restoration, they apply this policy:
 
 | Window context before mutation | Viewport policy | Discriminating case |
 | --- | --- | --- |
-| Point visits a surviving interaction card or status row | Retain the visited row, then fill only newly created blank pixels | Shrinking a visited card below point must not leave a newly empty viewport; collapsing a background row must not move a mid-window composer to the last page |
+| Point visits a surviving status row | Retain the visited row without filling new blank space | Repeated background-row collapse and expansion must not drift the row downward |
+| Point visits a surviving interaction card | Retain the visited row, then fill only newly created blank pixels | Shrinking a visited card below point must not leave a newly empty viewport |
 | Caret in visible composer, saved logical start survives | Retain the composer position and pre-existing blank space, except when growth overflows the window | Shorter status text must not erase intentional blank space; oversized incoming growth fills the last page |
 | Saved logical start removed or truncated | Fill the last page, bypassing the character-tail guard | Ask submission can expose longer history lines and increase the tail despite losing rows |
 | Caret in transcript history, saved logical start survives | Retain the reading viewport through growth and shrinkage below it | A focus click into history must not move it when deferred rendering catches up |
@@ -90,10 +93,10 @@ Their viewport transaction must not replace that exact mapping with a source-run
 character offset or mistake the changed offset for a lost start. They therefore
 reuse the same viewport policy while retaining the splice's position mapping.
 
-History readers keep their native viewport when a window changes height,
-including growth caused by a shrinking echo area. For other windows,
-height-only growth repairs newly exposed blank space using the height
-delta, provided the same buffer and width were displayed previously. This
+History and status readers keep their native viewport when a window changes
+height, including growth caused by a shrinking echo area. Only for windows whose
+point is in the editable composer, height-only growth repairs newly exposed blank
+space using the height delta, provided the same buffer and width were displayed previously. This
 inference covers popup closure with an unchanged start, not arbitrary simultaneous
 scrolling, reflow or buffer replacement. The first size change also remembers
 the original height and viewport. While the buffer and width remain unchanged
@@ -230,6 +233,30 @@ approval's RET action. An idle delay (as in Codex) only narrows that window, so
 focus is explicit.
 
 ## Decision history
+
+- **Status visits skip window-growth repair too (2026-11-01).** A live trace
+  after Magit returned to the view and a consult minibuffer closed showed
+  point in the status zone, not transcript history. The history-reader guard
+  therefore allowed blank-space repair and moved the start backward from
+  167024 to 166391. Height-growth repair now applies only when that window's
+  point is in the editable composer. Status visits retain their reading
+  viewport, consistent with their priority over blank-space repair during
+  redraws. Composer unmatched-growth and size-round-trip recovery remain
+  unchanged; previewing another buffer can still invalidate their baseline.
+
+- **Status shrink keeps the reader, not the blank-space budget (2026-11-01).**
+  Repeated agent-row toggles reproduced a backward-moving window start in both
+  window orders, including the non-selected window. The character-tail clamp
+  was not responsible: status visits already bypassed it. The later visited-row
+  blank-pixel repair overrode their restored screen position on collapse, but
+  expansion did not undo that scroll. Status visits now skip both blank-pixel
+  capture and repair, including in full-render preservation. Interaction-card
+  shrink and Ask-submission last-page recovery retain their existing rules.
+  The previous status-row regression expected the composer to stay still while
+  point visited the row; it now asserts the visited row's point, start and screen
+  position instead. A separate multi-row expiry regression retains transcript
+  readers in both windows; that case already passed on the baseline and does not
+  establish the cause of the reported live history jump.
 
 - **Scrolling back returns to the draft (2026-10-31).** With
   `scroll-preserve-screen-position` and two-line wheel steps, three wheel

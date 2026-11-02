@@ -1,0 +1,35 @@
+name: Dependabot auto-merge
+
+on:
+  workflow_run:
+    workflows: [CI, dependencies]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  enable-auto-merge:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Query metadata only; never check out or execute the PR's code here.
+      - name: Enable auto-merge for same-repository Dependabot PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          gh api --method GET "repos/$GH_REPO/pulls" \
+            -f head="$REPO_OWNER:$HEAD_BRANCH" -f state=open \
+            --jq '.[] | select(.user.login == "dependabot[bot]" and .base.ref == "master" and .head.repo.full_name == .base.repo.full_name) | .html_url' \
+            | while IFS= read -r pr; do
+              gh pr merge --auto --merge "$pr"
+            done

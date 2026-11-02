@@ -407,6 +407,88 @@ REGION promises that THUNK replaces only that text."
   (let ((last-nonmenu-event nil))
     (call-interactively (key-binding (kbd "RET")))))
 
+(mevedel-deftest mevedel-view-user-state/status-shrink-reader ()
+  (mevedel-view-user-state-test--with-view
+    (setq executions nil
+          agents (list (list :path "/root/worker" :status 'running
+                             :started-at 990.0
+                             :model-metadata '(:backend "Provider"
+                                               :model "Model" :effort "high"))))
+    (unless ,toggle
+      (dotimes (n 3)
+        (push (list :path (format "/root/finished-%d" n)
+                    :status 'running :started-at 989.0)
+              agents)))
+    (mevedel-view--render-status)
+    (mevedel-view-test--insert-composer-draft
+     mevedel-view-user-state-test--draft 4)
+    (when ,toggle
+      (mevedel-view-user-state-test--activate-row "/root/worker"))
+    (let* ((left (selected-window))
+           (right (split-window-right))
+           (selected (if ,right-selected right left)))
+      (set-window-buffer right view-buf)
+      (select-window selected)
+      (mevedel-view--render-status)
+      (dolist (window (list left right))
+        (let ((position (save-excursion
+                          (goto-char (point-min))
+                          (search-forward (if ,toggle "/root/worker" "Line 58 of"))
+                          (line-beginning-position))))
+          (set-window-point window position)
+          (set-window-start window
+                            (save-excursion
+                              (goto-char position)
+                              (forward-line (if (eq window left) -3 -5))
+                              (point)) t)))
+      (unless noninteractive (redisplay t))
+      (cl-flet ((observe ()
+                  (mapcar (lambda (window)
+                            (list (window-start window) (window-point window)
+                                  (mevedel-view--position-screen-y
+                                   (window-point window) window)))
+                          (list left right))))
+        (let ((before (observe))
+              (lines (count-lines (point-min) (point-max))))
+          (should (mevedel-view--window-shows-end-p left))
+          (should (mevedel-view--window-shows-end-p right))
+          (dotimes (_ 6)
+            (if ,toggle
+                (if ,outer
+                    (progn
+                      (setq mevedel-view-execution--selected-agent
+                            (unless mevedel-view-execution--selected-agent
+                              "/root/worker"))
+                      (mevedel-view--full-rerender))
+                  (let ((last-nonmenu-event nil))
+                    (call-interactively (key-binding (kbd "RET")))))
+              (setq agents nil clock (+ clock 20.0))
+              (mevedel-view--render-status))
+            (unless noninteractive (redisplay t))
+            (should (equal before (observe)))
+            (when ,toggle
+              (should (= (count-lines (point-min) (point-max))
+                         (- lines (if mevedel-view-execution--selected-agent 0 4)))))
+            (should (eq selected (selected-window)))
+            (should (equal mevedel-view-user-state-test--draft
+                           (mevedel-view--input-text))))
+          (unless ,toggle
+            (should-not (string-search "/root/worker" (buffer-string)))
+            (should-not (string-search "/root/finished-" (buffer-string))))))))
+  (toggle right-selected outer)
+  :doc "toggling an agent preserves both visited rows, left selected"
+  t nil nil
+  :doc "toggling an agent preserves both visited rows, right selected"
+  t t nil
+  :doc "a full rerender shrinking status preserves both visits, left selected"
+  t nil t
+  :doc "a full rerender shrinking status preserves both visits, right selected"
+  t t t
+  :doc "completed agents leaving preserve both history readers, left selected"
+  nil nil nil
+  :doc "completed agents leaving preserve both history readers, right selected"
+  nil t nil)
+
 (mevedel-deftest mevedel-view-user-state/collapse-background-row ()
   (progn
     (skip-unless (display-graphic-p))
@@ -422,16 +504,23 @@ REGION promises that THUNK replaces only that text."
         (goto-char (mevedel-view--input-start))
         (recenter 20))
       (redisplay t)
-      (let ((composer-y (mevedel-view-test--composer-screen-y (selected-window))))
+      (let ((composer-y (mevedel-view-test--composer-screen-y (selected-window)))
+            (start (window-start))
+            (position (point))
+            (row-y (mevedel-view--position-screen-y (point) (selected-window))))
         (should (mevedel-view--window-blank-pixels (selected-window)))
         (mevedel-view-user-state-test--activate-row "Inspect runner")
         (redisplay t)
         (should (looking-at-p "  ▸ Running"))
         (should (equal mevedel-view-user-state-test--draft (mevedel-view--input-text)))
-        (should (equal composer-y
-                       (mevedel-view-test--composer-screen-y (selected-window)))))))
+        (should (= start (window-start)))
+        (should (= position (window-point)))
+        (should (equal row-y (mevedel-view--position-screen-y
+                             (point) (selected-window))))
+        (should (< (mevedel-view-test--composer-screen-y (selected-window))
+                   composer-y)))))
   (test)
-  :doc "collapsing a background row keeps a mid-window composer in place"
+  :doc "collapsing a background row keeps the visited row, not the composer"
   nil)
 
 (defun mevedel-view-user-state-test--wheel (direction &optional window)
@@ -621,6 +710,203 @@ WINDOW defaults to the selected window, but need not be selected."
     (run 'mwheel-scroll (lambda () (set-window-start nil bottom)))
     (should (= transcript (point)))
     (should-not (window-parameter nil 'mevedel-view-scroll-return))))
+
+(mevedel-deftest mevedel-view-user-state/live-reader ()
+  ;; The graphical runner repeats every transition after a real wheel event
+  ;; in the command loop, including one targeting the non-selected window.
+  (dolist (scroll (if noninteractive '(nil) '(nil t)))
+    (mevedel-view-user-state-test--with-view
+      (mevedel-view-test--insert-data data-buf "Continue.\n" nil)
+      (mevedel-view--full-rerender)
+      (mevedel-view-user-state-test--begin-turn data-buf)
+      (mevedel-view-user-state-test--add-chunk
+       data-buf "\nA paragraph with a stable middle and a stable ending.")
+      (mevedel-view--render-stream-update data-buf)
+      (let* ((windows (mevedel-view-user-state-test--arrange))
+	     (reader (if ,selected (car windows) (cdr windows)))
+	     (position (save-excursion
+			 (goto-char (point-min))
+			 (search-forward ,needle)
+			 (point))))
+	(set-window-point reader position)
+	(set-window-start reader
+			  (save-excursion (goto-char position)
+					  (line-beginning-position)))
+	(unless noninteractive (redisplay t))
+	(when scroll
+	  (let ((scroll-preserve-screen-position t)
+		(mouse-wheel-follow-mouse t)
+		(mouse-wheel-scroll-amount '(2 ((shift) . hscroll)))
+		(mouse-wheel-progressive-speed nil))
+	    (mevedel-view-user-state-test--wheel 'wheel-up reader))
+	  (should (= position (window-point reader))))
+	(let ((start (window-start reader))
+	      (y (mevedel-view--position-screen-y position reader))
+	      (selected-window (selected-window)))
+	  (when (eq ,chunk 'rewrite)
+	    ;; A canonical source correction before the retained paragraph
+	    ;; invalidates the live tail through its real before-change hook.
+	    (with-current-buffer data-buf
+	      (goto-char (point-min))
+	      (search-forward "Streaming")
+	      (delete-region (- (point) 9) (point))
+	      (insert (propertize "Continued" 'gptel 'response))))
+	  (when (eq ,chunk 'shrink)
+	    (with-current-buffer data-buf
+	      (goto-char (point-min))
+	      (search-forward "A paragraph")
+	      (delete-region (match-beginning 0) (point-max))
+	      (insert (propertize "A shorter paragraph." 'gptel 'response))))
+	  (if (memq ,chunk '(tool rewrite))
+	      (progn
+		(mevedel-view-test--insert-data
+		 data-buf "(:name \"Bash\" :args (:command \"echo done\"))\n\ndone\n"
+		 '(tool . "live-reader-tool"))
+		(mevedel-view-user-state-test--add-chunk data-buf "After the tool."))
+	    (unless (memq ,chunk '(settle shrink))
+	      (mevedel-view-user-state-test--add-chunk data-buf ,chunk)))
+	  (if (memq ,chunk '(settle shrink))
+	      (let ((from (marker-position mevedel-view--data-turn-start)))
+		(with-current-buffer data-buf
+		  (mevedel-view-stream-render-response from (point-max))))
+	    (mevedel-view--render-stream-update data-buf))
+	  (unless noninteractive (redisplay t))
+	  (when (eq ,chunk 'shrink)
+	    (setq position (save-excursion
+			     (goto-char (point-min))
+			     (search-forward "A shorter paragraph.")
+			     (point))))
+	  (should (= position (window-point reader)))
+	  (should (= start (window-start reader)))
+	  (should (equal y (mevedel-view--position-screen-y
+			    (window-point reader) reader)))
+	  (should (eq selected-window (selected-window)))
+	  (should (equal mevedel-view-user-state-test--draft
+			 (mevedel-view--input-text)))))))
+  (selected needle chunk)
+  :doc "selected reader at paragraph end survives growth"
+  t "stable ending." " More text."
+  :doc "selected reader in paragraph middle survives growth"
+  t "stable middle" " More text."
+  :doc "non-selected reader at paragraph end survives growth"
+  nil "stable ending." " More text."
+  :doc "non-selected reader in paragraph middle survives growth"
+  nil "stable middle" " More text."
+  :doc "selected reader at paragraph end survives a stable block boundary"
+  t "stable ending." "\n\nNext paragraph."
+  :doc "selected reader in paragraph middle survives a stable block boundary"
+  t "stable middle" "\n\nNext paragraph."
+  :doc "non-selected reader at paragraph end survives a stable block boundary"
+  nil "stable ending." "\n\nNext paragraph."
+  :doc "non-selected reader in paragraph middle survives a stable block boundary"
+  nil "stable middle" "\n\nNext paragraph."
+  :doc "selected reader at paragraph end survives a tool boundary"
+  t "stable ending." 'tool
+  :doc "selected reader in paragraph middle survives a tool boundary"
+  t "stable middle" 'tool
+  :doc "non-selected reader at paragraph end survives a tool boundary"
+  nil "stable ending." 'tool
+  :doc "non-selected reader in paragraph middle survives a tool boundary"
+  nil "stable middle" 'tool
+  :doc "selected reader at paragraph end survives settlement"
+  t "stable ending." 'settle
+  :doc "selected reader in paragraph middle survives settlement"
+  t "stable middle" 'settle
+  :doc "non-selected reader at paragraph end survives settlement"
+  nil "stable ending." 'settle
+  :doc "non-selected reader in paragraph middle survives settlement"
+  nil "stable middle" 'settle
+  :doc "selected reader at paragraph end survives a source-corrected stream update"
+  t "stable ending." 'rewrite
+  :doc "selected reader in paragraph middle survives a source-corrected stream update"
+  t "stable middle" 'rewrite
+  :doc "non-selected reader at paragraph end survives a source-corrected stream update"
+  nil "stable ending." 'rewrite
+  :doc "non-selected reader in paragraph middle survives a source-corrected stream update"
+  nil "stable middle" 'rewrite
+  :doc "selected reader at paragraph end stays nearest to rewritten text"
+  t "stable ending." 'shrink
+  :doc "selected reader in paragraph middle stays nearest to rewritten text"
+  t "stable middle" 'shrink
+  :doc "non-selected reader at paragraph end stays nearest to rewritten text"
+  nil "stable ending." 'shrink
+  :doc "non-selected reader in paragraph middle stays nearest to rewritten text"
+  nil "stable middle" 'shrink)
+
+(mevedel-deftest mevedel-view-user-state/status-minibuffer-roundtrip ()
+  (progn
+    (skip-unless (display-graphic-p))
+    (mevedel-view-user-state-test--with-view
+      (let* ((left (selected-window))
+             (right (split-window-right))
+             (windows (list left right))
+             (resize-mini-windows nil)
+             (preview (generate-new-buffer "preview")))
+        (unwind-protect
+            (progn
+              (set-window-buffer right view-buf)
+              (mevedel-view-test--insert-composer-draft
+               mevedel-view-user-state-test--draft 4)
+              (mevedel-view--render-status)
+              (redisplay t)
+              (goto-char (point-min))
+              (search-forward "[Manage]")
+              (backward-char (length "[Manage]"))
+              (let ((visit (point)))
+                (should (>= visit mevedel-view--status-marker))
+                (should (< visit (mevedel-view--input-start)))
+                (dolist (window windows)
+                  (set-window-point window visit)
+                  (mevedel-view--set-viewport
+                   window (mevedel-view--viewport-at-y window visit 200)))
+                (select-window (if ,right right left))
+                (redisplay t)
+                (let ((before
+                       (mapcar (lambda (window)
+                                 (should (> (mevedel-view--window-blank-pixels window) 160))
+                                 (list (window-start window)
+                                       (mevedel-view--position-screen-y visit window)))
+                               windows)))
+                  (condition-case nil
+                      (minibuffer-with-setup-hook
+                          (lambda ()
+                            (enlarge-window 8)
+                            (redisplay t)
+                            ;; Previewing another buffer invalidates the old
+                            ;; size baseline, as consult-buffer does in use.
+                            (when ,preview
+                              (cl-mapc
+                               (lambda (window state)
+                                 (set-window-buffer window preview)
+                                 (redisplay t)
+                                 (set-window-buffer window view-buf)
+                                 (set-window-point window visit)
+                                 (set-window-start window (car state) t)
+                                 (redisplay t))
+                               windows before))
+                            (dolist (window windows)
+                              (should (= visit (window-point window))))
+                            (setq unread-command-events (list ?\C-g)))
+                        (read-from-minibuffer "Preview: "))
+                    (quit nil))
+                  (redisplay t)
+                  (should (eq (selected-window) (if ,right right left)))
+                  (should (equal mevedel-view-user-state-test--draft
+                                 (mevedel-view--input-text)))
+                  (dolist (window windows)
+                    (should (= visit (window-point window))))
+                  (should
+                   (equal before
+                          (mapcar (lambda (window)
+                                    (list (window-start window)
+                                          (mevedel-view--position-screen-y visit window)))
+                                  windows))))))
+          (kill-buffer preview)))))
+  (right preview)
+  :doc "status readers retain their rows across minibuffer resizing, left selected" nil nil
+  :doc "status readers retain their rows across minibuffer resizing, right selected" t nil
+  :doc "status readers retain their rows after preview resets the baseline, left selected" nil t
+  :doc "status readers retain their rows after preview resets the baseline, right selected" t t)
 
 (provide 'test-mevedel-view-user-state)
 ;;; test-mevedel-view-user-state.el ends here

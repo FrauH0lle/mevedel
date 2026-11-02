@@ -1,6 +1,6 @@
 ---
 name: "Test both reentry orders and separate mechanism from incident attribution"
-description: "Reverse reentrant nesting in regressions; a matching injected failure does not establish the original event sequence"
+description: "Reverse reentrant nesting in regressions; a matching injected failure does not establish the original event sequence."
 type: feedback
 ---
 
@@ -15,6 +15,4 @@ The 2026-09-16 view-render investigation demonstrated this asymmetry:
 
 Compare authoritative data with its rendered projection before attributing duplicated display content to duplicated model output. In this incident, the transcript contained one heading and HTML example, while the view contained multiple copies; fresh rendering was correct.
 
-**Causal limit:** a deterministic injected ordering can prove a defect with matching symptoms without proving the original production event sequence. Historical render tracing was unavailable here, and the full original corruption was not reproduced. Do not present the injected mechanism as a recorded trace of the original incident.
-
-The note's final checkpoint supersedes the earlier memories' “no implementation” status: fixes and rebuilt bytecode/native-runtime checks were completed. That does not resolve the historical causal limit. The original broken view was no longer open at final verification, so its final hash could not be checked.
+**Causal limit:** a deterministic injected ordering can prove a defect with matching symptoms without proving the original production event sequence. Historical render tracing was unavailable here, and the full original corruption was not reproduced. Do not present the injected mechanism as a recorded trace of the original incident. Subsequent fixes and runtime checks do not resolve that historical causal limit.

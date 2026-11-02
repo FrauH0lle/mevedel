@@ -1233,13 +1233,27 @@ into a neighbor.  With STRICT, return nil instead of clamping a lost offset."
            (count 0)
            found done)
        (while (and (not done) (< pos limit))
-         (let ((next (mevedel-view--render-anchor-run-end pos limit)))
-           (when (equal identity (mevedel-view--render-anchor-identity pos))
+         (let ((next (mevedel-view--render-anchor-run-end pos limit))
+               (current (mevedel-view--render-anchor-identity pos)))
+           (cond
+            ((equal identity current)
              (if (= count nth)
                  (setq done t
                        found (and (or (not strict) (< (+ pos offset) next))
                                   (min (max pos (1- next)) (+ pos offset))))
                (setq count (1+ count))))
+            ;; A completed response can absorb its formerly separate live
+            ;; paragraph.  Retain the character, not the container's header.
+            ((and (eq (cadr identity) 'response)
+                  (eq (cadr current) 'response)
+                  (not (get-text-property pos 'mevedel-view-collapsed))
+                  (< (car current) (car identity))
+                  (< (car identity)
+                     (cdr (get-text-property pos 'mevedel-view-source))))
+             (let ((position (+ pos (- (car identity) (car current)) offset)))
+               (setq done t
+                     found (and (or (not strict) (< position next))
+                                (min (1- next) position))))))
            (setq pos next)))
        (or found
            (and (not strict)
@@ -1498,7 +1512,8 @@ that height restores it, in either order: a shrink then growth exposes
 nothing new, and a growth then shrink undoes its repair.  Only growth
 beyond both the original height and any height already repaired counts as
 newly exposed.
-Transcript readers keep their native viewport instead of filling new space.
+Only windows with point in the editable composer fill new space; transcript
+and status readers keep their native viewport.
 Pending input keeps the viewport, except when undoing a repair made within
 `mevedel-view--transient-repair-seconds'.
 Record geometry only on size changes, not on ordinary redisplays."
@@ -1506,9 +1521,9 @@ Record geometry only on size changes, not on ordinary redisplays."
          (height (cdr (mevedel-view--window-body-geometry window)))
          (width (window-body-width window t))
          (viewport (cons (window-start window) (window-vscroll window t)))
-         (reader (and (markerp mevedel-view--status-marker)
-                      (eq (marker-buffer mevedel-view--status-marker) (current-buffer))
-                      (< (window-point window) mevedel-view--status-marker)))
+         (composer (and (markerp mevedel-view--input-marker)
+                        (eq (marker-buffer mevedel-view--input-marker) (current-buffer))
+                        (>= (window-point window) (mevedel-view--input-start))))
          ;; :height and :viewport are the original geometry, :shown the
          ;; viewport last observed or set here, :accounted the tallest height
          ;; whose blank space is already settled, :repaired the last repair time.
@@ -1518,7 +1533,7 @@ Record geometry only on size changes, not on ordinary redisplays."
                  (= (plist-get state :width) width)
                  (equal (plist-get state :shown) viewport))
       (setq state nil))
-    (if (or reader
+    (if (or (not composer)
             (not (and (eq (window-old-buffer window) (current-buffer))
                       (> old-height 0)
                       (= width (window-old-body-pixel-width window)))))
@@ -1822,7 +1837,8 @@ found without scanning the rest of the buffer."
 	                           (- ws (mevedel-view--input-start)))
                               (and visit-y
                                    (list visit visit-y
-                                         (or (mevedel-view--window-blank-pixels w) 0)))))))
+                                         (and (eq (car visit) 'interaction)
+                                              (or (mevedel-view--window-blank-pixels w) 0))))))))
                   (get-buffer-window-list (current-buffer) nil t))))
     (cl-flet ((resolve-position (position input-offset anchor)
                 (cond
@@ -1879,7 +1895,8 @@ found without scanning the rest of the buffer."
 			       (set-window-point w position)
 			       (mevedel-view--set-viewport
 				w (mevedel-view--viewport-at-y w position (nth 1 visit)))
-			       (mevedel-view--restore-window-blank-pixels w (nth 2 visit))
+			       (when (nth 2 visit)
+			         (mevedel-view--restore-window-blank-pixels w (nth 2 visit)))
 			       (push w visited-windows)))))
 		       (when (and (not positions-preserved) mevedel-view--pww-current-mark)
 			 (set-marker

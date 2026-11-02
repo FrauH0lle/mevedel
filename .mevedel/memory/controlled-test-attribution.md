@@ -1,6 +1,6 @@
 ---
 name: "Preserve controls and conditions when attributing test outcomes"
-description: "Equivalent context, delivered test inputs, assertion conditions, and negative controls establish different parts of a coverage claim"
+description: "Match relevant context, selection state, delivered inputs, and assertion conditions before attributing outcomes."
 type: feedback
 ---
 
@@ -20,9 +20,16 @@ type: feedback
 - With Playwright 1.63, native touch taps in Firefox and Chromium released before the first animation frame. Presence DOM created during pointer-down therefore did not establish a visibly rendered tip. Separating native lifecycle/capture checks from visible movement checks avoided a vacuous rendering assertion.
 - Isolated `Page.route` negative controls showed that repaired tests rejected ignored PNG input, blocked HTML paste, and disabled reduced-motion handling. These observations support checking both delivered inputs and consumer-visible effects.
 
+**Selection-state observation, 2026-10-29:**
+
+With real polymode on Emacs 31.1, `find-buffer-visiting` returned a file-named indirect child selected through `switch-to-buffer`, even when lookup ran inside `with-current-buffer` on the base buffer. Selecting the base reversed the result. A no-advice fixture and independent rerun established this without a disk change or second child, despite the function's documented base-buffer-only guarantee.
+
+The reusable testing lesson is that changing the current buffer does not reproduce selection/MRU-dependent behavior. This established an isolated mechanism, not the precise historical sequence after the reported `git switch`.
+
 **When and how to apply:**
 
 - For suspected regressions, compare baseline and changed sources under equivalent relevant context and identify the code and dependencies actually loaded.
+- When behavior may depend on selected buffers, windows, or recent-use ordering, reproduce the relevant selection transitions; a `with-current-buffer` binding alone is not equivalent.
 - For intermittent failures, retain counterexamples even after a green suite. Report what reproduced separately from any proposed mechanism.
 - For capability skips, retain the condition and probe output, distinguishing deadline expiry from demonstrated lack of support.
 - For cross-browser event tests, first establish what input reached the handler. A constructor accepting an initializer does not establish that its payload survived.
