@@ -21,10 +21,10 @@
                   (workspace args callback &optional authorize commit))
 (declare-function mevedel-artifact-backend-catalog "mevedel-artifact-backend"
                   (workspace &optional detail))
-(autoload 'mevedel-artifact-backend-call "mevedel-artifact-backend")
-(autoload 'mevedel-artifact-backend-catalog "mevedel-artifact-backend")
 (declare-function mevedel-artifact-backend-registered-p "mevedel-artifact-backend"
                   (workspace id))
+(autoload 'mevedel-artifact-backend-call "mevedel-artifact-backend")
+(autoload 'mevedel-artifact-backend-catalog "mevedel-artifact-backend")
 (autoload 'mevedel-artifact-backend-registered-p "mevedel-artifact-backend")
 
 ;; `mevedel-artifact-store'

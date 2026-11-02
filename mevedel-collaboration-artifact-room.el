@@ -56,33 +56,22 @@
 (require 'mevedel-resource)
 (require 'mevedel-workspace)
 
-;; `mevedel-shared-library'
-;; Restoring shared artifacts at startup loads this file; the libraries
-;; load only when a consumer asks for them.
-(declare-function mevedel-shared-library-libraries "mevedel-shared-library" ())
-(autoload 'mevedel-shared-library-libraries "mevedel-shared-library")
-
-;; `mevedel-collaboration-guest'
-(declare-function mevedel-collaboration--admit-hello
-                  "mevedel-collaboration-guest" (room peer frame))
-
 ;; `mevedel-collaboration-editing'
 (declare-function mevedel-collaboration-editing--send
                   "mevedel-collaboration-editing" (room peer req-id value &optional raw))
 (declare-function mevedel-collaboration-editing-handle
                   "mevedel-collaboration-editing" (room peer frame &optional dispatch))
 
-;; `mevedel-collaboration-projection'
-(defvar mevedel-collaboration--protocol-version)
+;; `mevedel-collaboration-guest'
+(declare-function mevedel-collaboration--admit-hello
+                  "mevedel-collaboration-guest" (room peer frame))
 
 ;; `mevedel-collaboration-presence'
 (declare-function mevedel-collaboration-presence-publish
                   "mevedel-collaboration-presence" (room))
 
-;; `mevedel-shared-editing'
-(declare-function mevedel-shared-editing-call "mevedel-shared-editing"
-                  (workspace args callback &optional authorize commit))
-(declare-function mevedel-shared-editing--json "mevedel-shared-editing" (value))
+;; `mevedel-collaboration-projection'
+(defvar mevedel-collaboration--protocol-version)
 
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-open
@@ -92,11 +81,20 @@
 (declare-function mevedel-collaboration--transport-stop
                   "mevedel-collaboration-transport" (transport))
 
+;; `mevedel-shared-editing'
+(declare-function mevedel-shared-editing--json "mevedel-shared-editing" (value))
+(declare-function mevedel-shared-editing-call "mevedel-shared-editing"
+                  (workspace args callback &optional authorize commit))
+
+;; `mevedel-shared-library'
+;; Restoring shared artifacts at startup loads this file; the libraries
+;; load only when a consumer asks for them.
+(declare-function mevedel-shared-library-libraries "mevedel-shared-library" ())
+(autoload 'mevedel-shared-library-libraries "mevedel-shared-library")
+
 ;; `mevedel-sleep'
 (declare-function mevedel-sleep-update "mevedel-sleep" (&rest _))
 (autoload 'mevedel-sleep-update "mevedel-sleep")
-
-(defvar mevedel-user-dir)
 
 
 ;;

@@ -35,6 +35,10 @@
 (require 'mevedel-artifact-store)
 (require 'mevedel-structs)
 
+;; `mevedel-remote-artifact'
+(declare-function mevedel-remote-artifact-registrations "mevedel-remote-artifact" (workspace))
+(autoload 'mevedel-remote-artifact-registrations "mevedel-remote-artifact")
+
 ;; `mevedel-shared-editing'
 (declare-function mevedel-shared-editing-call "mevedel-shared-editing"
                   (workspace args callback &optional authorize commit))
@@ -43,10 +47,6 @@
 (autoload 'mevedel-shared-editing-call "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-list "mevedel-shared-editing")
 (autoload 'mevedel-shared-editing-present-p "mevedel-shared-editing")
-
-;; `mevedel-remote-artifact'
-(declare-function mevedel-remote-artifact-registrations "mevedel-remote-artifact" (workspace))
-(autoload 'mevedel-remote-artifact-registrations "mevedel-remote-artifact")
 
 (defvar mevedel-artifact-backend-change-hook nil
   "Functions called with WORKSPACE, STATE, RESULT after an editing commit.

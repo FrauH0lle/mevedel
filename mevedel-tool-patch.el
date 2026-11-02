@@ -32,11 +32,6 @@
 (declare-function diff-no-select "diff"
                   (old new &optional switches no-async buf))
 
-;; `mevedel-artifact-store'
-(declare-function mevedel-artifact-store-note-writes
-                  "mevedel-artifact-store" (session changes &optional request))
-(autoload 'mevedel-artifact-store-note-writes "mevedel-artifact-store")
-
 ;; `mevedel-artifact-backend'
 (declare-function mevedel-artifact-backend-call "mevedel-artifact-backend"
                   (workspace args callback &optional authorize commit))
@@ -44,6 +39,11 @@
                   (workspace id))
 (autoload 'mevedel-artifact-backend-call "mevedel-artifact-backend")
 (autoload 'mevedel-artifact-backend-registered-p "mevedel-artifact-backend")
+
+;; `mevedel-artifact-store'
+(declare-function mevedel-artifact-store-note-writes
+                  "mevedel-artifact-store" (session changes &optional request))
+(autoload 'mevedel-artifact-store-note-writes "mevedel-artifact-store")
 
 ;; `mevedel-directive'
 (declare-function mevedel-directive-set-anchor
@@ -98,10 +98,6 @@
 (defvar mevedel-pipeline--auto-apply-edit-p)
 (defvar mevedel-pipeline--handler-active-p)
 
-;; `mevedel-tool-editing'
-(declare-function mevedel-tool-editing--actor "mevedel-tool-editing" ())
-(autoload 'mevedel-tool-editing--actor "mevedel-tool-editing")
-
 ;; `mevedel-resource'
 (declare-function mevedel-resource-address-like-p
                   "mevedel-resource" (value))
@@ -128,6 +124,10 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
+
+;; `mevedel-tool-editing'
+(declare-function mevedel-tool-editing--actor "mevedel-tool-editing" ())
+(autoload 'mevedel-tool-editing--actor "mevedel-tool-editing")
 
 (defvar mevedel-tool-patch-prepared-proposal nil)
 
