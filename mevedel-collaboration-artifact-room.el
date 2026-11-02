@@ -288,7 +288,8 @@ With `:image' in ARGS, show that embedded image instead, as
      authorize)))
 
 (defun mevedel-collaboration-artifact-room--library (room _guest args authorize reply)
-  "Show the origin user's whiteboard libraries to ROOM's guest, as `shared://library'.
+  "Show the origin user's whiteboard libraries to ROOM's guest.
+The guest sees them as `shared://library' does.
 ARGS may name one `:library'; with `:part' \"sheet\" the reply is the
 picture of the library (or of all of them) as `:png' and `:mime', else
 the listing as `:text'.  Only reading is offered: the libraries are never
