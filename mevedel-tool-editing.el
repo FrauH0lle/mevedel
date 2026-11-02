@@ -49,6 +49,7 @@
 (declare-function mevedel-resource-execute "mevedel-resource" (attempt &optional executor options))
 (declare-function mevedel-resource-parse-address "mevedel-resource" (address))
 (autoload 'mevedel-resource-address-like-p "mevedel-resource")
+(autoload 'mevedel-resource-encode-component "mevedel-resource")
 (autoload 'mevedel-resource-execute "mevedel-resource")
 (autoload 'mevedel-resource-parse-address "mevedel-resource")
 
@@ -184,10 +185,13 @@ CALLBACK once with (:text TEXT), (:data BASE64 :mime MIME) or
 \(:error MESSAGE).  SEARCH instead returns mapped search documents derived
 from the same Read lines, joining output string chunks only for matching.
 A remote HTML artifact's `files' lists its files and `files/PATH' is one
-file's text."
+file's text; searched, they are every text file at or under the path."
   (condition-case err
-      (let ((args
-             (pcase components
+      (if-let* ((search)
+                (files (pcase components (`(,id "files" . ,path) (cons id path)))))
+          (mevedel-tool-editing--search-files (car files) (string-join (cdr files) "/") callback)
+        (let ((args
+               (pcase components
                (`("library" . ,rest) (mevedel-tool-editing--library-args rest))
                (`(,id "library" . ,rest) (mevedel-tool-editing--library-args rest id))
                (`(,id) (list :action "view" :id id :part "overview"))
@@ -200,8 +204,6 @@ file's text."
                 (list :action "view" :id id :part "image" :image image))
                (`(,id "files") (list :action "files" :id id))
                (`(,id "files" . ,path)
-                (when search
-                  (error "Grep does not search a remote artifact's files; Read them"))
                 (list :action "file" :id id :file (string-join path "/")))
                (_ (error "Unknown shared:// address")))))
         (when search (setq args (plist-put args :search t)))
@@ -221,8 +223,57 @@ file's text."
                          ((equal (plist-get args :action) "file")
                           (list :error (format "%s is not text" (plist-get args :file))))
                          (t (list :data (plist-get result :png)
-                                  :mime (plist-get result :mime))))))))))
+                                  :mime (plist-get result :mime)))))))))))
     (error (funcall callback (list :error (error-message-string err))))))
+
+(defun mevedel-tool-editing--text-document (address text)
+  "Return file TEXT, read at ADDRESS, as a search document of its Read lines."
+  (let ((lines (split-string (string-remove-suffix "\n" text) "\n"))
+        (bytes 0) (line 0) spans)
+    (dolist (value lines)
+      (let ((end (+ bytes (string-bytes value) 1)))
+        (push (vector bytes end (cl-incf line)) spans)
+        (setq bytes end)))
+    (list :address address :text text :lines (vconcat lines) :spans (vconcat (nreverse spans)))))
+
+(defun mevedel-tool-editing--search-files (id prefix callback)
+  "Call CALLBACK with search documents of remote artifact ID's files.
+They are the text files at PREFIX or beneath it, every one for an empty
+PREFIX, each read from the origin in turn; other files are skipped.
+CALLBACK receives (:documents DOCUMENTS) or (:error MESSAGE)."
+  (let ((workspace (mevedel-tool-editing--workspace))
+        (documents nil))
+    (cl-labels
+        ((address (file)
+           (format "shared://%s/files/%s" id
+                   (mapconcat #'mevedel-resource-encode-component (split-string file "/") "/")))
+         (next (files)
+           (if (null files)
+               (funcall callback (list :documents (vconcat (nreverse documents))))
+             (mevedel-artifact-backend-call
+              workspace (list :action "file" :id id :file (car files))
+              (lambda (reply)
+                (if-let* ((message (plist-get reply :error)))
+                    (funcall callback (list :error message))
+                  (when-let* ((text (plist-get (plist-get reply :result) :text)))
+                    (push (mevedel-tool-editing--text-document (address (car files)) text)
+                          documents))
+                  (next (cdr files))))))))
+      (mevedel-artifact-backend-call
+       workspace (list :action "files" :id id)
+       (lambda (reply)
+         (if-let* ((message (plist-get reply :error)))
+             (funcall callback (list :error message))
+           (let ((files (cl-loop for entry across (plist-get (plist-get reply :result) :files)
+                                 for file = (plist-get entry :file)
+                                 when (or (string-empty-p prefix) (equal file prefix)
+                                          (string-prefix-p (concat prefix "/") file))
+                                 collect file)))
+             (if files
+                 (next files)
+               (funcall callback
+                        (list :error (format "No file %s in this artifact"
+                                             (address prefix))))))))))))
 
 (defun mevedel-tool-editing--files-text (id result)
   "Return the files RESULT lists for remote artifact ID, one address a line."

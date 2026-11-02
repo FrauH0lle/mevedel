@@ -626,6 +626,31 @@ body of the last request that reached the origin."
                            (text (run "Read" '(:file_path "shared://landing/files/missing.css")
                                       'error))))))
 
+(mevedel-deftest mevedel-tool-fs-search--shared/remote-files
+  (:doc "Grep searches a remote HTML artifact's files, one or all of them, by their read lines"
+   :quiet t)
+  (mevedel-remote-artifact-test--with-html
+    (plist-put origin :files (append (plist-get origin :files)
+                                     (list (cons "assets/app.js" "const h1 = 'Hello';\n"))))
+    ;; One file, its matches at the lines Read shows.
+    (let ((found (text (run "Grep" '(:pattern "Hello" :path "shared://landing/files/index.html"
+                                              :output_mode "content")))))
+      (should (string-search "shared://landing/files/index.html" found))
+      (should (string-match-p ":2:<h1>Hello</h1>" found)))
+    ;; Every file of the artifact, or those under a directory.
+    (let ((found (text (run "Grep" '(:pattern "h1" :path "shared://landing/files"
+                                              :output_mode "files_with_matches")))))
+      (should (string-search "shared://landing/files/index.html" found))
+      (should (string-search "shared://landing/files/site.css" found))
+      (should (string-search "shared://landing/files/assets/app.js" found)))
+    (let ((found (text (run "Grep" '(:pattern "h1" :path "shared://landing/files/assets"
+                                              :output_mode "files_with_matches")))))
+      (should (string-search "shared://landing/files/assets/app.js" found))
+      (should-not (string-search "index.html" found)))
+    (should (string-search "No file shared://landing/files/nope"
+                           (text (run "Grep" '(:pattern "h1" :path "shared://landing/files/nope")
+                                      'error))))))
+
 (defun mevedel-remote-artifact-test--edit-before-write (origin file edit &optional times)
   "Make ORIGIN's FILE change by EDIT just before each of its next TIMES writes.
 EDIT maps the file's text to the text another writer leaves there."

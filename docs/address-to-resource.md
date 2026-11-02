@@ -504,7 +504,9 @@ workspace boundary, it is authorized as an edit like `SharedEdit`, and Plan
 mode denies it. Its freshness check is that the artifact stays attached. The
 patch reads and writes the files through the artifact backend; the
 [ApplyPatch manual](tools/applypatch.md#remote-artifact-files) gives its
-behavior. Grep does not search them.
+behavior. Grep on `shared://ID/files` or `shared://ID/files/PATH` searches the
+text files at or beneath it, read from the origin one at a time, with matches
+at the lines Read shows.
 
 ### `mcp://`
 
