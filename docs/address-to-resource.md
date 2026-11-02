@@ -472,7 +472,11 @@ session-relative: `shared://ID` reads its overview of hashed element or block
 lines, and its parts are `view.png`, `discussions`, `history`,
 `elements/ELEMENT` and `images/KEY`. `shared://library` lists element library
 items, `shared://library/NAME` one library, and `sheet.png` beneath either
-renders their numbered sheet. Item, element and image identities match
+renders their numbered sheet; `shared://library/LIBRARY/ITEM-ID/view.png`
+renders one item. A remote whiteboard's `shared://ID/library` has the same
+shapes for the libraries of its origin, which `SharedEdit insert` uses for it;
+it resolves only for an attached remote artifact. Item, element and image
+identities match
 `[a-zA-Z0-9_-]{1,80}`; any other shape is refused before execution, and an
 item missing from the session is unavailable.
 

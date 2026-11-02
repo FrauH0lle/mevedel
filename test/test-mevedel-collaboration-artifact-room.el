@@ -1177,12 +1177,26 @@ FUNCTION is a step of the editing queue: admission or commit."
                   (sheet (alist-get 'result
                                     (mevedel-artifact-room-test--request
                                      viewer 2 '((action . "library") (part . "sheet")
-                                                (library . "My library"))))))
+                                                (library . "My library")))))
+                  (item (alist-get 'result
+                                   (mevedel-artifact-room-test--request
+                                    viewer 3 '((action . "library") (part . "item")
+                                               (item . "My library/cube"))))))
               (should (string-search "My library/cube" (alist-get 'text listing)))
               (should (string-search "Built-in" (alist-get 'text listing)))
               (should (equal "image/png" (alist-get 'mime sheet)))
               (should (string-prefix-p "\x89PNG" (base64-decode-string
-                                                  (alist-get 'png sheet)))))
+                                                  (alist-get 'png sheet))))
+              ;; One item previews alone, unlike the library's sheet.
+              (should (equal "image/png" (alist-get 'mime item)))
+              (should (string-prefix-p "\x89PNG" (base64-decode-string (alist-get 'png item))))
+              (should-not (equal (alist-get 'png sheet) (alist-get 'png item)))
+              (should (string-match-p
+                       "No library item My library/sphere"
+                       (alist-get 'error
+                                  (mevedel-artifact-room-test--request
+                                   viewer 4 '((action . "library") (part . "item")
+                                              (item . "My library/sphere")))))))
           (mevedel-artifact-room-test--close viewer)))))
 
   :doc "reports an unknown library as an error"

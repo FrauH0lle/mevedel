@@ -628,32 +628,41 @@ With `:image' in ARGS, show that embedded image instead, as
 (defun mevedel-collaboration-artifact-room--library (room _guest args authorize reply)
   "Show the origin user's whiteboard libraries to ROOM's guest.
 They are shown as `shared://library' shows them.  ARGS may name one
-`:library'; with `:part' \"sheet\" the reply is the
-picture of the library (or of all of them) as `:png' and `:mime', else
-the listing as `:text'.  Only reading is offered: the libraries are never
-changed.  AUTHORIZE and REPLY are as in
+`:library'; with `:part' \"sheet\" the reply is the picture of the
+library (or of all of them) as `:png' and `:mime', with \"item\" the
+picture of the one `:item' LIBRARY/ITEM-ID names, else the listing as
+`:text'.  Only reading is offered: the libraries are never changed.
+AUTHORIZE and REPLY are as in
 `mevedel-collaboration-artifact-room--actions'."
-  (let* ((name (plist-get args :library))
-         (part (plist-get args :part))
+  (let* ((part (plist-get args :part))
+         (item (plist-get args :item))
+         (name (if (equal part "item")
+                   (if-let* (((stringp item))
+                             (slash (string-search "/" item)))
+                       (substring item 0 slash)
+                     (error "An item preview needs item as LIBRARY/ITEM-ID from the library listing"))
+                 (plist-get args :library)))
          (libraries (cl-remove-if-not
                      (lambda (library) (or (null name) (equal name (plist-get library :name))))
                      (mevedel-shared-library-libraries))))
     (unless (or (null name) (stringp name))
       (error "A library is named by a string"))
-    (unless (member part '(nil "list" "sheet"))
-      (error "The library part is list or sheet"))
+    (unless (member part '(nil "list" "sheet" "item"))
+      (error "The library part is list, sheet or item"))
     (when (and name (null libraries))
       (error "No element library %s; list the libraries for installed ones" name))
     (mevedel-shared-editing-call
      (plist-get room :workspace)
-     (list :action "library-view" :part (if (equal part "sheet") "sheet" "list")
-           :at (if name
-                   (concat "shared://library/" (mevedel-resource-encode-component name))
-                 "shared://library")
-           :libraries (vconcat (mapcar (lambda (library)
-                                         (list :name (plist-get library :name)
-                                               :text (plist-get library :text)))
-                                       libraries)))
+     (append
+      (list :action "library-view" :part (if (member part '("sheet" "item")) part "list")
+            :at (if name
+                    (concat "shared://library/" (mevedel-resource-encode-component name))
+                  "shared://library")
+            :libraries (vconcat (mapcar (lambda (library)
+                                          (list :name (plist-get library :name)
+                                                :text (plist-get library :text)))
+                                        libraries)))
+      (when (equal part "item") (list :item item)))
      (lambda (value)
        (funcall reply
                 (if-let* ((failure (plist-get value :error)))

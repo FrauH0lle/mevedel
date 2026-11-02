@@ -424,6 +424,8 @@ whiteboard finds `SharedCreate`. The prompt's resource roster lists
 | `shared://ID/history` | retained contributions, newest first, with their changed ids |
 | `shared://library`, `shared://library/NAME` | element library items as `LIBRARY/ITEM-ID` references |
 | `shared://library[/NAME]/sheet.png` | a numbered sheet of the first 60 of those items |
+| `shared://library/LIBRARY/ITEM-ID/view.png` | one library item rendered |
+| `shared://ID/library[/...]` | a remote whiteboard's origin libraries, in the same shapes as `shared://library` |
 
 An overview line is `HASH JSON`: a 12-character content hash of the element or
 block, then its JSON. The hash is computed over sorted keys, so writers' key

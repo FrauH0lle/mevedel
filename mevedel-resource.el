@@ -1112,17 +1112,21 @@ as Glob or Grep scopes."
 Items are `ID' with `view.png', `discussions', `history', `elements/ID' and
 `images/KEY' descendants; a remote HTML artifact has `files', listing its
 files, and `files/PATH', one file.  `library' lists element libraries,
-optionally one library by name, each with a `sheet.png'."
+optionally one library by name, each with a `sheet.png', and previews one
+item at `LIBRARY/ITEM-ID/view.png'.  A remote whiteboard's `ID/library'
+has the same shapes for its origin's libraries."
   (cl-flet ((id-p (value)
               (and (stringp value)
-                   (string-match-p mevedel-resource--shared-identity value))))
+                   (string-match-p mevedel-resource--shared-identity value)))
+            (library-p (rest)
+              (pcase rest
+                ((or 'nil `(,_) `(,_ "sheet.png") `(,_ ,_ "view.png")) t))))
     (pcase components
       ('nil t)
-      (`("library") t)
-      (`("library" ,_) t)
-      (`("library" ,_ "sheet.png") t)
+      (`("library" . ,rest) (library-p rest))
       (`(,id) (id-p id))
       (`(,id ,(or "view.png" "discussions" "history")) (id-p id))
+      (`(,id "library" . ,rest) (and (id-p id) (library-p rest)))
       (`(,id ,(or "elements" "images") ,name) (and (id-p id) (id-p name)))
       (`(,id "files" . ,path)
        (and (id-p id)
@@ -1148,12 +1152,12 @@ FILE is the file's path relative to the remote artifact's directory."
 
 (defun mevedel-resource--shared-available-p (components session)
   "Return non-nil when shared COMPONENTS resolve in SESSION's workspace.
-Item addresses need an existing item, and `files' addresses a remote
-one; listings and libraries always resolve."
+Item addresses need an existing item, and `files' and `ID/library'
+addresses a remote one; listings and libraries always resolve."
   (or (null components)
       (equal (car components) "library")
       (and session
-           (if (equal (cadr components) "files")
+           (if (member (cadr components) '("files" "library"))
                (mevedel-artifact-backend-registered-p (mevedel-session-workspace session)
                                                       (car components))
              (mevedel-artifact-backend-present-p (mevedel-session-workspace session)

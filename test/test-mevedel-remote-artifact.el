@@ -21,6 +21,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-report-test-support"))
+(require 'gptel-request)
 (require 'mevedel-artifact-backend)
 (require 'mevedel-artifact-store)
 (require 'mevedel-artifacts-list)
@@ -108,6 +109,14 @@
                                             "contribution c1 revision 2 Host"
                                           mevedel-remote-artifact-test--overview))))
       ("view" (list :result (list :png "iVBORw0KGgo=" :mime "image/png")))
+      ("library"
+       (if (member (plist-get body :part) '("sheet" "item"))
+           (list :result (list :png "iVBORw0KGgo=" :mime "image/png"))
+         (list :result
+               (list :text (concat "1 library item; insert one with SharedEdit insert and its ref. "
+                                   "The sheet shared://library/sheet.png numbers items 1-1; "
+                                   "shared://library/REF/view.png shows one.\n"
+                                   "1. Origin kit/cube · \"Cube\" · Origin kit · 1 element · 50×40\n")))))
       ((or "patch" "rename" "background" "image" "insert" "revert")
        (cond
         ((not (plist-get origin :writable)) (list :error "This artifact link is view-only"))
@@ -362,6 +371,45 @@ under its origin id."
         (should (equal "snt-pipeline" (plist-get (plist-get (plist-get (settle) :result) :model)
                                                  :id)))
         (should (= 1 committed))))))
+
+(mevedel-deftest mevedel-tool-editing-view/remote-library
+  (:doc "A remote whiteboard's agents read its origin's libraries at shared://ALIAS/library"
+   :quiet t)
+  (mevedel-remote-artifact-test--with-session
+    (attach "pipeline")
+    (cl-letf (((symbol-function 'gptel--model-capable-p)
+               (lambda (capability &optional _model) (eq capability 'media)))
+              ((symbol-function 'gptel--model-mime-capable-p)
+               (lambda (_mime &optional _model) t)))
+      (cl-flet ((sent () (plist-get (car (plist-get origin :requests)) :body)))
+        ;; The listing names the origin's items, at addresses of the alias.
+        (let ((listing (text (run "Read" '(:file_path "shared://pipeline/library")))))
+          (should (string-search "Origin kit/cube" listing))
+          (should (string-search "shared://pipeline/library/sheet.png" listing))
+          (should (string-search "shared://pipeline/library/REF/view.png" listing))
+          (should-not (string-search "shared://library" listing)))
+        (should (equal '(:action "library" :part "list") (sent)))
+        (run "Read" '(:file_path "shared://pipeline/library/Origin%20kit"))
+        (should (equal '(:action "library" :part "list" :library "Origin kit") (sent)))
+        (should (plist-get (run "Read" '(:file_path "shared://pipeline/library/Origin%20kit/sheet.png"))
+                           :media))
+        (should (equal '(:action "library" :part "sheet" :library "Origin kit") (sent)))
+        ;; One item previews from the origin by its ref.
+        (should (plist-get (run "Read" '(:file_path "shared://pipeline/library/Origin%20kit/cube/view.png"))
+                           :media))
+        (should (equal '(:action "library" :part "item" :library "Origin kit" :item "Origin kit/cube")
+                       (sent)))
+        ;; Grep searches the origin's listing.
+        (should (string-search "Origin kit/cube"
+                               (text (run "Grep" '(:pattern "cube" :path "shared://pipeline/library"
+                                                            :output_mode "content")))))
+        ;; The local libraries never ask the origin.
+        (let ((sent-before (length (plist-get origin :requests))))
+          (run "Read" '(:file_path "shared://library"))
+          (should (= sent-before (length (plist-get origin :requests)))))))
+    ;; A local or unknown id has no libraries of its own.
+    (should (string-search "Shared item not found"
+                           (text (run "Read" '(:file_path "shared://other/library") 'error))))))
 
 (mevedel-deftest mevedel-remote-artifact-registrations
   (:doc "Attached artifacts come back in a fresh Emacs; origin changes are announced"

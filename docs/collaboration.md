@@ -807,7 +807,9 @@ element libraries -- their own, installed ones and the built-in one -- to any
 link tier. `library` takes an optional `library` name and `part`: `list` (the
 default) answers `{result: {text}}`, the listing `shared://library` shows with
 each item as `LIBRARY/ITEM-ID`; `sheet` answers `{result: {png, mime}}`, the
-library's (or every library's) picture. An edit link's `insert` (`item` as
+library's (or every library's) picture; `item` with `item` as `LIBRARY/ITEM-ID`
+answers `{result: {png, mime}}`, that one item's picture. An edit link's
+`insert` (`item` as
 `LIBRARY/ITEM-ID`, `x`, `y`) places that item as `SharedEdit` does; the origin
 resolves the reference to its own library text, so the consumer never sends
 library content. Library management (`library-add`, `-remove`, `-install`,
@@ -919,7 +921,11 @@ vocabulary onto the room's allowlist: `shared://ID` and its `/history` become
 `read`, `view.png` and `images/KEY` become `view`, and `SharedEdit`'s
 `patch`, `rename`, `background`, `image`, `insert` (the origin resolves
 `LIBRARY/ITEM-ID` in its own libraries) and `revert` pass their arguments
-through. Replies name the alias, not the origin id, so the stale-hash
+through. A remote whiteboard's origin libraries are read at
+`shared://ID/library`, `shared://ID/library/NAME`, their `sheet.png` and an
+item's `shared://ID/library/LIBRARY/ITEM-ID/view.png` (the room's `library`),
+so an agent inserts references the origin knows; `shared://library` stays this
+user's own. Replies name the alias, not the origin id, so the stale-hash
 contract and Grep's line mapping work unchanged. Discussions and element
 addresses (`/discussions`, `/elements/ID`) stay at the origin; deleting it
 here is refused (detach instead), and turn-settle versions are left to the

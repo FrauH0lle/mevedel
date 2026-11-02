@@ -148,24 +148,34 @@ versions it when the current request settles."
    (mevedel-tool-editing--deliver callback nil)
    mevedel-pipeline--handler-active-p mevedel-pipeline--handler-commit))
 
-(defun mevedel-tool-editing--library-args (rest)
-  "Return the host request for `shared://library' components REST."
-  (let* ((sheet (equal (car (last rest)) "sheet.png"))
-         (name (car (if sheet (butlast rest) rest)))
-         (libraries (cl-remove-if-not
-                     (lambda (library) (or (null name) (equal name (plist-get library :name))))
-                     (mevedel-shared-library-libraries))))
-    (when (and name (null libraries))
-      (error "No element library %s; Read shared://library for installed libraries" name))
-    (list :action "library-view" :part (if sheet "sheet" "list")
-          :at (if name
-                  (concat "shared://library/" (mevedel-resource-encode-component name))
-                "shared://library")
-          :libraries (vconcat
-                      (mapcar (lambda (library)
-                                (list :name (plist-get library :name)
-                                      :text (plist-get library :text)))
-                              libraries)))))
+(defun mevedel-tool-editing--library-args (rest &optional id)
+  "Return the host request for `shared://library' components REST.
+With ID, REST follows `shared://ID/library' and names the libraries of
+remote whiteboard ID's origin, which serves them."
+  (let* ((item (and (equal (car (last rest)) "view.png") (nth 1 rest)))
+         (part (cond (item "item") ((equal (car (last rest)) "sheet.png") "sheet") (t "list")))
+         (name (car (if (equal part "sheet") (butlast rest) rest)))
+         (ref (and item (concat name "/" item))))
+    (if id
+        (append (list :action "library-view" :id id :part part)
+                (when name (list :library name))
+                (when ref (list :item ref)))
+      (let ((libraries (cl-remove-if-not
+                        (lambda (library) (or (null name) (equal name (plist-get library :name))))
+                        (mevedel-shared-library-libraries))))
+        (when (and name (null libraries))
+          (error "No element library %s; Read shared://library for installed libraries" name))
+        (append
+         (list :action "library-view" :part part
+               :at (if name
+                       (concat "shared://library/" (mevedel-resource-encode-component name))
+                     "shared://library")
+               :libraries (vconcat
+                           (mapcar (lambda (library)
+                                     (list :name (plist-get library :name)
+                                           :text (plist-get library :text)))
+                                   libraries)))
+         (when ref (list :item ref)))))))
 
 (defun mevedel-tool-editing-view (components callback &optional search)
   "Fetch the current workspace's `shared://' view named by COMPONENTS.
@@ -179,6 +189,7 @@ file's text."
       (let ((args
              (pcase components
                (`("library" . ,rest) (mevedel-tool-editing--library-args rest))
+               (`(,id "library" . ,rest) (mevedel-tool-editing--library-args rest id))
                (`(,id) (list :action "view" :id id :part "overview"))
                (`(,id "view.png") (list :action "view" :id id :part "png"))
                (`(,id ,(and part (or "discussions" "history")))
@@ -375,7 +386,7 @@ Deliver the outcome to CALLBACK."
   (mevedel-define-tool
    :name "SharedEdit" :handler #'mevedel-tool-editing--edit
    :summary "Draw on a shared whiteboard or edit a shared document."
-   :description "Edit a shared whiteboard or document. Read shared://ID first: each line is HASH then an element's or block's JSON. patch: changes are {id,hash,set?,unset?,after?}; set merges fields and unset removes them, after replaces the whole element or block and null deletes it; a new element has no hash. A stale hash rejects the whole patch and returns current lines; unrelated edits survive. Whiteboards hold Excalidraw elements {id,type,x,y,width,height,...} of type rectangle/diamond/ellipse/text/arrow/line/freedraw/image/stickynote/frame, with Excalidraw's field names and values. Absent fields take Excalidraw defaults (strokeColor #1e1e1e, backgroundColor transparent, fillStyle solid, strokeWidth 2, roughness 1, opacity 100); omit version, versionNonce, updated, isDeleted and boundElements, which are derived. Label a shape or arrow with a text element whose containerId is that element; the label wraps and centres inside it. Connect shapes with an arrow whose startBinding/endBinding are {elementId,fixedPoint:[0.5,0.5],mode:\"orbit\"}; bound ends follow their shapes. Line, arrow and freedraw points are relative to x,y and stored at 0.1 units. Elements draw in fractional index order; new ones without an index go on top in the order listed. Existing images are referenced by fileId. image adds a new one from source: a file path, or an artifact://, work:// or shared:// address (shared://ID/images/KEY or shared://ID/view.png) the model can read. PNG, JPEG, WebP or SVG up to 4.7 MB; an SVG is rasterized. A board image goes at x,y (default below the content) and a document image after afterId (default the end); width sets its display width and alt describes a document image. insert places a library item (ref from shared://library) with its top-left at x,y as new elements. A document is a list of top-level ProseMirror blocks, each with a unique attrs.id (nested nodes get theirs); a new block goes after afterId, default the end. Blocks: paragraph, heading (attrs.level 1-6), blockquote, codeBlock (attrs.language), horizontalRule, image, bulletList or orderedList (attrs.start) of listItem (a paragraph, then blocks), table of tableRow of tableHeader or tableCell (each holds blocks). Inline content is {type:\"text\",text,marks} and hardBreak; marks: bold, italic, underline, strike, code, link (attrs.href http(s), mailto or #). Images keep their shared://ID/images/KEY src. rename uses title. background sets a whiteboard's canvas colour (#rrggbb; empty for the room theme). revert uses a contribution ID from shared://ID/history and refuses if its targets changed. All mutations are attributed and committed on the host. Results list the stored lines of changed elements; whiteboard edits also return the resulting PNG."
+   :description "Edit a shared whiteboard or document. Read shared://ID first: each line is HASH then an element's or block's JSON. patch: changes are {id,hash,set?,unset?,after?}; set merges fields and unset removes them, after replaces the whole element or block and null deletes it; a new element has no hash. A stale hash rejects the whole patch and returns current lines; unrelated edits survive. Whiteboards hold Excalidraw elements {id,type,x,y,width,height,...} of type rectangle/diamond/ellipse/text/arrow/line/freedraw/image/stickynote/frame, with Excalidraw's field names and values. Absent fields take Excalidraw defaults (strokeColor #1e1e1e, backgroundColor transparent, fillStyle solid, strokeWidth 2, roughness 1, opacity 100); omit version, versionNonce, updated, isDeleted and boundElements, which are derived. Label a shape or arrow with a text element whose containerId is that element; the label wraps and centres inside it. Connect shapes with an arrow whose startBinding/endBinding are {elementId,fixedPoint:[0.5,0.5],mode:\"orbit\"}; bound ends follow their shapes. Line, arrow and freedraw points are relative to x,y and stored at 0.1 units. Elements draw in fractional index order; new ones without an index go on top in the order listed. Existing images are referenced by fileId. image adds a new one from source: a file path, or an artifact://, work:// or shared:// address (shared://ID/images/KEY or shared://ID/view.png) the model can read. PNG, JPEG, WebP or SVG up to 4.7 MB; an SVG is rasterized. A board image goes at x,y (default below the content) and a document image after afterId (default the end); width sets its display width and alt describes a document image. insert places a library item (ref from shared://library; a remote whiteboard uses its origin's, from shared://ID/library) with its top-left at x,y as new elements. A document is a list of top-level ProseMirror blocks, each with a unique attrs.id (nested nodes get theirs); a new block goes after afterId, default the end. Blocks: paragraph, heading (attrs.level 1-6), blockquote, codeBlock (attrs.language), horizontalRule, image, bulletList or orderedList (attrs.start) of listItem (a paragraph, then blocks), table of tableRow of tableHeader or tableCell (each holds blocks). Inline content is {type:\"text\",text,marks} and hardBreak; marks: bold, italic, underline, strike, code, link (attrs.href http(s), mailto or #). Images keep their shared://ID/images/KEY src. rename uses title. background sets a whiteboard's canvas colour (#rrggbb; empty for the room theme). revert uses a contribution ID from shared://ID/history and refuses if its targets changed. All mutations are attributed and committed on the host. Results list the stored lines of changed elements; whiteboard edits also return the resulting PNG."
    :args ((id string :required "Item ID.")
           (action string :required "Operation." :enum ["patch" "insert" "image" "rename" "background" "revert"])
           (changes array :optional "Targeted changes: {id,hash,set,unset,after,afterId}." :items (:type object))

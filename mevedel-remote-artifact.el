@@ -47,6 +47,10 @@
 (require 'mevedel-artifact-store)
 (require 'mevedel-structs)
 
+;; `mevedel-resource'
+(declare-function mevedel-resource-encode-component "mevedel-resource" (component))
+(autoload 'mevedel-resource-encode-component "mevedel-resource")
+
 ;; `mevedel-shared-editing'
 (declare-function mevedel-shared-editing--json "mevedel-shared-editing" (value))
 (defvar mevedel-shared-editing-node-program)
@@ -392,8 +396,9 @@ stale when the file changed since.  A key without a value is not sent.")
 (defun mevedel-remote-artifact--translate (alias args)
   "Return how local editing ARGS for the remote artifact ALIAS are served.
 The result is (:body BODY :shape SHAPE): BODY is the origin request and
-SHAPE (`text', `search', `image', `edit' or `file') how its reply maps
-back.  Signal what a remote artifact cannot do."
+SHAPE (`text', `search', `image', `library', `library-search', `edit' or
+`file') how its reply maps back.  Signal what a remote artifact cannot
+do."
   (let ((action (plist-get args :action)))
     (pcase action
       ("view"
@@ -407,6 +412,12 @@ back.  Signal what a remote artifact cannot do."
            ("discussions"
             (error "Discussions of a remote artifact stay at its origin"))
            (_ (error "Read shared://%s for the elements of a remote artifact" alias)))))
+      ;; The origin's own libraries, as shared://ALIAS/library shows them.
+      ("library-view"
+       (list :body (append (list :action "library" :part (plist-get args :part))
+                           (when-let* ((name (plist-get args :library))) (list :library name))
+                           (when-let* ((item (plist-get args :item))) (list :item item)))
+             :shape (if (plist-get args :search) 'library-search 'library)))
       ("delete"
        (error "A remote artifact is deleted at its origin; detach it here instead"))
       ((and (pred stringp) (let file-action (assoc action mevedel-remote-artifact--file-actions))
@@ -477,8 +488,13 @@ the model knows the artifact by its alias here."
 (defun mevedel-remote-artifact--reply (alias entry args shape reply)
   "Return the local editing reply to the origin's REPLY.
 ALIAS, ENTRY and the local ARGS name the request; SHAPE is from
-`mevedel-remote-artifact--translate'."
-  (let ((result (plist-get reply :result)))
+`mevedel-remote-artifact--translate'.  The origin names its libraries
+shared://library, which here are ALIAS's."
+  (let* ((result (plist-get reply :result))
+         (library (concat "shared://" alias "/library"))
+         (library-text (lambda ()
+                         (string-replace "shared://library" library
+                                         (or (plist-get result :text) "")))))
     (cond
      ((plist-get reply :error)
       (cond
@@ -492,6 +508,16 @@ ALIAS, ENTRY and the local ARGS name the request; SHAPE is from
        (t (list :error (plist-get reply :error) :code "stale"
                 :targets (plist-get reply :targets) :revision (plist-get reply :revision)))))
      ((eq shape 'file) (list :result result))
+     ((and (eq shape 'library) (plist-get result :text))
+      (list :result (list :text (funcall library-text))))
+     ((eq shape 'library-search)
+      (list :result
+            (list :documents
+                  (vector (mevedel-remote-artifact--search-document
+                           (if-let* ((name (plist-get args :library)))
+                               (concat library "/" (mevedel-resource-encode-component name))
+                             library)
+                           (funcall library-text))))))
      ((eq shape 'text) (list :result (list :text (plist-get result :text))))
      ((eq shape 'search)
       (list :result
@@ -500,7 +526,7 @@ ALIAS, ENTRY and the local ARGS name the request; SHAPE is from
                            (concat "shared://" alias
                                    (if (equal (plist-get args :part) "history") "/history" ""))
                            (or (plist-get result :text) ""))))))
-     ((eq shape 'image)
+     ((memq shape '(image library))
       (list :result (list :png (plist-get result :png)
                           :mime (or (plist-get result :mime) "image/png"))))
      (t
